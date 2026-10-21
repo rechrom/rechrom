@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 icu_bidi = { path = "../icu_bidi" }
 rustybuzz = "0.20.1"
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "variable-fonts", "gvar-alloc"] }

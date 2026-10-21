@@ -16,7 +16,7 @@ default = []
 allocation_diagnostics = ["browser_tracing/allocation_diagnostics"]
 
 [dev-dependencies]
-foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
+foundation = { package = "layoutng_foundation", path = "../../crates/layoutng/layoutng_foundation" }
 
 [dependencies]
 bytemuck = "1.24"
@@ -24,7 +24,7 @@ executor = { path = "../../crates/executor" }
 browser_tracing = { path = "../../crates/tracing" }
 event_loop = { path = "../../crates/event_loop" }
 devtools = { path = "../../crates/devtools" }
-foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
+foundation = { package = "layoutng_foundation", path = "../../crates/layoutng/layoutng_foundation" }
 paint = { path = "../../crates/paint" }
 browser = { path = "../../crates/browser" }
 renderer_skia = { path = "../../crates/renderer_skia" }
@@ -39,7 +39,7 @@ image_resource = { path = "../../crates/image_resource" }
 url_loader = { path = "../../crates/url_loader" }
 xhr_transport = { path = "../../crates/xhr_transport" }
 javascript = { path = "../../crates/javascript" }
-layoutng_assembly = { path = "../../crates/layoutng_assembly" }
+layoutng_assembly = { path = "../../crates/layoutng/layoutng_assembly" }
 url = "2.5"
 serde_json = "1"
 png = "0.18"

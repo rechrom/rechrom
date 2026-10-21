@@ -4,11 +4,11 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 style = { path = "../style" }
 cssom = { path = "../cssom" }
 dom = { path = "../dom" }
 html = { path = "../html" }
 image_resource = { path = "../image_resource" }
-layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
 paint = { path = "../paint", features = ["translation_in_progress"] }

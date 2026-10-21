@@ -28,10 +28,10 @@ in `docs/font-engine.md`.
 This notice records the identified upstream source and preserves its license;
 it does not assign a license to the entire Rechrom repository. The separately
 supplied foundation translation has its own provenance limitations documented
-in `crates/foundation/base/README.md`.
+in `crates/layoutng/layoutng_foundation/base/README.md`.
 
-The multi-column algorithm in `crates/layoutng_multicol` and anonymous-column
-owner accessor corrections in `crates/layoutng_fragment_tree` are translated
+The multi-column algorithm in `crates/layoutng/layoutng_multicol` and anonymous-column
+owner accessor corrections in `crates/layoutng/layoutng_fragment_tree` are translated
 from Chromium revision `6c1d401fcca5e1b0030563a90c2f2bba168e0c15`:
 
 - https://github.com/chromium/chromium/blob/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/layout/column_layout_algorithm.cc
@@ -39,15 +39,15 @@ from Chromium revision `6c1d401fcca5e1b0030563a90c2f2bba168e0c15`:
 - https://github.com/chromium/chromium/blob/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/layout/physical_box_fragment.h
 
 The admitted branches and explicit remaining translation gaps are recorded in
-`crates/layoutng_multicol/README.md`. The Chromium BSD license above applies to
+`crates/layoutng/layoutng_multicol/README.md`. The Chromium BSD license above applies to
 these translated source portions as well.
 
 ## Nested SVG viewports
 
 The nested SVG viewport producer, SVG-container traversal, viewport length
 resolution, viewBox transforms and paint geometry integration in
-`crates/layoutng_svg`, `crates/dom`, `crates/layoutng`,
-`crates/layoutng_assembly`, `crates/layoutng_fragment_tree` and `crates/paint`
+`crates/layoutng/layoutng_svg`, `crates/dom`, `crates/layoutng/layoutng`,
+`crates/layoutng/layoutng_assembly`, `crates/layoutng/layoutng_fragment_tree` and `crates/paint`
 reference Chromium revision `6c1d401fcca5e1b0030563a90c2f2bba168e0c15`.
 `NOTICE.chromium-svg` retains the original copyright and license notices,
 with a pinned official URL for each referenced source file.

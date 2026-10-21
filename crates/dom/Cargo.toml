@@ -6,20 +6,20 @@ edition = "2021"
 [dependencies]
 browser_tracing = { path = "../tracing" }
 cssom = { path = "../cssom" }
-layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 
 css_parser = { path = "../css_parser", features = ["tokenizer"] }
 font_engine = { path = "../font_engine" }
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 image_resource = { path = "../image_resource" }
-layoutng_style = { path = "../layoutng_style" }
+layoutng_style = { path = "../layoutng/layoutng_style" }
 
 [dev-dependencies]
 html = { path = "../html" }
 style = { path = "../style" }
 # Standalone DOM tests link the assembly dispatch's real replaced-object
 # provider; browser executables already supply it through their layout bundle.
-layoutng_replaced = { path = "../layoutng_replaced" }
-layoutng_block = { path = "../layoutng_block", features = ["block_only_host", "replaced_extension"] }
+layoutng_replaced = { path = "../layoutng/layoutng_replaced" }
+layoutng_block = { path = "../layoutng/layoutng_block", features = ["block_only_host", "replaced_extension"] }
 
-layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }

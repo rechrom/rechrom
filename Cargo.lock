@@ -1996,14 +1996,17 @@ dependencies = [
 name = "layoutng_inline_assembly"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
  "cssom",
  "font_engine",
  "icu_bidi",
+ "image_resource",
  "layoutng_custom",
  "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_mathml",
  "layoutng_style",
+ "skia",
 ]
 
 [[package]]

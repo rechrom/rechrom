@@ -19,15 +19,15 @@ handwritten_mapping = (CHROMIUM / 'third_party/blink/renderer/core/css/css_value
 mapping = (GEN / 'css_value_id_mappings_generated.h').read_text()
 rust = '\n'.join(p.read_text() for root in ['foundation', 'layoutng_style']
                  for p in (ROOT / 'crates' / root / 'src').rglob('*.rs'))
-builder = (ROOT / 'crates/layoutng_style/src/style/computed_style_base.rs').read_text()
-builder += (ROOT / 'crates/layoutng_style/src/style/computed_style.rs').read_text()
-initial = (ROOT / 'crates/layoutng_style/src/style/computed_style_initial_values.rs').read_text()
+builder = (ROOT / 'crates/layoutng/layoutng_style/src/style/computed_style_base.rs').read_text()
+builder += (ROOT / 'crates/layoutng/layoutng_style/src/style/computed_style.rs').read_text()
+initial = (ROOT / 'crates/layoutng/layoutng_style/src/style/computed_style_initial_values.rs').read_text()
 setters = dict(re.findall(r'pub fn (Set\w+)\(&mut self, \w+: ([^\n]+?)\)', builder))
 initials = dict(re.findall(r'pub fn (Initial\w+)\(\) -> ([^\n]+?) \{', initial))
 enums = {name: re.findall(r'^\s*(k\w+)\s*(?:=\s*[^,]+)?,', body, re.M)
          for name, body in re.findall(r'pub enum (\w+)\s*\{([^}]+)\}', rust)}
 keywords = dict((k, int(v)) for k, v in re.findall(r'(k\w+) = (\d+)',
-    (ROOT / 'crates/foundation/src/css_value_id.rs').read_text()))
+    (ROOT / 'crates/layoutng/layoutng_foundation/src/css_value_id.rs').read_text()))
 keyword_by_id = {v: k for k, v in keywords.items()}
 
 def functions(text, pattern):

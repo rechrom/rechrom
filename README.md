@@ -57,8 +57,8 @@ A visible window needs an X11 or Wayland session; use `--headless` below on
 servers without a display. Rust registry dependencies still need downloading
 on the first build.
 
-The translated foundation primitives are owned by `crates/foundation/base`;
-`crates/foundation` preserves the higher-level foundation interfaces. The
+The translated foundation primitives are owned by `crates/layoutng/layoutng_foundation/base`;
+`crates/layoutng/layoutng_foundation` preserves the higher-level foundation interfaces. The
 Roboto fallback/test font is bundled in `assets/fonts` with its license.
 Linux and macOS currently use the internal Rust Skia software renderer. Text shaping uses
 `rustybuzz`; OpenType metadata, glyph metrics, math and Unicode helpers still
@@ -115,7 +115,7 @@ cargo build -p browser
 apps/rechrom/       desktop browser shell
 crates/browser/     public engine integration crate
 crates/dom/         DOM ownership and mutation routing
-crates/layoutng_*/  layout algorithms and fragment output
+crates/layoutng/layoutng_*/  layout algorithms and fragment output
 crates/paint/       pre-paint state and PaintArtifact generation
 crates/layer_tile/  retained layers, tiles, and frame planning
 crates/compositor/  retained cc state, tiling and raster-work selection

@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 paint = { path = "../paint", features = ["translation_in_progress"] }
-layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 dom = { path = "../dom" }
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 
 [dev-dependencies]
 html = { path = "../html" }

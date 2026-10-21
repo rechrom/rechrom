@@ -10,7 +10,7 @@ chromeos = []
 
 [dependencies]
 paint = { path = "../paint", features = ["translation_in_progress"] }
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 skia = { path = "../skia" }
 serde_json = "1"
 getrandom = "0.4"

@@ -9,9 +9,9 @@ translation_in_progress = []
 [dependencies]
 animation = { path = "../animation" }
 browser_tracing = { path = "../tracing" }
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 font_engine = { path = "../font_engine" }
-layoutng_assembly = { path = "../layoutng_assembly" }
-layoutng_style = { path = "../layoutng_style" }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
+layoutng_style = { path = "../layoutng/layoutng_style" }
 image_resource = { path = "../image_resource" }
 serde_json = "1"

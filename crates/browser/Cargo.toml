@@ -25,31 +25,31 @@ xhr_transport = { path = "../xhr_transport" }
 image_decoder = { path = "../image_decoder" }
 document_image = { path = "../document_image" }
 image_resource = { path = "../image_resource" }
-layoutng_assembly = { path = "../layoutng_assembly" }
-layoutng_block = { path = "../layoutng_block", features = ["block_only_host", "replaced_extension"] }
-layoutng_multicol = { path = "../layoutng_multicol" }
-layoutng_flex = { path = "../layoutng_flex" }
-layoutng_grid = { path = "../layoutng_grid" }
-layoutng_table = { path = "../layoutng_table" }
-layoutng_float = { path = "../layoutng_float" }
-layoutng_forms = { path = "../layoutng_forms" }
-layoutng_replaced = { path = "../layoutng_replaced" }
-layoutng_svg = { path = "../layoutng_svg" }
-layoutng_list = { path = "../layoutng_list" }
-layoutng_out_of_flow = { path = "../layoutng_out_of_flow", optional = true }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
+layoutng_block = { path = "../layoutng/layoutng_block", features = ["block_only_host", "replaced_extension"] }
+layoutng_multicol = { path = "../layoutng/layoutng_multicol" }
+layoutng_flex = { path = "../layoutng/layoutng_flex" }
+layoutng_grid = { path = "../layoutng/layoutng_grid" }
+layoutng_table = { path = "../layoutng/layoutng_table" }
+layoutng_float = { path = "../layoutng/layoutng_float" }
+layoutng_forms = { path = "../layoutng/layoutng_forms" }
+layoutng_replaced = { path = "../layoutng/layoutng_replaced" }
+layoutng_svg = { path = "../layoutng/layoutng_svg" }
+layoutng_list = { path = "../layoutng/layoutng_list" }
+layoutng_out_of_flow = { path = "../layoutng/layoutng_out_of_flow", optional = true }
 paint = { path = "../paint" }
 url_loader = { path = "../url_loader" }
 renderer = { path = "../renderer" }
 renderer_skia = { path = "../renderer_skia" }
 raster = { path = "../raster" }
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 web_font = { path = "../web_font" }
 font_engine = { path = "../font_engine" }
 compositor = { path = "../compositor" }
 viz = { path = "../viz" }
 
 [dev-dependencies]
-layoutng_style = { path = "../layoutng_style" }
+layoutng_style = { path = "../layoutng/layoutng_style" }
 
 [features]
 default = ["inline_layout", "production_raster"]

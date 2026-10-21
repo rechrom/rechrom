@@ -8,14 +8,14 @@ browser_tracing = { path = "../tracing" }
 renderer = { path = "../renderer" }
 bytemuck = "1.24"
 compositor_core = { package = "compositor", path = "../compositor" }
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 skia = { path = "../skia" }
 paint = { path = "../paint" }
 viz = { path = "../viz" }
 raster = { path = "../raster" }
 
 [dev-dependencies]
-layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 
 [features]
 default = []

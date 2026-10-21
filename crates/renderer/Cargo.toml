@@ -6,5 +6,5 @@ edition = "2021"
 [dependencies]
 browser_tracing = { path = "../tracing" }
 compositor_core = { package = "compositor", path = "../compositor" }
-foundation = { package = "layoutng_foundation", path = "../foundation" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 viz = { path = "../viz" }
