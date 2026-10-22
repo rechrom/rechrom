@@ -6,7 +6,7 @@
 
 use crate::{
     display_item_id::DisplayItemIdType,
-    geometry_mapper::{MapRectToRoot, MultiplyTransforms},
+    geometry_mapper::{MapRectToRoot, MapRectWithTransforms, MultiplyTransforms},
     paint_engine::{DisplayItem, PaintArtifact, PaintPhase},
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyNodeStore, PaintPropertyOwner,
@@ -37,6 +37,10 @@ struct FragmentCoverage {
     // A retained scroll changes only translation, even below a fixed rotation.
     recorded_world: TransformMatrix,
     properties: PropertyTreeState,
+    /// Ink which existed in Layout but was outside Paint's recorded cull at
+    /// capture time. If scrolling exposes it, the retained artifact cannot
+    /// provide pixels and Paint must record the newly visible content.
+    unrecorded_visual_rect: Option<PaintRect>,
     controls: Option<OverflowControlGeometry>,
     revision: u64,
     subtree_revision: u64,
@@ -400,6 +404,7 @@ impl RetainedScrollPaintState {
     pub(crate) fn capture(
         tree: &PaintTreeNode<'_>,
         store: &PaintPropertyNodeStore,
+        artifact: &PaintArtifact,
     ) -> Option<Self> {
         let mut nodes = Vec::new();
         gather(tree, &mut nodes);
@@ -413,6 +418,12 @@ impl RetainedScrollPaintState {
         let mut coverage_groups = Vec::<CoverageGroup>::new();
         let mut coverage_group_indices: HashMap<((usize, usize, usize), [u64; 16]), usize> =
             HashMap::new();
+        let recorded_clients: HashSet<(u64, u32)> = artifact
+            .display_items
+            .iter()
+            .filter(|item| !item.is_tombstone && item.draws_content)
+            .map(|item| (item.id.client_id, item.id.fragment))
+            .collect();
         let has_scroll_dependent_background = nodes
             .iter()
             .any(|node| has_scroll_dependent_background(node));
@@ -455,8 +466,13 @@ impl RetainedScrollPaintState {
             if fragment_indices.insert(identity, fragments.len()).is_some() {
                 return None;
             }
+            let paintable = f.paint.has_source && f.paint.style.visible && !f.paint.hidden;
+            let was_recorded = recorded_clients.contains(&(
+                f.paint.display_item_client_id,
+                f.paint.display_item_fragment,
+            ));
             if let (Some(world), Some(recorded_visible)) = (world, recorded_visible) {
-                if f.paint.has_source && f.paint.style.visible && !f.paint.hidden {
+                if paintable && was_recorded {
                     if let Some(recorded_cull) = node.self_cull_rect {
                         let key = (
                             state_cache_key(&node.properties.nodes),
@@ -492,6 +508,22 @@ impl RetainedScrollPaintState {
                 paint_offset: node.paint_offset,
                 recorded_world: world.unwrap_or(raw_world),
                 properties: node.properties.nodes.clone(),
+                unrecorded_visual_rect: (paintable && !was_recorded)
+                    .then(|| {
+                        f.paint
+                            .ink_overflow
+                            .or(f.paint.self_ink_overflow)
+                            .or(f.paint.box_self_visual_overflow)
+                            .or(f.paint.text_glyph_ink)
+                    })
+                    .flatten()
+                    .map(|rect| PaintRect {
+                        x: node.paint_offset.x + rect.offset.x,
+                        y: node.paint_offset.y + rect.offset.y,
+                        width: rect.size.width,
+                        height: rect.size.height,
+                    })
+                    .filter(|rect| !rect.is_empty()),
                 controls: f
                     .paint
                     .scrollbars
@@ -905,6 +937,40 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     // Fragments and chunks often share the exact immutable state. Retain one
     // frame-local mapping, including the lifecycle checks, for both consumers.
     let mut refreshed_states = HashMap::new();
+    // A cull rect only proves coverage for records that Paint actually
+    // emitted. Layout ink outside the old cull has no backing display item;
+    // once scrolling exposes it, recording a normal Paint artifact is the
+    // only valid result. This is the retained-paint equivalent of Blink's
+    // CullRectUpdater invalidating a cached subsequence at the interest edge.
+    for old in &retained.fragments {
+        let Some(local_rect) = old.unrecorded_visual_rect else {
+            continue;
+        };
+        let state = refreshed_cached(&old.properties, &mut trees, &mut refreshed_states)
+            .ok_or(PropertyChanged)?
+            .clone();
+        let world = property_world(&state, &mut worlds).ok_or(UnsupportedTransform)?;
+        let rect =
+            MapRectWithTransforms(local_rect, &[world], false).ok_or(UnsupportedTransform)?;
+        let output = visible_output(
+            &state,
+            &masks,
+            &mut mask_cache,
+            updated_store.viewport_clip(),
+            &mut worlds,
+            &mut clip_cache,
+            0.0,
+        )
+        .ok_or(UnsupportedTransform)?;
+        if output.is_none_or(|clip| !intersection(rect, clip).is_empty()) {
+            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+                eprintln!(
+                    "scroll-paint-reject stage=unrecorded-visible rect={rect:?} output={output:?}"
+                );
+            }
+            return Err(CoverageExceeded);
+        }
+    }
     // GeometryMapper maps once per property-tree state. Capture grouped the
     // equivalent retained client predicates during Paint, so the common path
     // also proves their shared cull enclosure once instead of redoing the same

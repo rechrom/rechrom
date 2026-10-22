@@ -1526,6 +1526,7 @@ fn RecordPaint(
             crate::scroll_paint_update::RetainedScrollPaintState::capture(
                 &paint_tree,
                 &pre_paint.property_node_store,
+                &output,
             );
     }
     pre_paint.RetainTree(paint_tree);

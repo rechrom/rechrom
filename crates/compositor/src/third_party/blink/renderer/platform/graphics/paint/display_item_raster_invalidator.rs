@@ -81,8 +81,21 @@ impl<
             };
             let old = &self.old_display_items_[old_index];
             let mut reason = new.GetPaintInvalidationReason();
-            if reason == Reason::kNone
-                && old.ImageContentRevisions() != new.ImageContentRevisions()
+            // A culled DrawingDisplayItem keeps its semantic id and visual
+            // rect, but its PaintRecord is empty.  When the interest rect
+            // moves, the matching item can therefore appear or disappear
+            // without Layout assigning a client invalidation reason.  Treat
+            // that record-presence transition exactly like an unmatched
+            // display item; otherwise ContentLayerClientImpl may retain the
+            // preceding recording and newly exposed tiles raster as clear.
+            if reason == Reason::kNone && old.DrawsContent() != new.DrawsContent() {
+                reason = if new.DrawsContent() {
+                    Reason::kAppeared
+                } else {
+                    Reason::kDisappeared
+                };
+            }
+            if reason == Reason::kNone && old.ImageContentRevisions() != new.ImageContentRevisions()
             {
                 reason = Reason::kImage;
             }
