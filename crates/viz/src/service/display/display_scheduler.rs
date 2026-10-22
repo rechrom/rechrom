@@ -26,11 +26,12 @@ impl FrameTiming {
     pub fn Deadlines(self) -> FrameDeadlines {
         FrameDeadlines {
             compositor_prepare: self.frame_time + self.interval / 3,
-            draw_and_swap: self
-                .source_deadline
-                .checked_sub(self.interval / 3)
-                .unwrap_or(self.frame_time)
-                .max(self.frame_time),
+            // DisplayScheduler::DesiredBeginFrameDeadlineTime(kRegular)
+            // uses BeginFrameArgs::deadline.  Keep the earlier prepare phase
+            // for the split renderer, but do not shorten Chromium's draw and
+            // swap window: a candidate that arrives before the source
+            // deadline is still valid for this frame.
+            draw_and_swap: self.source_deadline.max(self.frame_time),
         }
     }
 }

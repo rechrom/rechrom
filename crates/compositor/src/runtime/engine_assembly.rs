@@ -319,6 +319,19 @@ impl NativeEngineAssembly {
                 .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
         }
         drop(query);
+        // LayerTreeHostImpl delegate calls stay on Chromium's impl sequence.
+        // In particular, ProxyImpl::SetNeedsRedrawOnImplThread immediately
+        // updates Scheduler before the next BeginFrame.  Our delegate endpoint
+        // records those calls while Host is borrowed, so release that borrow
+        // and deliver the recorded lifecycle calls now.  Leaving them for
+        // Poll() lets a physical BeginFrame overtake SetNeedsRedraw and adds a
+        // full display interval to the first scroll frame.
+        //
+        // Do not Poll here: scheduler actions, raster work, and draw remain
+        // owned by the normal impl turn / physical BeginFrame.
+        while let Some(effect) = self.lifecycle.Pop() {
+            self.Lifecycle(effect)?;
+        }
         if let Some(error) = self.core.failure.take() {
             return Err(error);
         }
