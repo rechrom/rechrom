@@ -471,6 +471,35 @@ impl RetainedScrollPaintState {
                 f.paint.display_item_client_id,
                 f.paint.display_item_fragment,
             ));
+            let unrecorded_visual_rect = (paintable && !was_recorded)
+                .then(|| {
+                    f.paint
+                        .ink_overflow
+                        .or(f.paint.self_ink_overflow)
+                        .or(f.paint.box_self_visual_overflow)
+                        .or(f.paint.text_glyph_ink)
+                })
+                .flatten()
+                .map(|rect| PaintRect {
+                    x: node.paint_offset.x + rect.offset.x,
+                    y: node.paint_offset.y + rect.offset.y,
+                    width: rect.size.width,
+                    height: rect.size.height,
+                })
+                .filter(|rect| !rect.is_empty())
+                // A visible source may legitimately emit no drawing item
+                // (for example a transparent LayoutView). Paint culls a box
+                // only when its mapped visual rect misses self_cull_rect, so
+                // retain the same predicate here. Treating every non-recorded
+                // client as culled rejects every property-only scroll update.
+                // Source: box_fragment_painter.cc IsVisible;
+                //         paint_layer_painter.cc ShouldUseCachedSubsequence.
+                .filter(|rect| {
+                    node.self_cull_rect.is_some_and(|cull| {
+                        MapRectToRoot(*rect, &node.transforms)
+                            .is_some_and(|mapped| intersection(mapped, cull).is_empty())
+                    })
+                });
             if let (Some(world), Some(recorded_visible)) = (world, recorded_visible) {
                 if paintable && was_recorded {
                     if let Some(recorded_cull) = node.self_cull_rect {
@@ -508,22 +537,7 @@ impl RetainedScrollPaintState {
                 paint_offset: node.paint_offset,
                 recorded_world: world.unwrap_or(raw_world),
                 properties: node.properties.nodes.clone(),
-                unrecorded_visual_rect: (paintable && !was_recorded)
-                    .then(|| {
-                        f.paint
-                            .ink_overflow
-                            .or(f.paint.self_ink_overflow)
-                            .or(f.paint.box_self_visual_overflow)
-                            .or(f.paint.text_glyph_ink)
-                    })
-                    .flatten()
-                    .map(|rect| PaintRect {
-                        x: node.paint_offset.x + rect.offset.x,
-                        y: node.paint_offset.y + rect.offset.y,
-                        width: rect.size.width,
-                        height: rect.size.height,
-                    })
-                    .filter(|rect| !rect.is_empty()),
+                unrecorded_visual_rect,
                 controls: f
                     .paint
                     .scrollbars
