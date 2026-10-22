@@ -76,7 +76,11 @@ pub trait DirectRendererBackend {
         index: usize,
         clip: Option<&[PointF; 4]>,
     ) -> io::Result<()>;
-    fn FinishDrawingRenderPass(&mut self) -> io::Result<()>;
+    fn FinishDrawingRenderPass(
+        &mut self,
+        input: &VizOutput,
+        pass: &AggregatedRenderPass,
+    ) -> io::Result<()>;
     fn FinishDrawingFrame(&mut self) -> io::Result<()>;
     // Rust failure cleanup: invalidate partially drawn backings; C++ has no
     // fallible draw return path corresponding to this backend error boundary.
@@ -495,7 +499,7 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
             self.backend.DoDrawQuad(frame.input, pass, index, None)?
         }
         self.FlushPolygons(frame.input, pass, &mut polygons, scissor, clipped)?;
-        self.backend.FinishDrawingRenderPass()?;
+        self.backend.FinishDrawingRenderPass(frame.input, pass)?;
         if !root
             && self
                 .backend

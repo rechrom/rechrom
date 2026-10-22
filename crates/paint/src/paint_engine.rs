@@ -465,8 +465,7 @@ impl Default for DisplayItem {
 pub use crate::paint_context::CalculateRectKnownToBeOpaqueForRecord;
 pub use image_resource::{
     ContainerKey as DocumentImageContainerKey, PaintImageContent,
-    PaintImageId as NativePaintImageId,
-    PaintImageMetadataUnavailable as ImageMetadataUnavailable,
+    PaintImageId as NativePaintImageId, PaintImageMetadataUnavailable as ImageMetadataUnavailable,
 };
 pub use layoutng_assembly::internal::layout_input::PaintImage as NativePaintImage;
 

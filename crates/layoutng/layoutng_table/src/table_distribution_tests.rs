@@ -48,7 +48,8 @@ fn native_table_size_distribution_matches_unchanged_cpp() {
 }
 fn distribution_body() {
     let inputs = include_str!("../../../../artifacts/cpp-reference/table-distribution-input.tsv");
-    let expected = include_str!("../../../../artifacts/cpp-reference/table-distribution-results.tsv");
+    let expected =
+        include_str!("../../../../artifacts/cpp-reference/table-distribution-results.tsv");
     assert_eq!(inputs.lines().count(), 32000);
     assert_eq!(expected.lines().count(), 32000);
     for (index, (input, result)) in inputs.lines().zip(expected.lines()).enumerate() {

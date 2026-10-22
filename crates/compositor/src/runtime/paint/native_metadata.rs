@@ -169,12 +169,11 @@ impl<'a, R: CpuSkiaBackend> MetadataFields<'a, R> {
                 R::FromPaintPath(path)
             }
             CpuPaintOpRef::Converted(CpuPaintOp::DrawPath { path, .. }) => path.as_ref().clone(),
-            CpuPaintOpRef::Converted(CpuPaintOp::ClipPath { path, .. }) => {
-                path.single_path()
-                    .expect("PaintInput validates native union path capability")
-                    .as_ref()
-                    .clone()
-            }
+            CpuPaintOpRef::Converted(CpuPaintOp::ClipPath { path, .. }) => path
+                .single_path()
+                .expect("PaintInput validates native union path capability")
+                .as_ref()
+                .clone(),
             _ => R::Path::default(),
         };
         Self { op, path }

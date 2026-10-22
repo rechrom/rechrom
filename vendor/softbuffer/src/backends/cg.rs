@@ -304,13 +304,14 @@ impl<D, W> CGImpl<D, W> {
         observer: Option<crate::NativeTransactionObserver>,
     ) -> Result<(), SoftBufferError> {
         let (surface, lease) = prepared.native.finish_with_lease()?;
-        self.targets.submitted(surface.0.id());
+        let contents_unchanged = self.targets.submitted(surface.0.id());
         let pending = Box::new(MainThreadPresent {
             layer: SendCALayer(self.layer.0.clone()),
             surface,
             _lease: lease,
             callback,
             observer,
+            contents_unchanged,
         });
         if MainThreadMarker::new().is_some() {
             pending.commit();
@@ -338,11 +339,21 @@ pub(crate) struct PreparedBuffer {
 
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
 impl PreparedBuffer {
-    pub(crate) fn width(&self) -> NonZeroU32 { self.width }
-    pub(crate) fn height(&self) -> NonZeroU32 { self.height }
-    pub(crate) fn row_stride(&self) -> usize { self.native.row_stride() }
-    pub(crate) fn pixels(&self) -> &[u32] { self.native.pixels() }
-    pub(crate) fn pixels_mut(&mut self) -> &mut [u32] { self.native.pixels_mut() }
+    pub(crate) fn width(&self) -> NonZeroU32 {
+        self.width
+    }
+    pub(crate) fn height(&self) -> NonZeroU32 {
+        self.height
+    }
+    pub(crate) fn row_stride(&self) -> usize {
+        self.native.row_stride()
+    }
+    pub(crate) fn pixels(&self) -> &[u32] {
+        self.native.pixels()
+    }
+    pub(crate) fn pixels_mut(&mut self) -> &mut [u32] {
+        self.native.pixels_mut()
+    }
 }
 
 #[derive(Debug)]
@@ -487,13 +498,19 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
         self.imp.layer.setOpaque(true);
         // SAFETY: Chromium bridges IOSurfaceRef to id for CALayer.contents.
         // Core Animation retains the IOSurface; CPU mapping is already unlocked.
-        unsafe {
-            self.imp.layer.setContents(Some(
-                &*(&*surface.0 as *const objc2_io_surface::IOSurfaceRef).cast::<AnyObject>(),
-            ));
+        let contents_unchanged = self.imp.targets.submitted(surface.0.id());
+        if contents_unchanged {
+            unsafe {
+                let _: () = msg_send![&*self.imp.layer, setContentsChanged];
+            }
+        } else {
+            unsafe {
+                self.imp.layer.setContents(Some(
+                    &*(&*surface.0 as *const objc2_io_surface::IOSurfaceRef).cast::<AnyObject>(),
+                ));
+            }
         }
         CATransaction::commit();
-        self.imp.targets.submitted(surface.0.id());
         if std::env::var_os("BROWSER_APP_PROFILE_PRESENT").is_some() {
             println!(
                 "iosurface-present unlock_ms={:.3} commit_ms={:.3} total_ms={:.3}",
@@ -506,13 +523,20 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
     }
 
     #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
-    fn present_with_callback(self, callback: crate::PresentCallback,
-        observer: Option<crate::NativeTransactionObserver>) -> Result<(), SoftBufferError> {
+    fn present_with_callback(
+        self,
+        callback: crate::PresentCallback,
+        observer: Option<crate::NativeTransactionObserver>,
+    ) -> Result<(), SoftBufferError> {
         let (surface, lease) = self.native.finish_with_lease()?;
-        self.imp.targets.submitted(surface.0.id());
+        let contents_unchanged = self.imp.targets.submitted(surface.0.id());
         let pending = Box::new(MainThreadPresent {
-            layer: SendCALayer(self.imp.layer.0.clone()), surface,
-            _lease: lease, callback, observer,
+            layer: SendCALayer(self.imp.layer.0.clone()),
+            surface,
+            _lease: lease,
+            callback,
+            observer,
+            contents_unchanged,
         });
         if MainThreadMarker::new().is_some() {
             pending.commit();
@@ -521,8 +545,11 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
             // DisplayCALayerTree::GotIOSurfaceFrame: native view/layer updates
             // belong to the window main thread, independently of CPU painting.
             unsafe {
-                dispatch_async_f(std::ptr::addr_of!(_dispatch_main_q).cast_mut(),
-                    Box::into_raw(pending).cast(), commit_on_main_thread);
+                dispatch_async_f(
+                    std::ptr::addr_of!(_dispatch_main_q).cast_mut(),
+                    Box::into_raw(pending).cast(),
+                    commit_on_main_thread,
+                );
             }
         }
         Ok(())
@@ -540,12 +567,15 @@ struct MainThreadPresent {
     _lease: std::sync::Arc<()>,
     callback: crate::PresentCallback,
     observer: Option<crate::NativeTransactionObserver>,
+    contents_unchanged: bool,
 }
 
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
 impl MainThreadPresent {
     fn commit(self: Box<Self>) {
-        let _main = MainThreadMarker::new().expect("IOSurface layer commit requires the main thread");
+        use objc2::ClassType;
+        let _main =
+            MainThreadMarker::new().expect("IOSurface layer commit requires the main thread");
         let started = std::time::Instant::now();
         if let Some(observer) = &self.observer {
             register_transaction_observer(observer.clone(), self.surface.0.id());
@@ -555,13 +585,42 @@ impl MainThreadPresent {
         self.layer.setOpaque(true);
         // SAFETY: IOSurface is a supported CALayer.contents object. The queued
         // lease remains live through this update and the native transaction.
+        if self.contents_unchanged {
+            // DisplayCALayerTree::GotIOSurfaceFrame uses the same private CA
+            // notification when software compositing reuses an IOSurface.
+            unsafe {
+                let _: () = msg_send![&*self.layer, setContentsChanged];
+            }
+        } else {
+            unsafe {
+                self.layer.setContents(Some(
+                    &*(&*self.surface.0 as *const objc2_io_surface::IOSurfaceRef)
+                        .cast::<AnyObject>(),
+                ));
+            }
+        }
+        // SoftwareOutputDeviceMac keeps the IOSurface alive until the native
+        // swap transaction completes.  Returning the target to the pool when
+        // CATransaction::commit merely returns lets a following frame rewrite
+        // bytes before WindowServer has consumed them.  It also acknowledges
+        // a swap that Core Animation has not accepted yet, defeating Viz's
+        // normal one-swap-in-flight backpressure.
+        let completion_state = std::sync::Arc::new(std::sync::Mutex::new(Some((
+            self.surface.clone(),
+            self._lease.clone(),
+            self.callback,
+        ))));
+        let completion = completion_state.clone();
+        let block = block2::RcBlock::new(move || {
+            if let Some((_surface, _lease, callback)) = completion.lock().unwrap().take() {
+                callback(started, std::time::Instant::now());
+            }
+        });
+        let transaction_class = CATransaction::class();
         unsafe {
-            self.layer.setContents(Some(
-                &*(&*self.surface.0 as *const objc2_io_surface::IOSurfaceRef).cast::<AnyObject>(),
-            ));
+            let _: () = msg_send![transaction_class, setCompletionBlock: &*block];
         }
         CATransaction::commit();
-        (self.callback)(started, std::time::Instant::now());
     }
 }
 
@@ -576,17 +635,23 @@ fn register_transaction_observer(observer: crate::NativeTransactionObserver, sur
     let supported: bool = unsafe {
         msg_send![transaction_class, respondsToSelector: sel!(addCommitHandler:forPhase:)]
     };
-    if !supported { return; }
-    for (phase, native_phase) in [(crate::NativeTransactionPhase::PreCommit, 1u32),
-        (crate::NativeTransactionPhase::PostCommit, 2u32)] {
+    if !supported {
+        return;
+    }
+    for (phase, native_phase) in [
+        (crate::NativeTransactionPhase::PreCommit, 1u32),
+        (crate::NativeTransactionPhase::PostCommit, 2u32),
+    ] {
         let observer = observer.clone();
         let handler = block2::RcBlock::new(move || {
             observer(phase, surface_id, std::time::Instant::now());
         });
         // Core Animation copies and retains the block for its transaction.
         // The undocumented handler is best-effort diagnostic feedback only.
-        unsafe { let _: () = msg_send![transaction_class, addCommitHandler: &*handler,
-            forPhase: native_phase]; }
+        unsafe {
+            let _: () = msg_send![transaction_class, addCommitHandler: &*handler,
+            forPhase: native_phase];
+        }
     }
 }
 
@@ -594,8 +659,11 @@ fn register_transaction_observer(observer: crate::NativeTransactionObserver, sur
 unsafe extern "C" {
     // dispatch_get_main_queue() is a header macro for this global object.
     static _dispatch_main_q: c_void;
-    fn dispatch_async_f(queue: *mut c_void, context: *mut c_void,
-        work: unsafe extern "C" fn(*mut c_void));
+    fn dispatch_async_f(
+        queue: *mut c_void,
+        context: *mut c_void,
+        work: unsafe extern "C" fn(*mut c_void),
+    );
 }
 
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]

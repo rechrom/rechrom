@@ -362,11 +362,7 @@ mod tests {
             let object = native(root, id);
             let object_result = cached(object);
             let pixels = |f: &FragmentNode| {
-                raster::RasterizePaintArtifactTransparent(
-                    &paint::paint_engine::Paint(f),
-                    320,
-                    200,
-                )
+                raster::RasterizePaintArtifactTransparent(&paint::paint_engine::Paint(f), 320, 200)
             };
             for offset in [
                 Offset { x: 25.0, y: 30.0 },

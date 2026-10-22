@@ -74,7 +74,10 @@ impl RasterPoolImages {
         size: crate::adapter::geometry::Size,
         format: &crate::adapter::resource_types::SharedImageFormat,
     ) -> Option<RasterSharedImage> {
-        match self.provider.CreateSharedImage(self.ids.Next(), size, format) {
+        match self
+            .provider
+            .CreateSharedImage(self.ids.Next(), size, format)
+        {
             Ok(image) => Some(image),
             Err(error) => {
                 self.failure.OnRasterFailure(error);
@@ -124,8 +127,7 @@ impl ExternalRasterBufferProvider {
         }
     }
 }
-impl RasterBufferProvider<CpuCompositorTypes<SkRegion>> for ExternalRasterBufferProvider
-{
+impl RasterBufferProvider<CpuCompositorTypes<SkRegion>> for ExternalRasterBufferProvider {
     fn Shutdown(&mut self) {
         if let Err(error) = self.provider.Shutdown() {
             self.failure.OnRasterFailure(error);

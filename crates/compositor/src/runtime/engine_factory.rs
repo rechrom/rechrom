@@ -200,6 +200,7 @@ pub(crate) fn Create(
         executors.raster,
         commands.clone(),
         options.events.clone(),
+        config.raster_worker_limit,
     )));
     let stats = Arc::new(NativeRenderingStats::new(HostImplRenderingStatsId(owner)));
     let native = Arc::new(NativeFactoryCapabilities {
@@ -430,7 +431,13 @@ impl NativeFactoryOptions {
             defer_impl_invalidation: true,
             defer_impl_invalidation_frames: 4,
             scroll_event_dispatch_mode: "DispatchScrollEventsUntilDeadline".into(),
-            wait_for_late_scroll_events: true,
+            // Chromium enables late-scroll deadline waiting only when
+            // InputHandler is bound to an InputHandlerProxy/CTEQ client whose
+            // HasQueuedInput() reports frame-aligned input. This embedding
+            // dispatches wheel input synchronously on the impl sequence and
+            // has no CTEQ client, so waiting would spend one third of every
+            // frame on an input queue that cannot become non-empty.
+            wait_for_late_scroll_events: false,
             wait_for_late_scroll_events_deadline_ratio: 0.333,
             renderer_image_decode_working_set_bytes: 128 * 1024 * 1024,
             browser_image_decode_working_set_bytes: 128 * 1024 * 1024,
@@ -443,6 +450,14 @@ impl NativeFactoryOptions {
         let mut settings = LayerTreeSettings::new(picture.as_ref());
         // Source: third_party/blink/renderer/platform/widget/compositing/layer_tree_settings.cc:364.
         settings.use_layer_lists = true;
+        // Chromium enables fractional commit deltas only when the experimental
+        // FractionalScrollOffsets runtime feature is enabled. That feature is
+        // disabled by default; keep cc's source default so Blink receives
+        // integer committed offsets and the residual remains compositor-owned.
+        // Source: third_party/blink/renderer/platform/widget/compositing/
+        //         layer_tree_settings.cc:364-370.
+        // Source: content/public/common/content_features.cc:521.
+        settings.commit_fractional_scroll_deltas = false;
         // This assembly implements the renderer's pending-tree ProxyImpl
         // protocol even when both logical sequences use one injected executor.
         // Source settings defaults target SingleThreadProxy and commit active;
@@ -497,7 +512,14 @@ impl NativeFactoryOptions {
                     kNoCompositorFrameAcks: false,
                 },
                 slim_scheduler: false,
-                webview_scheduler: true,
+                // This Page uses Chromium's threaded renderer compositor
+                // protocol with an external BeginFrame source. WebView's
+                // synchronous-compositor state machine requires
+                // using_synchronous_renderer_compositor and changes deadline,
+                // invalidation, and activation policy; selecting it here made
+                // an ordinary desktop commit miss the current frame's tile
+                // preparation window.
+                webview_scheduler: false,
                 registered_trace_categories: Default::default(),
                 enabled_trace_categories: Default::default(),
             },
@@ -514,7 +536,11 @@ impl NativeFactoryOptions {
                 allow_debug_file_output: false,
             },
             input: NativeInputConfig {
-                wait_for_late_scroll_events: true,
+                // Keep this capability in lockstep with the picture feature
+                // above. InputHandler::BindToClient is what installs Chromium's
+                // queue-aware client; until that boundary exists, immediate
+                // impl dispatch must use the ordinary regular deadline.
+                wait_for_late_scroll_events: false,
                 overscroll_effect_on_non_root_scrollers: true,
                 snap_fling_near_extremes: true,
                 limit_scroll_delta_to_scroller_size: true,

@@ -34,6 +34,7 @@ pub trait InputDelegateForCompositor<H: InputHandlerTypes> {
         host: &mut C,
         commit_data: &mut H::CompositorCommitData,
         main_thread_mutator_host: Option<&H::MutatorHost>,
+        next_bmf: bool,
     );
     // Source: cc/input/compositor_input_interfaces.h:57-59.
     fn TickAnimations(&mut self, monotonic_time: TimeTicks);

@@ -18,8 +18,8 @@ use layoutng_style::style::{
 use skia::{
     include::core::SkPathTypes::{SkPathDirection, SkPathVerb},
     src::core::{
-        SkContourMeasure::SkContourMeasureIter, SkPath::SkPath,
-        SkPathBuilder::SkPathBuilder, SkPoint::SkPoint, SkRect::SkRect,
+        SkContourMeasure::SkContourMeasureIter, SkPath::SkPath, SkPathBuilder::SkPathBuilder,
+        SkPoint::SkPoint, SkRect::SkRect,
     },
 };
 
@@ -80,11 +80,7 @@ fn point_and_tangent_at_length(path: &SkPath, distance: f32) -> PathPointAndTang
             let local_distance = (distance - contour_start).clamp(0.0, contour.length());
             let mut position = SkPoint::default();
             let mut tangent = SkPoint::default();
-            if contour.getPosTan(
-                local_distance,
-                Some(&mut position),
-                Some(&mut tangent),
-            ) {
+            if contour.getPosTan(local_distance, Some(&mut position), Some(&mut tangent)) {
                 return PathPointAndTangent {
                     x: position.fX,
                     y: position.fY,

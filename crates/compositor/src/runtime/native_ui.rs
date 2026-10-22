@@ -41,7 +41,10 @@ pub trait NativeUiRasterServices: Send + Sync {
 use super::{
     engine_factory::NativeFactoryCapabilities,
     host_resources::SharedMapping,
-    resources::{RasterResourceSource, RasterSyncToken, RasterSynchronizationType, RasterTransferableResource},
+    resources::{
+        RasterResourceSource, RasterSyncToken, RasterSynchronizationType,
+        RasterTransferableResource,
+    },
 };
 use crate::{
     adapter::{geometry::SizeF, layer_tree_host_impl::*, layer_tree_impl::ResourceId},
@@ -57,7 +60,11 @@ impl NativeUiServices {
     }
     fn CheckSink(&self, sink: HostImplFrameSinkId) {
         assert_eq!(
-            self.native.frame_sink.lock().expect("raster frame sink").id(),
+            self.native
+                .frame_sink
+                .lock()
+                .expect("raster frame sink")
+                .id(),
             sink
         )
     }

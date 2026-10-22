@@ -4,7 +4,7 @@ use super::{
     execution::{EngineTask, EngineTaskQueue, ExecutorTaskGraphRunner},
     native_images::CpuNativeImageServices,
     native_services::NativeEventSink,
-    raster_resources::{RasterAllocationIds, ExternalRasterBufferProvider, EngineRasterFailure},
+    raster_resources::{EngineRasterFailure, ExternalRasterBufferProvider, RasterAllocationIds},
     types::{CpuCompositorTypes, CpuSkiaBackend},
 };
 use crate::{
@@ -51,6 +51,7 @@ impl<R: CpuSkiaBackend> TileExecution<R> {
         raster: Arc<dyn CompositorExecutor>,
         commands: EngineTaskQueue,
         events: Arc<dyn NativeEventSink>,
+        raster_worker_limit: usize,
     ) -> Self {
         let diagnostics = Arc::new(TileDiagnostics {
             origin: origin.clone(),
@@ -74,6 +75,7 @@ impl<R: CpuSkiaBackend> TileExecution<R> {
                 raster,
                 commands.clone(),
                 diagnostics.clone(),
+                raster_worker_limit,
             )),
             diagnostics,
             origin,

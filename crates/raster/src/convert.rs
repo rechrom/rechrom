@@ -920,9 +920,7 @@ mod font_identity_tests {
             }]),
             ..Default::default()
         };
-        let render = |artifact: &PaintArtifact| {
-            crate::RasterizePaintArtifact(artifact, 180, 48)
-        };
+        let render = |artifact: &PaintArtifact| crate::RasterizePaintArtifact(artifact, 180, 48);
         let mislabeled = render(&artifact);
         assert!(mislabeled
             .chunks_exact(4)

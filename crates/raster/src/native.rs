@@ -19,13 +19,13 @@ use compositor_core::{
         resource_types::{SharedImageFormat, SinglePlaneFormat},
     },
     runtime::{
+        paint::{NativeRasterSource, RasterImageProviderRef, RasterTransform},
         raster_execution::{
-            RasterBuffer, RasterBufferProviderBackend, RasterResourceLease, RasterPlayback,
+            RasterBuffer, RasterBufferProviderBackend, RasterPlayback, RasterResourceLease,
         },
-        paint::{RasterImageProviderRef, NativeRasterSource, RasterTransform},
         resources::{
-            CommandBufferNamespace, RasterDumpGuid, RasterSharedImage, RasterSyncToken, RasterWriteMapping,
-            NativeSharedImage,
+            CommandBufferNamespace, NativeSharedImage, RasterDumpGuid, RasterSharedImage,
+            RasterSyncToken, RasterWriteMapping,
         },
         skia::SkRegion,
     },
@@ -148,7 +148,11 @@ impl RasterWriteMapping for HostMemoryWrite {
             .row_bytes
     }
     fn bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.pixels.as_mut().expect("live raster write lease").pixels
+        &mut self
+            .pixels
+            .as_mut()
+            .expect("live raster write lease")
+            .pixels
     }
 }
 impl Drop for HostMemoryWrite {

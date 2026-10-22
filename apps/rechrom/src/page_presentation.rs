@@ -1,6 +1,6 @@
 //! Completed Page output transport. Page owns the only compositor and renderer.
 use crate::{chrome::DragRegion, engine::Viewport};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 pub(crate) type Document = (u64, u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ContentFrameProvenance {
@@ -10,6 +10,8 @@ pub(crate) struct ContentFrameProvenance {
     /// Page output was produced. This is the cross-sequence equivalent of
     /// Chromium's DataForCommit ownership boundary.
     pub main_frame_epoch: u64,
+    /// Last impl scroll callback incorporated by this Page output.
+    pub compositor_scroll_sequence: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameProvenance {
@@ -20,7 +22,20 @@ pub(crate) struct FrameProvenance {
 pub(crate) struct PageFrame {
     pub provenance: FrameProvenance,
     pub viewport: Viewport,
+    /// Chromium CompositorFrameMetadata::is_handling_interaction. Viz carries
+    /// this through aggregation so the platform presenter can apply its
+    /// native interaction-frame presentation policy.
+    pub is_handling_interaction: bool,
     pub pixels: Arc<Vec<u32>>,
+    pub recycler: Option<mpsc::Sender<Arc<Vec<u32>>>>,
+}
+impl Drop for PageFrame {
+    fn drop(&mut self) {
+        if let Some(recycler) = self.recycler.take() {
+            let pixels = std::mem::take(&mut self.pixels);
+            let _ = recycler.send(pixels);
+        }
+    }
 }
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct DeviceRect {

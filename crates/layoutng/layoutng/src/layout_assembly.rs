@@ -72,4 +72,46 @@ impl LayoutAssembly {
         environment.Commit(root);
         snapshot
     }
+
+    /// Export one laid-out subtree while borrowing the document root's native
+    /// layout environment. Chromium's font resolver and other per-frame
+    /// services belong to LocalFrame/LayoutView, not to the dirty descendant
+    /// chosen for fragment replacement.
+    ///
+    /// # Safety
+    /// Both pointers must belong to the same live LayoutObject tree and the
+    /// subtree must have a successful current LayoutResult. The caller holds
+    /// exclusive access to LayoutEngine for the duration of this operation.
+    pub unsafe fn ExportFragmentSubtree(
+        &self,
+        environment_root: *mut crate::internal::layout_object::LayoutObject,
+        subtree_root: *mut crate::internal::layout_object::LayoutObject,
+        space: &crate::internal::layout_input::ConstraintSpace,
+    ) -> layoutng_fragment_tree::fragment_tree::FragmentNode {
+        use crate::internal::{layout_box::LayoutBox, layout_pass_scope::LayoutPassScope};
+        assert!(!environment_root.is_null() && !subtree_root.is_null());
+        let _heap = foundation::LayoutHeapScope::new();
+        let _pass = LayoutPassScope::new(&self.algorithms, &self.objects);
+        let subtree_box = foundation::DynamicTo::<LayoutBox>(subtree_root);
+        assert!(!subtree_box.is_null(), "snapshot root must be a LayoutBox");
+        let result = unsafe { &*subtree_box }.GetLayoutResult(0);
+        assert!(
+            !result.is_null(),
+            "layout must finish before exporting fragments"
+        );
+        let mut environment =
+            self.boundary
+                .create_environment
+                .expect("layout environment")(unsafe { &mut *environment_root }, space);
+        let snapshot = self
+            .boundary
+            .export_tree
+            .expect("fragment snapshot exporter")(
+            unsafe { &mut *subtree_root },
+            unsafe { &*result },
+            space,
+        );
+        environment.Commit(unsafe { &mut *environment_root });
+        snapshot
+    }
 }

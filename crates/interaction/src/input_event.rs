@@ -139,7 +139,7 @@ pub struct NativeWheelMetadata {
 pub struct WheelEvent {
     /// InputHandler disposition supplied by the compositor. DOM dispatch still
     /// runs; its default scroll is synchronized through main-frame deltas.
-    pub compositor_handled: bool,
+    pub compositor_owned: bool,
     pub phase: WheelPhase,
     pub rails_mode: WheelRailsMode,
     pub native: Option<NativeWheelMetadata>,
@@ -167,7 +167,7 @@ impl WheelEvent {
     /// WebMouseWheelEvent::CanCoalesce / HaveConsistentPhase: compare both
     /// original native phases, but not timestamps; reversal is not a boundary.
     pub fn CanCoalesce(&self, next: &Self) -> bool {
-        self.compositor_handled == next.compositor_handled
+        self.compositor_owned == next.compositor_owned
             && self.modifiers == next.modifiers
             && self.delta_units == next.delta_units
             && self.phase == next.phase

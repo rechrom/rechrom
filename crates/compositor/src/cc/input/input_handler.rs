@@ -1726,6 +1726,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         host: &mut C,
         data: &mut CompositorCommitData,
         mutator: Option<&B::MutatorHost>,
+        next_bmf: bool,
     ) {
         if host.ActiveTree_LayerListIsEmpty() {
             return;
@@ -1743,6 +1744,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
                 setting!(host, commit_fractional_scroll_deltas),
                 snapped,
                 mutator,
+                next_bmf,
             )
         );
         data.scroll_type = self.last_latched_scroll_source_type_;
@@ -3369,8 +3371,9 @@ impl<B: InputHandlerTypes> InputDelegateForCompositor<B> for InputHandler<B> {
         host: &mut C,
         data: &mut B::CompositorCommitData,
         mutator: Option<&B::MutatorHost>,
+        next_bmf: bool,
     ) {
-        InputHandler::ProcessCommitDeltas(self, host, data, mutator)
+        InputHandler::ProcessCommitDeltas(self, host, data, mutator, next_bmf)
     }
     fn TickAnimations(&mut self, time: TimeTicks) {
         InputHandler::TickAnimations(self, time)

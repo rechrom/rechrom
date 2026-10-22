@@ -7395,6 +7395,7 @@ impl DocumentStyleEngine {
                         match_result: match_result.clone(),
                         root_font_size: root,
                         color_scheme_settings,
+                        system_colors: crate::resolver::production_style_resolver::ProductionSystemColorContext::default(),
                         text_link_text_color,
                         is_document_element,
                         pseudo_id,

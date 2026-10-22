@@ -6,10 +6,10 @@ use std::time::Instant;
 fn wheel_coalescing_preserves_compositor_default_action_disposition() {
     let mut queue = FrameAlignedInputQueue::default();
     let now = Instant::now();
-    for (compositor_handled, dy) in [(true, 20.), (true, -20.), (false, 10.)] {
+    for (compositor_owned, dy) in [(true, 20.), (true, -20.), (false, 10.)] {
         queue.Push(
             InputEvent::Wheel(WheelEvent {
-                compositor_handled,
+                compositor_owned,
                 phase: WheelPhase::kChanged,
                 delta: Offset { x: 0., y: dy },
                 ..Default::default()
@@ -22,13 +22,13 @@ fn wheel_coalescing_preserves_compositor_default_action_disposition() {
     let InputEvent::Wheel(wheel) = entry.input else {
         panic!("wheel")
     };
-    assert!(wheel.compositor_handled);
+    assert!(wheel.compositor_owned);
     assert_eq!(wheel.delta.y, 0.);
     assert_eq!(entry.samples, 2);
     let InputEvent::Wheel(wheel) = queue.PopFront().unwrap().input else {
         panic!("wheel")
     };
-    assert!(!wheel.compositor_handled);
+    assert!(!wheel.compositor_owned);
     assert_eq!(wheel.delta.y, 10.);
     assert!(queue.IsEmpty());
 }

@@ -114,11 +114,17 @@ fn draw_page_surfaces(
     {
         return Err(io::Error::other("invalid window target"));
     }
-    for row in pixels
-        .chunks_exact_mut(stride)
-        .take(viewport.height as usize)
-    {
-        row[..viewport.width as usize].fill(0);
+    // The normal browser scene covers the complete output (chrome plus page).
+    // Clearing that target first writes every pixel twice and can push an
+    // otherwise ready scroll frame past its display-link latch. Keep the clear
+    // for sparse scenes; complete scenes overwrite every visible pixel below.
+    if !placements_cover_viewport(pages, viewport) {
+        for row in pixels
+            .chunks_exact_mut(stride)
+            .take(viewport.height as usize)
+        {
+            row[..viewport.width as usize].fill(0);
+        }
     }
     for (frame, destination) in pages {
         if frame.viewport.width != destination.width || frame.viewport.height != destination.height
@@ -152,6 +158,59 @@ fn draw_page_surfaces(
         }
     }
     Ok(())
+}
+
+fn placements_cover_viewport(
+    pages: &[(
+        &crate::page_presentation::PageFrame,
+        crate::page_presentation::DeviceRect,
+    )],
+    viewport: crate::engine::Viewport,
+) -> bool {
+    let width = viewport.width as i64;
+    let height = viewport.height as i64;
+    if width == 0 || height == 0 {
+        return true;
+    }
+    let mut rectangles = Vec::with_capacity(pages.len());
+    let mut y_edges = vec![0, height];
+    for (_, destination) in pages {
+        let left = (destination.x as i64).clamp(0, width);
+        let top = (destination.y as i64).clamp(0, height);
+        let right = (destination.x as i64 + destination.width as i64).clamp(0, width);
+        let bottom =
+            (destination.y as i64 + destination.height as i64).clamp(0, height);
+        if left < right && top < bottom {
+            rectangles.push((left, top, right, bottom));
+            y_edges.extend([top, bottom]);
+        }
+    }
+    y_edges.sort_unstable();
+    y_edges.dedup();
+    y_edges.windows(2).all(|band| {
+        let (top, bottom) = (band[0], band[1]);
+        if top == bottom {
+            return true;
+        }
+        let mut intervals: Vec<_> = rectangles
+            .iter()
+            .filter_map(|&(left, rect_top, right, rect_bottom)| {
+                (rect_top <= top && rect_bottom >= bottom).then_some((left, right))
+            })
+            .collect();
+        intervals.sort_unstable();
+        let mut covered = 0;
+        for (left, right) in intervals {
+            if left > covered {
+                return false;
+            }
+            covered = covered.max(right);
+            if covered >= width {
+                return true;
+            }
+        }
+        false
+    })
 }
 
 #[cfg(test)]
@@ -331,7 +390,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         &mut self,
         prepared: PreparedWindowFrame,
         present_sequence: u64,
-        on_present: softbuffer::PresentCallback,
+        on_swap_ack: softbuffer::PresentCallback,
     ) -> io::Result<()> {
         let context = browser_tracing::context();
         let ready_at = std::time::Instant::now();
@@ -352,7 +411,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
                     ("present_sequence", present_sequence as f64),
                 ],
             );
-            on_present(started, finished);
+            on_swap_ack(started, finished);
         });
         static OPTICAL_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let optical_probe = *OPTICAL_PROBE.get_or_init(|| {

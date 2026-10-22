@@ -1,9 +1,9 @@
-//! Page-side wheel synchronization and main-thread fallback after cancelable
-//! DOM event dispatch.
+//! Page-side synchronization for the mutually exclusive compositor and
+//! main-thread wheel routes.
 //!
 //! Ordinary precise-pixel viewport scrolling is owned by the compositor's
 //! InputHandler/ScrollTree counterpart. Page retains the DOM scroll offset and
-//! handles gestures which cannot use that fast path, including blocking
+//! handles gestures assigned to the main thread, including blocking
 //! listeners, non-composited nested scrollers, and programmatic/test scrolls.
 use super::*;
 use interaction::input_event::{WheelEvent, WheelPhase};
@@ -162,15 +162,14 @@ impl Page {
             match effect {
                 CompositorMainThreadEffect::RequestMainFrame => requested_main_frame = true,
                 CompositorMainThreadEffect::ScrollOffsetChanged {
-                    element, offset, ..
+                    sequence,
+                    element,
+                    offset,
+                    ..
                 } => {
                     let Some((owner, target)) = self.CompositorScrollOwner(element) else {
                         continue;
                     };
-                    let sequence = self
-                        .processed_compositor_scroll_sequence
-                        .wrapping_add(1)
-                        .max(1);
                     self.ApplyCompositorScrollOffset(
                         sequence,
                         owner,
@@ -286,7 +285,7 @@ impl Page {
         wheel: &WheelEvent,
         target_node_id: Option<u64>,
     ) -> io::Result<()> {
-        if wheel.compositor_handled {
+        if wheel.compositor_owned {
             // InputHandler already moved the impl tree. Main receives its
             // actual (clamped) delta at BeginMainFrame, including corrections.
             if matches!(wheel.phase, WheelPhase::kEnded | WheelPhase::kCancelled) {

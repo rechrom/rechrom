@@ -56,6 +56,22 @@ lifecycle, raster, compositing, or presentation cause, improve the tracing and
 report generation first and iterate on it as needed so that the performance
 tool can diagnose and verify the optimization.
 
+Use `apps/rechrom/fixtures/native_trackpad_scroll.jsonl` to replay a recorded real macOS trackpad event stream when reproducing and diagnosing scroll-experience problems.
+
+For strict input-to-first-visible-frame measurements, replay that fixture as
+native macOS scroll events through the normal AppKit/winit entry path, drive a
+high-contrast page marker directly from scroll offset, and timestamp input plus
+ScreenCaptureKit frame PTS in the same monotonic clock domain. Randomize the
+event's VSync phase and collect enough runs to report min, p50, p95, and missed
+frame counts for Rechrom and Chromium under identical rendering settings. SCK
+PTS measures WindowServer-visible presentation, not physical panel emission.
+Keep the SCK callback below the frame budget: for the full-width color-row
+fixture, hash one dense vertical scanline instead of the full page, record the
+callback's own processing time, and distinguish missing SCK samples from
+missing browser submissions. A synchronous HTTP input driver can also create
+false input gaps; use native replay for visible-window measurements and treat
+background protocol injection as a downstream pipeline check only.
+
 Match the native page's CSS viewport and device-pixel ratio when reproducing
 scroll performance; headless defaults to DPR 1, so use
 `--force-device-scale-factor 2` for a DPR 2 display. Reaching the final scroll

@@ -147,12 +147,9 @@ impl CpuPaintImageValue for NativeImageLease {
                 "software image requires an actual bitmap allocation",
             )
         })?;
-        let converted = skia::raster_target::premultiply_rgba8888(
-            input.width,
-            input.height,
-            pixels,
-        )
-        .ok_or_else(|| std::io::Error::other("invalid software image bitmap allocation"))?;
+        let converted =
+            skia::raster_target::premultiply_rgba8888(input.width, input.height, pixels)
+                .ok_or_else(|| std::io::Error::other("invalid software image bitmap allocation"))?;
         let _ = self.software_image.set(Arc::new(converted));
         Ok(self
             .software_image

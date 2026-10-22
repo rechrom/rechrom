@@ -5,9 +5,8 @@ use crate::SoftBufferError;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained};
 use objc2_core_graphics::kCGColorSpaceSRGB;
 use objc2_io_surface::{
-    kIOSurfaceAllocSize, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
-    kIOSurfaceColorSpace, kIOSurfacePixelFormat, kIOSurfaceWidth, IOSurfaceLockOptions,
-    IOSurfaceRef,
+    kIOSurfaceAllocSize, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceColorSpace,
+    kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth, IOSurfaceLockOptions, IOSurfaceRef,
 };
 use std::{ptr::NonNull, slice, sync::Arc};
 
@@ -15,7 +14,8 @@ use std::{ptr::NonNull, slice, sync::Arc};
 pub(super) struct SendSurface(pub CFRetained<IOSurfaceRef>);
 // SAFETY: IOSurface lifetime, queries and lock/unlock are thread-safe. Mutable
 // CPU access is only exposed by the unique Surface buffer borrow after checking
-// WindowServer use and excluding the last submitted target; no writable aliases.
+// WindowServer use and retaining queued mappings through their native commit;
+// no writable aliases exist.
 unsafe impl Send for SendSurface {}
 
 #[derive(Debug)]
@@ -37,8 +37,14 @@ impl TargetPool {
         // Chromium gfx::CreateIOSurface reserves even width/height, then asks
         // IOSurface to align row pitch and allocation size. Visible size stays
         // unchanged. CPU mappings expose only the visible rows plus padding.
-        let allocation_width = width.checked_add(1).ok_or_else(|| error("IOSurface width overflow"))? & !1;
-        let allocation_height = height.checked_add(1).ok_or_else(|| error("IOSurface height overflow"))? & !1;
+        let allocation_width = width
+            .checked_add(1)
+            .ok_or_else(|| error("IOSurface width overflow"))?
+            & !1;
+        let allocation_height = height
+            .checked_add(1)
+            .ok_or_else(|| error("IOSurface height overflow"))?
+            & !1;
         let minimum_stride = allocation_width
             .checked_mul(4)
             .ok_or_else(|| error("IOSurface stride overflow"))?;
@@ -50,10 +56,12 @@ impl TargetPool {
         if width == 0 || stride < minimum_stride || stride % 4 != 0 {
             return Err(error("invalid IOSurface row alignment"));
         }
-        let minimum_alloc_size = stride.checked_mul(allocation_height)
+        let minimum_alloc_size = stride
+            .checked_mul(allocation_height)
             .filter(|&n| n <= isize::MAX as usize)
             .ok_or_else(|| error("IOSurface allocation overflow"))?;
-        let alloc_size = IOSurfaceRef::align_property(unsafe { kIOSurfaceAllocSize }, minimum_alloc_size);
+        let alloc_size =
+            IOSurfaceRef::align_property(unsafe { kIOSurfaceAllocSize }, minimum_alloc_size);
         if alloc_size < minimum_alloc_size || alloc_size > isize::MAX as usize {
             return Err(error("IOSurface allocation overflow"));
         }
@@ -62,11 +70,7 @@ impl TargetPool {
         let reusable = self
             .buffers
             .iter()
-            .find(|s| {
-                Arc::strong_count(&s.lease) == 1
-                    && Some(s.surface.0.id()) != self.last_submitted
-                    && !s.surface.0.is_in_use()
-            })
+            .find(|s| Arc::strong_count(&s.lease) == 1 && !s.surface.0.is_in_use())
             .map(|s| (s.surface.clone(), s.lease.clone()));
         let (surface, lease) = if let Some(surface) = reusable {
             surface
@@ -122,8 +126,8 @@ impl TargetPool {
             });
             (surface, lease)
         };
-        // SAFETY: no external CPU/GPU accesses to this not-in-use mapping. The
-        // last submitted target stays excluded until a different one is submitted.
+        // SAFETY: no external CPU/GPU accesses to this not-in-use mapping. A
+        // queued target retains an extra lease until its CA transaction commits.
         if unsafe {
             surface
                 .0
@@ -150,8 +154,13 @@ impl TargetPool {
             locked: true,
         })
     }
-    pub fn submitted(&mut self, id: u32) {
+    /// Record the surface installed in the CALayer and report whether the
+    /// layer already names this IOSurface. Chromium uses this distinction to
+    /// call `setContentsChanged` when reusing the same software buffer.
+    pub fn submitted(&mut self, id: u32) -> bool {
+        let unchanged = self.last_submitted == Some(id);
         self.last_submitted = Some(id);
+        unchanged
     }
 }
 #[derive(Debug)]
@@ -218,7 +227,13 @@ mod tests {
             let mut second = pool.acquire(width, height).unwrap();
             assert_ne!(first.surface.0.id(), second.surface.0.id());
             assert_eq!(first.pixels().len(), first.row_stride() * height);
-            assert_eq!(first.row_stride() * 4, IOSurfaceRef::align_property(unsafe { kIOSurfaceBytesPerRow }, ((width + 1) & !1) * 4));
+            assert_eq!(
+                first.row_stride() * 4,
+                IOSurfaceRef::align_property(
+                    unsafe { kIOSurfaceBytesPerRow },
+                    ((width + 1) & !1) * 4
+                )
+            );
             assert!(first.surface.0.alloc_size() >= first.row_stride() * 4 * ((height + 1) & !1));
             assert!(first.row_stride() >= width);
             first.pixels_mut().fill(0xff112233);
@@ -249,13 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn submitted_target_is_excluded_resize_and_pool_are_bounded() {
+    fn submitted_target_can_be_reused_after_native_release() {
         let mut pool = TargetPool::default();
         let submitted = pool.acquire(319, 7).unwrap().finish().unwrap();
-        pool.submitted(submitted.0.id());
+        assert!(!pool.submitted(submitted.0.id()));
         let next = pool.acquire(319, 7).unwrap();
-        assert_ne!(next.surface.0.id(), submitted.0.id());
+        assert_eq!(next.surface.0.id(), submitted.0.id());
         drop(next);
+        assert!(pool.submitted(submitted.0.id()));
         let mappings: Vec<_> = (0..6).map(|_| pool.acquire(319, 7).unwrap()).collect();
         assert_eq!(pool.buffers.len(), 4);
         let mut ids: Vec<_> = mappings.iter().map(|m| m.surface.0.id()).collect();

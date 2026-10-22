@@ -134,8 +134,8 @@ pub fn LowerPaintRecord<R: CpuSkiaBackend>(
                         values.clone(),
                     )
                     .unwrap_or(CpuPaintShader::ImagePattern {
-                    source,
-                    mask_layer: None,
+                        source,
+                        mask_layer: None,
                     }),
                 ));
                 output.push(CpuPaintOp::DrawRect(rect(op.rect), f));
@@ -400,14 +400,14 @@ fn LowerMask<R: CpuSkiaBackend>(
             flags: f,
         });
         if layer.clip_radii.HasRadius() {
-        out.push(CpuPaintOp::ClipPath {
+            out.push(CpuPaintOp::ClipPath {
                 path: clip_path::<R>(paint::paint_clip_path::rounded_bounds(
                     layer.clip_rect,
                     layer.clip_radii,
-            )),
-            difference: false,
-            antialias: true,
-        });
+                )),
+                difference: false,
+                antialias: true,
+            });
         } else {
             // Source clips rectangular mask layers with clipRect. Building an
             // equivalent zero-radius path changes the translated replay route

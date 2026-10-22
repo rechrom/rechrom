@@ -287,8 +287,8 @@ pub fn Paint(root: &FragmentNode) -> DisplayItemList {
 pub mod cc {
     pub mod paint {
         pub mod blend_mode;
-        pub mod color;
         pub mod clear_for_opaque_raster;
+        pub mod color;
         pub mod color_filter;
         pub mod discardable_image_map;
         pub mod draw_looper;
@@ -296,11 +296,11 @@ pub mod cc {
         pub mod filter_operations;
         pub mod paint_flags;
         pub mod paint_op;
-    pub mod paint_op_buffer;
-    pub mod paint_op_buffer_iterator;
-    pub mod path_effect;
-    pub mod render_surface_filters;
-    pub mod sampling_options;
+        pub mod paint_op_buffer;
+        pub mod paint_op_buffer_iterator;
+        pub mod path_effect;
+        pub mod render_surface_filters;
+        pub mod sampling_options;
         pub mod solid_color_analyzer;
         pub mod tile_mode;
     }

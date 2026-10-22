@@ -586,10 +586,11 @@ mod tests {
             include_str!("../../../../artifacts/cpp-reference/table-column-constraints-input.tsv")
                 .lines()
                 .collect::<Vec<_>>();
-        let results =
-            include_str!("../../../../artifacts/cpp-reference/table-column-constraints-results.tsv")
-                .lines()
-                .collect::<Vec<_>>();
+        let results = include_str!(
+            "../../../../artifacts/cpp-reference/table-column-constraints-results.tsv"
+        )
+        .lines()
+        .collect::<Vec<_>>();
         assert_eq!(inputs.len(), 4416);
         assert_eq!(results.len(), inputs.len());
         for (index, (line, result)) in inputs.iter().zip(results).enumerate() {

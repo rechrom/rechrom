@@ -229,7 +229,8 @@ fn native_objects_body() {
         }
         dump(unsafe { &*root }, "0", stage, &ids, &mut actual);
     }
-    let expected = include_str!("../../../../artifacts/cpp-reference/table-native-tree-results.tsv");
+    let expected =
+        include_str!("../../../../artifacts/cpp-reference/table-native-tree-results.tsv");
     if actual != expected {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts");
         std::fs::write(root.join("table-native-tree-actual.tsv"), &actual).unwrap();

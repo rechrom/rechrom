@@ -359,7 +359,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
             geometry(&actual, &mut actual_geometry);
             geometry(&fresh, &mut fresh_geometry);
             assert_eq!(actual_geometry, fresh_geometry, "step {step}");
-                    {
+            {
                 let pixels = |fragment: &FragmentNode| {
                     raster::RasterizePaintArtifactTransparent(
                         &paint::paint_engine::Paint(fragment),

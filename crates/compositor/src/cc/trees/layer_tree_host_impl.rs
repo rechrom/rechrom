@@ -2033,7 +2033,12 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         let mut commit_data = Box::new(CompositorCommitData::default());
         self.WithInputHandler(context, |input, host| {
             if let Some(input) = input {
-                input.ProcessCommitDeltas(host, &mut commit_data, main_thread_mutator_host);
+                input.ProcessCommitDeltas(
+                    host,
+                    &mut commit_data,
+                    main_thread_mutator_host,
+                    next_bmf,
+                );
             }
         });
         self.CollectScrollbarUpdatesForCommit(&mut commit_data);
@@ -11705,6 +11710,7 @@ mod source_input_host {
                 crate::cc::input::scroll_snap_data::TargetSnapAreaElementIds,
             >,
             mutator: Option<&<B as InputHostTypes>::MutatorHost>,
+            next_bmf: bool,
         ) {
             let trees = self.InputActiveTree().property_trees();
             trees.scroll_tree().CollectScrollDeltas(
@@ -11713,6 +11719,7 @@ mod source_input_host {
                 fractional,
                 &snapped,
                 mutator.map(|m| m as &dyn crate::adapter::property_tree::PropertyTreeMutatorHost),
+                next_bmf,
                 trees.state(),
             );
         }
@@ -16877,6 +16884,15 @@ pub(crate) mod source_tile_manager_runtime {
         pub raster_provider: &'a mut Option<Box<<Cpu<R> as HostImplTypes>::RasterBufferProvider>>,
         pub raster_queries: &'a mut Option<Box<<Cpu<R> as HostImplTypes>::RasterQueryQueue>>,
         pub services: &'a mut dyn HostImplServices<Cpu<R>>,
+        // C++ carries direct PictureLayerTiling*/PictureLayerImpl* identities.
+        // Resolve the Rust IDs once per native TileManager call so hot raster
+        // queue iteration keeps the same O(1) owner lookup semantics instead
+        // of rescanning every layer for every tile.
+        pub picture_locations:
+            HashMap<PictureLayerTilingClientId, (LayerTreeId, i32)>,
+        pub tiling_locations: HashMap<PictureLayerTilingId, (LayerTreeId, i32)>,
+        pub tiling_set_locations:
+            HashMap<PictureLayerTilingSetId, (LayerTreeId, i32)>,
     }
     impl<R: CpuSkiaBackend> Runtime<'_, R> {
         fn ReadFields(&self) -> TileReadFields<'_, R> {
@@ -16941,60 +16957,61 @@ pub(crate) mod source_tile_manager_runtime {
         }
         fn FindPictureIn<'a>(
             trees: [Option<&'a LayerTreeImpl<Cpu<R>>>; 3],
+            locations: &HashMap<PictureLayerTilingClientId, (LayerTreeId, i32)>,
             client: PictureLayerTilingClientId,
         ) -> (
             &'a crate::cc::layers::picture_layer_impl::PictureLayerImpl<Cpu<R>>,
             &'a LayerTreeImpl<Cpu<R>>,
         ) {
-            for tree in trees.into_iter().flatten() {
-                for picture in tree.picture_layers() {
-                    if picture.identity().stable as u64 == client.0 {
-                        return (picture, tree);
-                    }
-                }
-            }
-            panic!("native Picture client pointer must belong to a current resident tree")
+            let &(tree_id, layer_id) = locations
+                .get(&client)
+                .expect("native Picture client pointer must belong to a current resident tree");
+            let tree = trees
+                .into_iter()
+                .flatten()
+                .find(|tree| tree.id == tree_id)
+                .expect("indexed Picture tree must remain resident for the manager call");
+            let picture = tree
+                .LayerById(layer_id)
+                .and_then(|layer| layer.AsPictureLayer())
+                .expect("indexed Picture layer must remain resident for the manager call");
+            debug_assert_eq!(picture.identity().stable as u64, client.0);
+            (picture, tree)
         }
         fn FindTilingIn<'a>(
             trees: [Option<&'a LayerTreeImpl<Cpu<R>>>; 3],
+            locations: &HashMap<PictureLayerTilingId, (LayerTreeId, i32)>,
             id: PictureLayerTilingId,
         ) -> &'a PictureLayerTiling<Cpu<R>> {
-            for tree in trees.into_iter().flatten() {
-                for picture in tree.picture_layers() {
-                    if let Some(tiling) = picture.picture_layer_tiling_set().TilingByIdIfPresent(id)
-                    {
-                        return tiling;
-                    }
-                }
-            }
-            panic!("native tiling pointer must belong to a current resident tree")
+            let &(tree_id, layer_id) = locations
+                .get(&id)
+                .expect("native tiling pointer must belong to a current resident tree");
+            trees
+                .into_iter()
+                .flatten()
+                .find(|tree| tree.id == tree_id)
+                .and_then(|tree| tree.LayerById(layer_id))
+                .and_then(|layer| layer.AsPictureLayer())
+                .and_then(|picture| picture.picture_layer_tiling_set().TilingByIdIfPresent(id))
+                .expect("indexed tiling must remain resident for the manager call")
         }
         fn TilingMutableIn<'a>(
             trees: [Option<&'a mut LayerTreeImpl<Cpu<R>>>; 3],
+            locations: &HashMap<PictureLayerTilingId, (LayerTreeId, i32)>,
             id: PictureLayerTilingId,
         ) -> &'a mut PictureLayerTiling<Cpu<R>> {
             use crate::adapter::layer_tree_impl::LayerTreeLayer;
-            for tree in trees.into_iter().flatten() {
-                let layer_id = tree
-                    .picture_layers()
-                    .find(|picture| {
-                        picture
-                            .picture_layer_tiling_set()
-                            .TilingByIdIfPresent(id)
-                            .is_some()
-                    })
-                    .map(|picture| picture.base().id());
-                if let Some(layer_id) = layer_id {
-                    return tree
-                        .LayerByIdMutable(layer_id)
-                        .expect("actual source layer")
-                        .AsPictureLayerMut()
-                        .expect("source Picture subtype")
-                        .picture_layer_tiling_set_mut()
-                        .TilingByIdMut(id);
-                }
-            }
-            panic!("native mutable tiling pointer must belong to a current resident tree")
+            let &(tree_id, layer_id) = locations
+                .get(&id)
+                .expect("native mutable tiling pointer must belong to a current resident tree");
+            trees
+                .into_iter()
+                .flatten()
+                .find(|tree| tree.id == tree_id)
+                .and_then(|tree| tree.LayerByIdMutable(layer_id))
+                .and_then(|layer| layer.AsPictureLayerMut())
+                .map(|picture| picture.picture_layer_tiling_set_mut().TilingByIdMut(id))
+                .expect("indexed mutable tiling must remain resident for the manager call")
         }
     }
     impl<R: CpuSkiaBackend> PictureLayerTilingQueries<Cpu<R>> for Runtime<'_, R> {
@@ -17016,6 +17033,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.picture_locations,
                 id,
             )
             .0
@@ -17028,6 +17046,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.tiling_locations,
                 id,
             )
         }
@@ -17056,6 +17075,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.picture_locations,
                 id,
             )
             .0
@@ -17070,6 +17090,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.picture_locations,
                 PictureLayerTilingClientId(id.0),
             )
             .0
@@ -17078,22 +17099,22 @@ pub(crate) mod source_tile_manager_runtime {
     }
     impl<R: CpuSkiaBackend> RasterQueueContext<Cpu<R>> for Runtime<'_, R> {
         fn TilingSetById(&self, id: PictureLayerTilingSetId) -> &PictureLayerTilingSet<Cpu<R>> {
-            for tree in [
+            let &(tree_id, layer_id) = self
+                .tiling_set_locations
+                .get(&id)
+                .expect("native tiling-set pointer must belong to a current resident tree");
+            [
                 self.active.as_deref(),
                 self.pending.as_deref(),
                 self.recycle.as_deref(),
             ]
             .into_iter()
             .flatten()
-            {
-                for picture in tree.picture_layers() {
-                    let set = picture.picture_layer_tiling_set();
-                    if set.identity() == id {
-                        return set;
-                    }
-                }
-            }
-            panic!("source resident tiling set identity")
+            .find(|tree| tree.id == tree_id)
+            .and_then(|tree| tree.LayerById(layer_id))
+            .and_then(|layer| layer.AsPictureLayer())
+            .map(|picture| picture.picture_layer_tiling_set())
+            .expect("indexed tiling set must remain resident for the manager call")
         }
         fn IsCCSlimmingEnabled(&self) -> bool {
             self.services.PictureReadEnvironment().IsCCSlimmingEnabled()
@@ -17546,6 +17567,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref_mut(),
                     self.recycle.as_deref_mut(),
                 ],
+                &self.tiling_locations,
                 id.tiling,
             )
             .TileByIdMutable(id)
@@ -17563,6 +17585,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref_mut(),
                     self.recycle.as_deref_mut(),
                 ],
+                &self.tiling_locations,
                 id.tiling,
             );
             (tiling.TileByIdMutable(id), pool_ref)
@@ -17575,8 +17598,8 @@ pub(crate) mod source_tile_manager_runtime {
                 self.pending.as_deref(),
                 self.recycle.as_deref(),
             ];
-            let tile = Self::FindTilingIn(trees, id.tiling).TileById(id);
-            let source = Self::FindTilingIn(trees, source)
+            let tile = Self::FindTilingIn(trees, &self.tiling_locations, id.tiling).TileById(id);
+            let source = Self::FindTilingIn(trees, &self.tiling_locations, source)
                 .raster_source()
                 .as_deref()
                 .expect("source raster source");
@@ -17597,6 +17620,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.tiling_locations,
                 source,
             );
             let (picture, _) = Self::FindPictureIn(
@@ -17605,6 +17629,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.picture_locations,
                 tiling.client(),
             );
             ImagePartitionParts {
@@ -17614,6 +17639,7 @@ pub(crate) mod source_tile_manager_runtime {
                         self.pending.as_deref(),
                         self.recycle.as_deref(),
                     ],
+                    &self.tiling_locations,
                     id.tiling,
                 )
                 .TileById(id),
@@ -17676,6 +17702,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.tiling_locations,
                 id.tiling,
             )
             .TileById(id);
@@ -17935,6 +17962,7 @@ pub(crate) mod source_tile_manager_runtime {
                     self.pending.as_deref(),
                     self.recycle.as_deref(),
                 ],
+                &self.tiling_locations,
                 id.tiling,
             )
             .TileById(id);
@@ -18381,6 +18409,34 @@ pub(crate) fn WithCpuTileManagerContext<R: crate::runtime::types::CpuSkiaBackend
         &mut source_tile_manager_runtime::Runtime<'_, R>,
     ) -> Output,
 ) -> Output {
+    use crate::adapter::layer_tree_impl::LayerTreeLayer;
+    let mut picture_locations = HashMap::new();
+    let mut tiling_locations = HashMap::new();
+    let mut tiling_set_locations = HashMap::new();
+    for tree in [
+        host.active_tree_.as_deref(),
+        host.pending_tree_.as_deref(),
+        host.recycle_tree_.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for picture in tree.picture_layers() {
+            let layer_id = picture.base().id();
+            let location = (tree.id, layer_id);
+            picture_locations.insert(
+                crate::adapter::picture_layer_tiling::PictureLayerTilingClientId(
+                    picture.identity().stable as u64,
+                ),
+                location,
+            );
+            let set = picture.picture_layer_tiling_set();
+            tiling_set_locations.insert(set.identity(), location);
+            for index in 0..set.num_tilings() {
+                tiling_locations.insert(set.tiling_at(index).identity(), location);
+            }
+        }
+    }
     let external = context.services.TileExecution();
     let output = {
         let mut execution = external
@@ -18420,6 +18476,9 @@ pub(crate) fn WithCpuTileManagerContext<R: crate::runtime::types::CpuSkiaBackend
             raster_provider: &mut host.raster_buffer_provider_,
             raster_queries: &mut host.pending_raster_queries_,
             services: context.services,
+            picture_locations,
+            tiling_locations,
+            tiling_set_locations,
         };
         body(&mut host.tile_manager_, &mut runtime)
     };

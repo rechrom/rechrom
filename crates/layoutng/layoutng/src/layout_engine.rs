@@ -6,14 +6,20 @@ use foundation::{
 use layoutng_fragment_tree::fragment_tree::pre_paint_revision::PrePaintRevisionTracker;
 use layoutng_fragment_tree::fragment_tree::FragmentNode;
 use layoutng_fragment_tree::layout_result::EStatus;
-use std::{collections::HashSet, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+};
 
 use crate::internal::layout_object_builder::LayoutObjectTree;
 use crate::{caret::FrameCaret, editing_state::LayoutEditingState};
 use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 
 use crate::internal::block_node::BlockNode;
-use crate::internal::boundary::layout_boundary::ScrollPaintPropertyIndex;
+use crate::internal::boundary::layout_boundary::{
+    ResolveLogicalParentOccurrences, ScrollPaintPropertyIndex,
+};
 use crate::internal::layout_algorithm_set::LayoutAlgorithmSet;
 use crate::internal::layout_box::LayoutBox;
 use crate::internal::layout_input::{ConstraintSpace, NodeKind};
@@ -91,6 +97,226 @@ fn UpdateFragmentPaintStyle(
     for child in &mut fragment.children {
         UpdateFragmentPaintStyle(child, node_id, style, found);
     }
+}
+
+fn SameOptionalArc<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn SameImageGeometry(
+    a: &crate::internal::layout_input::PaintImage,
+    b: &crate::internal::layout_input::PaintImage,
+) -> bool {
+    a.id == b.id
+        && a.paint_image_id == b.paint_image_id
+        && a.width == b.width
+        && a.height == b.height
+        && a.resolution_scale == b.resolution_scale
+        && a.orientation == b.orientation
+        && a.document_container_key == b.document_container_key
+}
+
+fn SameImageCatalogGeometry(
+    a: &[crate::internal::layout_input::PaintImage],
+    b: &[crate::internal::layout_input::PaintImage],
+) -> bool {
+    a.len() == b.len()
+        && a.iter().all(|left| {
+            b.iter()
+                .find(|right| right.id == left.id)
+                .is_some_and(|right| SameImageGeometry(left, right))
+        })
+}
+
+/// ConstraintSpace carries both geometry and shared host services. DOM emits
+/// the resolved value before every layout pass, so compare it with the
+/// resident value before invalidating a retained fragment snapshot. Provider
+/// identity is part of the comparison: replacing a service is a real input
+/// change even when its current answer happens to match.
+fn SameConstraintScalars(a: &ConstraintSpace, b: &ConstraintSpace) -> bool {
+    a.available_size == b.available_size
+        && a.fragmentainer_block_size == b.fragmentainer_block_size
+        && a.compatibility_mode == b.compatibility_mode
+        && a.printing == b.printing
+        && a.vertical_scroll_enforced == b.vertical_scroll_enforced
+        && a.scrollbar_theme == b.scrollbar_theme
+        && a.minimum_font_physical_size == b.minimum_font_physical_size
+        && a.device_pixel_ratio == b.device_pixel_ratio
+        && a.preferred_color_scheme == b.preferred_color_scheme
+        && a.document_image_container == b.document_image_container
+        && a.layout_zoom_factor == b.layout_zoom_factor
+        && a.canvas_draw_element_enabled == b.canvas_draw_element_enabled
+        && a.prefer_non_composited_scrolling_enabled == b.prefer_non_composited_scrolling_enabled
+        && a.viewport == b.viewport
+        && a.control_theme == b.control_theme
+}
+
+fn SameConstraints(a: &ConstraintSpace, b: &ConstraintSpace) -> bool {
+    SameConstraintScalars(a, b)
+        && SameOptionalArc(&a.hyphenation, &b.hyphenation)
+        && SameOptionalArc(&a.phrase_break, &b.phrase_break)
+        && SameOptionalArc(&a.text_transform, &b.text_transform)
+        && SameOptionalArc(&a.font_backend_factory, &b.font_backend_factory)
+        && a.font_queries == b.font_queries
+        && a.fonts == b.fonts
+        // Decoded pixels, animation metadata and revision are Paint resource
+        // inputs. Chromium invalidates layout only when intrinsic image
+        // geometry changes; Page publishes content-only mutations separately.
+        && SameImageCatalogGeometry(&a.images, &b.images)
+}
+
+fn CountFragmentNode(node: &FragmentNode, node_id: u64, count: &mut usize) {
+    *count += usize::from(node.node_id == node_id);
+    for child in &node.children {
+        CountFragmentNode(child, node_id, count);
+    }
+}
+
+fn MaxFragmentInstance(node: &FragmentNode) -> u64 {
+    node.children
+        .iter()
+        .map(MaxFragmentInstance)
+        .fold(node.fragment_instance_id, u64::max)
+}
+
+fn MaxFragmentainerInstance(node: &FragmentNode) -> u64 {
+    node.children
+        .iter()
+        .map(MaxFragmentainerInstance)
+        .fold(node.fragmentainer_instance_id, u64::max)
+}
+
+fn SameFragmentIdentity(a: &FragmentNode, b: &FragmentNode) -> bool {
+    a.node_id == b.node_id
+        && a.kind == b.kind
+        && a.text_start == b.text_start
+        && a.text_end == b.text_end
+}
+
+fn AdoptRetainedFragmentIds(
+    old: &FragmentNode,
+    new: &mut FragmentNode,
+    ids: &mut HashMap<u64, u64>,
+    next_fragment: &mut u64,
+    next_fragmentainer: &mut u64,
+) {
+    let exported_id = new.fragment_instance_id;
+    if SameFragmentIdentity(old, new) {
+        new.fragment_instance_id = old.fragment_instance_id;
+        new.fragmentainer_instance_id = old.fragmentainer_instance_id;
+        new.paint.logical_tree_order = old.paint.logical_tree_order;
+    } else {
+        new.fragment_instance_id = *next_fragment;
+        *next_fragment = next_fragment.saturating_add(1);
+        if new.fragmentainer_instance_id != 0 {
+            new.fragmentainer_instance_id = *next_fragmentainer;
+            *next_fragmentainer = next_fragmentainer.saturating_add(1);
+        }
+    }
+    ids.insert(exported_id, new.fragment_instance_id);
+
+    let mut claimed = vec![false; old.children.len()];
+    for (index, child) in new.children.iter_mut().enumerate() {
+        let old_index = old
+            .children
+            .get(index)
+            .filter(|old_child| SameFragmentIdentity(old_child, child))
+            .map(|_| index)
+            .or_else(|| {
+                old.children
+                    .iter()
+                    .enumerate()
+                    .position(|(old_index, old_child)| {
+                        !claimed[old_index] && SameFragmentIdentity(old_child, child)
+                    })
+            });
+        if let Some(old_index) = old_index {
+            claimed[old_index] = true;
+            AdoptRetainedFragmentIds(
+                &old.children[old_index],
+                child,
+                ids,
+                next_fragment,
+                next_fragmentainer,
+            );
+        } else {
+            AssignFreshFragmentIds(child, ids, next_fragment, next_fragmentainer);
+        }
+    }
+}
+
+fn AssignFreshFragmentIds(
+    node: &mut FragmentNode,
+    ids: &mut HashMap<u64, u64>,
+    next_fragment: &mut u64,
+    next_fragmentainer: &mut u64,
+) {
+    let exported_id = node.fragment_instance_id;
+    node.fragment_instance_id = *next_fragment;
+    *next_fragment = next_fragment.saturating_add(1);
+    if node.fragmentainer_instance_id != 0 {
+        node.fragmentainer_instance_id = *next_fragmentainer;
+        *next_fragmentainer = next_fragmentainer.saturating_add(1);
+    }
+    ids.insert(exported_id, node.fragment_instance_id);
+    for child in &mut node.children {
+        AssignFreshFragmentIds(child, ids, next_fragment, next_fragmentainer);
+    }
+}
+
+fn RemapLogicalParents(node: &mut FragmentNode, ids: &HashMap<u64, u64>) {
+    if let Some(parent) = node.paint.logical_parent_fragment_instance_id {
+        if let Some(remapped) = ids.get(&parent) {
+            node.paint.logical_parent_fragment_instance_id = Some(*remapped);
+        }
+    }
+    for child in &mut node.children {
+        RemapLogicalParents(child, ids);
+    }
+}
+
+fn ReplaceFragmentNode(
+    node: &mut FragmentNode,
+    node_id: u64,
+    replacement: &mut FragmentNode,
+    next_fragment: &mut u64,
+    next_fragmentainer: &mut u64,
+) -> bool {
+    if node.node_id == node_id {
+        let old_offset = node.offset;
+        let old_logical_parent_node = node.paint.logical_parent_node_id;
+        let old_logical_parent_fragment = node.paint.logical_parent_fragment_instance_id;
+        let mut ids = HashMap::new();
+        AdoptRetainedFragmentIds(
+            node,
+            replacement,
+            &mut ids,
+            next_fragment,
+            next_fragmentainer,
+        );
+        RemapLogicalParents(replacement, &ids);
+        replacement.offset = old_offset;
+        replacement.paint.logical_parent_node_id = old_logical_parent_node;
+        replacement.paint.logical_parent_fragment_instance_id = old_logical_parent_fragment;
+        *node = std::mem::take(replacement);
+        return true;
+    }
+    for child in &mut node.children {
+        if ReplaceFragmentNode(
+            child,
+            node_id,
+            replacement,
+            next_fragment,
+            next_fragmentainer,
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 // cpp: layoutng/layout_engine.h:19-31
@@ -213,6 +439,10 @@ pub struct LayoutEngine {
     pending_scroll_ids_: HashSet<u64>,
     pending_paint_ids_: HashSet<u64>,
     pending_inline_ink_ids_: HashSet<u64>,
+    // A single Element::RebuildLayoutTree root may reuse the rest of the
+    // exported fragment tree after native layout. Multiple or unrelated
+    // mutations clear this proof and take the ordinary complete export.
+    pending_subtree_export_id_: Option<u64>,
     algorithms_: LayoutAlgorithmSet,
     objects_: LayoutObjectFactorySet,
     boundary_: LayoutBoundarySupport,
@@ -231,6 +461,7 @@ impl LayoutEngine {
             pending_scroll_ids_: HashSet::new(),
             pending_paint_ids_: HashSet::new(),
             pending_inline_ink_ids_: HashSet::new(),
+            pending_subtree_export_id_: None,
             algorithms_: assembly.algorithms,
             objects_: assembly.objects,
             boundary_: assembly.boundary,
@@ -254,6 +485,43 @@ impl LayoutEngine {
     /// Apply input changes without running layout. Native synchronization
     /// preserves client identities and invalidates layout exactly as before.
     pub fn ApplyMutation(&mut self, mutation: LayoutMutation<'_>) -> bool {
+        // EmitConstraints is deliberately unconditional at the DOM boundary:
+        // compatibility mode is resolved there. Do not let an identical
+        // value erase a valid local-layout export proof on every frame.
+        if let LayoutMutation::Constraints(space) = &mutation {
+            let same = SameConstraints(&self.constraints_, space);
+            let mut trace = browser_tracing::span("layout", "LayoutEngine.Constraints");
+            trace.set("same", same as u8 as f64);
+            trace.set(
+                "scalars_same",
+                SameConstraintScalars(&self.constraints_, space) as u8 as f64,
+            );
+            trace.set(
+                "fonts_same",
+                (self.constraints_.fonts == space.fonts) as u8 as f64,
+            );
+            trace.set(
+                "font_queries_same",
+                (self.constraints_.font_queries == space.font_queries) as u8 as f64,
+            );
+            trace.set(
+                "image_geometry_same",
+                SameImageCatalogGeometry(&self.constraints_.images, &space.images) as u8 as f64,
+            );
+            trace.set(
+                "providers_same",
+                (SameOptionalArc(&self.constraints_.hyphenation, &space.hyphenation)
+                    && SameOptionalArc(&self.constraints_.phrase_break, &space.phrase_break)
+                    && SameOptionalArc(&self.constraints_.text_transform, &space.text_transform)
+                    && SameOptionalArc(
+                        &self.constraints_.font_backend_factory,
+                        &space.font_backend_factory,
+                    )) as u8 as f64,
+            );
+            if same {
+                return true;
+            }
+        }
         // Native topology, style, constraints and layout results may change at
         // all other mutation entries. Never keep borrowed native pointers or
         // exported paths across them, even if the mutation later proves a noop.
@@ -269,6 +537,14 @@ impl LayoutEngine {
         ) {
             self.scroll_paint_index_ = None;
             self.pending_scroll_ids_.clear();
+        }
+        if !matches!(
+            &mutation,
+            LayoutMutation::SubtreeUpdate { .. }
+                | LayoutMutation::SelectionPaint { .. }
+                | LayoutMutation::EditingState(_)
+        ) {
+            self.pending_subtree_export_id_ = None;
         }
         match mutation {
             LayoutMutation::Constraints(space) => {
@@ -312,19 +588,32 @@ impl LayoutEngine {
             } => {
                 let mut trace = browser_tracing::span("layout", "LayoutEngine.SubtreeUpdate");
                 trace.set("node_id", node_id as f64);
+                trace.set("had_fragments", self.fragments.is_some() as u8 as f64);
                 let applied = self.tree_.as_mut().is_some_and(|tree| {
                     tree.UpdateSubtree(node_id, parent_id, |tree, parent| {
                         update(&mut LayoutTreeUpdate::new(tree), parent);
                     })
                 });
                 if applied {
-                    self.fragments = None;
+                    self.pending_subtree_export_id_ =
+                        match (self.pending_subtree_export_id_, self.fragments.is_some()) {
+                            (None, true) => Some(node_id),
+                            (Some(previous), true) if previous == node_id => Some(node_id),
+                            _ => {
+                                self.fragments = None;
+                                None
+                            }
+                        };
                     let stats = self.tree_.as_ref().unwrap().UpdateStats();
                     trace.set("created", stats.created as f64);
                     trace.set("reused", stats.reused as f64);
                     trace.set("updated", stats.updated as f64);
                     trace.set("removed", stats.removed as f64);
                 }
+                trace.set(
+                    "pending_export",
+                    self.pending_subtree_export_id_.is_some() as u8 as f64,
+                );
                 trace.set("applied", applied as u8 as f64);
                 applied
             }
@@ -485,6 +774,10 @@ impl LayoutEngine {
         &self.constraints_
     }
 
+    pub fn HasPendingSubtreeExport(&self) -> bool {
+        self.pending_subtree_export_id_.is_some() && self.fragments.is_some()
+    }
+
     fn RootPointer(&mut self) -> *mut LayoutObject {
         self.tree_
             .as_mut()
@@ -521,6 +814,11 @@ impl LayoutEngine {
         self.scroll_paint_index_ = None;
         self.pending_scroll_ids_.clear();
         let root = self.RootPointer();
+        let subtree_id = (purpose == LayoutUpdateKind::Paint)
+            .then_some(self.pending_subtree_export_id_)
+            .flatten();
+        self.pending_subtree_export_id_ = None;
+        let mut retained_fragments = subtree_id.and_then(|_| self.fragments.take());
         self.fragments = None;
         self.output_kind = purpose;
         trace.set(
@@ -531,12 +829,35 @@ impl LayoutEngine {
         // Unwinding leaves it empty; a subsequent success receives fresh
         // globally unique revisions instead of reusing a failed pass's basis.
         let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
-        if let Some(mut fragments) = self.RunLayout(
+        let exported = retained_fragments.is_none();
+        let layout_result = self.RunLayout(
             unsafe { &mut *root },
             &self.constraints_,
-            purpose == LayoutUpdateKind::Paint,
+            purpose == LayoutUpdateKind::Paint && exported,
             purpose,
-        ) {
+        );
+        let mut fragments = if exported {
+            layout_result
+        } else if layout_result.is_none() {
+            let target = subtree_id.unwrap();
+            retained_fragments.take().and_then(|mut retained| {
+                if self.ReplaceExportedSubtree(root, target, Rc::make_mut(&mut retained)) {
+                    trace.set("targeted_subtree_export", 1.0);
+                    Some(Rc::try_unwrap(retained).unwrap_or_else(|shared| (*shared).clone()))
+                } else {
+                    trace.set("targeted_subtree_fallback", 1.0);
+                    let assembly = LayoutAssembly {
+                        algorithms: self.algorithms_,
+                        objects: self.objects_,
+                        boundary: self.boundary_,
+                    };
+                    Some(assembly.ExportFragments(unsafe { &mut *root }, &self.constraints_))
+                }
+            })
+        } else {
+            layout_result
+        };
+        if let Some(mut fragments) = fragments.take() {
             if purpose == LayoutUpdateKind::Paint {
                 let _trace = browser_tracing::span("prepaint", "LayoutEngine.CertifyPaintInputs");
                 inputs.update(&mut fragments);
@@ -554,6 +875,62 @@ impl LayoutEngine {
             self.pre_paint_inputs_ = inputs;
             trace.set("published", 1.0);
         }
+    }
+
+    fn ReplaceExportedSubtree(
+        &mut self,
+        document_root: *mut LayoutObject,
+        node_id: u64,
+        retained: &mut FragmentNode,
+    ) -> bool {
+        let Some(tree) = self.tree_.as_mut() else {
+            return false;
+        };
+        let Some(object) = tree.OutputNodeMut(node_id) else {
+            return false;
+        };
+        let box_ = DynamicTo::<LayoutBox>(object as *mut LayoutObject);
+        if box_.is_null()
+            || unsafe { &*box_ }.GetLayoutResults().is_empty()
+            || unsafe { &*box_ }.GetLayoutResult(0).is_null()
+            || object.NeedsLayout()
+        {
+            return false;
+        }
+        let mut occurrences = 0usize;
+        CountFragmentNode(retained, node_id, &mut occurrences);
+        if occurrences != 1 {
+            return false;
+        }
+        let assembly = LayoutAssembly {
+            algorithms: self.algorithms_,
+            objects: self.objects_,
+            boundary: self.boundary_,
+        };
+        let mut replacement = unsafe {
+            assembly.ExportFragmentSubtree(
+                document_root,
+                object as *mut LayoutObject,
+                &self.constraints_,
+            )
+        };
+        let mut next_fragment = MaxFragmentInstance(retained).saturating_add(1);
+        let mut next_fragmentainer = MaxFragmentainerInstance(retained).saturating_add(1);
+        let replaced = ReplaceFragmentNode(
+            retained,
+            node_id,
+            &mut replacement,
+            &mut next_fragment,
+            &mut next_fragmentainer,
+        );
+        if replaced {
+            // ExportFragmentSubtree resolves logical parents only within its
+            // temporary subtree. Re-resolve every occurrence after insertion
+            // so retained and replacement nodes refer to instance ids in the
+            // same complete snapshot.
+            ResolveLogicalParentOccurrences(retained);
+        }
+        replaced
     }
 
     /// Re-export paint inputs from the resident layout result without running
@@ -1010,5 +1387,57 @@ impl LayoutEngine {
             heap_scope.AllowUnchangedReuse();
         }
         fragments
+    }
+}
+
+#[cfg(test)]
+mod incremental_fragment_tests {
+    use super::*;
+
+    fn fragment(node_id: u64, instance_id: u64) -> FragmentNode {
+        let mut node = FragmentNode::default();
+        node.node_id = node_id;
+        node.fragment_instance_id = instance_id;
+        node.paint.has_source = true;
+        node.paint.establishes_paint_state = true;
+        node
+    }
+
+    #[test]
+    fn subtree_replacement_resolves_logical_parent_in_retained_tree() {
+        let mut root = fragment(1, 1);
+        let logical_parent = fragment(200, 20);
+        let mut old_target = fragment(300, 30);
+        let mut old_child = fragment(400, 40);
+        old_child.paint.logical_parent_node_id = Some(200);
+        old_child.paint.logical_parent_fragment_instance_id = Some(20);
+        old_target.children.push(old_child);
+        root.children = vec![logical_parent, old_target];
+
+        // A standalone subtree export cannot see its logical parent in the
+        // retained sibling and therefore carries a stale occurrence id.
+        let mut replacement = fragment(300, 1);
+        let mut replacement_child = fragment(400, 2);
+        replacement_child.paint.logical_parent_node_id = Some(200);
+        replacement_child.paint.logical_parent_fragment_instance_id = Some(999);
+        replacement.children.push(replacement_child);
+
+        let mut next_fragment = 41;
+        let mut next_fragmentainer = 1;
+        assert!(ReplaceFragmentNode(
+            &mut root,
+            300,
+            &mut replacement,
+            &mut next_fragment,
+            &mut next_fragmentainer,
+        ));
+        ResolveLogicalParentOccurrences(&mut root);
+
+        assert_eq!(
+            root.children[1].children[0]
+                .paint
+                .logical_parent_fragment_instance_id,
+            Some(20)
+        );
     }
 }

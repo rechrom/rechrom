@@ -131,7 +131,7 @@ fn pump_events(
             // These are native UI effects. Headless never opens a DevTools
             // window or waits for a native presentation acknowledgement.
             UserEvent::OpenDevTools
-            | UserEvent::FramePresented(_)
+            | UserEvent::FrameSwapCompleted(_)
             | UserEvent::ChromeDragRegions { .. }
             | UserEvent::CursorChanged(_)
             | UserEvent::CaretChanged(_) => {}

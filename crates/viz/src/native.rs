@@ -95,6 +95,11 @@ impl VizOutput {
     pub fn Frame(&self) -> &AggregatedFrame {
         &self.frame
     }
+    /// Display-stage mutation performed after aggregation and before drawing.
+    /// Chromium's Display owns this interval and uses it for occlusion culling.
+    pub fn FrameMut(&mut self) -> &mut AggregatedFrame {
+        &mut self.frame
+    }
     pub fn Resource(&self, id: ResourceId) -> Option<Arc<NativeRasterResourceLease>> {
         self.resources.get(&id.0).cloned()
     }

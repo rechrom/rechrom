@@ -616,8 +616,13 @@ impl StyleColor {
         if self.IsCurrentColor() {
             return current_color;
         }
-        assert!(!self.IsUnresolvedColorFunction());
-        assert!(!self.HasColorKeyword());
+        // cpp: style_color.cc:501-507. System colors have already been
+        // resolved to the retained numeric payload before used-value time,
+        // even though their originating keyword remains attached. Ordinary
+        // keyword colors are converted by the production property builder;
+        // every retained used-value state therefore has an invalid effective
+        // keyword here.
+        debug_assert_eq!(self.EffectiveColorKeyword(), CSSValueID::kInvalid);
         self.GetColor()
     }
 

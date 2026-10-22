@@ -6,9 +6,7 @@ use compositor_core::{
         HostUICanvas, HostUIPixmap, HostUISharedImageUsage, HostUISourceBitmap, HostUISurface,
     },
     runtime::{
-        host_resources::{
-            NativeUiImage, SourceBitmap, UICanvas, UIImage, UIImageInfo, UISurface,
-        },
+        host_resources::{NativeUiImage, SourceBitmap, UICanvas, UIImage, UIImageInfo, UISurface},
         native_ui::NativeUiRasterServices,
         resources::RasterColorSpace,
     },
@@ -21,9 +19,7 @@ use skia::{
             SkCanvas::SrcRectConstraint, SkImageInfo::SkImageInfo, SkPixmap::SkPixmap,
             SkRect::SkRect,
         },
-        image::{
-            SkImage::SkImage, SkImage_RasterFactories::RasterFromPixmapCopy,
-        },
+        image::{SkImage::SkImage, SkImage_RasterFactories::RasterFromPixmapCopy},
     },
     RasterError,
 };

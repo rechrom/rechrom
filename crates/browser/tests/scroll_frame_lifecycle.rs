@@ -200,7 +200,7 @@ fn compositor_delta_acknowledgement_follows_commit_and_skips_second_default() {
         use layoutng_assembly::internal::layout_input::Offset;
         let mut page = fixture("body{height:230px}", "<div></div>", true);
         let wheel = WheelEvent {
-            compositor_handled: true,
+            compositor_owned: true,
             phase: WheelPhase::kBegan,
             delta: Offset { x: 0., y: 80. },
             position: Offset { x: 20., y: 20. },

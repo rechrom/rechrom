@@ -62,11 +62,7 @@ impl FilterOperations {
         let transform = ScaleTransform(scale);
         self.MapRect(rect, Some(&transform))
     }
-    pub fn MapRectReverse(
-        &self,
-        rect: Rect,
-        ctm: Option<&dyn FilterMapTransform>,
-    ) -> Rect {
+    pub fn MapRectReverse(&self, rect: Rect, ctm: Option<&dyn FilterMapTransform>) -> Rect {
         self.operations_
             .iter()
             .rev()

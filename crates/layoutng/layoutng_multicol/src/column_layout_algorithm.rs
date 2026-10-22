@@ -33,7 +33,6 @@ use layoutng_assembly::{
             ShrinkLogicalSize,
         },
         min_max_sizes::{MinMaxSizes, MinMaxSizesResult},
-        oof_positioned_node::FragmentedOofData,
         space_utils::SetTextBoxTrimOnChildSpaceBuilder,
     },
     layout_result::{EStatus, LayoutResult},
@@ -151,9 +150,6 @@ impl ColumnLayoutAlgorithm {
             let mut child = object.SlowFirstChild();
             while !child.is_null() {
                 let node = unsafe { &*child };
-                if node.IsOutOfFlowPositioned() {
-                    unsupported("multicol: fragmented out-of-flow descendants are not translated");
-                }
                 if node.IsColumnSpanAll() {
                     unsupported("multicol: column spanners are not translated");
                 }
@@ -334,11 +330,10 @@ impl ColumnLayoutAlgorithm {
         if !result.GetColumnSpannerPath().is_null() {
             unsupported("multicol: column spanners are not translated");
         }
-        if FragmentedOofData::HasOutOfFlowPositionedFragmentainerDescendants(
-            result.GetPhysicalFragment(),
-        ) {
-            unsupported("multicol: fragmented out-of-flow descendants are not translated");
-        }
+        // FragmentBuilder::AddChild propagates fragmentainer descendants from
+        // each column into the multicol builder. HandleOofsAndSpecialDescendants
+        // then runs the translated OutOfFlowLayoutPart after the final multicol
+        // size is known, matching the source's deferred fragmented-OOF path.
     }
 
     // column_layout_algorithm.cc:1495-1517.

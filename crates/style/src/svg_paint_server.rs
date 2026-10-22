@@ -937,7 +937,29 @@ fn PatternPrimitivesWithShapes(
             return Ok(());
         }
         let local_transform = if shapes.is_some() {
-            TransformMatrix::default()
+            // Mask recording already owns the canonical computed paint style.
+            // Carry each SVG graphics/container transform through the same
+            // retained command transform used by ordinary pattern content.
+            let mut resolved = TransformMatrix::default();
+            if let Some(transform) = Style(document, pending, node)
+                .and_then(|style| style.style.paint.transform.as_ref())
+            {
+                use layoutng::internal::paint_input::PaintTransformOperationKind;
+                for operation in &transform.operations {
+                    let operation = match operation.kind {
+                        PaintTransformOperationKind::kMatrix => operation.matrix,
+                        PaintTransformOperationKind::kTranslate
+                        | PaintTransformOperationKind::kTranslate3D
+                            if operation.percentages == Offset::default() && operation.z == 0.0 =>
+                        {
+                            Translation(operation.pixels.x, operation.pixels.y)
+                        }
+                        _ => return Err(PatternContentError::UnsupportedElement),
+                    };
+                    resolved = Multiply(&resolved, &operation);
+                }
+            }
+            resolved
         } else {
             Attribute(document, node, "transform")
                 .as_deref()
@@ -2116,8 +2138,8 @@ pub(crate) fn ResolveMaskDefinition(
             if native.EffectiveZoom() != 1.0 {
                 return Err("zoomed mask content recording".into());
             }
-            if paint.transform.is_some() || native.HasOffset() {
-                return Err("transformed mask content recording".into());
+            if native.HasOffset() {
+                return Err("offset mask content recording".into());
             }
             if !paint.filters.is_empty()
                 || paint.clip_path.is_some()

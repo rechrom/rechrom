@@ -24,7 +24,7 @@ use skia::{
         SkSamplingOptions::{SkFilterMode, SkSamplingOptions},
         SkTileMode::SkTileMode,
     },
-    raster_target::{PixelFormat, RasterTarget},
+    raster_target::{N32BlitMode, PixelFormat, RasterTarget},
     src::{
         core::{
             SkBlendMode::SkBlendMode,
@@ -45,6 +45,12 @@ use viz::{
     common::quads::aggregated_render_pass::{NativeDrawQuad, NativeSharedQuadState},
     native::{AggregatedRenderPass, VizOutput},
 };
+
+struct PendingDraw {
+    index: usize,
+    draw_region: Option<[PointF; 4]>,
+    scissor_rect: Option<Rect>,
+}
 
 /// Filter bounds consume only SkMatrix::mapVector. This adapter keeps the
 /// translated SkMatrix concrete type inside the translated renderer while the
@@ -68,8 +74,11 @@ pub struct TranslatedSoftwareRenderer {
     scissor_rect: Option<Rect>,
     linear_sampling: bool,
     profile_input: bool,
+    n32_tile_blit: bool,
     framebuffer_damage: BTreeMap<RenderPassId, Rect>,
     drawn_damage: BTreeMap<RenderPassId, Rect>,
+    pending_draws: Vec<PendingDraw>,
+    pending_clear: Option<(Rect, bool)>,
 }
 
 impl TranslatedSoftwareRenderer {
@@ -81,6 +90,7 @@ impl TranslatedSoftwareRenderer {
         self.update = RenderUpdate::default();
         self.linear_sampling = false;
         self.profile_input = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        self.n32_tile_blit = std::env::var_os("BROWSER_DISABLE_N32_TILE_BLIT").is_none();
         self.framebuffer_damage.clear();
         self.drawn_damage.clear();
         for pass in input.Frame().RenderPasses() {
@@ -98,7 +108,12 @@ impl TranslatedSoftwareRenderer {
     }
 
     fn FinishDrawingFrame(&mut self) -> io::Result<()> {
-        self.FinishDrawingRenderPass()
+        if self.current_pass.is_some() || !self.pending_draws.is_empty() {
+            return Err(io::Error::other(
+                "translated renderer ended a frame with an unfinished render pass",
+            ));
+        }
+        Ok(())
     }
 
     fn EnsureScissorTestDisabled(&mut self) {
@@ -109,48 +124,6 @@ impl TranslatedSoftwareRenderer {
         self.scissor_rect = Some(rect);
     }
 
-    /// Temporarily remove the active backing so drawing may also borrow already
-    /// completed child passes. The backing is reinserted even when drawing or
-    /// Canvas teardown fails.
-    fn WithCurrentTarget<T>(
-        &mut self,
-        draw: impl FnOnce(&mut Self, &mut RasterTarget<'_>) -> io::Result<T>,
-    ) -> io::Result<T> {
-        let id = self
-            .current_pass
-            .ok_or_else(|| io::Error::other("translated renderer has no active pass"))?;
-        let mut backing = self
-            .render_pass_bitmaps
-            .remove(&id)
-            .ok_or_else(|| io::Error::other("translated render-pass backing is unavailable"))?;
-        let result = match RasterTarget::new(
-            &mut backing.pixels,
-            backing.rect.width,
-            backing.rect.height,
-            backing.rect.width as usize * 4,
-            PixelFormat::Bgra8888,
-            None,
-        ) {
-            Ok(mut target) => {
-                let draw_result = draw(self, &mut target);
-                let finish_result = target.finish().map_err(|error| {
-                    raster_error("translated render-pass target finish failed", error)
-                });
-                match (draw_result, finish_result) {
-                    (Ok(value), Ok(())) => Ok(value),
-                    (Err(error), _) | (_, Err(error)) => Err(error),
-                }
-            }
-            Err(error) => Err(raster_error(
-                "translated render-pass target creation failed",
-                error,
-            )),
-        };
-        let old = self.render_pass_bitmaps.insert(id, backing);
-        debug_assert!(old.is_none());
-        result
-    }
-
     fn BeginDrawingRenderPass(
         &mut self,
         pass: &AggregatedRenderPass,
@@ -158,7 +131,11 @@ impl TranslatedSoftwareRenderer {
         update: Rect,
         viewport: Size,
     ) -> io::Result<()> {
-        self.FinishDrawingRenderPass()?;
+        if self.current_pass.is_some() || !self.pending_draws.is_empty() {
+            return Err(io::Error::other(
+                "translated renderer began a render pass before finishing the previous pass",
+            ));
+        }
         let backing = self
             .render_pass_bitmaps
             .get_mut(&pass.RenderPassId())
@@ -181,35 +158,17 @@ impl TranslatedSoftwareRenderer {
         } else {
             self.SetScissorTestRect(update);
         }
-        if needs_clear {
+        self.pending_clear = if needs_clear {
             let bounds = self.scissor_rect.unwrap_or(Rect::new(
                 0,
                 0,
                 self.current_rect.width,
                 self.current_rect.height,
             ));
-            let transparent = pass.has_transparent_background;
-            self.WithCurrentTarget(|_, target| {
-                let mut paint = SkPaint::default();
-                paint.setBlendMode(SkBlendMode::kSrc);
-                paint.setAntiAlias(false);
-                paint.setColor4f(
-                    &skia::src::core::SkColor::SkColor4f {
-                        fR: 0.,
-                        fG: 0.,
-                        fB: if transparent || !cfg!(debug_assertions) {
-                            0.
-                        } else {
-                            1.
-                        },
-                        fA: if transparent { 0. } else { 1. },
-                    },
-                    None,
-                );
-                unsafe { target.draw_rect(&rect(bounds), &paint) }
-                    .map_err(|error| raster_error("translated framebuffer clear failed", error))
-            })?;
-        }
+            Some((bounds, pass.has_transparent_background))
+        } else {
+            None
+        };
         self.update.passes += 1;
         Ok(())
     }
@@ -229,8 +188,9 @@ impl TranslatedSoftwareRenderer {
         target.clip_path(&path.detach(None), SkClipOp::kIntersect, false);
     }
 
-    fn DoDrawQuad(
+    fn DrawQuadIntoTarget(
         &mut self,
+        target: &mut RasterTarget<'_>,
         input: &VizOutput,
         pass: &AggregatedRenderPass,
         index: usize,
@@ -251,9 +211,8 @@ impl TranslatedSoftwareRenderer {
         let current_rect = self.current_rect;
         let scissor = self.scissor_rect;
         let settings = self.settings.clone();
-        self.WithCurrentTarget(|renderer, target| {
-            target.save();
-            let draw_result = (|| -> io::Result<()> {
+        target.save();
+        let draw_result = (|| -> io::Result<()> {
                 if let Some(scissor) = scissor {
                     target.clip_rect(&rect(scissor), SkClipOp::kIntersect, false);
                 }
@@ -272,7 +231,7 @@ impl TranslatedSoftwareRenderer {
                 target.set_matrix(&transform);
                 let antialias =
                     if settings.force_antialiasing || !is_scale_and_integer_translate(&transform) {
-                        renderer.linear_sampling = true;
+                        self.linear_sampling = true;
                         let exterior = quad.geometry.rect == shared.quad_layer_rect;
                         settings.allow_antialiasing && (settings.force_antialiasing || exterior)
                     } else {
@@ -293,22 +252,29 @@ impl TranslatedSoftwareRenderer {
                 match &quad.material {
                     QuadMaterial::SolidColor { .. } => {
                         Self::DrawSolidColorQuad(target, quad, shared, blend, antialias)?;
-                        renderer.update.solid_quads += 1;
+                        self.update.solid_quads += 1;
                     }
                     QuadMaterial::Tile { .. } => {
-                        Self::DrawTileQuad(target, input, quad, shared, blend, antialias)?;
-                        renderer.update.tile_quads += 1;
+                        self.DrawTileQuad(
+                            target,
+                            input,
+                            quad,
+                            shared,
+                            blend,
+                            antialias,
+                            draw_region.is_none(),
+                        )?;
+                        self.update.tile_quads += 1;
                     }
                     QuadMaterial::DebugBorder { .. } => {
                         Self::DrawDebugBorderQuad(target, quad, shared, blend)?;
                     }
                     QuadMaterial::CompositorRenderPass { .. } => {
-                        renderer
-                            .DrawRenderPassQuad(target, input, quad, shared, blend, antialias)?;
+                        self.DrawRenderPassQuad(target, input, quad, shared, blend, antialias)?;
                     }
                     QuadMaterial::Picture { .. } => {
                         Self::DrawPictureQuad(target, quad, shared)?;
-                        renderer.update.picture_quads += 1;
+                        self.update.picture_quads += 1;
                     }
                     QuadMaterial::SharedElement { .. } => {
                         return Err(io::Error::other(
@@ -316,13 +282,12 @@ impl TranslatedSoftwareRenderer {
                         ));
                     }
                 }
-                Ok(())
-            })();
-            let restore_result = target
-                .restore()
-                .map_err(|error| raster_error("translated draw-quad restore failed", error));
-            draw_result.and(restore_result)
-        })?;
+            Ok(())
+        })();
+        let restore_result = target
+            .restore()
+            .map_err(|error| raster_error("translated draw-quad restore failed", error));
+        draw_result.and(restore_result)?;
 
         if let Some(started) = quad_started {
             let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -386,12 +351,14 @@ impl TranslatedSoftwareRenderer {
     }
 
     fn DrawTileQuad(
+        &mut self,
         target: &mut RasterTarget<'_>,
         input: &VizOutput,
         quad: &NativeDrawQuad,
         shared: &NativeSharedQuadState,
         blend: SkBlendMode,
         antialias: bool,
+        has_rectangular_clip: bool,
     ) -> io::Result<()> {
         let QuadMaterial::Tile {
             resource_id,
@@ -402,33 +369,325 @@ impl TranslatedSoftwareRenderer {
         else {
             return Ok(());
         };
-        let lease = resource(input, *resource_id)?;
-        let image = lease_image(lease)?;
         let source = compositor_core::cc::base::math_util::MathUtil::ScaleRectProportional(
             *tex_coord_rect,
             RectF::from(quad.geometry.rect),
             RectF::from(quad.geometry.visible_rect),
         );
+        // A one-to-one, pixel-aligned translation samples every source pixel at
+        // its exact center. Linear and nearest filtering are therefore
+        // identical, while the latter lets raster Skia use its copy/blend fast
+        // path. Keep Chromium's requested filter for every scaled, rotated,
+        // skewed or fractional mapping.
+        let transform = shared.quad_to_target_transform.native();
+        let nearly = |a: f64, b: f64| (a - b).abs() <= 1. / 4096.;
+        let integral = |value: f64| (value - value.round()).abs() <= 1. / 4096.;
+        // Sprite eligibility depends on the complete source-to-device matrix,
+        // not on the source and CTM translations being integral separately.
+        // Equal fractional source and device origins cancel: every destination
+        // pixel center still lands exactly on a source pixel center. This is
+        // the same condition SkTreatAsSprite evaluates after drawImageRect has
+        // concatenated the subset matrix with the device CTM.
+        let device_left = quad.geometry.visible_rect.x as f64 + transform.rc(0, 3);
+        let device_top = quad.geometry.visible_rect.y as f64 + transform.rc(1, 3);
+        let pixel_aligned_one_to_one = nearly(source.width() as f64, quad.geometry.visible_rect.width as f64)
+            && nearly(source.height() as f64, quad.geometry.visible_rect.height as f64)
+            && nearly(transform.rc(0, 0), 1.)
+            && nearly(transform.rc(1, 1), 1.)
+            && nearly(transform.rc(0, 1), 0.)
+            && nearly(transform.rc(1, 0), 0.)
+            && integral(device_left - source.x() as f64)
+            && integral(device_top - source.y() as f64);
         let sampling = SkSamplingOptions::with_filter(if *nearest_neighbor {
             SkFilterMode::kNearest
         } else {
             SkFilterMode::kLinear
         });
+        let fractional = |value: f32| (value - value.round()).abs() > 1. / 4096.;
+        let fractional_source = fractional(source.x())
+            || fractional(source.y())
+            || fractional(source.right())
+            || fractional(source.bottom());
+        if self.profile_input {
+            let source_width = source.width().max(0.);
+            let source_height = source.height().max(0.);
+            let target_scale_x = (transform.rc(0, 0).powi(2) + transform.rc(1, 0).powi(2)).sqrt();
+            let target_scale_y = (transform.rc(0, 1).powi(2) + transform.rc(1, 1).powi(2)).sqrt();
+            let target_width = quad.geometry.visible_rect.width.max(0) as f64 * target_scale_x;
+            let target_height = quad.geometry.visible_rect.height.max(0) as f64 * target_scale_y;
+            self.update.tile_source_pixels = self.update.tile_source_pixels.saturating_add(
+                (f64::from(source_width) * f64::from(source_height)).round().max(0.) as u64,
+            );
+            self.update.tile_target_pixels = self.update.tile_target_pixels.saturating_add(
+                (target_width * target_height).round().max(0.) as u64,
+            );
+            self.update.tile_linear_quads += usize::from(!*nearest_neighbor);
+            self.update.tile_fractional_source_quads += usize::from(fractional_source);
+            self.update.tile_scaled_quads += usize::from(
+                (f64::from(source_width) - target_width).abs() > 1. / 4096.
+                    || (f64::from(source_height) - target_height).abs() > 1. / 4096.,
+            );
+            self.update.tile_blended_quads += usize::from(blend != SkBlendMode::kSrc);
+            let integer_translation = |value: f64| (value - value.round()).abs() <= 1. / 4096.;
+            self.update.tile_integer_translation_quads += usize::from(
+                integer_translation(transform.rc(0, 3))
+                    && integer_translation(transform.rc(1, 3)),
+            );
+        }
+        // Keep the immutable read lease scoped to this draw. Chromium's
+        // resource lifetime protocol releases it before cc attempts partial
+        // raster into the same backing on a later frame.
+        let lease = resource(input, *resource_id)?;
+        let alpha = skia::src::core::SkFloatingPoint::sk_float_round2int(
+            shared.opacity.clamp(0., 1.) * 255.,
+        )
+        .clamp(0, 255) as u8;
+        let mask = &shared.mask_filter_info;
+        let mut rounded_corner_regions = None;
+        let blit_eligible = self.n32_tile_blit
+            && pixel_aligned_one_to_one
+            && has_rectangular_clip
+            && !antialias
+            && !mask.HasGradientMask()
+            && matches!(blend, SkBlendMode::kSrc | SkBlendMode::kSrcOver);
+        if blit_eligible {
+            self.update.tile_blit_eligible_quads += 1;
+            let mapping = raster::native::MapResourceForRead(lease.as_ref())?;
+            let format = mapping.format();
+            if format
+                == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
+                || format
+                    == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRX_8888
+            {
+                let mode = if blend == SkBlendMode::kSrc {
+                    N32BlitMode::Src
+                } else {
+                    N32BlitMode::SrcOver
+                };
+
+                // Skia's sprite path can still use its row blitter under a
+                // rounded clip. Decompose the rrect into three disjoint,
+                // guaranteed-interior rectangles (top stem, full-width
+                // middle, bottom stem), then leave only the small corner
+                // pieces to Canvas. This preserves the exact rrect clip while
+                // avoiding an image shader over the large interior.
+                let visible = quad.geometry.visible_rect;
+                let mut direct_regions = Vec::with_capacity(3);
+                let mut corner_regions = Vec::with_capacity(4);
+                if mask.IsEmpty() {
+                    direct_regions.push(visible);
+                } else if mask.HasRoundedCorners() {
+                    // MaskFilterInfo is expressed in render-target space and
+                    // is installed before the quad-to-target matrix. Sprite
+                    // eligibility above guarantees this matrix is a pure 1:1
+                    // translation, so move the mask bounds back into the
+                    // quad's local space before intersecting tile geometry.
+                    let target_bounds = mask.rounded_corner_bounds.rect;
+                    let bounds = RectF::new(
+                        target_bounds.x() - transform.rc(0, 3) as f32,
+                        target_bounds.y() - transform.rc(1, 3) as f32,
+                        target_bounds.width(),
+                        target_bounds.height(),
+                    );
+                    let radii = &mask.rounded_corner_bounds.corner_radii;
+                    let left = (bounds.x() + radii[0].x().max(radii[3].x())).ceil() as i32;
+                    let right =
+                        (bounds.right() - radii[1].x().max(radii[2].x())).floor() as i32;
+                    let top = (bounds.y() + radii[0].y().max(radii[1].y())).ceil() as i32;
+                    let bottom =
+                        (bounds.bottom() - radii[3].y().max(radii[2].y())).floor() as i32;
+                    let bounds = Rect::FromBounds(
+                        bounds.x().ceil() as i32,
+                        bounds.y().ceil() as i32,
+                        bounds.right().floor() as i32,
+                        bounds.bottom().floor() as i32,
+                    );
+                    if left <= right && top <= bottom {
+                        direct_regions.push(Rect::FromBounds(left, bounds.y, right, top));
+                        direct_regions.push(Rect::FromBounds(
+                            bounds.x,
+                            top,
+                            bounds.right(),
+                            bottom,
+                        ));
+                        direct_regions.push(Rect::FromBounds(
+                            left,
+                            bottom,
+                            right,
+                            bounds.bottom(),
+                        ));
+                        corner_regions.push(Rect::FromBounds(
+                            bounds.x,
+                            bounds.y,
+                            left,
+                            top,
+                        ));
+                        corner_regions.push(Rect::FromBounds(
+                            right,
+                            bounds.y,
+                            bounds.right(),
+                            top,
+                        ));
+                        corner_regions.push(Rect::FromBounds(
+                            bounds.x,
+                            bottom,
+                            left,
+                            bounds.bottom(),
+                        ));
+                        corner_regions.push(Rect::FromBounds(
+                            right,
+                            bottom,
+                            bounds.right(),
+                            bounds.bottom(),
+                        ));
+                    }
+                } else {
+                    let target_bounds = mask.rounded_corner_bounds.rect;
+                    let bounds = RectF::new(
+                        target_bounds.x() - transform.rc(0, 3) as f32,
+                        target_bounds.y() - transform.rc(1, 3) as f32,
+                        target_bounds.width(),
+                        target_bounds.height(),
+                    );
+                    direct_regions.push(Rect::FromBounds(
+                        bounds.x().ceil() as i32,
+                        bounds.y().ceil() as i32,
+                        bounds.right().floor() as i32,
+                        bounds.bottom().floor() as i32,
+                    ));
+                }
+
+                for region in &mut direct_regions {
+                    region.Intersect(visible);
+                }
+                direct_regions.retain(|region| !region.IsEmpty());
+                let direct_region_count = direct_regions.len();
+                let mut successful_regions = Vec::with_capacity(direct_region_count);
+                for mut region in direct_regions {
+                    let mut destination = Rect::new(
+                        region.x + transform.rc(0, 3).round() as i32 - self.current_rect.x,
+                        region.y + transform.rc(1, 3).round() as i32 - self.current_rect.y,
+                        region.width,
+                        region.height,
+                    );
+                    let original_destination = destination;
+                    destination.Intersect(Rect::new(
+                        0,
+                        0,
+                        self.current_rect.width,
+                        self.current_rect.height,
+                    ));
+                    if let Some(scissor) = self.scissor_rect {
+                        destination.Intersect(scissor);
+                    }
+                    if destination.IsEmpty() {
+                        successful_regions.push(region);
+                        continue;
+                    }
+                    let source_x = source.x().round() as i32
+                        + region.x.saturating_sub(visible.x)
+                        + destination.x.saturating_sub(original_destination.x);
+                    let source_y = source.y().round() as i32
+                        + region.y.saturating_sub(visible.y)
+                        + destination.y.saturating_sub(original_destination.y);
+                    if target.blit_n32(
+                        mapping.bytes(),
+                        mapping.size().width(),
+                        mapping.size().height(),
+                        mapping.row_bytes(),
+                        source_x,
+                        source_y,
+                        destination.x,
+                        destination.y,
+                        destination.width,
+                        destination.height,
+                        mode,
+                        alpha,
+                        lease.is_opaque(),
+                    ) {
+                        successful_regions.push(region);
+                    }
+                }
+                if !successful_regions.is_empty() {
+                    let direct_complete = successful_regions.len() == direct_region_count;
+                    self.update.tile_blit_quads += 1;
+                    if mask.IsEmpty() {
+                        return Ok(());
+                    }
+                    for region in successful_regions {
+                        target.clip_rect(&rect(region), SkClipOp::kDifference, false);
+                    }
+                    if direct_complete && direct_region_count > 0 && corner_regions.len() == 4 {
+                        rounded_corner_regions = Some(corner_regions);
+                    }
+                }
+            }
+        }
+        let image_started = self.profile_input.then(std::time::Instant::now);
+        let image = lease_image(lease)?;
+        if let Some(started) = image_started {
+            self.update.tile_image_ns = self
+                .update
+                .tile_image_ns
+                .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+        }
         let mut paint = SkPaint::default();
-        paint.setAlphaf((shared.opacity * 255.) as u8 as f32 / 255.);
+        paint.setAlphaf(alpha as f32 / 255.);
         paint.setBlendMode(blend);
         paint.setAntiAlias(antialias);
-        unsafe {
-            target.draw_image_rect(
-                &image,
-                Some(&rectf(source)),
-                &rect(quad.geometry.visible_rect),
-                &sampling,
-                Some(&paint),
-                SrcRectConstraint::kStrict_SrcRectConstraint,
-            )
+        let draw_started = self.profile_input.then(std::time::Instant::now);
+        let result = if let Some(corner_regions) = rounded_corner_regions {
+            let mut result = Ok(());
+            for mut region in corner_regions {
+                region.Intersect(quad.geometry.visible_rect);
+                if region.IsEmpty() {
+                    continue;
+                }
+                let source_region = RectF::new(
+                    source.x() + (region.x - quad.geometry.visible_rect.x) as f32,
+                    source.y() + (region.y - quad.geometry.visible_rect.y) as f32,
+                    region.width as f32,
+                    region.height as f32,
+                );
+                target.save();
+                target.clip_rect(&rect(region), SkClipOp::kIntersect, false);
+                let draw_result = unsafe {
+                    target.draw_image_rect(
+                        &image,
+                        Some(&rectf(source_region)),
+                        &rect(region),
+                        &sampling,
+                        Some(&paint),
+                        SrcRectConstraint::kStrict_SrcRectConstraint,
+                    )
+                }
+                .map_err(|error| raster_error("translated rounded tile draw failed", error));
+                let restore_result = target
+                    .restore()
+                    .map_err(|error| raster_error("translated rounded tile restore failed", error));
+                result = result.and(draw_result).and(restore_result);
+            }
+            result
+        } else {
+            unsafe {
+                target.draw_image_rect(
+                    &image,
+                    Some(&rectf(source)),
+                    &rect(quad.geometry.visible_rect),
+                    &sampling,
+                    Some(&paint),
+                    SrcRectConstraint::kStrict_SrcRectConstraint,
+                )
+            }
+            .map_err(|error| raster_error("translated tile draw failed", error))
+        };
+        if let Some(started) = draw_started {
+            self.update.tile_draw_ns = self
+                .update
+                .tile_draw_ns
+                .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
-        .map_err(|error| raster_error("translated tile draw failed", error))
+        result
     }
 
     // Source: components/viz/service/display/software_renderer.cc:393-431.
@@ -1149,15 +1408,95 @@ impl TranslatedSoftwareRenderer {
             .map_or(Rect::default(), |backing| backing.drawn_rect)
     }
 
-    fn FinishDrawingRenderPass(&mut self) -> io::Result<()> {
-        if let Some(id) = self.current_pass.take() {
-            let backing = self
-                .render_pass_bitmaps
-                .get_mut(&id)
-                .ok_or_else(|| io::Error::other("translated active pass backing disappeared"))?;
+    fn QueueDrawQuad(&mut self, index: usize, draw_region: Option<&[PointF; 4]>) {
+        self.pending_draws.push(PendingDraw {
+            index,
+            draw_region: draw_region.copied(),
+            scissor_rect: self.scissor_rect,
+        });
+    }
+
+    fn FinishDrawingRenderPass(
+        &mut self,
+        input: &VizOutput,
+        pass: &AggregatedRenderPass,
+    ) -> io::Result<()> {
+        let Some(id) = self.current_pass.take() else {
+            return Ok(());
+        };
+        if id != pass.RenderPassId() {
+            return Err(io::Error::other(
+                "translated renderer finished a different render pass",
+            ));
+        }
+        let mut backing = self
+            .render_pass_bitmaps
+            .remove(&id)
+            .ok_or_else(|| io::Error::other("translated active pass backing disappeared"))?;
+        let draws = std::mem::take(&mut self.pending_draws);
+        let pending_clear = self.pending_clear.take();
+        let result = match RasterTarget::new(
+            &mut backing.pixels,
+            backing.rect.width,
+            backing.rect.height,
+            backing.rect.width as usize * 4,
+            PixelFormat::Bgra8888,
+            None,
+        ) {
+            Ok(mut target) => {
+                let draw_result = (|| -> io::Result<()> {
+                    if let Some((bounds, transparent)) = pending_clear {
+                        let mut paint = SkPaint::default();
+                        paint.setBlendMode(SkBlendMode::kSrc);
+                        paint.setAntiAlias(false);
+                        paint.setColor4f(
+                            &skia::src::core::SkColor::SkColor4f {
+                                fR: 0.,
+                                fG: 0.,
+                                fB: if transparent || !cfg!(debug_assertions) {
+                                    0.
+                                } else {
+                                    1.
+                                },
+                                fA: if transparent { 0. } else { 1. },
+                            },
+                            None,
+                        );
+                        unsafe { target.draw_rect(&rect(bounds), &paint) }.map_err(|error| {
+                            raster_error("translated framebuffer clear failed", error)
+                        })?;
+                    }
+                    for draw in draws {
+                        self.scissor_rect = draw.scissor_rect;
+                        self.DrawQuadIntoTarget(
+                            &mut target,
+                            input,
+                            pass,
+                            draw.index,
+                            draw.draw_region.as_ref(),
+                        )?;
+                    }
+                    Ok(())
+                })();
+                let finish_result = target.finish().map_err(|error| {
+                    raster_error("translated render-pass target finish failed", error)
+                });
+                match (draw_result, finish_result) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                }
+            }
+            Err(error) => Err(raster_error(
+                "translated render-pass target creation failed",
+                error,
+            )),
+        };
+        if result.is_ok() {
             backing.drawn_rect = self.current_rect;
         }
-        Ok(())
+        let old = self.render_pass_bitmaps.insert(id, backing);
+        debug_assert!(old.is_none());
+        result
     }
 
     fn GetCurrentFramebufferDamage(&self, id: RenderPassId) -> Rect {
@@ -1169,6 +1508,8 @@ impl TranslatedSoftwareRenderer {
 
     fn AbortDrawingFrame(&mut self) {
         self.current_pass = None;
+        self.pending_draws.clear();
+        self.pending_clear = None;
         self.render_pass_bitmaps.clear();
         self.framebuffer_damage.clear();
         self.drawn_damage.clear();
@@ -1228,16 +1569,21 @@ impl RendererBackend for TranslatedSoftwareRenderer {
 
     fn DoDrawQuad(
         &mut self,
-        input: &VizOutput,
-        pass: &AggregatedRenderPass,
+        _input: &VizOutput,
+        _pass: &AggregatedRenderPass,
         index: usize,
         draw_region: Option<&[PointF; 4]>,
     ) -> io::Result<()> {
-        Self::DoDrawQuad(self, input, pass, index, draw_region)
+        self.QueueDrawQuad(index, draw_region);
+        Ok(())
     }
 
-    fn FinishDrawingRenderPass(&mut self) -> io::Result<()> {
-        Self::FinishDrawingRenderPass(self)
+    fn FinishDrawingRenderPass(
+        &mut self,
+        input: &VizOutput,
+        pass: &AggregatedRenderPass,
+    ) -> io::Result<()> {
+        Self::FinishDrawingRenderPass(self, input, pass)
     }
 
     fn GetCurrentFramebufferDamage(&self, id: RenderPassId) -> Rect {

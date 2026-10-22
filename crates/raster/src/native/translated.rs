@@ -8,7 +8,6 @@
 
 use super::{backend::*, *};
 use crate::convert::{resources, ToSkia};
-use paint::paint_engine::PaintArtifact;
 use compositor_core::{
     adapter::{
         display_item_list::DisplayCanvas, geometry::Rect, picture_layer_impl::PictureRasterSource,
@@ -18,6 +17,7 @@ use compositor_core::{
         CpuPaintOpBuffer, CpuPaintOpRef, CpuPaintRecord, CpuPaintShader, RasterPlaybackParams,
     },
 };
+use paint::paint_engine::PaintArtifact;
 use raster_commands::commands::{
     self as command, CommandKind, DrawCommand, FontSmoothing, ImageInterpolationQuality,
     ImageOrientation, MaskLayer, PaintBlendMode, PaintMaskComposite, PaintMaskMode,
@@ -57,6 +57,7 @@ use skia::{
         SkRRect::SkRRect,
         SkRect::SkRect,
     },
+    src::shaders::SkEmptyShader::Empty as EmptyShader,
     src::shaders::SkPictureShader::CachedImageInfo,
 };
 #[cfg(target_vendor = "apple")]
@@ -65,6 +66,79 @@ use std::sync::Arc;
 
 pub(super) struct TranslatedSkiaBackend {
     _image_cache_byte_limit: usize,
+    typeface_cache: TypefaceCache,
+}
+
+#[cfg(target_vendor = "apple")]
+struct CachedTypeface {
+    identity: command::FontDataIdentity,
+    variations: Vec<command::FontVariation>,
+    font_size_bits: u64,
+    typeface: skia::src::core::SkTypeface::SkTypefaceRef,
+}
+
+#[cfg(target_vendor = "apple")]
+#[derive(Default)]
+struct TypefaceCache {
+    entries: std::sync::Mutex<Vec<CachedTypeface>>,
+}
+
+#[cfg(not(target_vendor = "apple"))]
+#[derive(Default)]
+struct TypefaceCache;
+
+#[cfg(target_vendor = "apple")]
+impl TypefaceCache {
+    fn GetOrCreate(
+        &self,
+        item: &DrawCommand,
+        face: &command::FontFace<'_>,
+    ) -> io::Result<skia::src::core::SkTypeface::SkTypefaceRef> {
+        let source_variations = if item.font_variations.is_empty() {
+            &face.variations
+        } else {
+            &item.font_variations
+        };
+        let variations = command::canonical_font_variations(source_variations);
+        let font_size_bits = item.font_size.to_bits();
+        let matches = |entry: &CachedTypeface| {
+            entry.font_size_bits == font_size_bits
+                && entry.variations.as_slice() == variations.as_ref()
+                && entry.identity.matches(face)
+        };
+        if let Some(typeface) = self
+            .entries
+            .lock()
+            .map_err(|_| io::Error::other("translated typeface cache poisoned"))?
+            .iter()
+            .find(|entry| matches(entry))
+            .map(|entry| entry.typeface.clone())
+        {
+            return Ok(typeface);
+        }
+
+        let typeface = create_raster_typeface(item, face, variations.as_ref())?;
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| io::Error::other("translated typeface cache poisoned"))?;
+        if let Some(entry) = entries.iter().find(|entry| matches(entry)) {
+            return Ok(entry.typeface.clone());
+        }
+        // Chromium retains resolved SkTypeface objects in its strike/font
+        // caches. Keep the same expensive exact-face construction out of tile
+        // replay while bounding this backend-local retained identity set.
+        if entries.len() >= 64 {
+            entries.remove(0);
+        }
+        entries.push(CachedTypeface {
+            identity: command::FontDataIdentity::new(face),
+            variations: variations.into_owned(),
+            font_size_bits,
+            typeface: typeface.clone(),
+        });
+        Ok(typeface)
+    }
 }
 
 #[cfg(target_vendor = "apple")]
@@ -351,26 +425,14 @@ fn standalone_font_data(bytes: &[u8], face_index: u32) -> io::Result<Cow<'_, [u8
 }
 
 #[cfg(target_vendor = "apple")]
-fn raster_typeface(
+fn create_raster_typeface(
     item: &DrawCommand,
-    resources: &ResourceContext<'_>,
+    face: &command::FontFace<'_>,
+    variations: &[command::FontVariation],
 ) -> io::Result<skia::src::core::SkTypeface::SkTypefaceRef> {
-    let catalog = resources
-        .resources
-        .as_ref()
-        .ok_or_else(|| io::Error::other("translated glyph run has no font resources"))?;
-    let face = catalog
-        .fonts
-        .get(item.font_face_index as usize)
-        .ok_or_else(|| io::Error::other("translated glyph font index is outside resources"))?;
     if face.bytes.is_empty() {
         return Err(io::Error::other("translated glyph font has no bytes"));
     }
-    let variations = if item.font_variations.is_empty() {
-        &face.variations
-    } else {
-        &item.font_variations
-    };
     let coordinates = variations
         .iter()
         .map(|axis| Coordinate {
@@ -396,10 +458,7 @@ fn raster_typeface(
         return Ok(typeface);
     }
     let stream: core::pin::Pin<Box<dyn skia::src::core::SkStream::SkStreamAsset>> = unsafe {
-        skia::src::core::SkStream::SkMemoryStream::MakeCopy(
-            font_data.as_ptr(),
-            font_data.len(),
-        )
+        skia::src::core::SkStream::SkMemoryStream::MakeCopy(font_data.as_ptr(), font_data.len())
     };
     let stream = unsafe {
         skia::src::core::SkStream::TransferableStreamAsset::from_native_transferable(stream)
@@ -410,10 +469,36 @@ fn raster_typeface(
     .ok_or_else(|| io::Error::other("translated CoreText typeface creation failed"))
 }
 
+#[cfg(target_vendor = "apple")]
+fn raster_typeface(
+    item: &DrawCommand,
+    resources: &ResourceContext<'_>,
+    cache: Option<&TypefaceCache>,
+) -> io::Result<skia::src::core::SkTypeface::SkTypefaceRef> {
+    let catalog = resources
+        .resources
+        .as_ref()
+        .ok_or_else(|| io::Error::other("translated glyph run has no font resources"))?;
+    let face = catalog
+        .fonts
+        .get(item.font_face_index as usize)
+        .ok_or_else(|| io::Error::other("translated glyph font index is outside resources"))?;
+    if let Some(cache) = cache {
+        return cache.GetOrCreate(item, face);
+    }
+    let variations = if item.font_variations.is_empty() {
+        &face.variations
+    } else {
+        &item.font_variations
+    };
+    create_raster_typeface(item, face, variations)
+}
+
 #[cfg(not(target_vendor = "apple"))]
 fn raster_typeface(
     _item: &DrawCommand,
     _resources: &ResourceContext<'_>,
+    _cache: Option<&TypefaceCache>,
 ) -> io::Result<skia::src::core::SkTypeface::SkTypefaceRef> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
@@ -425,6 +510,7 @@ impl TranslatedSkiaBackend {
     pub fn new(image_cache_byte_limit: usize) -> Self {
         Self {
             _image_cache_byte_limit: image_cache_byte_limit,
+            typeface_cache: TypefaceCache::default(),
         }
     }
 }
@@ -700,20 +786,33 @@ fn gradient_shader(
             "translated extended-color CSS gradient is not connected",
         ));
     }
-    if shader.stops.len() < 2
-        || shader.stops.iter().any(|stop| {
-            !stop.offset.is_finite()
-                || ![
-                    stop.color.red,
-                    stop.color.green,
-                    stop.color.blue,
-                    stop.color.alpha,
-                ]
-                .into_iter()
-                .all(f32::is_finite)
-        })
-    {
-        return Err(io::Error::other("translated gradient has invalid stops"));
+    if shader.stops.is_empty() {
+        // Blink rejects an empty CSS gradient before paint; SVG and an
+        // unavailable generated-image payload instead contribute transparent
+        // pixels. Preserve that non-fatal paint result at the raster boundary.
+        return Ok(EmptyShader());
+    }
+    if let Some((index, stop)) = shader.stops.iter().enumerate().find(|(_, stop)| {
+        !stop.offset.is_finite()
+            || ![
+                stop.color.red,
+                stop.color.green,
+                stop.color.blue,
+                stop.color.alpha,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+    }) {
+        return Err(io::Error::other(format!(
+            "translated gradient stop {index} is non-finite (offset={}, rgba={:?})",
+            stop.offset,
+            [
+                stop.color.red,
+                stop.color.green,
+                stop.color.blue,
+                stop.color.alpha,
+            ]
+        )));
     }
     let colors = shader
         .stops
@@ -1132,13 +1231,7 @@ fn translated_filter_graph(
             operation,
             reference_box,
             reference_scale,
-        } => translated_reference_filter(
-            operation,
-            reference_box,
-            reference_scale,
-            matrix,
-            input,
-        ),
+        } => translated_reference_filter(operation, reference_box, reference_scale, matrix, input),
         PaintFilterReplay::Reflection(_) => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "translated reflection filter requires reference coordinate mapping",
@@ -1254,8 +1347,8 @@ fn translated_reference_filter(
                     if values.is_empty() {
                         value
                     } else {
-                        values[((value * values.len() as f32).floor() as usize)
-                            .min(values.len() - 1)]
+                        values
+                            [((value * values.len() as f32).floor() as usize).min(values.len() - 1)]
                     }
                 }
                 RenderSvgTransfer::Linear { slope, intercept } => slope * value + intercept,
@@ -1285,19 +1378,14 @@ fn translated_reference_filter(
     let mut previous: Option<Option<Arc<dyn SkImageFilter>>> = None;
     let lookup = |name: &str,
                   previous: &Option<Option<Arc<dyn SkImageFilter>>>,
-                  named: &std::collections::HashMap<
-        String,
-        Option<Arc<dyn SkImageFilter>>,
-    >|
+                  named: &std::collections::HashMap<String, Option<Arc<dyn SkImageFilter>>>|
      -> io::Result<Option<Arc<dyn SkImageFilter>>> {
         match name {
             "" => Ok(previous.clone().unwrap_or_else(|| source.clone())),
             "SourceGraphic" => Ok(source.clone()),
             "SourceAlpha" => source_alpha(source.clone())
                 .map(Some)
-                .ok_or_else(|| {
-                    io::Error::other("translated Skia rejected SVG SourceAlpha filter")
-                }),
+                .ok_or_else(|| io::Error::other("translated Skia rejected SVG SourceAlpha filter")),
             // Fixed Chromium resolves these unsupported built-ins through the
             // previous-effect/SourceGraphic fallback in SVGFilterBuilder.
             "BackgroundImage" | "BackgroundAlpha" => {
@@ -1340,13 +1428,7 @@ fn translated_reference_filter(
                     RenderSvgEdgeMode::Duplicate => SkTileMode::kClamp,
                     RenderSvgEdgeMode::Wrap => SkTileMode::kRepeat,
                 };
-                imagefilters::SkBlurImageFilter::Blur(
-                    *x,
-                    *y,
-                    tile,
-                    input,
-                    Some(primitive_crop),
-                )
+                imagefilters::SkBlurImageFilter::Blur(*x, *y, tile, input, Some(primitive_crop))
             }
             RenderSvgFilterKind::ColorMatrix(values) => {
                 let color = colorfilters::SkMatrixColorFilter::Matrix(
@@ -1390,18 +1472,16 @@ fn translated_reference_filter(
                     background = convert_space(background, true);
                 }
                 match operator {
-                    RenderSvgComposite::Arithmetic => {
-                        imagefilters::SkBlendImageFilter::Arithmetic(
-                            k[0],
-                            k[1],
-                            k[2],
-                            k[3],
-                            true,
-                            background,
-                            input,
-                            Some(primitive_crop),
-                        )
-                    }
+                    RenderSvgComposite::Arithmetic => imagefilters::SkBlendImageFilter::Arithmetic(
+                        k[0],
+                        k[1],
+                        k[2],
+                        k[3],
+                        true,
+                        background,
+                        input,
+                        Some(primitive_crop),
+                    ),
                     operator => {
                         let mode = match operator {
                             RenderSvgComposite::Over => SkBlendMode::kSrcOver,
@@ -1469,11 +1549,9 @@ fn translated_reference_filter(
                     )
                 }
             }
-            RenderSvgFilterKind::Tile => imagefilters::SkCropImageFilter::Tile(
-                primitive_crop,
-                crop(graph.region),
-                input,
-            ),
+            RenderSvgFilterKind::Tile => {
+                imagefilters::SkCropImageFilter::Tile(primitive_crop, crop(graph.region), input)
+            }
             RenderSvgFilterKind::DisplacementMap {
                 input2,
                 scale,
@@ -1746,6 +1824,7 @@ fn orient_image_pixels(
 
 struct TranslatedCanvas<'target, 'pixels> {
     target: &'target mut RasterTarget<'pixels>,
+    typeface_cache: Option<&'target TypefaceCache>,
     error: Option<io::Error>,
     depth: usize,
     mask_stack: Vec<Vec<MaskLayer>>,
@@ -1761,12 +1840,18 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
     fn new(target: &'target mut RasterTarget<'pixels>, nearest: bool, opacity: f32) -> Self {
         Self {
             target,
+            typeface_cache: None,
             error: None,
             depth: 0,
             mask_stack: Vec::new(),
             nearest,
             opacity,
         }
+    }
+
+    fn with_typeface_cache(mut self, cache: &'target TypefaceCache) -> Self {
+        self.typeface_cache = Some(cache);
+        self
     }
 
     fn unwind_to_depth(&mut self, depth: usize) {
@@ -2036,10 +2121,11 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             None,
         );
         let pixmap = SkPixmap::new(&info, pixels.as_ptr(), row_bytes);
-        let image = unsafe {
-            skia::src::image::SkImage_RasterFactories::RasterFromPixmapCopy(&pixmap)
-        }
-        .ok_or_else(|| io::Error::other("translated record shader image allocation failed"))?;
+        let image =
+            unsafe { skia::src::image::SkImage_RasterFactories::RasterFromPixmapCopy(&pixmap) }
+                .ok_or_else(|| {
+                    io::Error::other("translated record shader image allocation failed")
+                })?;
         let image_to_record = tile
             .matrixForDraw
             .invert()
@@ -2331,8 +2417,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             });
             if layer.mode == PaintMaskMode::kLuminance {
                 restore_paint.setColorFilter(
-                    skia::src::effects::colorfilters::SkRuntimeColorFilter::MakeLumaColorFilter(
-                    ),
+                    skia::src::effects::colorfilters::SkRuntimeColorFilter::MakeLumaColorFilter(),
                 );
             }
             self.target
@@ -2678,7 +2763,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                         "translated transformed glyph run replay is not connected",
                     ));
                 }
-                let typeface = raster_typeface(item, resources)?;
+                let typeface = raster_typeface(item, resources, self.typeface_cache)?;
                 let mut font = SkFont::with_size(Some(typeface), item.font_size as f32);
                 font.setEmbolden(item.synthetic_bold);
                 font.setSkewX(if item.synthetic_italic { -0.25 } else { 0.0 });
@@ -3004,8 +3089,7 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                                 continue;
                             }
                         };
-                        if let Err(error) =
-                            unsafe { self.target.draw_path(value.as_ref(), &paint) }
+                        if let Err(error) = unsafe { self.target.draw_path(value.as_ref(), &paint) }
                         {
                             self.error.get_or_insert(raster_error(
                                 "translated converted drawPath failed",
@@ -3207,8 +3291,7 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                                 continue;
                             }
                         };
-                        if branches.len()
-                            > skia::src::core::SkCanvas::kMaxFiltersPerLayer as usize
+                        if branches.len() > skia::src::core::SkCanvas::kMaxFiltersPerLayer as usize
                         {
                             self.fail("translated saveLayer has too many independent filters");
                             continue;
@@ -3410,11 +3493,7 @@ fn rasterize_paint_artifact(
 /// Rasterize a Paint publication onto an opaque white RGBA target. This is a
 /// standalone inspection/export entry point; production tile raster continues
 /// to enter through [`RasterEngine`] with compositor-selected work.
-pub fn RasterizePaintArtifact(
-    list: &PaintArtifact,
-    width: u32,
-    height: u32,
-) -> Vec<u8> {
+pub fn RasterizePaintArtifact(list: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
     rasterize_paint_artifact(list, width, height, 1., false)
         .expect("translated PaintArtifact rasterization failed")
 }
@@ -3431,11 +3510,7 @@ pub fn RasterizePaintArtifactWithScale(
 }
 
 /// Rasterize a Paint publication onto a transparent RGBA target.
-pub fn RasterizePaintArtifactTransparent(
-    list: &PaintArtifact,
-    width: u32,
-    height: u32,
-) -> Vec<u8> {
+pub fn RasterizePaintArtifactTransparent(list: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
     rasterize_paint_artifact(list, width, height, 1., true)
         .expect("translated transparent PaintArtifact rasterization failed")
 }
@@ -3459,7 +3534,8 @@ impl RasterBackend for TranslatedSkiaBackend {
         )
         .map_err(|error| raster_error("translated raster target creation failed", error))?;
         let replay_result = (|| -> io::Result<()> {
-            let mut canvas = TranslatedCanvas::new(&mut target, false, 1.);
+            let mut canvas = TranslatedCanvas::new(&mut target, false, 1.)
+                .with_typeface_cache(&self.typeface_cache);
             let source = request.source;
             if source.requires_clear {
                 canvas

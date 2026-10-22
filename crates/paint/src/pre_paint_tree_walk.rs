@@ -354,6 +354,15 @@ impl<'a> Default for PaintTreeNode<'a> {
 }
 
 impl PaintTreeNode<'_> {
+    /// Resident physical links remain stable while this retained tree is
+    /// borrowed. Logical paint ownership can reparent OOF nodes, so clients
+    /// validating Layout's physical revision paths must use this directory.
+    pub(crate) fn PhysicalChildPointers(&self) -> Option<&[*mut PaintTreeNode<'static>]> {
+        self.cache
+            .as_ref()
+            .map(|cache| cache.physical_children.as_slice())
+    }
+
     pub(crate) fn SetFragment(&mut self, source: &FragmentNode) {
         // Do not keep a layout-root Rc or clone the source subtree. Painters use
         // this node's resident children, not FragmentNode.children.
@@ -4671,9 +4680,8 @@ impl PrePaintTreeWalk {
                 style.will_change_transform,
                 node.applies_mask && node.applies_backdrop_filter,
             );
-            compositor.filter_output_bounds = filter_reference_box.and_then(|reference| {
-                backdrop_filters.reference_output_bounds(reference)
-            });
+            compositor.filter_output_bounds = filter_reference_box
+                .and_then(|reference| backdrop_filters.reference_output_bounds(reference));
             node.properties.nodes.effect = Arc::new(
                 EffectPaintPropertyNode {
                     compositor,
@@ -4868,8 +4876,7 @@ impl PrePaintTreeWalk {
                 style.will_change_transform,
                 false,
             );
-            compositor.filter_output_bounds =
-                filters.reference_output_bounds(filter_reference_box);
+            compositor.filter_output_bounds = filters.reference_output_bounds(filter_reference_box);
             // UpdateFilter follows UpdateEffect and has its own persistent
             // ObjectPaintProperties slot (paint_property_tree_builder.cc:2630).
             node.properties.nodes.effect = Arc::new(
@@ -5188,6 +5195,28 @@ impl PrePaintTreeWalk {
                     PaintPropertyRole::Scroll,
                     node.properties.scroll_id,
                 );
+                // Blink's UpdateScrollNode passes
+                // PaintLayerScrollableArea::PixelSnappedContentsSize() to
+                // cc. Snap the contents with the same physical origin as the
+                // overflow clip; enclosing the unsnapped LayoutUnit size at
+                // the compositor boundary can grow the scroll range by one
+                // pixel and make main/impl offsets alternate at the end.
+                // Source: core/paint/paint_property_tree_builder.cc:3706-3726;
+                //         core/paint/paint_layer_scrollable_area.cc.
+                let snapped_contents = node.PixelSnappedRect(&PaintRect {
+                    x: precise_layout_clip.x,
+                    y: precise_layout_clip.y,
+                    width: fragment
+                        .paint
+                        .scroll_size
+                        .width
+                        .max(precise_layout_clip.width),
+                    height: fragment
+                        .paint
+                        .scroll_size
+                        .height
+                        .max(precise_layout_clip.height),
+                });
                 scroll_node = Some(Arc::new(ScrollPaintPropertyNode {
                     // Source: core/paint/paint_property_tree_builder.cc:3614-3635.
                     // The remaining fields still await their original Layout
@@ -5240,8 +5269,8 @@ impl PrePaintTreeWalk {
                     contents_rect: PaintRect {
                         x: local.x + property_space_delta.x,
                         y: local.y + property_space_delta.y,
-                        width: fragment.paint.scroll_size.width.max(local.width),
-                        height: fragment.paint.scroll_size.height.max(local.height),
+                        width: snapped_contents.width.max(local.width),
+                        height: snapped_contents.height.max(local.height),
                     },
                     minimum_scroll_offset: fragment
                         .paint

@@ -30,6 +30,9 @@ impl<R: CpuSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
     fn SetCcNodeId(&self, s: i32, id: i32) {
         self.node().lifecycle.set_cc_node_id(s, id)
     }
+    fn IsRoot(&self) -> bool {
+        self.node().parent.is_none()
+    }
     fn Parent(&self) -> Option<Self> {
         self.node()
             .parent

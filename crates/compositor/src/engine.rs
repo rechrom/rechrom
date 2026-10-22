@@ -75,12 +75,17 @@ pub struct CompositorExecutors {
 pub struct CompositorConfig {
     pub thread: bool,
     pub raster_task_limit: usize,
+    /// Maximum number of independent task-graph drains offered to the
+    /// embedding's raster executor. The executor remains authoritative for
+    /// the actual worker count and sequencing policy.
+    pub raster_worker_limit: usize,
 }
 impl Default for CompositorConfig {
     fn default() -> Self {
         Self {
             thread: false,
             raster_task_limit: 32,
+            raster_worker_limit: 8,
         }
     }
 }
@@ -126,6 +131,9 @@ pub enum CompositorInput {
     Wheel {
         position: PointF,
         delta: Vector2dF,
+        unconstrained_delta: Vector2dF,
+        granularity: crate::adapter::input_types::ScrollGranularity,
+        is_inertial: bool,
         phase: ScrollPhase,
     },
     PinchBegin {
@@ -170,6 +178,7 @@ pub enum CompositorMainThreadEffect {
         paused: bool,
     },
     ScrollOffsetChanged {
+        sequence: u64,
         element: ElementId,
         offset: PointF,
         source: ScrollSourceType,
@@ -180,7 +189,7 @@ pub enum CompositorMainThreadEffect {
         hidden: bool,
     },
     WheelDisposition {
-        handled: bool,
+        compositor_owned: bool,
     },
 }
 
@@ -189,6 +198,8 @@ pub struct CompositorOutput {
     pub frame: Option<NativeCompositorFrameSubmission>,
     pub main_thread_effects: Vec<CompositorMainThreadEffect>,
     pub needs_begin_frames: bool,
+    /// Typed impl tasks remain queued and require another owner-sequence turn.
+    pub work_pending: bool,
     /// The accepted main commit has not yet reached Scheduler's COMMIT action.
     /// Embedders may retain a newer PaintArtifact, but must not submit it yet.
     pub main_commit_pending: bool,
@@ -282,11 +293,13 @@ impl From<crate::runtime::native_pac_scroll::NativePacScrollEffect> for Composit
         use crate::runtime::native_pac_scroll::NativePacScrollEffect as E;
         match effect {
             E::DidCompositorScroll {
+                sequence,
                 element,
                 offset,
                 source,
                 snap,
             } => Self::ScrollOffsetChanged {
+                sequence,
                 element,
                 offset,
                 source,
@@ -319,6 +332,11 @@ impl CompositorEngine {
         viewport: CompositorViewportState,
     ) -> Result<CompositorOutput, CompositorError> {
         self.assembly.Commit(artifact, viewport)
+    }
+    /// Mirrors LayerTreeHost/ProxyMain commit demand before the main-frame
+    /// lifecycle has produced its PaintArtifact.
+    pub fn RequestMainFrame(&mut self) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.RequestMainFrame()
     }
     pub fn FinishMainFrameWithoutUpdates(&mut self) -> Result<CompositorOutput, CompositorError> {
         self.assembly.FinishMainFrameWithoutUpdates()

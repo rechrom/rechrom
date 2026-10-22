@@ -176,22 +176,35 @@ pub struct AdditionGroup<BaseT, DeltaT = BaseT>(PhantomData<(BaseT, DeltaT)>);
 impl<BaseT, DeltaT> SyncedPropertyGroup for AdditionGroup<BaseT, DeltaT>
 where
     BaseT: Copy + PartialEq + Default + Add<DeltaT, Output = BaseT> + Sub<BaseT, Output = DeltaT>,
-    DeltaT: Copy + PartialEq + Default + Add<DeltaT, Output = DeltaT> + Sub<DeltaT, Output = DeltaT>,
+    DeltaT:
+        Copy + PartialEq + Default + Add<DeltaT, Output = DeltaT> + Sub<DeltaT, Output = DeltaT>,
 {
     type BaseType = BaseT;
     type DeltaType = DeltaT;
     // Source: cc/base/synced_property.h:200
-    fn IdentityBase() -> BaseT { BaseT::default() }
+    fn IdentityBase() -> BaseT {
+        BaseT::default()
+    }
     // Source: cc/base/synced_property.h:201
-    fn IdentityDelta() -> DeltaT { DeltaT::default() }
+    fn IdentityDelta() -> DeltaT {
+        DeltaT::default()
+    }
     // Source: cc/base/synced_property.h:202
-    fn ApplyDelta(value: BaseT, delta: DeltaT) -> BaseT { value + delta }
+    fn ApplyDelta(value: BaseT, delta: DeltaT) -> BaseT {
+        value + delta
+    }
     // Source: cc/base/synced_property.h:203
-    fn DeltaBetweenBases(first: BaseT, second: BaseT) -> DeltaT { first - second }
+    fn DeltaBetweenBases(first: BaseT, second: BaseT) -> DeltaT {
+        first - second
+    }
     // Source: cc/base/synced_property.h:204
-    fn DeltaBetweenDeltas(first: DeltaT, second: DeltaT) -> DeltaT { first - second }
+    fn DeltaBetweenDeltas(first: DeltaT, second: DeltaT) -> DeltaT {
+        first - second
+    }
     // Source: cc/base/synced_property.h:205
-    fn CombineDeltas(first: DeltaT, second: DeltaT) -> DeltaT { first + second }
+    fn CombineDeltas(first: DeltaT, second: DeltaT) -> DeltaT {
+        first + second
+    }
 }
 
 // Source: cc/base/synced_property.h:208-218
@@ -200,15 +213,27 @@ impl SyncedPropertyGroup for ScaleGroup {
     type BaseType = f32;
     type DeltaType = f32;
     // Source: cc/base/synced_property.h:212
-    fn IdentityBase() -> f32 { 1.0 }
+    fn IdentityBase() -> f32 {
+        1.0
+    }
     // Source: cc/base/synced_property.h:213
-    fn IdentityDelta() -> f32 { 1.0 }
+    fn IdentityDelta() -> f32 {
+        1.0
+    }
     // Source: cc/base/synced_property.h:214
-    fn ApplyDelta(value: f32, delta: f32) -> f32 { value * delta }
+    fn ApplyDelta(value: f32, delta: f32) -> f32 {
+        value * delta
+    }
     // Source: cc/base/synced_property.h:215
-    fn DeltaBetweenBases(first: f32, second: f32) -> f32 { first / second }
+    fn DeltaBetweenBases(first: f32, second: f32) -> f32 {
+        first / second
+    }
     // Source: cc/base/synced_property.h:216
-    fn DeltaBetweenDeltas(first: f32, second: f32) -> f32 { first / second }
+    fn DeltaBetweenDeltas(first: f32, second: f32) -> f32 {
+        first / second
+    }
     // Source: cc/base/synced_property.h:217
-    fn CombineDeltas(first: f32, second: f32) -> f32 { first * second }
+    fn CombineDeltas(first: f32, second: f32) -> f32 {
+        first * second
+    }
 }

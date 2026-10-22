@@ -126,7 +126,9 @@ impl PropertyFilterOperations {
                         reference_box,
                         reference_scale,
                         output_region: resolve_filter_region(
-                            op.reference_graph.as_ref().expect("validated reference graph"),
+                            op.reference_graph
+                                .as_ref()
+                                .expect("validated reference graph"),
                             reference_box,
                             reference_scale,
                         ),
@@ -232,8 +234,14 @@ impl PaintFilter for ReferencePaintFilter {
             ),
         ];
         let points = points.map(|(x, y)| ctm.map_or((x, y), |matrix| matrix.MapVector(x, y)));
-        let left = points.iter().map(|point| point.0).fold(f32::INFINITY, f32::min);
-        let top = points.iter().map(|point| point.1).fold(f32::INFINITY, f32::min);
+        let left = points
+            .iter()
+            .map(|point| point.0)
+            .fold(f32::INFINITY, f32::min);
+        let top = points
+            .iter()
+            .map(|point| point.1)
+            .fold(f32::INFINITY, f32::min);
         let right = points
             .iter()
             .map(|point| point.0)
@@ -284,20 +292,18 @@ fn resolve_filter_region(
             }
         })
     };
-    let resolve_length = |value: Option<SvgFilterLength>,
-                          axis: f64,
-                          units: SvgFilterUnits,
-                          default: f64| {
-        value.map_or(default, |value| {
-            if value.percentage {
-                axis * value.value / 100.0
-            } else if units == SvgFilterUnits::kObjectBoundingBox {
-                axis * value.value
-            } else {
-                value.value * user_scale
-            }
-        })
-    };
+    let resolve_length =
+        |value: Option<SvgFilterLength>, axis: f64, units: SvgFilterUnits, default: f64| {
+            value.map_or(default, |value| {
+                if value.percentage {
+                    axis * value.value / 100.0
+                } else if units == SvgFilterUnits::kObjectBoundingBox {
+                    axis * value.value
+                } else {
+                    value.value * user_scale
+                }
+            })
+        };
     let SvgFilterRegion {
         x,
         y,

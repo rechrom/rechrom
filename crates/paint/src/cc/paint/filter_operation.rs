@@ -454,10 +454,10 @@ impl FilterOperation {
                 let sx = spread.0.abs();
                 let sy = spread.1.abs();
                 result.OutsetEdges(OutsetsF::new(sy, sx, sy, sx));
-                let mut offset = ctm.map_or(
-                    (self.offset_.x() as f32, self.offset_.y() as f32),
-                    |m| m.MapVector(self.offset_.x() as f32, self.offset_.y() as f32),
-                );
+                let mut offset = ctm
+                    .map_or((self.offset_.x() as f32, self.offset_.y() as f32), |m| {
+                        m.MapVector(self.offset_.x() as f32, self.offset_.y() as f32)
+                    });
                 if direction == MapDirection::Reverse {
                     offset.0 = -offset.0;
                     offset.1 = -offset.1;
@@ -474,10 +474,10 @@ impl FilterOperation {
                 }
             }
             FilterType::OFFSET => {
-                let mut offset = ctm.map_or(
-                    (self.offset_.x() as f32, self.offset_.y() as f32),
-                    |m| m.MapVector(self.offset_.x() as f32, self.offset_.y() as f32),
-                );
+                let mut offset = ctm
+                    .map_or((self.offset_.x() as f32, self.offset_.y() as f32), |m| {
+                        m.MapVector(self.offset_.x() as f32, self.offset_.y() as f32)
+                    });
                 if direction == MapDirection::Reverse {
                     offset.0 = -offset.0;
                     offset.1 = -offset.1;
@@ -492,11 +492,7 @@ impl FilterOperation {
     pub fn MapRect(&self, rect: Rect, ctm: Option<&dyn FilterMapTransform>) -> Rect {
         self.MapRectInternal(rect, ctm, MapDirection::Forward)
     }
-    pub fn MapRectReverse(
-        &self,
-        rect: Rect,
-        ctm: Option<&dyn FilterMapTransform>,
-    ) -> Rect {
+    pub fn MapRectReverse(&self, rect: Rect, ctm: Option<&dyn FilterMapTransform>) -> Rect {
         self.MapRectInternal(rect, ctm, MapDirection::Reverse)
     }
 }
@@ -528,11 +524,10 @@ impl FilterOperation {
                 // Source: include/core/SkColor.h SkColor4f::toSkColor.
                 let byte = |v: f32| ((v.clamp(0., 1.) * 255.).round()) as u32;
                 let c = self.drop_shadow_color_;
-                let color =
-                    (byte(c.alpha) << 24)
-                        | (byte(c.red) << 16)
-                        | (byte(c.green) << 8)
-                        | byte(c.blue);
+                let color = (byte(c.alpha) << 24)
+                    | (byte(c.red) << 16)
+                    | (byte(c.green) << 8)
+                    | byte(c.blue);
                 value.insert("color".into(), json!(color as i32));
             }
             COLOR_MATRIX => {

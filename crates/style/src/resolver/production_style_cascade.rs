@@ -291,6 +291,7 @@ pub(crate) struct ProductionCascadeInputs<'a> {
     pub match_result: MatchResult,
     pub root_font_size: f32,
     pub color_scheme_settings: production_style_builder::ColorSchemeSettings,
+    pub system_colors: super::production_style_resolver::ProductionSystemColorContext<'a>,
     pub text_link_text_color: Option<foundation::Color>,
     pub is_document_element: bool,
     pub pseudo_id: PseudoId,
@@ -636,6 +637,7 @@ pub(crate) struct ProductionStyleCascadeBackend<'a> {
     media: MediaValuesCachedData,
     root_font_size: f32,
     color_scheme_settings: production_style_builder::ColorSchemeSettings,
+    system_colors: super::production_style_resolver::ProductionSystemColorContext<'a>,
     text_link_text_color: Option<foundation::Color>,
     initial: ComputedStyleHandle,
     language: &'static AtomicString,
@@ -659,6 +661,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         media: MediaValuesCachedData,
         root_font_size: f32,
         color_scheme_settings: production_style_builder::ColorSchemeSettings,
+        system_colors: super::production_style_resolver::ProductionSystemColorContext<'a>,
         text_link_text_color: Option<foundation::Color>,
         custom_properties: Option<&'a CustomProperties>,
         parent_custom_properties: Option<&'a CustomProperties>,
@@ -705,6 +708,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             media,
             root_font_size,
             color_scheme_settings,
+            system_colors,
             text_link_text_color,
             initial: Persistent::from_ptr(
                 ComputedStyle::GetInitialStyleSingleton() as *mut ComputedStyle
@@ -1184,6 +1188,7 @@ pub(crate) fn ApplyInlineProperties(
         inputs.media.clone(),
         inputs.root_font_size,
         inputs.color_scheme_settings,
+        inputs.system_colors,
         inputs.text_link_text_color,
         inputs.custom_properties,
         inputs.parent_custom_properties,
@@ -1278,6 +1283,7 @@ pub(crate) fn ApplyMatchResultWithFilter(
         inputs.media.clone(),
         inputs.root_font_size,
         inputs.color_scheme_settings,
+        inputs.system_colors,
         inputs.text_link_text_color,
         inputs.custom_properties,
         inputs.parent_custom_properties,
@@ -3570,6 +3576,35 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                 _ => None,
             };
             let value = resolved_light_dark.as_deref().unwrap_or(value);
+            // cpp: longhands_custom.cc Color::ApplyValue resolves system
+            // colors through StyleResolverState before storing the retained
+            // keyword and platform color. Keep that document-owned decision
+            // at the cascade boundary: the generic property converter cannot
+            // resolve `fieldtext`, `canvastext`, or accent-color keywords.
+            if property.PropertyID() == CSSPropertyID::kColor {
+                if let CSSValuePayload::kIdentifierClass(identifier) = value.Payload() {
+                    if StyleColor::IsSystemColorIncludingDeprecatedKeyword(identifier.0) {
+                        let unresolved = StyleColor::from_keyword(identifier.0);
+                        let used_color_scheme = {
+                            let builder = state.StyleBuilder();
+                            builder.UsedColorScheme()
+                        };
+                        if let Some(color) =
+                            super::production_style_resolver::ResolveProductionSystemColor(
+                                &unresolved,
+                                used_color_scheme,
+                                self.system_colors,
+                            )
+                        {
+                            let mut builder = state.StyleBuilderMut();
+                            builder.SetColor(&color);
+                            builder.SetColorIsInherited(false);
+                            builder.SetColorIsCurrentColor(false);
+                            return;
+                        }
+                    }
+                }
+            }
             // cpp: generated longhands.cc BackgroundImage::ApplyValue and
             // MaskImage::ApplyValue call StyleResolverState::ResolveForImage
             // for every layer. A light-dark() image is nested inside the
@@ -3869,6 +3904,8 @@ mod tests {
             match_result,
             root_font_size: 16.0,
             color_scheme_settings: production_style_builder::ColorSchemeSettings::default(),
+            system_colors:
+                super::super::production_style_resolver::ProductionSystemColorContext::default(),
             text_link_text_color: None,
             is_document_element: false,
             pseudo_id: PseudoId::kPseudoIdNone,
@@ -4609,6 +4646,7 @@ mod tests {
             media,
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
+            super::super::production_style_resolver::ProductionSystemColorContext::default(),
             None,
             None,
             None,
@@ -4740,6 +4778,7 @@ mod tests {
             media,
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
+            super::super::production_style_resolver::ProductionSystemColorContext::default(),
             None,
             None,
             None,
@@ -4812,6 +4851,7 @@ mod tests {
             media,
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
+            super::super::production_style_resolver::ProductionSystemColorContext::default(),
             None,
             None,
             None,
@@ -4884,6 +4924,7 @@ mod tests {
             media(),
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
+            super::super::production_style_resolver::ProductionSystemColorContext::default(),
             None,
             None,
             None,
@@ -4925,6 +4966,7 @@ mod tests {
             media,
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
+            super::super::production_style_resolver::ProductionSystemColorContext::default(),
             None,
             None,
             None,

@@ -1,10 +1,10 @@
 //! Source solid-color classification. The backend supplies only no-pixels
 //! SkCanvas/gfx value primitives and typed resident op projections.
 #![allow(non_snake_case)]
+use super::blend_mode::BlendMode;
 use super::paint_op_buffer_iterator::{
     CompositeIterator, PaintOpBufferView, PaintOpType, PaintOpView,
 };
-use super::blend_mode::BlendMode;
 
 pub type Color = [f32; 4];
 #[derive(Clone, Copy, Debug)]

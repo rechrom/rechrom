@@ -721,7 +721,10 @@ declare_class!(
             trace_scope!("scrollWheel:");
 
             let fields = native_wheel_fields(event);
-            profile_native_wheel(event, self.scale_factor(), fields);
+            let scale_factor = self.scale_factor();
+            let window_point = unsafe { event.locationInWindow() };
+            let event_position = self.convertPoint_fromView(window_point, None);
+            profile_native_wheel(event, scale_factor, fields);
 
             self.mouse_motion(event);
 
@@ -778,6 +781,15 @@ declare_class!(
                     timestamp_seconds: unsafe { event.timestamp() },
                     phase: unsafe { event.phase().0 as u64 },
                     momentum_phase: unsafe { event.momentumPhase().0 as u64 },
+                    is_continuous: fields.map(|fields| fields.0),
+                    point_delta_x: fields.map(|fields| fields.1),
+                    point_delta_y: fields.map(|fields| fields.2),
+                    cocoa_delta_x: unsafe { event.scrollingDeltaX() },
+                    cocoa_delta_y: unsafe { event.scrollingDeltaY() },
+                    precise: unsafe { event.hasPreciseScrollingDeltas() },
+                    position_x: event_position.x,
+                    position_y: event_position.y,
+                    scale_factor,
                 }),
             });
         }

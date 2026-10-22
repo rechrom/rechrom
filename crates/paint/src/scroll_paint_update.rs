@@ -22,7 +22,7 @@ use layoutng_assembly::{
 };
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -38,6 +38,8 @@ struct FragmentCoverage {
     recorded_world: TransformMatrix,
     properties: PropertyTreeState,
     controls: Option<OverflowControlGeometry>,
+    revision: u64,
+    subtree_revision: u64,
 }
 
 /// Only overflow controls need flat paint geometry during a retained scroll.
@@ -64,11 +66,69 @@ pub struct RetainedScrollPaintState {
     // Recorded identity, never traversal order or a borrowed fragment address.
     // Logical out-of-flow reparenting can differ from native fragment order.
     fragment_indices: HashMap<(u64, u64, u64, u32), usize>,
+    // Physical preorder ranges let a certified unchanged subtree satisfy the
+    // retained identity proof without walking every descendant. Paint's
+    // logical tree may reparent OOF descendants, so these are deliberately
+    // separate from `fragment_indices`.
+    physical_ranges: HashMap<(u64, u64, u64, u32), (usize, usize)>,
     masks: Vec<MaskOutput>,
     coverage_groups: Vec<CoverageGroup>,
     /// Whether Paint folded a live scroll offset into background drawing
     /// commands. Property-driven backgrounds keep their existing records.
     has_scroll_dependent_background: bool,
+}
+
+fn fragment_identity(f: &FragmentNode) -> (u64, u64, u64, u32) {
+    (
+        f.node_id,
+        f.fragment_instance_id,
+        f.paint.display_item_client_id,
+        f.paint.display_item_fragment,
+    )
+}
+
+fn collect_fragment_physical_ranges(
+    fragment: &FragmentNode,
+    ranges: &mut HashMap<(u64, u64, u64, u32), (usize, usize)>,
+    next: &mut usize,
+) -> bool {
+    let key = fragment_identity(fragment);
+    let start = *next;
+    *next += 1;
+    for child in crate::pre_paint_tree_walk::OrdinaryPaintChildren(fragment) {
+        if !collect_fragment_physical_ranges(child, ranges, next) {
+            return false;
+        }
+    }
+    ranges.insert(key, (start, *next)).is_none()
+}
+
+fn collect_paint_physical_ranges(
+    node: &PaintTreeNode<'_>,
+    ranges: &mut HashMap<(u64, u64, u64, u32), (usize, usize)>,
+    next: &mut usize,
+) -> bool {
+    let Some(fragment) = node.fragment.as_deref() else {
+        return false;
+    };
+    let key = fragment_identity(fragment);
+    let start = *next;
+    *next += 1;
+    if let Some(children) = node.PhysicalChildPointers() {
+        for &child in children {
+            // The resident PaintTree owns every pointed-to Box for this borrow.
+            if child.is_null() || !collect_paint_physical_ranges(unsafe { &*child }, ranges, next) {
+                return false;
+            }
+        }
+    } else {
+        for child in &node.children {
+            if !collect_paint_physical_ranges(child, ranges, next) {
+                return false;
+            }
+        }
+    }
+    ranges.insert(key, (start, *next)).is_none()
 }
 
 #[derive(Clone)]
@@ -442,11 +502,29 @@ impl RetainedScrollPaintState {
                         contents_properties: node.contents_properties.clone(),
                         transforms: node.transforms.clone(),
                     }),
+                revision: f.pre_paint_revision,
+                subtree_revision: f.pre_paint_subtree_revision,
             });
+        }
+        let mut physical_ranges = HashMap::with_capacity(fragments.len());
+        let mut physical_count = 0;
+        let physical_unique =
+            collect_paint_physical_ranges(tree, &mut physical_ranges, &mut physical_count);
+        if !physical_unique || physical_count != fragments.len() {
+            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+                eprintln!(
+                    "scroll-paint-capture rejected physical_unique={} physical_fragments={} paint_fragments={}",
+                    physical_unique,
+                    physical_count,
+                    fragments.len()
+                );
+            }
+            return None;
         }
         Some(Self {
             fragments,
             fragment_indices,
+            physical_ranges,
             masks: retained_masks,
             coverage_groups,
             has_scroll_dependent_background,
@@ -465,15 +543,23 @@ fn collect_current_fragments<'a>(
     nodes: &mut [Option<&'a FragmentNode>],
     offsets: &mut BTreeMap<PaintPropertyOwner, Offset>,
     sticky: &mut BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)>,
+    dirty_offsets: &mut BTreeMap<PaintPropertyOwner, Offset>,
+    dirty_sticky: &mut BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)>,
+    explicit: &mut HashSet<usize>,
+    clean_ranges: &mut Vec<(usize, usize)>,
     collected: &mut usize,
 ) -> bool {
-    let key = (
-        f.node_id,
-        f.fragment_instance_id,
-        f.paint.display_item_client_id,
-        f.paint.display_item_fragment,
-    );
+    let key = fragment_identity(f);
     let Some(&index) = retained.fragment_indices.get(&key) else {
+        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            eprintln!(
+                "scroll-paint-reject stage=missing-fragment node_id={} fragment_instance_id={} client_id={} fragment={}",
+                f.node_id,
+                f.fragment_instance_id,
+                f.paint.display_item_client_id,
+                f.paint.display_item_fragment
+            );
+        }
         browser_tracing::instant(
             "paint",
             "ScrollPaintReuseRejected",
@@ -489,7 +575,20 @@ fn collect_current_fragments<'a>(
         );
         return false;
     };
-    if nodes[index].is_some() {
+    let Some(&(physical, physical_end)) = retained.physical_ranges.get(&key) else {
+        return false;
+    };
+    if !explicit.insert(physical)
+        || clean_ranges
+            .iter()
+            .any(|&(start, end)| physical >= start && physical < end)
+    {
+        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            eprintln!(
+                "scroll-paint-reject stage=duplicate-fragment node_id={} physical={}",
+                f.node_id, physical
+            );
+        }
         browser_tracing::instant(
             "paint",
             "ScrollPaintReuseRejected",
@@ -498,9 +597,36 @@ fn collect_current_fragments<'a>(
         return false;
     }
     let old = &retained.fragments[index];
+    if f.pre_paint_subtree_revision != 0 && f.pre_paint_subtree_revision == old.subtree_revision {
+        explicit.remove(&physical);
+        if clean_ranges
+            .iter()
+            .any(|&(start, end)| start < physical_end && physical < end)
+            || explicit
+                .iter()
+                .any(|&position| position >= physical && position < physical_end)
+        {
+            return false;
+        }
+        clean_ranges.push((physical, physical_end));
+        *collected += physical_end - physical;
+        return true;
+    }
+    let self_clean = f.pre_paint_revision != 0 && f.pre_paint_revision == old.revision;
     let unowned_sticky_change = f.paint.sticky_offset != old.sticky_offset
         && (f.paint.sticky_constraint.is_none() || f.paint.display_item_client_id == 0);
-    if f.offset != old.offset || f.size != old.size || unowned_sticky_change {
+    if !self_clean && (f.offset != old.offset || f.size != old.size || unowned_sticky_change) {
+        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            eprintln!(
+                "scroll-paint-reject stage=geometry node_id={} self_revision={} old_revision={} offset_changed={} size_changed={} sticky_changed={}",
+                f.node_id,
+                f.pre_paint_revision,
+                old.revision,
+                f.offset != old.offset,
+                f.size != old.size,
+                f.paint.sticky_offset != old.sticky_offset
+            );
+        }
         browser_tracing::instant(
             "paint",
             "ScrollPaintReuseRejected",
@@ -519,34 +645,50 @@ fn collect_current_fragments<'a>(
         );
         return false;
     }
-    nodes[index] = Some(f);
+    if !self_clean {
+        nodes[index] = Some(f);
+    }
     *collected += 1;
-    if f.paint.display_item_client_id != 0 {
+    if !self_clean && f.paint.display_item_client_id != 0 {
         let owner = PaintPropertyOwner::NativeFragment {
             client: f.paint.display_item_client_id,
             fragment: f.paint.display_item_fragment,
         };
         if let Some(constraint) = f.paint.sticky_constraint {
             let current = (f.paint.sticky_offset, constraint);
-            if sticky
+            if dirty_sticky
                 .insert(owner, current)
                 .is_some_and(|old| old != current)
             {
                 return false;
             }
+            sticky.insert(owner, current);
         }
-        if offsets
+        if dirty_offsets
             .insert(owner, f.paint.scroll_offset)
             .is_some_and(|old| old != f.paint.scroll_offset)
         {
             return false;
         }
+        offsets.insert(owner, f.paint.scroll_offset);
     }
     // LayoutSVGHiddenContainer remains in Layout snapshots for resource users,
     // but PrePaint creates no ordinary owners beneath that boundary. Traverse
     // the same owner-selected children when validating retained identities.
-    crate::pre_paint_tree_walk::OrdinaryPaintChildren(f)
-        .all(|child| collect_current_fragments(child, retained, nodes, offsets, sticky, collected))
+    crate::pre_paint_tree_walk::OrdinaryPaintChildren(f).all(|child| {
+        collect_current_fragments(
+            child,
+            retained,
+            nodes,
+            offsets,
+            sticky,
+            dirty_offsets,
+            dirty_sticky,
+            explicit,
+            clean_ranges,
+            collected,
+        )
+    })
 }
 
 fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
@@ -670,21 +812,44 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     // Verify current geometry independently and carry Layout's resolved sticky
     // values into its existing property slot before validating recorded coverage.
     let mut nodes = vec![None; retained.fragments.len()];
-    let mut offsets = BTreeMap::new();
-    let mut sticky = BTreeMap::new();
+    let mut offsets = prepaint.property_node_store.scroll_offsets();
+    let mut sticky = prepaint.property_node_store.sticky_offsets();
+    let mut dirty_offsets = BTreeMap::new();
+    let mut dirty_sticky = BTreeMap::new();
+    let mut explicit = HashSet::new();
+    let mut clean_ranges = Vec::new();
     let mut collected = 0;
-    let collect_trace = browser_tracing::span("paint", "ScrollPaint.CollectFragments");
+    let mut collect_trace = browser_tracing::span("paint", "ScrollPaint.CollectFragments");
     if !collect_current_fragments(
         fragments,
         retained,
         &mut nodes,
         &mut offsets,
         &mut sticky,
+        &mut dirty_offsets,
+        &mut dirty_sticky,
+        &mut explicit,
+        &mut clean_ranges,
         &mut collected,
     ) || collected != retained.fragments.len()
     {
+        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            eprintln!(
+                "scroll-paint-reject stage=fragment-validation collected={} retained={} explicit={} clean_ranges={}",
+                collected,
+                retained.fragments.len(),
+                explicit.len(),
+                clean_ranges.len()
+            );
+        }
         return Err(FragmentChanged);
     }
+    collect_trace.set("fragments", retained.fragments.len() as f64);
+    collect_trace.set(
+        "visited_fragments",
+        (explicit.len() + clean_ranges.len()) as f64,
+    );
+    collect_trace.set("clean_subtrees", clean_ranges.len() as f64);
     drop(collect_trace);
     // These layers are recorded in the owning box-decoration record. Until
     // they are promoted to Chromium's dedicated scrolling/fixed background
@@ -698,6 +863,9 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
             .is_some_and(|recorded| recorded != current)
     });
     if scroll_changed && retained.has_scroll_dependent_background {
+        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            eprintln!("scroll-paint-reject stage=scroll-dependent-background");
+        }
         browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[("stage", 4.0)]);
         return Err(FragmentChanged);
     }
@@ -832,7 +1000,9 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     let mut replacements: Vec<(usize, Vec<DisplayItem>)> = Vec::new();
     let scrollbar_trace = browser_tracing::span("paint", "ScrollPaint.UpdateScrollbars");
     for (old, f) in retained.fragments.iter().zip(&nodes) {
-        let f = f.ok_or(FragmentChanged)?;
+        let Some(f) = f else {
+            continue;
+        };
         if f.paint.scrollbars.is_none() || f.paint.hidden {
             continue;
         }
@@ -1004,6 +1174,10 @@ mod coverage_tests {
                 &mut nodes,
                 &mut offsets,
                 &mut BTreeMap::new(),
+                &mut BTreeMap::new(),
+                &mut BTreeMap::new(),
+                &mut HashSet::new(),
+                &mut Vec::new(),
                 &mut collected,
             ) && collected == retained.fragments.len()
         }
@@ -1021,6 +1195,8 @@ mod coverage_tests {
                 recorded_world: TransformMatrix::default(),
                 properties: PropertyTreeState::default(),
                 controls: None,
+                revision: f.pre_paint_revision,
+                subtree_revision: f.pre_paint_subtree_revision,
             })
             .collect();
         let fragment_indices = order
@@ -1038,9 +1214,17 @@ mod coverage_tests {
                 )
             })
             .collect();
+        let mut physical_ranges = HashMap::new();
+        let mut physical_count = 0;
+        assert!(collect_fragment_physical_ranges(
+            &root,
+            &mut physical_ranges,
+            &mut physical_count,
+        ));
         let retained = RetainedScrollPaintState {
             fragments,
             fragment_indices,
+            physical_ranges,
             masks: Vec::new(),
             coverage_groups: Vec::new(),
             has_scroll_dependent_background: false,

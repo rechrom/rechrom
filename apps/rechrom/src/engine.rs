@@ -133,7 +133,9 @@ pub enum UserEvent {
         frame_sequence: u64,
         regions: Vec<crate::chrome::DragRegion>,
     },
-    FramePresented(Viewport),
+    /// Native swap completion. This acknowledges ownership transfer to the
+    /// platform compositor; it is not physical display feedback.
+    FrameSwapCompleted(Viewport),
     Location(String),
     Message(String),
     Fatal(FatalError),
@@ -156,6 +158,7 @@ pub enum Command {
     VSyncDisplayChanged(u32),
     Redraw,
     Input(InputEvent),
+    NativeWheel(crate::input::NativeWheelSample),
     QueuedInput {
         input: InputEvent,
         queued_at: Instant,
@@ -185,7 +188,7 @@ impl Command {
             Self::Resize(_) => "Host.Resize",
             Self::VSyncDisplayChanged(_) => "Host.VSyncDisplayChanged",
             Self::Redraw => "Host.Redraw",
-            Self::Input(_) | Self::QueuedInput { .. } => "Host.Input",
+            Self::Input(_) | Self::QueuedInput { .. } | Self::NativeWheel(_) => "Host.Input",
             Self::FocusAddress => "Host.FocusAddress",
             Self::SetActive(_) => "Host.SetActive",
             Self::Reload => "Host.Reload",

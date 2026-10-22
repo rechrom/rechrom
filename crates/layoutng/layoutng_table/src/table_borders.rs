@@ -746,9 +746,10 @@ mod tests {
     }
     fn border_grid_body() {
         let _heap = LayoutHeapScope::new();
-        let inputs = include_str!("../../../../artifacts/cpp-reference/table-border-grid-input.tsv")
-            .lines()
-            .collect::<Vec<_>>();
+        let inputs =
+            include_str!("../../../../artifacts/cpp-reference/table-border-grid-input.tsv")
+                .lines()
+                .collect::<Vec<_>>();
         let expected =
             include_str!("../../../../artifacts/cpp-reference/table-border-grid-results.tsv")
                 .lines()

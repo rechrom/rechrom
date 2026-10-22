@@ -505,9 +505,7 @@ impl<B: PaintFlagsTypes> PaintFlags<B> {
                 kUpscale => SamplingOptions::Cubic(CubicResampler::Mitchell()),
             },
             kMedium => match scaling {
-                kDefault => {
-                    SamplingOptions::Filter(FilterMode::kLinear, MipmapMode::kNearest)
-                }
+                kDefault => SamplingOptions::Filter(FilterMode::kLinear, MipmapMode::kNearest),
                 kUnknown | kUpscale => {
                     SamplingOptions::Filter(FilterMode::kLinear, MipmapMode::kLinear)
                 }

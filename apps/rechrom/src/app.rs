@@ -325,11 +325,11 @@ impl ApplicationHandler<UserEvent> for App {
                     self.drag_geometry_valid.set(true);
                 }
             }
-            UserEvent::FramePresented(viewport) => {
+            UserEvent::FrameSwapCompleted(viewport) => {
                 self.presented += 1;
                 if self.presented == 1 {
                     println!(
-                        "window-presented\t{}x{}\tscale={}",
+                        "window-swap-completed\t{}x{}\tscale={}",
                         viewport.width, viewport.height, viewport.scale
                     );
                 }
@@ -431,6 +431,20 @@ impl ApplicationHandler<UserEvent> for App {
                     crate::input::set_cursor(window, browser::page::Cursor::kDefault);
                 }
                 self.send(Command::SetActive(*active));
+            }
+            WindowEvent::MouseWheel {
+                delta,
+                phase,
+                native,
+                ..
+            } => {
+                let sample = self.input.native_wheel_sample(
+                    *delta,
+                    *phase,
+                    *native,
+                    window.scale_factor(),
+                );
+                self.send(Command::NativeWheel(sample));
             }
             _ => {
                 if matches!(&event, WindowEvent::CursorLeft { .. }) {

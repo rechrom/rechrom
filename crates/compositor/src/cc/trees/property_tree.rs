@@ -1085,10 +1085,8 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
             pivot.set_y(scroller_size.height() as f32);
         }
         if scroll_node.scrolls_inner_viewport {
-            pivot = crate::cc::base::math_util::MathUtil::ScalePointByInverse(
-                pivot,
-                page_scale_factor,
-            );
+            pivot =
+                crate::cc::base::math_util::MathUtil::ScalePointByInverse(pivot, page_scale_factor);
         }
         transform.Translate(pivot.x(), pivot.y());
         transform.Scale(scale_factor.x(), scale_factor.y());
@@ -2696,18 +2694,18 @@ impl ScrollTree {
         fractional: bool,
         snapped: &BTreeMap<ElementId, TargetSnapAreaElementIds>,
         mutator: Option<&dyn PropertyTreeMutatorHost>,
+        next_bmf: bool,
         state: &PropertyTreesState,
     ) {
         debug_assert!(!state.is_main_thread_);
         for (id, offset) in &self.synced_scroll_offset_map_ {
-            let pipeline = mutator.is_some();
             let mut delta = Vector2dF::default();
             let clobber = mutator.is_some_and(|host| host.ScrollOffsetAnimationWasInterrupted(*id));
             if !clobber {
                 delta = Self::PullDeltaForMainThread(
                     &mut offset.borrow_mut(),
                     fractional,
-                    pipeline,
+                    next_bmf,
                     state,
                 );
             }

@@ -105,42 +105,61 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
     }));
     let wheel_commands = commands.clone();
     devtools::set_wheel_handler(Arc::new(move |wheel| {
-        use interaction::input_event::{InputEvent, ScrollGranularity, WheelEvent, WheelPhase};
+        use interaction::input_event::EventModifiers;
         use layoutng_assembly::internal::layout_input::Offset;
         let phase = match wheel.phase.as_str() {
-            "began" => WheelPhase::kBegan,
-            "changed" => WheelPhase::kChanged,
-            "ended" => WheelPhase::kEnded,
-            "cancelled" => WheelPhase::kCancelled,
-            "none" => WheelPhase::kNone,
+            "began" => winit::event::TouchPhase::Started,
+            "changed" | "none" => winit::event::TouchPhase::Moved,
+            "ended" => winit::event::TouchPhase::Ended,
+            "cancelled" => winit::event::TouchPhase::Cancelled,
             _ => return Err("Unsupported wheel phase".into()),
         };
-        // Local synthetic input shares the native dispatch queue
-        // and window coordinates, without fabricating NSEvent time.
-        let input = InputEvent::Wheel(WheelEvent {
+        let scale = wheel.native_scale_factor.unwrap_or(1.0);
+        let native = match (
+            wheel.native_timestamp_seconds,
+            wheel.native_phase,
+            wheel.momentum_phase,
+        ) {
+            (Some(timestamp_seconds), Some(native_phase), Some(momentum_phase)) => {
+                Some(winit::event::MacOSMouseWheelMetadata {
+                    timestamp_seconds,
+                    phase: native_phase,
+                    momentum_phase,
+                    is_continuous: Some(wheel.precise),
+                    point_delta_x: None,
+                    point_delta_y: None,
+                    cocoa_delta_x: -wheel.delta_x,
+                    cocoa_delta_y: -wheel.delta_y,
+                    precise: wheel.precise,
+                    position_x: wheel.x,
+                    position_y: wheel.y,
+                    scale_factor: scale,
+                })
+            }
+            (None, None, None) => None,
+            _ => return Err("native timestamp, phase and momentum phase must be provided together".into()),
+        };
+        // Both synthetic control input and captured native replay enter before
+        // the common phase handler, rails filter and frame-aligned queue.
+        let sample = crate::input::NativeWheelSample {
+            delta: winit::event::MouseScrollDelta::PixelDelta(
+                winit::dpi::PhysicalPosition::new(
+                    -wheel.delta_x * scale,
+                    -wheel.delta_y * scale,
+                ),
+            ),
+            phase,
+            native,
             position: Offset {
                 x: wheel.x,
                 y: wheel.y,
             },
-            delta: Offset {
-                x: wheel.delta_x,
-                y: wheel.delta_y,
-            },
-            phase,
-            native: None,
-            delta_units: if wheel.precise {
-                ScrollGranularity::kScrollByPrecisePixel
-            } else {
-                ScrollGranularity::kScrollByPixel
-            },
-            ..Default::default()
-        });
+            modifiers: EventModifiers::default(),
+            scale,
+            observed_at: Instant::now(),
+        };
         wheel_commands
-            .send(Command::QueuedInput {
-                input,
-                queued_at: Instant::now(),
-                samples: 1,
-            })
+            .send(Command::NativeWheel(sample))
             .map_err(|error| error.to_string())
     }));
     let mouse_commands = commands.clone();

@@ -14,12 +14,12 @@ use crate::{
         skia::SkRegion,
     },
 };
+use paint::cc::paint::blend_mode::BlendMode;
 use paint::cc::paint::{
     paint_op_buffer::PaintOpBufferMetadata,
     paint_op_buffer_iterator::{PaintOpBufferView, PaintOpView},
     solid_color_analyzer::SolidColorAnalyzer,
 };
-use paint::cc::paint::blend_mode::BlendMode;
 use std::{
     collections::BTreeMap,
     sync::{

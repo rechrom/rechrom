@@ -17,7 +17,6 @@ pub(crate) enum Message {
     },
     Submit {
         frame: crate::begin_frame_source::NativeBeginFrame,
-        scroll_active: bool,
     },
     SwapAck(u64),
     Stop,
@@ -36,6 +35,7 @@ struct PreparedDisplayFrame {
     sequence: u64,
     viewport: Viewport,
     drag_regions: Vec<crate::chrome::DragRegion>,
+    is_handling_interaction: bool,
 }
 
 pub(crate) struct Display {
@@ -79,10 +79,7 @@ impl Display {
                 Ok(vec![Effect::RequestBeginFrame])
             }
             Message::Prepare { submitted } => self.Prepare(submitted),
-            Message::Submit {
-                frame,
-                scroll_active,
-            } => self.Submit(frame, scroll_active, post_swap_ack),
+            Message::Submit { frame } => self.Submit(frame, post_swap_ack),
             Message::SwapAck(sequence) => {
                 let accepted = self.pending_swap == Some(sequence);
                 if accepted {
@@ -148,6 +145,18 @@ impl Display {
 
     fn Prepare(&mut self, submitted: SubmittedFrame) -> io::Result<Vec<Effect>> {
         let document = submitted.provenance.document;
+        browser_tracing::instant(
+            "frame",
+            "DisplayPageFrameReceived",
+            &[
+                ("tab_id", document.0 as f64),
+                ("document_generation", document.1 as f64),
+                (
+                    "content_sequence",
+                    submitted.provenance.content.map_or(0, |c| c.sequence) as f64,
+                ),
+            ],
+        );
         self.pages
             .insert(document, PageSurface { frame: submitted });
         self.PrunePages();
@@ -167,6 +176,7 @@ impl Display {
         };
         let viewport = scene.viewport;
         let mut placements = vec![];
+        let mut is_handling_interaction = false;
         let mut provenance = FrameProvenance {
             document: scene
                 .placements
@@ -184,6 +194,7 @@ impl Display {
                 return Ok(());
             };
             let page = &self.pages[&document];
+            is_handling_interaction |= page.frame.is_handling_interaction;
             let local = page.frame.viewport;
             // A resize waits for a matching producer frame; Viz never stretches
             // an old Page into a different local viewport.
@@ -216,6 +227,7 @@ impl Display {
             sequence,
             viewport,
             drag_regions: scene.metadata.clone(),
+            is_handling_interaction,
         });
         browser_tracing::instant(
             "frame",
@@ -248,7 +260,6 @@ impl Display {
     fn Submit(
         &mut self,
         frame: crate::begin_frame_source::NativeBeginFrame,
-        scroll_active: bool,
         post_swap_ack: &Arc<dyn Fn(u64) + Send + Sync>,
     ) -> io::Result<Vec<Effect>> {
         let _frame = browser_tracing::scope(browser_tracing::Context {
@@ -259,7 +270,6 @@ impl Display {
         });
         let started = Instant::now();
         let mut frame_trace = browser_tracing::span("frame", "FrameCycle");
-        frame_trace.set("scroll_active", scroll_active as u8 as f64);
         frame_trace.set("interval_ms", frame.interval.as_secs_f64() * 1000.0);
         frame_trace.set(
             "source_deadline_ms",
@@ -312,7 +322,13 @@ impl Display {
             sequence,
             viewport,
             drag_regions,
+            is_handling_interaction,
         } = prepared;
+        frame_trace.set("is_handling_interaction", is_handling_interaction as u8 as f64);
+        // Source: SoftwareOutputDeviceMac::EndPaint ->
+        // DisplayCALayerTree::GotIOSurfaceFrame. This output submits the ready
+        // IOSurface immediately; the GPU overlay presenter's separate
+        // VSyncAlignedPresentationForScrolling queue does not apply here.
         // Headless capture has no visible native presentation boundary.
         // Submission activates this complete compositor frame; pending or
         // failed candidates never replace the last published frame.
@@ -333,7 +349,7 @@ impl Display {
             sequence,
             Box::new(move |_, _| {
                 if native_presentation {
-                    (notify)(UserEvent::FramePresented(viewport));
+                    (notify)(UserEvent::FrameSwapCompleted(viewport));
                 }
                 (post_swap_ack)(sequence);
             }),
@@ -403,14 +419,10 @@ impl Display {
         if native_presentation {
             browser_tracing::instant(
                 "frame",
-                "FramePresentedToNative",
+                "FrameSubmittedToNative",
                 &[("present_sequence", sequence as f64), ("compositor", 1.0)],
             );
         }
-        Ok(if scroll_active {
-            vec![Effect::RequestBeginFrame]
-        } else {
-            Vec::new()
-        })
+        Ok(Vec::new())
     }
 }

@@ -26,6 +26,7 @@ mod components {
                 pub(crate) mod bsp_walk_action;
                 pub(crate) mod direct_renderer;
                 pub(crate) mod draw_polygon;
+                pub(crate) mod occlusion_culler;
                 pub(crate) mod render_pass_alpha_type;
             }
         }

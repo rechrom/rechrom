@@ -862,8 +862,7 @@ fn ExportProperties(
             .EnsureId();
         output.property_fragment_unique_id = unsafe { &*object }.UniqueId();
         output.display_item_client_id = client.Id() as u64;
-        output.display_item_client_owner_node_id =
-            unsafe { &*object }.OwnerNodeIdDefault();
+        output.display_item_client_owner_node_id = unsafe { &*object }.OwnerNodeIdDefault();
         output.display_item_client_invalidation_reason = Some(client.GetPaintInvalidationReason());
         output.display_item_client_debug_name = Arc::from(unsafe { &*object }.DebugName().Utf8());
         output.display_item_client_is_cacheable = client.IsCacheable();
@@ -3747,7 +3746,7 @@ fn ExportInlineStitchedDecorations(root: &mut FragmentNode) {
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:1969-2083
-fn ResolveLogicalParentOccurrences(root: &mut FragmentNode) {
+pub(crate) fn ResolveLogicalParentOccurrences(root: &mut FragmentNode) {
     struct Occurrence {
         // The physical path is used only by the debug preorder assertion.
         #[cfg(debug_assertions)]
@@ -3826,6 +3825,11 @@ fn ResolveLogicalParentOccurrences(root: &mut FragmentNode) {
         *next_index += 1;
         #[cfg(debug_assertions)]
         debug_assert_eq!(all[current_index].path, *path);
+        // This pass also runs after an incremental fragment-subtree export.
+        // Clear the retained occurrence before resolving it against the
+        // complete current tree: an old instance id may have disappeared when
+        // a sibling or ancestor occurrence was replaced.
+        fragment.paint.logical_parent_fragment_instance_id = None;
         if let Some(parent_node_id) = fragment.paint.logical_parent_node_id {
             let mut resolved = physical_ancestors.iter().rev().copied().find(|&index| {
                 all[index].node_id == parent_node_id && all[index].establishes_paint_state

@@ -626,6 +626,18 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
             return id;
         }
 
+        // Chromium runs every PaintArtifactCompositor on one Blink main
+        // thread, so the process-wide Paint root's single (sequence, id)
+        // cache slot cannot be changed during this call. Rechrom has one Page
+        // executor per tab: another tab may rebuild its property trees and
+        // replace that shared root cache entry between SetupRootTransformNode
+        // and this lookup. The root's cc id is structural and invariant, so
+        // recognize the source root directly instead of treating a displaced
+        // cache entry as a non-root node.
+        if transform_node.IsRoot() {
+            return kSecondaryRootPropertyNodeId;
+        }
+
         let parent = transform_node
             .UnaliasedParent()
             .expect("non-root Paint transform node must retain its parent");
@@ -903,6 +915,13 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
             return id;
         }
 
+        // See EnsureCompositorTransformNode: the native root cache assumes
+        // serialized Blink main-thread conversion, while tabs convert on
+        // independent Page executors here.
+        if clip_node.IsRoot() {
+            return kSecondaryRootPropertyNodeId;
+        }
+
         debug_assert!(!clip_node.IsRoot());
         let parent = clip_node.ParentUnalias();
         let parent_id = self.EnsureCompositorClipNode(&parent);
@@ -958,6 +977,9 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
         let id = scroll_node.CcNodeId(self.new_sequence_number_);
         if id != kInvalidPropertyNodeId {
             return id;
+        }
+        if scroll_node.IsRoot() {
+            return kSecondaryRootPropertyNodeId;
         }
 
         let parent = scroll_node
@@ -2077,9 +2099,15 @@ impl<B: PropertyTreeManagerTypes, C: PropertyTreeManagerClient<B> + ?Sized> Drop
     for PropertyTreeManager<'_, '_, B, C>
 {
     fn drop(&mut self) {
-        debug_assert!(
-            self.effect_stack_.is_empty(),
-            "PropertyTreeManager::Finalize() must be called at the end of tree conversion"
-        );
+        // A second panic from Drop aborts the process and prevents the page
+        // failure boundary from reporting the original conversion error.
+        // Preserve Chromium's DCHECK during ordinary destruction, but do not
+        // turn an already-unwinding tab failure into a browser-wide abort.
+        if !std::thread::panicking() {
+            debug_assert!(
+                self.effect_stack_.is_empty(),
+                "PropertyTreeManager::Finalize() must be called at the end of tree conversion"
+            );
+        }
     }
 }

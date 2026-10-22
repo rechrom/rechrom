@@ -1,8 +1,9 @@
 //! Main-thread wheel default action against immutable committed geometry.
 //!
 //! Compositor scrolling stays in cc's InputHandler. This owner handles the
-//! fallback selected after cancelable DOM event dispatch and returns typed DOM
-//! scroll-offset updates without mutating Page, Layout, Paint or Compositor.
+//! route selected for blocking listeners and main-thread scrolling reasons,
+//! and returns typed DOM scroll-offset updates without mutating Page, Layout,
+//! Paint or Compositor.
 
 use crate::input_event::WheelEvent;
 use layoutng_assembly::{
@@ -219,17 +220,10 @@ fn ScrollChain(
                 minimum.y = 0.0;
                 maximum.y = 0.0;
             }
-            if root {
-                maximum.y = maximum.y.max(
-                    minimum.y
-                        + (fragment
-                            .content_size
-                            .height
-                            .max(fragment.paint.scroll_size.height)
-                            - viewport_height)
-                            .max(0.0),
-                );
-            }
+            // LayoutNG's scroll container is the canonical, pixel-snapped
+            // range used by Blink and cc. Re-deriving a larger root maximum
+            // from unsnapped fragment geometry makes the main-thread route
+            // disagree with the compositor at the bottom edge.
             (minimum, maximum)
         },
     );

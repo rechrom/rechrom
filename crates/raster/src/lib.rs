@@ -7,8 +7,8 @@
 
 mod basic_replay;
 pub mod convert;
-mod reflection_mask;
 mod png;
+mod reflection_mask;
 pub mod svg_filter_graph;
 
 pub use basic_replay::{RasterizeDisplayItemList, WriteDisplayItemListPng};
@@ -17,6 +17,6 @@ pub use reflection_mask::CompileReflectionMaskLayers;
 
 pub mod native;
 pub use native::{
-    MapResourceForRead, RasterEngine, RasterReadView, RasterizePaintArtifact, RasterizePaintArtifactTransparent,
-    RasterizePaintArtifactWithScale,
+    MapResourceForRead, RasterEngine, RasterReadView, RasterizePaintArtifact,
+    RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,
 };

@@ -162,36 +162,39 @@ pub(crate) struct ExecutorTaskGraphRunner<C: 'static> {
     executor: Arc<dyn CompositorExecutor>,
     commands: EngineTaskQueue,
     needs_drain: AtomicBool,
-    run_gate: Arc<Mutex<()>>,
+    worker_limit: usize,
 }
 impl<C: 'static> ExecutorTaskGraphRunner<C> {
     pub(crate) fn new(
         executor: Arc<dyn CompositorExecutor>,
         commands: EngineTaskQueue,
         trace: Arc<dyn TaskGraphTrace>,
+        worker_limit: usize,
     ) -> Self {
         Self {
             native: Arc::new(SynchronousTaskGraphRunner::new(trace)),
             executor,
             commands,
             needs_drain: AtomicBool::new(false),
-            run_gate: Arc::new(Mutex::new(())),
+            worker_limit: worker_limit.max(1),
         }
     }
     pub(crate) fn Kick(&self) {
         if !self.needs_drain.swap(false, Ordering::AcqRel) {
             return;
         }
-        let native = self.native.clone();
-        let gate = self.run_gate.clone();
-        let commands = self.commands.clone();
-        self.executor.Execute(Box::new(move || {
-            // Exclusivity concerns only this independent native runner. Source
-            // queue locking and task execution remain in RunUntilIdle itself.
-            let _run = gate.lock().expect("native raster runner execution");
-            native.RunUntilIdle();
-            commands.Push(EngineTask::RasterWorkCompleted);
-        }));
+        for _ in 0..self.worker_limit {
+            let native = self.native.clone();
+            let commands = self.commands.clone();
+            self.executor.Execute(Box::new(move || {
+                // TaskGraphWorkQueue marks a task running before releasing its
+                // queue mutex, so independent executor lanes can drain the
+                // same graph just like Chromium's raster worker pool. Owner
+                // callbacks still return through the typed command queue.
+                native.RunUntilIdle();
+                commands.Push(EngineTask::RasterWorkCompleted);
+            }));
+        }
     }
 }
 impl<C: 'static> TaskGraphRunner<C> for ExecutorTaskGraphRunner<C> {
@@ -199,6 +202,10 @@ impl<C: 'static> TaskGraphRunner<C> for ExecutorTaskGraphRunner<C> {
         self.native.GenerateNamespaceToken()
     }
     fn ScheduleTasks(&self, token: NamespaceToken, graph: &mut TaskGraph<C>) {
+        // TaskGraphWorkQueue's mutex is the synchronization boundary between
+        // the cc origin sequence and the injected raster executor. Holding a
+        // second lock through RunOnWorkerThread would turn asynchronous raster
+        // into a synchronous input-thread stall.
         self.native.ScheduleTasks(token, graph);
         self.needs_drain.store(true, Ordering::Release);
     }
@@ -207,22 +214,14 @@ impl<C: 'static> TaskGraphRunner<C> for ExecutorTaskGraphRunner<C> {
         self.needs_drain.store(true, Ordering::Release);
     }
     fn WaitForTasksToFinishRunning(&self, token: NamespaceToken) {
-        // Native shutdown explicitly permits waiting. Exclude a concurrently
-        // posted drain before entering the source synchronous-runner body.
-        let _run = self
-            .run_gate
-            .lock()
-            .expect("native raster runner execution");
+        // Native shutdown explicitly permits waiting. The runner's queue lock
+        // arbitrates with any already posted drain one task at a time.
         self.native.WaitForTasksToFinishRunning(token);
     }
     fn CollectCompletedTasks(&self, token: NamespaceToken, completed: &mut TaskVector<C>) {
         self.native.CollectCompletedTasks(token, completed);
     }
     fn RunTasksUntilIdleForTest(&self) {
-        let _run = self
-            .run_gate
-            .lock()
-            .expect("native raster runner execution");
         self.native.RunUntilIdle();
     }
 }

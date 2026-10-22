@@ -43,26 +43,49 @@ struct Host {
     tabstrip: String,
     reload_loading: Option<bool>,
     drag_regions: Vec<crate::chrome::DragRegion>,
+    wheel_input: crate::input::InputState,
 }
 /// Product composition supplies a separate executor for each Page domain.
 fn page_threads() -> io::Result<browser::page::PageThreads> {
     let inline = std::env::var("RECHROM_EXECUTOR").as_deref() == Ok("inline");
-    let executor: Arc<dyn executor::Executor> = if inline {
-        executor::inline()
+    let (executor, compositor_executor, raster_executor): (
+        Arc<dyn executor::Executor>,
+        Arc<dyn executor::Executor>,
+        Arc<dyn executor::Executor>,
+    ) = if inline {
+        let executor = executor::inline();
+        (executor.clone(), executor.clone(), executor)
     } else {
-        // One raster coordinator can wait for up to four foreground lanes;
-        // prepaint and decode/compile jobs still have independent capacity.
-        Arc::new(executor::PoolExecutor::new(
-            "page-work",
-            16 * 1024 * 1024,
-            8,
-        )?)
+        // Match Chromium's scheduling boundary: impl input and frame
+        // scheduling have a dedicated sequence, while raster playback uses a
+        // worker pool and decode/compile work has separate capacity. Keep the
+        // raster throughput previously available to each Page. The extra
+        // sequencing lane is reserved for input and frame scheduling.
+        (
+            Arc::new(executor::PoolExecutor::new(
+                "page-work",
+                16 * 1024 * 1024,
+                2,
+            )?),
+            Arc::new(executor::PoolExecutor::new(
+                "page-compositor",
+                16 * 1024 * 1024,
+                1,
+            )?),
+            Arc::new(executor::PoolExecutor::new(
+                "page-raster",
+                16 * 1024 * 1024,
+                8,
+            )?),
+        )
     };
     Ok(browser::page::PageThreads {
         raster: true,
         decode: true,
         scriptCompile: true,
         executor,
+        compositor_executor,
+        raster_executor,
     })
 }
 
@@ -158,6 +181,7 @@ pub(crate) fn spawn(
                 tabstrip: String::new(),
                 reload_loading: None,
                 drag_regions: vec![],
+                wheel_input: crate::input::InputState::default(),
             };
             if let Err(error) = host.navigate(
                 url_loader::URLRequest {
@@ -168,7 +192,28 @@ pub(crate) fn spawn(
             ) {
                 (host.output.notify)(UserEvent::Message(error.to_string()));
             }
-            while let Ok(message) = inbox.recv() {
+            loop {
+                let message = if let Some(deadline) = host.wheel_input.pending_wheel_end_deadline() {
+                    match inbox.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                        Ok(message) => message,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if let Some(command) =
+                                host.wheel_input.take_due_wheel_end(Instant::now())
+                            {
+                                if let Err(error) = host.command(command) {
+                                    (host.output.notify)(UserEvent::Message(error.to_string()));
+                                }
+                            }
+                            continue;
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                } else {
+                    match inbox.recv() {
+                        Ok(message) => message,
+                        Err(_) => break,
+                    }
+                };
                 if matches!(&message, Message::Host(Command::Stop)) {
                     break;
                 }
@@ -643,6 +688,18 @@ impl Host {
                 Ok(())
             }
             Command::Input(input) => self.input(input, Instant::now(), 1),
+            Command::NativeWheel(sample) => {
+                let queued_at = sample.observed_at;
+                for command in self
+                    .wheel_input
+                    .accept_native_wheel(sample, Instant::now())
+                {
+                    if let Command::Input(input) = command {
+                        self.input(input, queued_at, 1)?;
+                    }
+                }
+                Ok(())
+            }
             Command::QueuedInput {
                 input,
                 queued_at,

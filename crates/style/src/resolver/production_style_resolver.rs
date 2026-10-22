@@ -399,7 +399,7 @@ fn DefaultForcedSystemColor(keyword: CSSValueID, scheme: ColorScheme) -> Option<
     Some(foundation::Color::FromRGBA32(rgba))
 }
 
-fn ResolveForcedSystemColor(
+pub(crate) fn ResolveProductionSystemColor(
     color: &StyleColor,
     scheme: ColorScheme,
     system_colors: ProductionSystemColorContext<'_>,
@@ -415,6 +415,14 @@ fn ResolveForcedSystemColor(
         })
         .or_else(|| DefaultForcedSystemColor(keyword, scheme))?;
     Some(StyleColor::from_color_and_keyword(resolved, keyword))
+}
+
+fn ResolveForcedSystemColor(
+    color: &StyleColor,
+    scheme: ColorScheme,
+    system_colors: ProductionSystemColorContext<'_>,
+) -> Option<StyleColor> {
+    ResolveProductionSystemColor(color, scheme, system_colors)
 }
 
 // cpp: style_adjuster.cc:1043-1102 AdjustForForcedColorsMode. This lives in
@@ -3239,6 +3247,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                     match_result: MatchResult::default(),
                     root_font_size: self.cascade.root_font_size,
                     color_scheme_settings: self.cascade.color_scheme_settings,
+                    system_colors: self.cascade.system_colors,
                     text_link_text_color: self.cascade.text_link_text_color,
                     is_document_element: false,
                     pseudo_id: self.cascade.pseudo_id,
@@ -4013,6 +4022,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 match_result: cascade.result.borrow().clone(),
                 root_font_size: self.cascade.root_font_size,
                 color_scheme_settings: self.cascade.color_scheme_settings,
+                system_colors: self.cascade.system_colors,
                 text_link_text_color: self.cascade.text_link_text_color,
                 is_document_element: self.cascade.is_document_element,
                 pseudo_id: self.cascade.pseudo_id,
@@ -6042,6 +6052,7 @@ mod tests {
             match_result: matched,
             root_font_size: 16.0,
             color_scheme_settings: ColorSchemeSettings::default(),
+            system_colors: ProductionSystemColorContext::default(),
             text_link_text_color: None,
             is_document_element: false,
             pseudo_id: layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdNone,

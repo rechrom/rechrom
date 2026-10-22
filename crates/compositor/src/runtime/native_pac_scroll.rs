@@ -17,7 +17,7 @@ use crate::{
     },
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::VecDeque,
     rc::{Rc, Weak},
 };
@@ -25,6 +25,7 @@ use std::{
 #[derive(Clone, Debug)]
 pub(crate) enum NativePacScrollEffect {
     DidCompositorScroll {
+        sequence: u64,
         element: ElementId,
         offset: PointF,
         source: ScrollSourceType,
@@ -55,11 +56,15 @@ impl NativePacScrollEffects {
 
 pub(crate) struct NativePacScrollCallbacks {
     effects: NativePacScrollEffects,
+    sequence: Cell<u64>,
 }
 
 impl NativePacScrollCallbacks {
     pub(crate) fn new(effects: NativePacScrollEffects) -> Rc<Self> {
-        Rc::new(Self { effects })
+        Rc::new(Self {
+            effects,
+            sequence: Cell::new(0),
+        })
     }
 
     pub(crate) fn Downgrade(callbacks: &Rc<Self>) -> Weak<dyn ScrollCallbacks> {
@@ -76,8 +81,11 @@ impl ScrollCallbacks for NativePacScrollCallbacks {
         source: ScrollSourceType,
         snap: &Option<TargetSnapAreaElementIds>,
     ) {
+        let sequence = self.sequence.get().wrapping_add(1).max(1);
+        self.sequence.set(sequence);
         self.effects
             .Push(NativePacScrollEffect::DidCompositorScroll {
+                sequence,
                 element,
                 offset: *offset,
                 source,

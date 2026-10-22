@@ -73,11 +73,6 @@ use renderer_skia::{PixelFormat, RendererSkiaBackend};
 struct PageCompositorExecutor {
     executor: Arc<dyn executor::Executor>,
     origin: std::time::Instant,
-    // Physical BeginFrame timestamps may have been sampled just before this
-    // Page executor was constructed, while manually driven frames use Now().
-    // Both enter cc's single TimeTicks domain here, whose source invariant is
-    // nondecreasing frame_time.
-    last_ticks_us: std::sync::atomic::AtomicI64,
     sequence: std::thread::ThreadId,
 }
 
@@ -87,34 +82,40 @@ impl PageCompositorExecutor {
         Self {
             executor,
             origin: std::time::Instant::now(),
-            last_ticks_us: std::sync::atomic::AtomicI64::new(0),
             sequence: std::thread::current().id(),
         }
     }
 
-    fn MonotonicTimeTicks(&self, candidate_us: i64) -> CompositorTimeTicks {
-        let candidate_us = candidate_us.max(1);
-        let previous = self
-            .last_ticks_us
-            .fetch_max(candidate_us, std::sync::atomic::Ordering::Relaxed);
-        CompositorTimeTicks::FromMicroseconds(candidate_us.max(previous))
-    }
-
+    /// Convert an Instant into cc's one absolute TimeTicks domain without
+    /// advancing that domain's clock. In particular, converting a future
+    /// BeginFrame deadline must not make Now() equal that deadline.
     fn TimeTicks(&self, instant: std::time::Instant) -> CompositorTimeTicks {
-        let micros = instant
-            .checked_duration_since(self.origin)
-            .unwrap_or_default()
-            .as_micros()
-            .min(i64::MAX as u128) as i64;
-        self.MonotonicTimeTicks(micros)
+        // Leave an hour before the origin so a physical frame sampled just
+        // before Page construction remains ordered and all normal ticks stay
+        // non-null, matching base::TimeTicks' absolute conversion semantics.
+        const ORIGIN_OFFSET_US: i64 = 60 * 60 * 1_000_000;
+        let value = if instant >= self.origin {
+            let delta = instant
+                .duration_since(self.origin)
+                .as_micros()
+                .min(i64::MAX as u128) as i64;
+            ORIGIN_OFFSET_US.saturating_add(delta)
+        } else {
+            let delta = self
+                .origin
+                .duration_since(instant)
+                .as_micros()
+                .min(i64::MAX as u128) as i64;
+            ORIGIN_OFFSET_US.saturating_sub(delta)
+        };
+        CompositorTimeTicks::FromMicroseconds(value.max(1))
     }
 }
 
 #[cfg(feature = "production_raster")]
 impl CompositorExecutor for PageCompositorExecutor {
     fn Now(&self) -> CompositorTimeTicks {
-        let micros = self.origin.elapsed().as_micros().min(i64::MAX as u128) as i64;
-        self.MonotonicTimeTicks(micros)
+        self.TimeTicks(std::time::Instant::now())
     }
 
     fn Execute(&self, task: Box<dyn FnOnce() + Send>) {
@@ -181,6 +182,7 @@ struct PresentablePageRender {
 pub struct PageRenderPipeline {
     compositor: Option<CompositorEngine>,
     executor: Arc<PageCompositorExecutor>,
+    raster_executor: Arc<PageCompositorExecutor>,
     raster_engine: RasterEngine,
     viz: viz::native::VizEngine,
     renderer: renderer::Renderer<RendererSkiaBackend>,
@@ -194,6 +196,14 @@ pub struct PageRenderPipeline {
     deferred_effects: Vec<CompositorMainThreadEffect>,
     begin_frame_sequence: u64,
     needs_begin_frames: bool,
+    work_pending: bool,
+    // Manual driving is confined to the synchronous internal presenter.
+    // External presentation receives only the host's physical BeginFrames.
+    input_frame_issued_since_physical: bool,
+    // The synthetic input BeginFrame may need one or more owner-sequence
+    // Polls to reach ScheduledActionDraw. Keep those Polls runnable, then hold
+    // later input work for the next physical interval once a frame is sent.
+    input_frame_pump_pending: bool,
     // A committed input remains strongly identified until its compositor frame
     // reaches Viz. Calls made while it is pending advance that commit instead
     // of issuing a second main commit.
@@ -206,7 +216,7 @@ pub struct PageRenderPipeline {
 #[cfg(feature = "production_raster")]
 #[derive(Default)]
 pub struct CompositorWheelResult {
-    pub handled: bool,
+    pub compositor_owned: bool,
     pub submitted: bool,
     pub effects: Vec<CompositorMainThreadEffect>,
 }
@@ -232,7 +242,7 @@ pub struct PageFramePresenter {
 
 #[cfg(feature = "production_raster")]
 impl PageFramePresenter {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             viz: viz::native::VizEngine::New(),
             renderer: renderer::Renderer::new(RendererSkiaBackend::default()),
@@ -250,6 +260,7 @@ impl PageFramePresenter {
     ) -> io::Result<(
         bool,
         Vec<compositor::runtime::resources::RasterReturnedResource>,
+        bool,
     )> {
         let local_surface_id = submission.local_surface_id;
         let frame = submission.frame;
@@ -262,6 +273,10 @@ impl PageFramePresenter {
             root.output_rect.height.max(0) as u32,
             frame.metadata.device_scale_factor.to_bits(),
         );
+        // A full root damage rect makes the previous host target irrelevant.
+        // Pass this fact across the Viz/Renderer boundary so the embedding can
+        // acquire fresh storage without cloning an immutable in-flight frame.
+        let full_root_damage = root.damage_rect == root.output_rect;
         let mut returned = Vec::new();
         if let Some(current) = self.local_surface_id {
             let same_embed = current.embed_token == local_surface_id.embed_token;
@@ -272,7 +287,7 @@ impl PageFramePresenter {
                 returned.extend(frame.resource_list.iter().map(
                     compositor::runtime::resources::RasterTransferableResource::ToReturnedResource,
                 ));
-                return Ok((false, returned));
+                return Ok((false, returned, false));
             }
         }
         let generation_changed = self
@@ -308,7 +323,7 @@ impl PageFramePresenter {
                 .map_err(|error| io::Error::other(error.to_string()))?
                 .returned_resources,
         );
-        Ok((true, returned))
+        Ok((true, returned, full_root_damage))
     }
 
     pub fn RenderCurrent(
@@ -323,12 +338,12 @@ impl PageFramePresenter {
             surface_id: self.surface,
             destination: output,
         };
-        let aggregated = self
+        let mut aggregated = self
             .viz
             .Aggregate(output, &[placement])
             .map_err(|error| io::Error::other(error.to_string()))?;
         let update = self.renderer.Render(
-            &aggregated,
+            &mut aggregated,
             renderer_skia::RenderTarget {
                 width,
                 height,
@@ -347,19 +362,30 @@ impl PageFramePresenter {
 #[cfg(feature = "production_raster")]
 impl PageRenderPipeline {
     pub fn new(executor: Arc<dyn executor::Executor>) -> Self {
-        Self::NewWithPresentation(executor, false).0
+        Self::NewWithPresentation(executor.clone(), executor, false).0
+    }
+
+    pub fn new_with_executors(
+        compositor: Arc<dyn executor::Executor>,
+        raster: Arc<dyn executor::Executor>,
+    ) -> Self {
+        Self::NewWithPresentation(compositor, raster, false).0
     }
 
     /// Builds the cc producer and the Viz/Renderer consumer as separate owners.
     /// Moving the consumer to a Page renderer sequence preserves Chromium's
     /// FrameSink boundary: impl-thread input submits owned CompositorFrames and
     /// never waits for software drawing to finish.
-    pub fn new_external(executor: Arc<dyn executor::Executor>) -> (Self, PageFramePresenter) {
-        Self::NewWithPresentation(executor, true)
+    pub fn new_external(
+        compositor: Arc<dyn executor::Executor>,
+        raster: Arc<dyn executor::Executor>,
+    ) -> Self {
+        Self::NewWithPresentation(compositor, raster, true).0
     }
 
     fn NewWithPresentation(
-        executor: Arc<dyn executor::Executor>,
+        compositor_executor: Arc<dyn executor::Executor>,
+        raster_executor: Arc<dyn executor::Executor>,
         external_presentation: bool,
     ) -> (Self, PageFramePresenter) {
         static NEXT_COMMAND_BUFFER: std::sync::atomic::AtomicU64 =
@@ -375,7 +401,8 @@ impl PageRenderPipeline {
         (
             Self {
                 compositor: None,
-                executor: Arc::new(PageCompositorExecutor::new(executor)),
+                executor: Arc::new(PageCompositorExecutor::new(compositor_executor)),
+                raster_executor: Arc::new(PageCompositorExecutor::new(raster_executor)),
                 raster_engine,
                 viz: viz::native::VizEngine::New(),
                 renderer,
@@ -389,6 +416,9 @@ impl PageRenderPipeline {
                 deferred_effects: Vec::new(),
                 begin_frame_sequence: 0,
                 needs_begin_frames: false,
+                work_pending: false,
+                input_frame_issued_since_physical: false,
+                input_frame_pump_pending: false,
                 pending: None,
                 presentable: None,
             },
@@ -465,7 +495,7 @@ impl PageRenderPipeline {
                     CompositorConfig::default(),
                     CompositorExecutors {
                         compositor: executor.clone(),
-                        raster: executor,
+                        raster: self.raster_executor.clone(),
                         raster_provider,
                         ui_raster,
                     },
@@ -494,6 +524,7 @@ impl PageRenderPipeline {
             needs_begin_frames = output.needs_begin_frames;
             main_commit_pending = output.main_commit_pending;
             self.needs_begin_frames = needs_begin_frames;
+            self.work_pending = output.work_pending;
             self.deferred_effects
                 .append(&mut output.main_thread_effects);
             let Some(frame) = output.frame else {
@@ -573,6 +604,13 @@ impl PageRenderPipeline {
         if self.AcceptPendingOutput(output)? {
             return Ok(true);
         }
+        // The external FrameSink is driven by the host BeginFrame source.
+        // Polling a pending commit must not invent additional frame clocks.
+        // Source: cc/trees/proxy_impl.cc and cc/scheduler/scheduler.cc
+        //         OnBeginFrame / ProcessScheduledActions.
+        if self.external_presentation {
+            return Ok(false);
+        }
         for _ in 0..8 {
             if !self
                 .pending
@@ -593,6 +631,9 @@ impl PageRenderPipeline {
         self.begin_frame_sequence = self.begin_frame_sequence.wrapping_add(1).max(1);
         let now = self.executor.Now();
         let interval = BeginFrameArgs::DefaultInterval();
+        let mut trace = browser_tracing::span("compositor", "PageCompositor.ManualBeginFrame");
+        trace.set("external_presentation", self.external_presentation as u8 as f64);
+        trace.set("sequence", self.begin_frame_sequence as f64);
         self.compositor
             .as_mut()
             .expect("initialized compositor")
@@ -621,6 +662,11 @@ impl PageRenderPipeline {
         if self.compositor.is_none() {
             return Ok(CompositorWheelResult::default());
         }
+        let mut trace = browser_tracing::span("compositor", "PageCompositor.PhysicalBeginFrame");
+        trace.set("source_id", args.source_id as f64);
+        trace.set("sequence", args.sequence_number as f64);
+        self.input_frame_issued_since_physical = false;
+        self.input_frame_pump_pending = false;
         let interval = CompositorTimeDelta::Microseconds(
             args.interval.as_micros().min(i64::MAX as u128) as i64,
         );
@@ -658,16 +704,16 @@ impl PageRenderPipeline {
                 .iter()
                 .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
         for effect in std::mem::take(&mut output.main_thread_effects) {
-            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
-                result.handled |= handled;
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
             } else {
                 result.effects.push(effect);
             }
         }
         let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
         for effect in self.TakeMainThreadEffects() {
-            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
-                result.handled |= handled;
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
             } else {
                 result.effects.push(effect);
             }
@@ -684,6 +730,7 @@ impl PageRenderPipeline {
             }
         }
         result.submitted = submitted;
+        self.input_frame_issued_since_physical = submitted;
         if let (Some(started), Some(began)) = (profile, began_at) {
             eprintln!(
                 "page-compositor-begin-profile begin_ms={:.3} output_ms={:.3} total_ms={:.3} submitted={} effects={}",
@@ -697,8 +744,95 @@ impl PageRenderPipeline {
         Ok(result)
     }
 
+    fn BeginInputFrame(&mut self) -> io::Result<CompositorWheelResult> {
+        let mut output = self.BeginFrame()?;
+        let stable_frame_reuse = self.pending.is_some()
+            && output.frame.is_none()
+            && !output.needs_begin_frames
+            && !output
+                .main_thread_effects
+                .iter()
+                .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
+        let mut result = CompositorWheelResult::default();
+        for effect in std::mem::take(&mut output.main_thread_effects) {
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
+        for effect in self.TakeMainThreadEffects() {
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        if let Some(pending) = self.pending.as_mut() {
+            pending.needs_begin_frames = needs_begin_frames;
+        }
+        if !main_commit_pending && (submitted || stable_frame_reuse) {
+            if let Some(pending) = self.pending.take() {
+                self.presentable = Some(PresentablePageRender {
+                    artifact: Arc::downgrade(&pending.artifact),
+                    input: pending.input,
+                });
+            }
+        }
+        result.submitted = submitted;
+        Ok(result)
+    }
+
     pub fn NeedsBeginFrames(&self) -> bool {
         self.needs_begin_frames
+    }
+
+    pub fn NeedsPump(&self) -> bool {
+        // Runnable executor callbacks wake the impl sequence through
+        // WakingExecutor. `work_pending` also includes scheduler work which is
+        // deliberately blocked on the next physical BeginFrame; treating that
+        // state as an immediate wake spins Pump continuously between display
+        // pulses and starves input/presentation. Only the synthetic input
+        // BeginFrame needs an explicit follow-up Poll here.
+        self.input_frame_pump_pending
+    }
+
+    /// Notify cc that the Page needs a main-frame lifecycle before that
+    /// lifecycle has produced its immutable PaintArtifact. This is the
+    /// external Page runtime's ProxyMain::SetNeedsCommit boundary.
+    pub fn RequestMainFrame(&mut self) -> io::Result<CompositorWheelResult> {
+        self.EnsureCompositor()?;
+        let output = self
+            .compositor
+            .as_mut()
+            .expect("initialized compositor")
+            .RequestMainFrame()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let stable_frame_reuse = self.pending.is_some()
+            && output.frame.is_none()
+            && !output.needs_begin_frames
+            && !output
+                .main_thread_effects
+                .iter()
+                .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
+        let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
+        if let Some(pending) = self.pending.as_mut() {
+            pending.needs_begin_frames = needs_begin_frames;
+        }
+        if !main_commit_pending && (submitted || stable_frame_reuse) {
+            if let Some(pending) = self.pending.take() {
+                self.presentable = Some(PresentablePageRender {
+                    artifact: Arc::downgrade(&pending.artifact),
+                    input: pending.input,
+                });
+            }
+        }
+        Ok(CompositorWheelResult {
+            submitted,
+            effects: self.TakeMainThreadEffects(),
+            ..Default::default()
+        })
     }
 
     pub fn TakeFrames(&mut self) -> Vec<NativeCompositorFrameSubmission> {
@@ -716,6 +850,7 @@ impl PageRenderPipeline {
         let Some(compositor) = self.compositor.as_mut() else {
             return Ok(CompositorWheelResult::default());
         };
+        let input_frame_pump = std::mem::take(&mut self.input_frame_pump_pending);
         let mut output = compositor
             .Poll()
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -728,16 +863,16 @@ impl PageRenderPipeline {
                 .iter()
                 .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
         for effect in std::mem::take(&mut output.main_thread_effects) {
-            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
-                result.handled |= handled;
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
             } else {
                 result.effects.push(effect);
             }
         }
         let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
         for effect in self.TakeMainThreadEffects() {
-            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
-                result.handled |= handled;
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
             } else {
                 result.effects.push(effect);
             }
@@ -754,6 +889,9 @@ impl PageRenderPipeline {
             }
         }
         result.submitted = submitted;
+        self.input_frame_issued_since_physical |= submitted;
+        self.input_frame_pump_pending =
+            input_frame_pump && !submitted && self.work_pending;
         Ok(result)
     }
 
@@ -803,37 +941,96 @@ impl PageRenderPipeline {
             .expect("checked compositor")
             .Input(CompositorInput::Wheel {
                 position: CompositorPointF::new(wheel.position.x as f32, wheel.position.y as f32),
-                delta: Vector2dF::new(wheel.delta.x as f32, wheel.delta.y as f32),
+                delta: {
+                    let delta = wheel.DefaultScrollDelta();
+                    Vector2dF::new(delta.x as f32, delta.y as f32)
+                },
+                unconstrained_delta: Vector2dF::new(
+                    wheel.delta.x as f32,
+                    wheel.delta.y as f32,
+                ),
+                granularity: match wheel.delta_units {
+                    interaction::input_event::ScrollGranularity::kScrollByPrecisePixel =>
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByPrecisePixel,
+                    interaction::input_event::ScrollGranularity::kScrollByPixel =>
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByPixel,
+                    interaction::input_event::ScrollGranularity::kScrollByLine =>
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByLine,
+                    interaction::input_event::ScrollGranularity::kScrollByPage =>
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByPage,
+                    interaction::input_event::ScrollGranularity::kScrollByDocument =>
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByDocument,
+                },
+                is_inertial: wheel
+                    .native
+                    .is_some_and(|native| native.momentum_phase != 0),
                 phase,
             })
             .map_err(|error| io::Error::other(error.to_string()))?;
         let input_done = profile.map(|start| start.elapsed());
         let mut result = CompositorWheelResult::default();
         let mut output = first;
+        let stable_frame_reuse = self.pending.is_some()
+            && output.frame.is_none()
+            && !output.needs_begin_frames
+            && !output
+                .main_thread_effects
+                .iter()
+                .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
         for effect in std::mem::take(&mut output.main_thread_effects) {
-            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
-                result.handled |= handled;
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
             } else {
                 result.effects.push(effect);
             }
         }
-        let (submitted, _, _) = self.AcceptOutput(output)?;
+        let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
         for effect in self.TakeMainThreadEffects() {
-            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
-                result.handled |= handled;
+            if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
+                result.compositor_owned |= compositor_owned;
             } else {
                 result.effects.push(effect);
+            }
+        }
+        if let Some(pending) = self.pending.as_mut() {
+            pending.needs_begin_frames = needs_begin_frames;
+        }
+        if !main_commit_pending && (submitted || stable_frame_reuse) {
+            if let Some(pending) = self.pending.take() {
+                self.presentable = Some(PresentablePageRender {
+                    artifact: Arc::downgrade(&pending.artifact),
+                    input: pending.input,
+                });
             }
         }
         result.submitted = submitted;
+        // A compositor scroll requests redraw on the existing scheduler.
+        // External presentation receives its next opportunity from the host,
+        // not a second manual BeginFrame generated by the input callback.
+        let input_frame = !self.external_presentation
+            && result.compositor_owned
+            && (wheel.delta.x != 0. || wheel.delta.y != 0.)
+            && !result.submitted
+            && !self.input_frame_issued_since_physical;
+        if input_frame {
+            // The synchronous internal presenter has no external frame source;
+            // its caller explicitly drives a frame after the input mutation.
+            self.input_frame_issued_since_physical = true;
+            let immediate = self.BeginInputFrame()?;
+            self.input_frame_pump_pending = !immediate.submitted && self.work_pending;
+            result.submitted |= immediate.submitted;
+            result.compositor_owned |= immediate.compositor_owned;
+            result.effects.extend(immediate.effects);
+        }
         if let Some(start) = profile {
             eprintln!(
-                "page-compositor-wheel-profile input_ms={:.3} output_ms={:.3} total_ms={:.3} handled={} submitted={} effects={}",
+                "page-compositor-wheel-profile input_ms={:.3} output_ms={:.3} total_ms={:.3} compositor_owned={} submitted={} input_frame={} effects={}",
                 input_done.unwrap().as_secs_f64() * 1000.0,
                 (start.elapsed() - input_done.unwrap()).as_secs_f64() * 1000.0,
                 start.elapsed().as_secs_f64() * 1000.0,
-                result.handled,
+                result.compositor_owned,
                 result.submitted,
+                input_frame,
                 result.effects.len(),
             );
         }
@@ -1013,19 +1210,13 @@ impl PageRenderPipeline {
                 needs_begin_frames: false,
             });
             let presentable = self.AcceptPendingOutput(first)?;
-            if self.external_presentation {
-                // Commit transfers this PaintArtifact to cc at
-                // ScheduledActionCommit. Raster, activation and frame
-                // submission continue independently on impl BeginFrames, so
-                // they cannot hold the Page's next main-frame response slot.
-                // This is the threaded Proxy boundary in Chromium: the main
-                // commit completes before DrawLayers submits its frame.
-                if let Some(accepted) = self.pending.take() {
-                    self.presentable = Some(PresentablePageRender {
-                        artifact: Arc::downgrade(&accepted.artifact),
-                        input: accepted.input,
-                    });
-                }
+            // AcceptPendingOutput clears `pending` only after cc reports that
+            // the main commit itself completed.  Frame submission may remain
+            // asynchronous, but a later PaintArtifact must not replace the
+            // ready commit or the pending tree before that boundary.  Doing
+            // so pairs a newer reflected scroll delta with an older absolute
+            // main-thread base and makes activation move the viewport back.
+            if self.external_presentation && self.pending.is_none() {
                 return Ok(());
             }
             let presentable = presentable || self.ContinuePending()?;
@@ -1063,14 +1254,14 @@ impl PageRenderPipeline {
             destination: output,
         };
         let (update, viz_output) = {
-            let viz_output = self
+            let mut viz_output = self
                 .viz
                 .Aggregate(output, &[placement])
                 .map_err(|error| io::Error::other(error.to_string()))?;
             let aggregated_at = profile_started.map(|_| std::time::Instant::now());
             let aggregate_damage_pixels = viz_output.DamagePixels();
             let update = self.renderer.Render(
-                &viz_output,
+                &mut viz_output,
                 renderer_skia::RenderTarget {
                     width,
                     height,
@@ -2326,15 +2517,24 @@ pub struct PageThreads {
     pub raster: bool,
     pub decode: bool,
     pub scriptCompile: bool,
+    /// Background document work such as decode and script compilation.
     pub executor: std::sync::Arc<dyn executor::Executor>,
+    /// Chromium's compositor sequence. It must remain runnable while raster
+    /// workers are saturated so impl input and frame scheduling keep moving.
+    pub compositor_executor: std::sync::Arc<dyn executor::Executor>,
+    /// Chromium's raster worker pool, independent from the compositor sequence.
+    pub raster_executor: std::sync::Arc<dyn executor::Executor>,
 }
 impl Default for PageThreads {
     fn default() -> Self {
+        let executor = executor::inline();
         Self {
             raster: false,
             decode: false,
             scriptCompile: false,
-            executor: executor::inline(),
+            executor: executor.clone(),
+            compositor_executor: executor.clone(),
+            raster_executor: executor,
         }
     }
 }
@@ -2862,11 +3062,18 @@ impl Page {
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let paint_engine = paint::PaintEngine::new();
         #[cfg(feature = "production_raster")]
-        let rendering = PageRenderPipeline::new(if threads.raster {
-            threads.executor.clone()
-        } else {
-            executor::inline()
-        });
+        let rendering = PageRenderPipeline::new_with_executors(
+            if threads.raster {
+                threads.compositor_executor.clone()
+            } else {
+                executor::inline()
+            },
+            if threads.raster {
+                threads.raster_executor.clone()
+            } else {
+                executor::inline()
+            },
+        );
         let state = PageState::WithEngines(
             document,
             layout_engine,
@@ -3388,7 +3595,7 @@ impl Page {
         // Chromium sends a non-blocking wheel gesture to cc first. DOM still
         // receives the same event, marked with the impl-thread disposition, so
         // its default action does not apply the delta a second time. Regions
-        // with a cancelable listener stay wholly on the main-thread fallback.
+        // with a cancelable listener are assigned wholly to the main thread.
         let dispatch_profile = std::env::var_os("BROWSER_PROFILE_INPUT")
             .is_some()
             .then(std::time::Instant::now);
@@ -3409,7 +3616,7 @@ impl Page {
                 || regions.fixed_rects.iter().copied().any(contains);
             if !self.external_compositor && !blocked {
                 compositor_wheel = self.state.rendering.borrow_mut().Wheel(wheel)?;
-                wheel.compositor_handled = compositor_wheel.handled;
+                wheel.compositor_owned = compositor_wheel.compositor_owned;
             }
         }
         let compositor_done = dispatch_profile.map(|start| start.elapsed());
@@ -3432,7 +3639,7 @@ impl Page {
         if !result.default_prevented {
             if let interaction::input_event::InputEvent::Wheel(wheel) = &routed_input {
                 #[cfg(feature = "production_raster")]
-                if compositor_wheel.handled {
+                if compositor_wheel.compositor_owned {
                     self.ApplyCompositorWheelEffects(compositor_wheel.effects)?;
                     if compositor_wheel.submitted {
                         self.PresentCompositorOnlyFrame();
@@ -3714,6 +3921,29 @@ impl Page {
                 &mut self.state.document.borrow_mut(),
                 &self.state.interaction.borrow(),
             );
+        trace.set(
+            "resident_fragments_before_layout",
+            self.state
+                .layout_engine
+                .borrow()
+                .GetLayoutResult()
+                .is_some() as u8 as f64,
+        );
+        browser_tracing::instant(
+            "layout",
+            "Page.LayoutFragmentOwnership",
+            &[
+                ("stage", 0.0),
+                (
+                    "resident",
+                    self.state
+                        .layout_engine
+                        .borrow()
+                        .GetLayoutResult()
+                        .is_some() as u8 as f64,
+                ),
+            ],
+        );
         let paint_only_style = layout_geometry_current
             || (self.frame.is_some() && {
                 let impact = self.state.document.borrow().GetStyleImpact();
@@ -3770,13 +4000,10 @@ impl Page {
         } else {
             Vec::new()
         };
-        // A targeted paint mutation updates the retained FragmentData-style
-        // snapshot before taking it for Paint. Generic export replaces the
-        // snapshot, so release its old reference first. Either path leaves no
-        // extra engine reference while CommitPaint mutates client lifecycle.
-        if !paint_only_style {
-            self.state.layout_engine.borrow_mut().ReleaseLayoutResult();
-        }
+        // Keep Chromium's last committed fragment snapshot resident until DOM
+        // synchronization classifies the mutation. Tree/constraint mutations
+        // invalidate it inside LayoutEngine; a single subtree update retains
+        // it so native layout can replace only that exported fragment subtree.
 
         trace.set(
             "targeted_animation_paint",
@@ -3863,6 +4090,29 @@ impl Page {
             layout_output,
             paint_output,
             Some(&self.state.layout_editing.caret.borrow()),
+        );
+        trace.set(
+            "resident_fragments_after_paint",
+            self.state
+                .layout_engine
+                .borrow()
+                .GetLayoutResult()
+                .is_some() as u8 as f64,
+        );
+        browser_tracing::instant(
+            "layout",
+            "Page.LayoutFragmentOwnership",
+            &[
+                ("stage", 1.0),
+                (
+                    "resident",
+                    self.state
+                        .layout_engine
+                        .borrow()
+                        .GetLayoutResult()
+                        .is_some() as u8 as f64,
+                ),
+            ],
         );
         if let Some(start) = profile {
             let elapsed = start.elapsed();

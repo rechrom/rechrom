@@ -822,10 +822,10 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
             });
             let property_trees_changed = changed_to_root
                 || (previous.chunks.len() == input.artifact().chunks.len()
-                && previous
-                    .chunks
-                    .iter()
-                    .zip(&input.artifact().chunks)
+                    && previous
+                        .chunks
+                        .iter()
+                        .zip(&input.artifact().chunks)
                         .any(|(old, new)| !old.properties.same_nodes(&new.properties)));
             if property_trees_changed {
                 pac.SetNeedsUpdate();
@@ -841,6 +841,50 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
                 requests,
                 &mut context,
             );
+        }
+        // Blink's LocalFrameView sends simple scroll-value changes through
+        // PaintArtifactCompositor's direct scroll API. Our immutable artifact
+        // boundary carries that value together with repaint data, so apply it
+        // after PAC has retained or rebuilt the scroll node and before the
+        // main tree is committed. This prevents PAC's retained node value
+        // from replacing the newer main-thread absolute offset.
+        //
+        // Source: local_frame_view.cc:3545-3563;
+        //         paint_artifact_compositor.cc:1500-1521.
+        for scroll_translation in &input
+            .artifact()
+            .compositor_viewport
+            .as_ref()
+            .expect("validated native viewport")
+            .scroll_translation_nodes
+        {
+            let Some(scroll) = &scroll_translation.scroll else {
+                continue;
+            };
+            let value = scroll.compositor.compositor_element_id.GetInternalValue();
+            if !ElementId::IsValidInternalValue(value) {
+                continue;
+            }
+            let offset = PointF::new(
+                -scroll_translation.matrix.values[12] as f32,
+                -scroll_translation.matrix.values[13] as f32,
+            );
+            // PaintPropertyTreeBuilder updates the cc transform even when the
+            // retained Paint node reports no effective change. This matters
+            // after ApplyCompositorChanges has reflected the impl delta into
+            // the main scroll map: PushMainToPending can then see equal
+            // SyncedScrollOffset values, so the copied transform itself must
+            // already carry the absolute offset before activation.
+            //
+            // Source: paint_property_tree_builder.cc:3801-3827;
+            //         property_tree_manager.cc:138-177.
+            let transform = paint::TransformNode::<R>::from_arc(scroll_translation.clone());
+            if !pac.DirectlyUpdateScrollOffsetTransform(&transform, context.layer) {
+                // The direct transform path intentionally declines nodes that
+                // must be realized on main. Keep ScrollingCoordinator's
+                // independent scroll-map update for that source case.
+                pac.DirectlySetScrollOffset(ElementId::new(value), &offset, context.layer);
+            }
         }
         Ok(())
     }

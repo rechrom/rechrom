@@ -875,6 +875,18 @@ impl LayoutObjectTree {
             .min_by_key(|record| record.input.kind as i32)
             .map(|record| unsafe { &*record.object })
     }
+
+    pub(crate) fn OutputNodeMut(&mut self, id: u64) -> Option<&mut LayoutObject> {
+        let storage = unsafe { &mut *self.storage_ };
+        let object = storage
+            .InputKeys(id)
+            .iter()
+            .filter_map(|key| storage.managed.get(key))
+            .filter(|record| !record.input.style_generated)
+            .min_by_key(|record| record.input.kind as i32)?
+            .object;
+        Some(unsafe { &mut *object })
+    }
     pub(crate) fn OutputScrollOffsets(&self) -> Vec<(u64, super::layout_input::Offset)> {
         let storage = unsafe { &*self.storage_ };
         storage
@@ -1772,10 +1784,9 @@ impl LayoutObjectTree {
                 || record.effective_style.paint != projected.paint
                 || control_paint_state_changed
             {
-                unsafe { &mut *record.object }
-                    .SetShouldDoFullPaintInvalidationWithoutLayoutChange(
-                        foundation::PaintInvalidationReason::kStyle,
-                    );
+                unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+                    foundation::PaintInvalidationReason::kStyle,
+                );
             }
             // A generated text-source projection supplies transport metadata,
             // while StyleRef supplies the canonical text paint. Preserve the

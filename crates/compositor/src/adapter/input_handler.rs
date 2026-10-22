@@ -288,6 +288,7 @@ pub trait InputHost<B: InputHandlerTypes> {
         fractional: bool,
         snapped: BTreeMap<ElementId, TargetSnapAreaElementIds>,
         mutator: Option<&B::MutatorHost>,
+        next_bmf: bool,
     );
     fn ViewportScrollBy(
         &mut self,

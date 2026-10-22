@@ -348,7 +348,7 @@ impl Page {
             if let InputEvent::Wheel(wheel) = &entry.input {
                 input_trace.set("delta_x", wheel.delta.x);
                 input_trace.set("delta_y", wheel.delta.y);
-                input_trace.set("compositor_handled", wheel.compositor_handled as u8 as f64);
+                input_trace.set("compositor_owned", wheel.compositor_owned as u8 as f64);
             }
             let result = self.DispatchInputWithoutLifecycle(&entry.input);
             let result = result.map(|result| {

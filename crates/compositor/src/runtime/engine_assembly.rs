@@ -139,6 +139,16 @@ impl NativeEngineAssembly {
         self.Poll()
     }
 
+    /// Main-thread commit demand, before Blink produces DataForCommit.
+    ///
+    /// Source: cc/trees/proxy_main.cc:741-756;
+    ///         cc/trees/proxy_impl.cc:567-573.
+    pub(crate) fn RequestMainFrame(&mut self) -> Result<CompositorOutput, CompositorError> {
+        self.scheduler
+            .SetNeedsBeginMainFrame(false, false, &mut self.core);
+        self.Poll()
+    }
+
     pub(crate) fn FinishMainFrameWithoutUpdates(
         &mut self,
     ) -> Result<CompositorOutput, CompositorError> {
@@ -194,10 +204,13 @@ impl NativeEngineAssembly {
         let mut context = HostImplContext {
             services: &mut self.core.services,
         };
-        let handled = match input {
+        let compositor_owned = match input {
             CompositorInput::Wheel {
                 position,
                 delta,
+                unconstrained_delta,
+                granularity,
+                is_inertial,
                 phase,
             } => {
                 let position = point(position)?;
@@ -209,7 +222,17 @@ impl NativeEngineAssembly {
                 }
                 Some(host.WithInputHandler(&mut context, |input, runtime| {
                     let input = input.expect("source bound InputHandler");
-                    let mut handled = true;
+                    // Wheel disposition records which thread owns the
+                    // gesture, not whether this particular update changed an
+                    // offset. An impl-thread gesture remains compositor-owned
+                    // when it reaches a scroll boundary; InputHandler reports
+                    // that separately through did_scroll/unused_scroll_delta.
+                    // Falling back to Blink for a zero-consumption update
+                    // would apply the same wheel delta twice and make the two
+                    // scroll ranges fight at the boundary.
+                    // Source: content/renderer/input/input_handler_proxy.cc;
+                    //         cc/input/input_handler.h:InputHandlerScrollResult.
+                    let mut compositor_owned = input.IsCurrentlyScrolling(runtime);
                     if phase == ScrollPhase::Begin {
                         let mut data = ScrollStateData::default();
                         data.position_x = position.x();
@@ -217,35 +240,41 @@ impl NativeEngineAssembly {
                         data.delta_x_hint = f64::from(delta.x());
                         data.delta_y_hint = f64::from(delta.y());
                         data.is_beginning = true;
+                        data.is_in_inertial_phase = is_inertial;
+                        data.delta_granularity = granularity;
                         data.from_user_input = true;
                         let mut state = ScrollState::new(data);
                         let status =
                             input.ScrollBegin(runtime, &mut state, ScrollInputType::kWheel);
-                        handled = status.thread == ScrollThread::kScrollOnImplThread
+                        compositor_owned = status.thread == ScrollThread::kScrollOnImplThread
                             && status.main_thread_hit_test_reasons.empty();
                     }
-                    if phase == ScrollPhase::End {
-                        handled = input.IsCurrentlyScrolling(runtime);
-                        input.ScrollEnd(runtime, true, None);
-                    } else if handled
-                        && (phase == ScrollPhase::Update || delta.x() != 0. || delta.y() != 0.)
+                    if compositor_owned
+                        && (phase == ScrollPhase::Update
+                            || delta.x() != 0.
+                            || delta.y() != 0.)
                     {
                         let mut data = ScrollStateData::default();
                         data.position_x = position.x();
                         data.position_y = position.y();
                         data.delta_x = f64::from(delta.x());
                         data.delta_y = f64::from(delta.y());
-                        data.delta_x_unconstrained = f64::from(delta.x());
-                        data.delta_y_unconstrained = f64::from(delta.y());
+                        data.delta_x_unconstrained = f64::from(unconstrained_delta.x());
+                        data.delta_y_unconstrained = f64::from(unconstrained_delta.y());
+                        data.is_in_inertial_phase = is_inertial;
+                        data.delta_granularity = granularity;
                         data.from_user_input = true;
-                        let result = input.ScrollUpdate(
+                        let _result = input.ScrollUpdate(
                             runtime,
                             ScrollState::new(data),
                             TimeDelta::default(),
                         );
-                        handled = result.did_scroll;
                     }
-                    handled
+                    if phase == ScrollPhase::End {
+                        compositor_owned = input.IsCurrentlyScrolling(runtime);
+                        input.ScrollEnd(runtime, true, None);
+                    }
+                    compositor_owned
                 }))
             }
             CompositorInput::PinchBegin { anchor } => {
@@ -284,13 +313,33 @@ impl NativeEngineAssembly {
                 None
             }
         };
-        if let Some(handled) = handled {
+        if let Some(compositor_owned) = compositor_owned {
             self.core
                 .effects
-                .push(CompositorMainThreadEffect::WheelDisposition { handled });
+                .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
         }
         drop(query);
-        self.Poll()
+        if let Some(error) = self.core.failure.take() {
+            return Err(error);
+        }
+        let mut effects = std::mem::take(&mut self.core.effects);
+        self.core.DrainScrollEffects(&mut effects);
+        // InputHandlerProxy returns after mutating the active tree and posts
+        // the resulting scheduler work back to the impl task runner. Running
+        // Poll here would drain tile, raster and scheduler commands inside the
+        // input callback, so 120 Hz wheel delivery could occupy the sequence
+        // past a 60 Hz BeginFrame deadline. The queued lifecycle effects are
+        // consumed by the already requested Pump/BeginFrame turn.
+        //
+        // Source: content/renderer/input/input_handler_proxy.cc;
+        //         cc/trees/proxy_impl.cc SetNeedsRedrawOnImplThread.
+        Ok(CompositorOutput {
+            frame: None,
+            main_thread_effects: effects,
+            needs_begin_frames: true,
+            work_pending: true,
+            main_commit_pending: self.core.HasReadyCommit(),
+        })
     }
     /// The actual Viz acceptance event is distinct from resource returns.
     pub(crate) fn DidReceiveFrameAck(&mut self) -> Result<CompositorOutput, CompositorError> {
@@ -762,14 +811,77 @@ impl NativeEngineAssembly {
         }
     }
     pub(crate) fn Poll(&mut self) -> Result<CompositorOutput, CompositorError> {
+        const OWNER_TURN_BUDGET: std::time::Duration = std::time::Duration::from_micros(1_000);
+        let turn_started = std::time::Instant::now();
+        let mut budget_exhausted = false;
         if let Some(effect) = self.deferred.take() {
             self.Lifecycle(effect)?;
         }
         loop {
             let mut progressed = false;
             while let Some(task) = self.commands.Pop() {
+                let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
+                    .is_some()
+                    .then(std::time::Instant::now);
+                let task_name = match &task {
+                    EngineTask::RenewTreePriority => "RenewTreePriority",
+                    EngineTask::PaintWorkletState { .. } => "PaintWorkletState",
+                    EngineTask::AnimationWorkletState { .. } => "AnimationWorkletState",
+                    EngineTask::RemoveLatencyMonitor { .. } => "RemoveLatencyMonitor",
+                    EngineTask::ScrollbarAnimation { .. } => "ScrollbarAnimation",
+                    EngineTask::DidNotProduceFrame { .. } => "DidNotProduceFrame",
+                    EngineTask::BeginFrameSourcePaused { .. } => "BeginFrameSourcePaused",
+                    EngineTask::CheckerNeedsInvalidation { .. } => "CheckerNeedsInvalidation",
+                    EngineTask::Autoscroll { .. } => "Autoscroll",
+                    EngineTask::ImageAnimation(_) => "ImageAnimation",
+                    EngineTask::MainHost(_) => "MainHost",
+                    EngineTask::ImageDecoded { .. } => "ImageDecoded",
+                    EngineTask::Host(_) => "Host",
+                    EngineTask::Metrics { .. } => "Metrics",
+                    EngineTask::PostedHost(_) => "PostedHost",
+                    EngineTask::Scheduler(task) => match task.kind {
+                        crate::adapter::scheduler_host::SchedulerTaskKind::BeginImplFrameDeadline =>
+                            "Scheduler.BeginImplFrameDeadline",
+                        crate::adapter::scheduler_host::SchedulerTaskKind::PendingBeginFrame =>
+                            "Scheduler.PendingBeginFrame",
+                    },
+                    EngineTask::PoolEviction(_) => "PoolEviction",
+                    EngineTask::Tile { command, .. } => match command {
+                        crate::cc::tiles::tile_manager::TileManagerCommand::CheckIfMoreTilesNeedToBePrepared =>
+                            "Tile.CheckIfMoreTilesNeedToBePrepared",
+                        crate::cc::tiles::tile_manager::TileManagerCommand::CheckForCompletedTasksAndIssueSignals =>
+                            "Tile.CheckForCompletedTasksAndIssueSignals",
+                        crate::cc::tiles::tile_manager::TileManagerCommand::ReduceTileMemoryWhenIdle =>
+                            "Tile.ReduceTileMemoryWhenIdle",
+                        crate::cc::tiles::tile_manager::TileManagerCommand::TrimPrepaintTiles =>
+                            "Tile.TrimPrepaintTiles",
+                        crate::cc::tiles::tile_manager::TileManagerCommand::CheckRasterFinishedQueries =>
+                            "Tile.CheckRasterFinishedQueries",
+                        crate::cc::tiles::tile_manager::TileManagerCommand::CheckPendingGpuWorkAndIssueSignals =>
+                            "Tile.CheckPendingGpuWorkAndIssueSignals",
+                        crate::cc::tiles::tile_manager::TileManagerCommand::DidFinishRunningTileTasksRequiredForActivation =>
+                            "Tile.DidFinishRunningTileTasksRequiredForActivation",
+                        crate::cc::tiles::tile_manager::TileManagerCommand::DidFinishRunningTileTasksRequiredForDraw =>
+                            "Tile.DidFinishRunningTileTasksRequiredForDraw",
+                    },
+                    EngineTask::TileTasksFinished { .. } => "TileTasksFinished",
+                    EngineTask::PostedClosure(_) => "PostedClosure",
+                    EngineTask::RasterWorkCompleted => "RasterWorkCompleted",
+                    EngineTask::RasterFailure(_) => "RasterFailure",
+                };
                 self.Task(task)?;
+                if let Some(started) = profile.filter(|started| started.elapsed().as_millis() >= 1) {
+                    eprintln!(
+                        "compositor-engine-task-profile task={} total_ms={:.3}",
+                        task_name,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    );
+                }
                 progressed = true;
+                if turn_started.elapsed() >= OWNER_TURN_BUDGET {
+                    budget_exhausted = true;
+                    break;
+                }
             }
             while let Some(effect) = self.lifecycle.Pop() {
                 self.Lifecycle(effect)?;
@@ -814,6 +926,9 @@ impl NativeEngineAssembly {
                     .clone()
             };
             raster_tasks.Kick();
+            if budget_exhausted {
+                break;
+            }
             if !progressed
                 && self.commands.IsEmpty()
                 && self.lifecycle.IsEmpty()
@@ -828,10 +943,16 @@ impl NativeEngineAssembly {
         }
         let mut effects = std::mem::take(&mut self.core.effects);
         self.core.DrainScrollEffects(&mut effects);
+        let work_pending = self.deferred.is_some()
+            || !self.commands.IsEmpty()
+            || !self.lifecycle.IsEmpty()
+            || !self.resource_effects.IsEmpty()
+            || !self.scheduler_effects.IsEmpty();
         Ok(CompositorOutput {
             frame: self.core.TakeFrame(),
             main_thread_effects: effects,
             needs_begin_frames: self.needs_begin_frames,
+            work_pending,
             main_commit_pending: self.core.HasReadyCommit(),
         })
     }

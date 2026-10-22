@@ -36,6 +36,7 @@ pub trait PropertyTreeManagerTypes:
 pub trait PropertyTreeManagerScrollNode: Clone {
     fn CcNodeId(&self, sequence: i32) -> i32;
     fn SetCcNodeId(&self, sequence: i32, id: i32);
+    fn IsRoot(&self) -> bool;
     fn Parent(&self) -> Option<Self>;
     fn ContainerRect(&self) -> Rect;
     fn GetCompositorElementId(&self) -> ElementId;

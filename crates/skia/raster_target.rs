@@ -7,7 +7,6 @@
 
 use core::{marker::PhantomData, pin::Pin, ptr::NonNull};
 
-use crate::RasterError;
 use crate::include::core::{
     SkAlphaType::SkAlphaType, SkClipOp::SkClipOp, SkColorType::SkColorType,
     SkSamplingOptions::SkSamplingOptions, SkSurfaceProps::SkSurfaceProps,
@@ -27,6 +26,7 @@ use crate::src::core::{
     SkRect::SkRect,
 };
 use crate::src::image::SkImage::SkImage;
+use crate::RasterError;
 use std::sync::Arc;
 
 /// Byte order in the host mapping, independent of the native N32 configuration.
@@ -42,6 +42,14 @@ pub enum TargetError {
     InvalidLayout,
     BufferTooSmall,
     CanvasCreationFailed,
+}
+
+/// The two Porter-Duff operations supported by Skia's original N32 sprite
+/// row blitter. Other blend modes continue through Canvas.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum N32BlitMode {
+    Src,
+    SrcOver,
 }
 
 /// Convert one tightly packed straight-alpha RGBA8888 image into Skia's
@@ -80,6 +88,12 @@ pub fn premultiply_rgba8888(width: u32, height: u32, pixels: &[u8]) -> Option<Ve
 /// result before publishing a rendered frame.
 pub struct RasterTarget<'pixels> {
     canvas: Pin<Box<SkCanvas<'pixels>>>,
+    pixels: NonNull<u8>,
+    pixel_len: usize,
+    width: i32,
+    height: i32,
+    row_bytes: usize,
+    format: PixelFormat,
     _pixels: PhantomData<&'pixels mut [u8]>,
 }
 
@@ -121,14 +135,102 @@ impl<'pixels> RasterTarget<'pixels> {
         // and exclusivity. Its borrow is retained by the returned target. The
         // original MakeRasterDirect installs nonowning pixels; no release
         // callback or replacement pixel owner is introduced here.
+        let pixel_address = NonNull::new(pixels.as_mut_ptr()).ok_or(TargetError::BufferTooSmall)?;
         let canvas = unsafe {
             SkCanvas::MakeRasterDirect(&info, pixels.as_mut_ptr().cast(), row_bytes, props)
         }
         .ok_or(TargetError::CanvasCreationFailed)?;
         Ok(Self {
             canvas,
+            pixels: pixel_address,
+            pixel_len: available,
+            width,
+            height,
+            row_bytes,
+            format,
             _pixels: PhantomData,
         })
+    }
+
+    /// Composite a clipped, pixel-aligned N32 sprite using the original
+    /// `SkBlitRow` implementation selected by Skia for this architecture.
+    ///
+    /// This is the same terminal row operation used by Skia's sprite blitter;
+    /// it avoids rebuilding an image shader for the common 1:1 tile case. The
+    /// caller supplies device-space coordinates after applying Canvas' matrix
+    /// and clip. Returning `false` means the validated N32 fast path does not
+    /// apply and Canvas must perform the draw.
+    pub fn blit_n32(
+        &mut self,
+        source: &[u8],
+        source_width: i32,
+        source_height: i32,
+        source_row_bytes: usize,
+        source_x: i32,
+        source_y: i32,
+        destination_x: i32,
+        destination_y: i32,
+        width: i32,
+        height: i32,
+        mode: N32BlitMode,
+        alpha: u8,
+        source_opaque: bool,
+    ) -> bool {
+        if !matches!(self.format, PixelFormat::Bgra8888 | PixelFormat::Bgrx8888)
+            || source_width <= 0
+            || source_height <= 0
+            || width <= 0
+            || height <= 0
+            || source_x < 0
+            || source_y < 0
+            || destination_x < 0
+            || destination_y < 0
+            || source_x.saturating_add(width) > source_width
+            || source_y.saturating_add(height) > source_height
+            || destination_x.saturating_add(width) > self.width
+            || destination_y.saturating_add(height) > self.height
+            || source_row_bytes < source_width as usize * 4
+            || self.row_bytes < self.width as usize * 4
+            || source_row_bytes % 4 != 0
+            || self.row_bytes % 4 != 0
+            || source_row_bytes
+                .checked_mul(source_height as usize)
+                .is_none_or(|required| required > source.len())
+            || self
+                .row_bytes
+                .checked_mul(self.height as usize)
+                .is_none_or(|required| required > self.pixel_len)
+            || (mode == N32BlitMode::Src && alpha != 255)
+        {
+            return false;
+        }
+
+        let mut flags = 0;
+        if mode == N32BlitMode::SrcOver && !source_opaque {
+            flags |= crate::src::core::SkBlitRow::SkBlitRow::kSrcPixelAlpha_Flag32;
+        }
+        if alpha != 255 {
+            flags |= crate::src::core::SkBlitRow::SkBlitRow::kGlobalAlpha_Flag32;
+        }
+        let procedure = crate::src::core::SkBlitRow::SkBlitRow::Factory32_raw(flags);
+        let source_stride = source_row_bytes / 4;
+        let destination_stride = self.row_bytes / 4;
+        let source_start = source_y as usize * source_stride + source_x as usize;
+        let destination_start =
+            destination_y as usize * destination_stride + destination_x as usize;
+        // Validation above proves every addressed row lies inside its live
+        // allocation. Raster resources and render-pass targets are disjoint
+        // owners, satisfying SkBlitRow's source/destination alias contract.
+        unsafe {
+            let mut src = source.as_ptr().cast::<u32>().add(source_start);
+            let mut dst = self.pixels.as_ptr().cast::<u32>().add(destination_start);
+            for _ in 0..height {
+                procedure(dst, src, width, alpha as u32);
+                src = src.add(source_stride);
+                dst = dst.add(destination_stride);
+            }
+        }
+        true
     }
 
     // End the temporary Pin borrow before calling any operation that can restore

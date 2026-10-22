@@ -400,11 +400,8 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = raster::RasterizePaintArtifact(
-            &page.CurrentFrame().unwrap().display_items,
-            160,
-            96,
-        );
+        let rgba =
+            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         assert_eq!(
             &rgba[(50 * 160 + 80) * 4..(50 * 160 + 80) * 4 + 4],
             &[32, 33, 36, 255]
@@ -439,11 +436,8 @@ fn css_semibold_font_selection_matches_repository_chromium() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = raster::RasterizePaintArtifact(
-            &page.CurrentFrame().unwrap().display_items,
-            160,
-            96,
-        );
+        let rgba =
+            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         std::fs::write(root.join("rust.rgba"), &rgba).unwrap();
         let expected =
             include_bytes!("../../../artifacts/qq-chromium-parity/font-fixture/chromium.rgba");
@@ -467,11 +461,8 @@ fn image_mipmap_sampling_matches_repository_chromium() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = raster::RasterizePaintArtifact(
-            &page.CurrentFrame().unwrap().display_items,
-            160,
-            96,
-        );
+        let rgba =
+            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         std::fs::write(root.join("rust.rgba"), &rgba).unwrap();
         let expected =
             include_bytes!("../../../artifacts/qq-chromium-parity/image-fixture/chromium.rgba");
@@ -993,11 +984,8 @@ fn css_zoom_matches_repository_chromium_geometry_and_pixels() {
             )
             .unwrap();
         assert!(result.Succeeded(), "{:?}", result.exception);
-        let rgba = raster::RasterizePaintArtifact(
-            &page.CurrentFrame().unwrap().display_items,
-            160,
-            96,
-        );
+        let rgba =
+            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         assert_eq!(
             rgba.as_slice(),
             include_bytes!("../../../artifacts/qq-chromium-parity/zoom-fixture/chromium.rgba")
@@ -1791,11 +1779,9 @@ fn profile_qq_loading_stall() {
                         scale,
                     );
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-                    let hash = pixels
-                        .iter()
-                        .fold(0xcbf29ce484222325_u64, |value, &byte| {
-                            (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)
-                        });
+                    let hash = pixels.iter().fold(0xcbf29ce484222325_u64, |value, &byte| {
+                        (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+                    });
                     eprintln!("qq-direct-raster-probe iteration={iteration} items={} viewport={width}x{height} scale={scale} ms={elapsed:.3} fnv1a64={hash:016x}",frame.display_items.items.len());
                 }
             }

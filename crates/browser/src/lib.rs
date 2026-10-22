@@ -167,11 +167,8 @@ pub fn RenderHtml(source: &str, width: u32, height: u32) -> Vec<u8> {
 }
 
 fn RenderFragmentPng(fragments: &FragmentNode, width: u32, height: u32) -> Vec<u8> {
-    let rgba = raster::RasterizePaintArtifact(
-        &paint::paint_engine::Paint(fragments),
-        width,
-        height,
-    );
+    let rgba =
+        raster::RasterizePaintArtifact(&paint::paint_engine::Paint(fragments), width, height);
     raster::EncodeRgbaPng(&rgba, width, height)
 }
 
@@ -423,7 +420,7 @@ mod tests {
     }
     fn local_and_redirected_url_body() {
         svg_profile_exports_shape_fragments();
-            generated_after_clears_nested_floats_like_cpp_reference();
+        generated_after_clears_nested_floats_like_cpp_reference();
         let plain = "<html><body><div style='width:40px;height:20px;background:#123456'></div></body></html>";
         let hidden = "<html><body><div style='display:none;width:200px;height:200px;background:#ff0000'></div><div style='width:40px;height:20px;background:#123456'></div></body></html>";
         let contents = "<html><body><section style='display:contents'><div style='width:40px;height:20px;background:#123456'></div></section></body></html>";

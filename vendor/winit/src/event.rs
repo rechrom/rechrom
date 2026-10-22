@@ -1007,6 +1007,23 @@ pub struct MacOSMouseWheelMetadata {
     pub timestamp_seconds: f64,
     pub phase: u64,
     pub momentum_phase: u64,
+    /// Chromium's kCGScrollWheelEventIsContinuous value when the NSEvent
+    /// carries a CGEvent. Synthetic NSEvents may not have one.
+    pub is_continuous: Option<bool>,
+    /// Unscaled CG PointDeltaAxis2/Axis1 values used by Chromium for
+    /// continuous wheel events.
+    pub point_delta_x: Option<i64>,
+    pub point_delta_y: Option<i64>,
+    /// Cocoa values retained for capture diagnostics and non-continuous
+    /// fallback. These are not used in place of the CG point deltas.
+    pub cocoa_delta_x: f64,
+    pub cocoa_delta_y: f64,
+    pub precise: bool,
+    /// Top-left logical client coordinates captured from this NSEvent itself.
+    pub position_x: f64,
+    pub position_y: f64,
+    /// Native view scale at event delivery, before any later display change.
+    pub scale_factor: f64,
 }
 
 /// Describes a difference in the mouse scroll wheel state.

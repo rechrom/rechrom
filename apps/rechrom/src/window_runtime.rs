@@ -199,7 +199,25 @@ fn run(
                 return Ok(());
             }
             Ok(Command::Display(message)) => {
+                let page_surface_changed = matches!(&message, display::Message::Prepare { .. });
                 dispatch(DisplayWork::Command(message))?;
+                if page_surface_changed {
+                    // Chromium's DisplayScheduler waits for a Surface update
+                    // until its regular draw deadline, but moves the deadline
+                    // forward as soon as damage from a producer arrives.  The
+                    // Page compositor and Display share the physical
+                    // BeginFrame here, so drawing the old surface immediately
+                    // would race the Page's deadline by a few hundred
+                    // microseconds and add a full refresh interval.
+                    scheduler.OnPendingSurfacesChanged(false);
+                    scheduler.OnDisplayDamaged(Instant::now());
+                    // Damage after a completed deadline belongs to the next
+                    // scheduler opportunity. Chromium's optional previous-frame
+                    // swap requires CanDrawForPreviousFrame; a deadline alone
+                    // does not authorize another Submit for the same frame.
+                    // Source: components/viz/service/display/
+                    //         display_scheduler.cc OnDisplayDamaged.
+                }
                 source.request_begin_frame();
             }
             Ok(Command::Tick(frame)) => {
@@ -213,11 +231,13 @@ fn run(
                 ) {
                     dispatch(DisplayWork::Command(display::Message::Submit {
                         frame: previous.Payload(),
-                        scroll_active: false,
                     }))?;
                 }
-                // Pages already rendered their own output. Window
-                // deadlines never execute or wait for a Page producer.
+                // The physical source has already dispatched this BeginFrame
+                // to Page compositors. Keep Viz in regular-deadline mode until
+                // a Page surface arrives; if none does, the deadline still
+                // aggregates the previously submitted surfaces.
+                scheduler.OnPendingSurfacesChanged(true);
                 let pending = scheduler.PendingFrame().unwrap();
                 scheduler.MarkPrepared(pending, true);
             }
@@ -229,7 +249,6 @@ fn run(
         if let Some(frame) = scheduler.TakeIfDrawDue(Instant::now()) {
             dispatch(DisplayWork::Command(display::Message::Submit {
                 frame,
-                scroll_active: false,
             }))?;
         }
     }

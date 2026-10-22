@@ -92,6 +92,10 @@ pub struct WheelInjection {
     pub delta_y: f64,
     pub phase: String,
     pub precise: bool,
+    pub native_timestamp_seconds: Option<f64>,
+    pub native_phase: Option<u64>,
+    pub momentum_phase: Option<u64>,
+    pub native_scale_factor: Option<f64>,
 }
 pub type WheelHandler = Arc<dyn Fn(WheelInjection) -> Result<(), String> + Send + Sync>;
 fn wheel_handler() -> &'static std::sync::Mutex<Option<WheelHandler>> {
@@ -256,6 +260,23 @@ impl WheelInjection {
             None => true,
             Some(value) => value.as_bool().ok_or("precise must be a boolean")?,
         };
+        let optional_number = |name: &str| -> Result<Option<f64>, String> {
+            params
+                .get(name)
+                .map(|value| {
+                    value
+                        .as_f64()
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| format!("{name} must be finite"))
+                })
+                .transpose()
+        };
+        let optional_u64 = |name: &str| -> Result<Option<u64>, String> {
+            params
+                .get(name)
+                .map(|value| value.as_u64().ok_or_else(|| format!("{name} must be an unsigned integer")))
+                .transpose()
+        };
         Ok(Self {
             x: number("x", 0.0)?,
             y: number("y", 0.0)?,
@@ -263,6 +284,10 @@ impl WheelInjection {
             delta_y: number("delta_y", -1_000_000.0)?,
             phase: phase.into(),
             precise,
+            native_timestamp_seconds: optional_number("native_timestamp_seconds")?,
+            native_phase: optional_u64("native_phase")?,
+            momentum_phase: optional_u64("momentum_phase")?,
+            native_scale_factor: optional_number("native_scale_factor")?,
         })
     }
 }

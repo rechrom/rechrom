@@ -4693,9 +4693,11 @@ impl LayoutObject {
         self.bitfields_.should_check_for_paint_invalidation_ = false;
         self.bitfields_.subtree_should_check_for_paint_invalidation_ = false;
         self.bitfields_.subtree_should_do_full_paint_invalidation_ = false;
-        self.bitfields_.may_need_paint_invalidation_animated_background_image_ = false;
+        self.bitfields_
+            .may_need_paint_invalidation_animated_background_image_ = false;
         self.bitfields_.should_check_layout_for_paint_invalidation_ = false;
-        self.bitfields_.descendant_should_check_layout_for_paint_invalidation_ = false;
+        self.bitfields_
+            .descendant_should_check_layout_for_paint_invalidation_ = false;
         self.bitfields_.should_invalidate_selection_ = false;
     }
 

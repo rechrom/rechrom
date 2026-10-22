@@ -229,7 +229,11 @@ impl<R: CpuSkiaBackend> crate::adapter::tile_manager::TileManagerTypes for CpuCo
         super::resources::RasterResourceSource::Test
     }
     fn TestRasterSyncToken() -> Self::SyncToken {
-        super::resources::RasterSyncToken::new(super::resources::CommandBufferNamespace::GpuIo, 1, 1)
+        super::resources::RasterSyncToken::new(
+            super::resources::CommandBufferNamespace::GpuIo,
+            1,
+            1,
+        )
     }
     fn IsHDR(space: &Self::ColorSpace) -> bool {
         space.IsHDR()

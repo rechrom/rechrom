@@ -350,7 +350,10 @@ impl RasterDisplayColorSpaces {
         self.hdr_max_luminance_relative.log2()
     }
     // Source: ui/gfx/display_color_spaces.cc:116-155.
-    pub fn GetRasterAndCompositeColorSpace(&self, mut usage: ContentColorUsage) -> RasterColorSpace {
+    pub fn GetRasterAndCompositeColorSpace(
+        &self,
+        mut usage: ContentColorUsage,
+    ) -> RasterColorSpace {
         if !self.SupportsHDR() && usage == ContentColorUsage::kHDR {
             usage = ContentColorUsage::kWideColorGamut;
         }
@@ -486,7 +489,9 @@ impl PoolSharedImage<RasterSyncToken, RasterDumpGuid> for RasterSharedImage {
         self.0.OnMemoryDump(dump, guid, importance);
     }
 }
-impl crate::adapter::layer_tree_host_impl::HostUISharedImage<RasterSyncToken> for RasterSharedImage {
+impl crate::adapter::layer_tree_host_impl::HostUISharedImage<RasterSyncToken>
+    for RasterSharedImage
+{
     fn creation_sync_token(&self) -> RasterSyncToken {
         self.0.creation_sync_token()
     }

@@ -5,8 +5,8 @@ use crate::runtime::{
     paint::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef},
     skia::SkRegion,
 };
-use paint::cc::paint::solid_color_analyzer::*;
 use paint::cc::paint::blend_mode::BlendMode;
+use paint::cc::paint::solid_color_analyzer::*;
 use skia::{
     include::{core::SkClipOp::SkClipOp, utils::SkNoDrawCanvas::SkNoDrawCanvas},
     src::core::{SkCanvas::SkCanvas, SkM44::SkM44, SkRect::SkRect as NativeRect},
@@ -77,8 +77,7 @@ impl NoDrawCanvas {
         unsafe {
             let mut canvas = self.0.as_mut().canvas();
             let address = core::ptr::NonNull::from(canvas.as_mut().get_unchecked_mut());
-            SkCanvas::restore_raw(address)
-                .expect("SkNoDrawCanvas restore");
+            SkCanvas::restore_raw(address).expect("SkNoDrawCanvas restore");
         }
     }
     fn restore_to_count(&mut self, count: i32) {
@@ -415,9 +414,9 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
             CpuPaintOpRef::Native { op, .. } => match op.r#type {
                 T::kSave => canvas.save(),
                 T::kRestore | T::kEndMask => canvas.restore(),
-                T::kConcat => canvas.concat_m44(&matrix_col_major(
-                    op.transform.values.map(|v| v as f32),
-                )),
+                T::kConcat => {
+                    canvas.concat_m44(&matrix_col_major(op.transform.values.map(|v| v as f32)))
+                }
                 T::kClipRect | T::kClipOutRect => canvas.clip_rect(
                     NativeRect::MakeLTRB(
                         op.rect.x as f32,

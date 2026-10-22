@@ -12,7 +12,7 @@ use compositor_core::{
         property_types::BlendMode,
         resource_types::{SharedImageFormat, SinglePlaneFormat},
     },
-    runtime::{raster_execution::RasterResourceLease, frame::RenderPassId},
+    runtime::{frame::RenderPassId, raster_execution::RasterResourceLease},
 };
 use raster::MapResourceForRead;
 use skia::{
@@ -282,6 +282,14 @@ pub(crate) fn lease_image(lease: Arc<dyn RasterResourceLease>) -> io::Result<Arc
         ));
     }
     let info = image_info(size.width(), size.height(), mapping.format())?;
+    // Preserve the resource's actual opacity in the SkImage metadata. Skia's
+    // source sprite path uses this to select memcpy for SrcOver N32 tiles;
+    // treating every RGBA/BGRA tile as translucent forces per-pixel blending.
+    let info = if lease.is_opaque() {
+        info.makeAlphaType(SkAlphaType::kOpaque_SkAlphaType)
+    } else {
+        info
+    };
     let pixels = pixels.as_ptr();
     let length = mapping.bytes().len();
     drop(mapping);
@@ -322,6 +330,62 @@ pub(crate) fn publish(
 ) -> io::Result<()> {
     let frame = input.Frame();
     let full_bounds = Rect::new(0, 0, target.width as i32, target.height as i32);
+    let root_passes: Vec<_> = frame
+        .RenderPasses()
+        .iter()
+        .filter_map(|pass| {
+            input
+                .RootDestination(pass.RenderPassId())
+                .map(|destination| (pass, destination))
+        })
+        .collect();
+    // SoftwareRenderer's usual Page output is one unscaled BGRA root pass.
+    // Publishing it through a copied SkImage performs two full-frame memory
+    // passes before the embedding even reaches its host target. The backing is
+    // already complete immutable N32 output, so copy its valid damage rows
+    // directly into the borrowed target, matching SoftwareOutputDevice's
+    // same-format bitmap handoff.
+    if target.format == PixelFormat::Bgra8888 && root_passes.len() == 1 {
+        let (pass, destination) = root_passes[0];
+        let backing = backings
+            .get(&pass.RenderPassId())
+            .ok_or_else(|| io::Error::other("completed translated root pass is unavailable"))?;
+        if destination == full_bounds
+            && backing.drawn_rect.width == destination.width
+            && backing.drawn_rect.height == destination.height
+        {
+            let source = pass.OutputRect();
+            let mut damage = if target.retained {
+                let damage = drawn_damage
+                    .get(&pass.RenderPassId())
+                    .copied()
+                    .unwrap_or_default();
+                Rect::new(
+                    damage.x.saturating_sub(source.x),
+                    damage.y.saturating_sub(source.y),
+                    damage.width,
+                    damage.height,
+                )
+            } else {
+                full_bounds
+            };
+            damage.Intersect(full_bounds);
+            if !damage.IsEmpty() {
+                let source_stride = backing.rect.width as usize * 4;
+                let target_stride = target.row_stride * 4;
+                let row_bytes = damage.width as usize * 4;
+                let target_bytes: &mut [u8] = bytemuck::cast_slice_mut(target.pixels);
+                for y in damage.y as usize..damage.bottom() as usize {
+                    let source_start = y * source_stride + damage.x as usize * 4;
+                    let target_start = y * target_stride + damage.x as usize * 4;
+                    target_bytes[target_start..target_start + row_bytes].copy_from_slice(
+                        &backing.pixels[source_start..source_start + row_bytes],
+                    );
+                }
+            }
+            return Ok(());
+        }
+    }
     let format = target_format(target.format);
     let row_bytes = target
         .row_stride
@@ -350,11 +414,7 @@ pub(crate) fn publish(
             )
             .map_err(|error| raster_error("translated host clear failed", error))?;
     }
-    for (pass, destination) in frame.RenderPasses().iter().filter_map(|pass| {
-        input
-            .RootDestination(pass.RenderPassId())
-            .map(|destination| (pass, destination))
-    }) {
+    for (pass, destination) in root_passes {
         let backing = backings
             .get(&pass.RenderPassId())
             .ok_or_else(|| io::Error::other("completed translated root pass is unavailable"))?;
