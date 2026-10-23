@@ -250,9 +250,7 @@ impl NativeEngineAssembly {
                             && status.main_thread_hit_test_reasons.empty();
                     }
                     if compositor_owned
-                        && (phase == ScrollPhase::Update
-                            || delta.x() != 0.
-                            || delta.y() != 0.)
+                        && (phase == ScrollPhase::Update || delta.x() != 0. || delta.y() != 0.)
                     {
                         let mut data = ScrollStateData::default();
                         data.position_x = position.x();
@@ -883,7 +881,8 @@ impl NativeEngineAssembly {
                     EngineTask::RasterFailure(_) => "RasterFailure",
                 };
                 self.Task(task)?;
-                if let Some(started) = profile.filter(|started| started.elapsed().as_millis() >= 1) {
+                if let Some(started) = profile.filter(|started| started.elapsed().as_millis() >= 1)
+                {
                     eprintln!(
                         "compositor-engine-task-profile task={} total_ms={:.3}",
                         task_name,

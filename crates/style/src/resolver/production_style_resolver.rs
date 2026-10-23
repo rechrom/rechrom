@@ -1201,6 +1201,12 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     pub image_resolver: Option<&'a dyn URLImageResolver>,
     pub property_registry: Option<&'a PropertyRegistry>,
     pub function_registry: Option<&'a crate::production_style_sheet::ProductionFunctionRegistry>,
+    /// Document font service used by CSSLengthResolver for ch/ex/cap/ic and
+    /// their root-relative forms. Chromium carries this through
+    /// StyleResolverState's conversion data; keep the same owner on the
+    /// translated resolver path instead of falling back to the compatibility
+    /// cascade for font-relative lengths.
+    pub font_metrics: Option<&'a dyn production_style_builder::FontMetricsResolver>,
     pub animations: Option<&'a ProductionActiveInterpolationsMap>,
     pub transitions: Option<&'a ProductionActiveInterpolationsMap>,
     pub matched_properties_cache: Option<ProductionMatchedPropertiesCache>,
@@ -1253,6 +1259,7 @@ impl ProductionBaseStyleCollaborators<'_> {
             image_resolver: None,
             property_registry: None,
             function_registry: None,
+            font_metrics: None,
             animations: None,
             transitions: None,
             matched_properties_cache: None,
@@ -3262,7 +3269,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                     function_registry: self.cascade.function_registry,
                     animations: None,
                     transitions: None,
-                    font_metrics: None,
+                    font_metrics: self.cascade.font_metrics,
                 },
                 &mut state.builder,
                 &properties,
@@ -4037,7 +4044,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 function_registry: self.cascade.function_registry,
                 animations: cascade.animations.as_ref(),
                 transitions: cascade.transitions.as_ref(),
-                font_metrics: None,
+                font_metrics: self.cascade.font_metrics,
             },
             filter,
         ) {
@@ -4932,6 +4939,9 @@ pub(crate) fn ApplyBaseStyleForElement(
         })?;
     let matched_signatures = std::mem::take(&mut *host.matched_signatures.borrow_mut());
     let metrics = host.base_style_metrics.borrow().clone();
+    if let Some(fonts) = host.cascade.font_metrics {
+        fonts.WillUseFont(unsafe { &*style.Get() }.GetFontDescription());
+    }
     Ok(ProductionBaseStyleOutput {
         style,
         custom_properties,

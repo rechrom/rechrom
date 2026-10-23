@@ -41,7 +41,8 @@ fn editing_fixture() -> Page {
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader)),
         Rc::new(RefCell::new(SkiaImageDecoder)),

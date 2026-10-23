@@ -1,24 +1,28 @@
 //! Host-side completion of pure font cache misses, before layout publication.
+#[cfg(test)]
+use font_engine::FontEngine;
 use font_engine::{
-    FontContextVersion, FontEngine, FontMutation, SystemFontProvider, SystemFontResponse,
+    FontContextVersion, FontEngineHandle, FontMutation, SystemFontProvider, SystemFontResponse,
 };
 use layoutng_assembly::internal::layout_input::ConstraintSpace;
 
 pub(crate) struct SystemFontSession {
-    engine: FontEngine,
+    engine: FontEngineHandle,
     provider: Box<dyn SystemFontProvider>,
 }
 impl SystemFontSession {
-    pub(crate) fn new() -> Self {
-        Self::with_provider(Box::new(
-            crate::system_font_provider::BrowserSystemFontProvider::default(),
-        ))
-    }
+    #[cfg(test)]
     pub(crate) fn with_provider(provider: Box<dyn SystemFontProvider>) -> Self {
-        Self {
-            engine: FontEngine::new(FontContextVersion::default(), None),
+        Self::with_engine(
+            FontEngineHandle::new(FontEngine::new(FontContextVersion::default(), None)),
             provider,
-        }
+        )
+    }
+    pub(crate) fn with_engine(
+        engine: FontEngineHandle,
+        provider: Box<dyn SystemFontProvider>,
+    ) -> Self {
+        Self { engine, provider }
     }
     pub(crate) fn SetProvider(
         &mut self,
@@ -26,23 +30,22 @@ impl SystemFontSession {
         constraints: &mut ConstraintSpace,
     ) {
         self.EnvironmentChanged(constraints);
-        provider.SetContextVersion(self.engine.ContextVersion());
+        provider.SetContextVersion(self.engine.with_mut(|engine| engine.ContextVersion()));
         self.provider = provider;
     }
     pub(crate) fn EnvironmentChanged(&mut self, constraints: &mut ConstraintSpace) {
-        let previous = self.engine.ResolvedFaces();
-        constraints.fonts.retain(|face| !previous.contains(face));
         let version = FontContextVersion(
             self.engine
-                .ContextVersion()
+                .with_mut(|engine| engine.ContextVersion())
                 .0
                 .checked_add(1)
                 .expect("font context version exhausted"),
         );
         self.provider.SetContextVersion(version);
         self.engine
-            .ApplyMutation(FontMutation::EnvironmentChanged(version))
+            .with_mut(|engine| engine.ApplyMutation(FontMutation::EnvironmentChanged(version)))
             .expect("font environment mutation");
+        constraints.fonts = self.engine.with_mut(|engine| engine.ResolvedFaces());
         if let Some(collector) = &constraints.font_queries {
             collector.Clear();
         }
@@ -55,14 +58,23 @@ impl SystemFontSession {
             return false;
         };
         let previous_revision = collector.Revision();
-        self.engine.SetQueryCollector(Some(collector.clone()));
+        self.engine
+            .with_mut(|engine| engine.SetQueryCollector(Some(collector.clone())));
         let queries = collector.Drain();
+        // An ordinary layout pass has no font-host work. Keep the exact shared
+        // catalog generation already in ConstraintSpace and avoid rebuilding
+        // or comparing any face metadata on the hot lifecycle path.
+        if queries.is_empty() {
+            return false;
+        }
         for query in queries {
             // Discovery and exact-open are the two protocol phases. Stop
             // after open so a real shaping retry, not this host, decides whether
             // the next contextual fallback candidate is needed.
             loop {
-                let pending = self.engine.PrepareSystemQuery(query.clone());
+                let pending = self
+                    .engine
+                    .with_mut(|engine| engine.PrepareSystemQuery(query.clone()));
                 if pending.system_queries.is_empty() {
                     break;
                 }
@@ -75,10 +87,11 @@ impl SystemFontSession {
                     let answer = self.provider.Resolve(&request);
                     admitted |= matches!(&answer, font_engine::SystemFontAnswer::Face(face) if !face.bytes.is_empty());
                     self.engine
-                        .ApplyMutation(FontMutation::SystemFontResponse(SystemFontResponse {
-                            request,
-                            answer,
-                        }))
+                        .with_mut(|engine| {
+                            engine.ApplyMutation(FontMutation::SystemFontResponse(
+                                SystemFontResponse { request, answer },
+                            ))
+                        })
                         .expect("host font response must match its pending request and version");
                 }
                 if opened && admitted {
@@ -86,13 +99,12 @@ impl SystemFontSession {
                 }
             }
         }
-        let mut changed = false;
-        for face in self.engine.ResolvedFaces() {
-            if !constraints.fonts.contains(&face) {
-                constraints.fonts.push(face);
-                changed = true;
-            }
-        }
+        // FontFaceId in shaped/paint output is the index in FontEngine's
+        // canonical catalog. Publish that exact order instead of incrementally
+        // appending faces in a host-owned order.
+        let resolved = self.engine.with_mut(|engine| engine.ResolvedFaces());
+        let changed = constraints.fonts != resolved;
+        constraints.fonts = resolved;
         changed || collector.Revision() != previous_revision
     }
 }

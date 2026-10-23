@@ -100,8 +100,7 @@ impl OcclusionCuller {
         if let Some(clip) = sqs.clip_rect {
             region.Intersect(&clip);
         }
-        if Self::RegionArea(&region) <= i64::from(self.settings.occluder_minium_visible_quad_size)
-        {
+        if Self::RegionArea(&region) <= i64::from(self.settings.occluder_minium_visible_quad_size) {
             return false;
         }
         occlusion.Union(&region);
@@ -208,7 +207,8 @@ impl OcclusionCuller {
                         sqs.visible_quad_layer_rect,
                     );
                     current_sqs_intersects = occlusion.Intersects(&current_target);
-                    if current_sqs_intersects && Self::IsSimpleInvertible(&sqs.quad_to_target_transform)
+                    if current_sqs_intersects
+                        && Self::IsSimpleInvertible(&sqs.quad_to_target_transform)
                     {
                         let inverse = sqs.quad_to_target_transform.GetCheckedInverse();
                         for target_rect in &occlusion {

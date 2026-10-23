@@ -145,7 +145,8 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
             .into(),
         fallback_role: font_engine::FontFallbackRole::kLastResort,
         ..Default::default()
-    }];
+    }]
+    .into();
     space.font_queries = Some(font_engine::FontQueryCollector::default());
     space.text_transform = Some(std::sync::Arc::new(
         text_transform::BrowserTextTransformProvider,
@@ -195,14 +196,30 @@ fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<Fragmen
     }
     let assembly = CreateLayoutAssembly();
     let mut space = CreateBrowserConstraints(width, height);
+    let mut fonts = font_engine::FontEngine::new(
+        font_engine::FontContextVersion::default(),
+        space.font_backend_factory.clone(),
+    );
+    fonts
+        .ApplyMutation(font_engine::FontMutation::SetFaces(
+            space.fonts.iter().cloned().collect(),
+        ))
+        .expect("initial font catalog mutation");
+    fonts.SetQueryCollector(space.font_queries.clone());
+    let fonts = font_engine::FontEngineHandle::new(fonts);
+    space.font_engine = Some(fonts.clone());
     style_services::ResolveLayoutStyles(&mut document, &space);
     let mut layout = LayoutEngine::new(&assembly);
+    let mut font_session = font_session::SystemFontSession::with_engine(
+        fonts,
+        Box::new(system_font_provider::BrowserSystemFontProvider::default()),
+    );
     font_session::LayoutWithSystemFonts(
         &mut layout,
         &mut document,
         &dom::UserInteractionState::default(),
         &mut space,
-        &mut font_session::SystemFontSession::new(),
+        &mut font_session,
     );
     let fragments = layout
         .TakeLayoutResult()

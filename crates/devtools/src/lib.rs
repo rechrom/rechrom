@@ -274,7 +274,11 @@ impl WheelInjection {
         let optional_u64 = |name: &str| -> Result<Option<u64>, String> {
             params
                 .get(name)
-                .map(|value| value.as_u64().ok_or_else(|| format!("{name} must be an unsigned integer")))
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .ok_or_else(|| format!("{name} must be an unsigned integer"))
+                })
                 .transpose()
         };
         Ok(Self {

@@ -11,12 +11,14 @@ use viz::native::VizOutput;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderUpdate {
+    pub direct_root_target: bool,
     pub passes: usize,
     pub quads: usize,
     pub damage_pixels: usize,
     pub tile_quads: usize,
     pub picture_quads: usize,
     pub solid_quads: usize,
+    pub render_pass_quads: usize,
     pub tile_ns: u64,
     pub tile_image_ns: u64,
     pub tile_draw_ns: u64,
@@ -31,6 +33,8 @@ pub struct RenderUpdate {
     pub tile_blit_quads: usize,
     pub picture_ns: u64,
     pub solid_ns: u64,
+    pub render_pass_ns: u64,
+    pub render_pass_blit_quads: usize,
 }
 
 /// Backend-owned target and storage keep the management core independent of
@@ -49,9 +53,8 @@ impl<B: DirectRendererBackend> Renderer<B> {
         let mut direct = DirectRenderer::new(settings, DebugRendererSettings::default(), backend);
         direct.Initialize();
         direct.SetVisible(true);
-        let occlusion_culler = OcclusionCuller::new(
-            direct.settings.occlusion_culler_settings.clone(),
-        );
+        let occlusion_culler =
+            OcclusionCuller::new(direct.settings.occlusion_culler_settings.clone());
         Self {
             direct,
             occlusion_culler,
@@ -60,8 +63,8 @@ impl<B: DirectRendererBackend> Renderer<B> {
     pub fn Render(
         &mut self,
         input: &mut VizOutput,
-        target: B::Target<'_>,
-    ) -> io::Result<RenderUpdate> {
+        target: B::Target,
+    ) -> io::Result<(RenderUpdate, B::Target)> {
         let started = std::env::var_os("BROWSER_PROFILE_INPUT")
             .is_some()
             .then(std::time::Instant::now);
@@ -78,25 +81,41 @@ impl<B: DirectRendererBackend> Renderer<B> {
                 cull.opaque_groups,
             );
         }
-        {
+        let output = {
             let _draw = browser_tracing::span("renderer", "Renderer.DrawFrame");
-            self.direct.DrawFrame(input, viewport)?;
-        }
-        let passes = started.map(|_| std::time::Instant::now());
-        let update = {
-            let _publish = browser_tracing::span("renderer", "Renderer.PublishFrame");
-            self.direct.backend.PublishFrame(input, target)?
+            self.direct.DrawFrame(input, viewport, target)?
         };
-        if let (Some(started), Some(passes)) = (started, passes) {
-            eprintln!("renderer-profile passes_ms={:.3} root_ms={:.3} total_ms={:.3} passes={} quads={} damage_pixels={} tiles={} tile_ms={:.3} tile_image_ms={:.3} tile_draw_ms={:.3} tile_source_pixels={} tile_target_pixels={} tile_linear={} tile_fractional_source={} tile_scaled={} tile_blended={} tile_integer_translation={} tile_blit_eligible={} tile_blit={} pictures={} picture_ms={:.3} solids={} solid_ms={:.3}",
-                (passes-started).as_secs_f64()*1000., passes.elapsed().as_secs_f64()*1000., started.elapsed().as_secs_f64()*1000.,
-                update.passes, update.quads, update.damage_pixels, update.tile_quads, update.tile_ns as f64/1_000_000.,
-                update.tile_image_ns as f64/1_000_000., update.tile_draw_ns as f64/1_000_000.,
-                update.tile_source_pixels, update.tile_target_pixels, update.tile_linear_quads,
-                update.tile_fractional_source_quads, update.tile_scaled_quads, update.tile_blended_quads,
-                update.tile_integer_translation_quads, update.tile_blit_eligible_quads, update.tile_blit_quads,
-                update.picture_quads, update.picture_ns as f64/1_000_000., update.solid_quads, update.solid_ns as f64/1_000_000.);
+        if let Some(started) = started {
+            let update = output.0;
+            eprintln!(
+                "renderer-profile total_ms={:.3} direct_root={} passes={} quads={} damage_pixels={} tiles={} tile_ms={:.3} tile_image_ms={:.3} tile_draw_ms={:.3} tile_source_pixels={} tile_target_pixels={} tile_linear={} tile_fractional_source={} tile_scaled={} tile_blended={} tile_integer_translation={} tile_blit_eligible={} tile_blit={} pictures={} picture_ms={:.3} solids={} solid_ms={:.3} render_passes={} render_pass_ms={:.3} render_pass_blit={}",
+                started.elapsed().as_secs_f64() * 1000.,
+                update.direct_root_target,
+                update.passes,
+                update.quads,
+                update.damage_pixels,
+                update.tile_quads,
+                update.tile_ns as f64 / 1_000_000.,
+                update.tile_image_ns as f64 / 1_000_000.,
+                update.tile_draw_ns as f64 / 1_000_000.,
+                update.tile_source_pixels,
+                update.tile_target_pixels,
+                update.tile_linear_quads,
+                update.tile_fractional_source_quads,
+                update.tile_scaled_quads,
+                update.tile_blended_quads,
+                update.tile_integer_translation_quads,
+                update.tile_blit_eligible_quads,
+                update.tile_blit_quads,
+                update.picture_quads,
+                update.picture_ns as f64 / 1_000_000.,
+                update.solid_quads,
+                update.solid_ns as f64 / 1_000_000.,
+                update.render_pass_quads,
+                update.render_pass_ns as f64 / 1_000_000.,
+                update.render_pass_blit_quads,
+            );
         }
-        Ok(update)
+        Ok(output)
     }
 }

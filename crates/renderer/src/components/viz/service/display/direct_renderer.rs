@@ -35,14 +35,16 @@ pub struct RenderPassRequirements {
 pub trait DirectRendererBackend {
     /// Embedding adapter: the target's concrete storage belongs to the backend.
     /// Borrowed targets do not escape Render and require no pixel snapshot.
-    type Target<'a>;
+    type Target;
     fn Configure(&mut self, settings: &RendererSettings);
-    fn ValidateTarget(&self, input: &VizOutput, target: &Self::Target<'_>) -> io::Result<Size>;
-    fn PublishFrame(
+    fn ValidateTarget(&self, input: &VizOutput, target: &Self::Target) -> io::Result<Size>;
+    /// Bind the host output as SoftwareRenderer's root framebuffer. Non-root
+    /// render passes continue to use backend-owned intermediate backings.
+    fn BindFrameTarget(&mut self, input: &VizOutput, target: Self::Target) -> io::Result<()>;
+    fn ReleaseFrameTarget(
         &mut self,
         input: &VizOutput,
-        target: Self::Target<'_>,
-    ) -> io::Result<crate::RenderUpdate>;
+    ) -> io::Result<(crate::RenderUpdate, Self::Target)>;
 
     fn CanPartialSwap(&self) -> bool;
     fn UpdateRenderPassTextures(
@@ -194,8 +196,13 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
     }
     // Source: components/viz/service/display/direct_renderer.cc:200-217,233-238,263-291,357-376,391-395,410-449,472-489.
     // CPU output is fixed-size; overlay/ink/platform reshape branches are excluded.
-    pub fn DrawFrame(&mut self, input: &VizOutput, viewport: Size) -> io::Result<()> {
-        let result = self.DrawFrameInternal(input, viewport);
+    pub fn DrawFrame(
+        &mut self,
+        input: &VizOutput,
+        viewport: Size,
+        target: B::Target,
+    ) -> io::Result<(crate::RenderUpdate, B::Target)> {
+        let result = self.DrawFrameInternal(input, viewport, target);
         self.backdrop_filter_output_rects.clear();
         self.has_pixel_moving_foreground_filters = false;
         if result.is_err() {
@@ -204,7 +211,12 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         }
         result
     }
-    fn DrawFrameInternal(&mut self, input: &VizOutput, viewport: Size) -> io::Result<()> {
+    fn DrawFrameInternal(
+        &mut self,
+        input: &VizOutput,
+        viewport: Size,
+        target: B::Target,
+    ) -> io::Result<(crate::RenderUpdate, B::Target)> {
         assert!(self.visible);
         let surface_size = self.CalculateSizeForOutputSurface(viewport);
         let reshape =
@@ -251,6 +263,15 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
             }
         }
         self.DecideRenderPassAllocationsForFrame(input, false)?;
+        // SoftwareOutputDevice storage must be bound before root damage and
+        // skip decisions. Ensure only root resources here; child allocation
+        // remains owned by DrawRenderPassAndExecuteCopyRequests.
+        for pass in input.Frame().RenderPasses() {
+            if input.RootDestination(pass.RenderPassId()).is_some() {
+                self.EnsureRenderPassAllocated(pass, true)?;
+            }
+        }
+        self.backend.BindFrameTarget(input, target)?;
         let frame = DrawingFrame {
             input,
             device_viewport_size: viewport,
@@ -292,9 +313,10 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         }
 
         self.backend.FinishDrawingFrame()?;
+        let output = self.backend.ReleaseFrameTarget(input)?;
         self.backdrop_filter_output_rects.clear();
         self.has_pixel_moving_foreground_filters = false;
-        Ok(())
+        Ok(output)
     }
     // Source: components/viz/service/display/direct_renderer.cc:123-129,517-564.
     pub fn MoveFromDrawToWindowSpace(pass: &AggregatedRenderPass, r: Rect) -> Rect {

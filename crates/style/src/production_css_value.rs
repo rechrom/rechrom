@@ -1711,7 +1711,7 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSBasicShapeEllipseValue = crate::production_effects_value::CSSBasicShapeEllipseValue;
     type CSSBasicShapePolygonValue = crate::production_effects_value::CSSBasicShapePolygonValue;
     type CSSBasicShapeInsetValue = crate::production_effects_value::CSSBasicShapeInsetValue;
-    type CSSBasicShapeRectValue = UnavailableCSSValue;
+    type CSSBasicShapeRectValue = crate::production_effects_value::CSSBasicShapeRectValue;
     type CSSBasicShapeXYWHValue = UnavailableCSSValue;
     type CSSPathValue = crate::production_effects_value::CSSPathValue;
     type CSSShapeValue = UnavailableCSSValue;

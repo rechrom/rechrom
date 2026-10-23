@@ -657,10 +657,10 @@ fn resources_equal(
             && *viewport == b.viewport
             && fonts.len() == b.fonts.len()
             && images.len() == b.images.len()
-            && fonts
-                .iter()
-                .zip(&b.fonts)
-                .all(|(a, b)| font_engine::SharedFontBytes::ptr_eq(&a.bytes, &b.bytes) && a == b)
+            && (fonts.ptr_eq(&b.fonts)
+                || fonts.iter().zip(b.fonts.iter()).all(|(a, b)| {
+                    font_engine::SharedFontBytes::ptr_eq(&a.bytes, &b.bytes) && a == b
+                }))
             && images.iter().zip(&b.images).all(|(a, b)| a == b)
     })
 }

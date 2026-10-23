@@ -9,32 +9,133 @@ use std::{cell::RefCell, rc::Rc};
 use style::media_queries::{media_values_cached::MediaValuesCachedData, scripting::Scripting};
 use webapi::dom_bindings::DOMBindingsHost;
 
-struct StyleFontMetricsResolver {
-    engine: RefCell<font_engine::FontEngine>,
+struct StyleFontMetricsState {
+    engine: font_engine::FontEngineHandle,
+    fonts: font_engine::FontFaceCatalog,
+    backend: Option<std::sync::Arc<dyn font_engine::FontBackendFactory>>,
+    queries: Option<font_engine::FontQueryCollector>,
+    metrics_pending: bool,
+}
+
+pub(crate) struct StyleFontMetricsResolver {
+    state: RefCell<StyleFontMetricsState>,
 }
 
 impl StyleFontMetricsResolver {
-    fn new(constraints: &ConstraintSpace) -> Self {
-        let mut engine = font_engine::FontEngine::FromFaces(
-            &constraints.fonts,
-            constraints.font_backend_factory.clone(),
-        );
-        engine.SetQueryCollector(constraints.font_queries.clone());
+    fn Engine(constraints: &ConstraintSpace) -> font_engine::FontEngineHandle {
+        constraints.font_engine.clone().unwrap_or_else(|| {
+            let mut engine = font_engine::FontEngine::FromFaces(
+                &constraints.fonts,
+                constraints.font_backend_factory.clone(),
+            );
+            engine.SetQueryCollector(constraints.font_queries.clone());
+            font_engine::FontEngineHandle::new(engine)
+        })
+    }
+
+    pub(crate) fn new(constraints: &ConstraintSpace) -> Self {
+        let engine = Self::Engine(constraints);
         Self {
-            engine: RefCell::new(engine),
+            state: RefCell::new(StyleFontMetricsState {
+                engine,
+                fonts: constraints.fonts.clone(),
+                backend: constraints.font_backend_factory.clone(),
+                queries: constraints.font_queries.clone(),
+                metrics_pending: false,
+            }),
+        }
+    }
+
+    /// Blink's document StyleEngine retains FontCache/Font objects across
+    /// incremental style updates. Rebuild only when the immutable catalog or
+    /// host service identity changes; ordinary DOM/style invalidations keep
+    /// parsed faces, native backends and resolved FontDescription entries.
+    pub(crate) fn Update(&self, constraints: &ConstraintSpace) {
+        fn same_arc<T: ?Sized>(
+            a: &Option<std::sync::Arc<T>>,
+            b: &Option<std::sync::Arc<T>>,
+        ) -> bool {
+            match (a, b) {
+                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+        }
+        let mut state = self.state.borrow_mut();
+        let same_engine = constraints
+            .font_engine
+            .as_ref()
+            .is_some_and(|engine| engine.ptr_eq(&state.engine));
+        let same_queries = match (&state.queries, &constraints.font_queries) {
+            (Some(a), Some(b)) => a.ptr_eq(b),
+            (None, None) => true,
+            _ => false,
+        };
+        if (same_engine || state.fonts == constraints.fonts)
+            && same_arc(&state.backend, &constraints.font_backend_factory)
+            && same_queries
+        {
+            return;
+        }
+        let engine = Self::Engine(constraints);
+        *state = StyleFontMetricsState {
+            engine,
+            fonts: constraints.fonts.clone(),
+            backend: constraints.font_backend_factory.clone(),
+            queries: constraints.font_queries.clone(),
+            metrics_pending: false,
+        };
+    }
+
+    /// A pending metrics lookup means Style consumed a provisional CSS
+    /// font-relative metric and must be recalculated after the host admits the
+    /// face. A WillUse-only miss can proceed directly to Layout.
+    pub(crate) fn TakeMetricsPending(&self) -> bool {
+        std::mem::take(&mut self.state.borrow_mut().metrics_pending)
+    }
+
+    fn QueueSystemQueries(&self, pending: &font_engine::FontPending) {
+        let state = self.state.borrow();
+        let Some(queries) = &state.queries else {
+            return;
+        };
+        for request in &pending.system_queries {
+            queries.Push(request.query.clone());
         }
     }
 }
 
 impl style::resolver::production_style_builder::FontMetricsResolver for StyleFontMetricsResolver {
+    fn WillUseFont(&self, description: &font_engine::FontDescription) {
+        let engine = self.state.borrow().engine.clone();
+        let result = engine.with_mut(|engine| {
+            let version = engine.ContextVersion();
+            engine.GetMetrics(description, version)
+        });
+        if let font_engine::FontCompute::Pending(pending) = result {
+            self.QueueSystemQueries(&pending);
+        }
+    }
+
     fn Metrics(
         &self,
         description: &font_engine::FontDescription,
     ) -> Option<font_engine::FontMetrics> {
-        let version = self.engine.borrow().ContextVersion();
-        match self.engine.borrow_mut().GetMetrics(description, version) {
+        let state = self.state.borrow();
+        let engine = state.engine.clone();
+        drop(state);
+        let result = engine.with_mut(|engine| {
+            let version = engine.ContextVersion();
+            engine.GetMetrics(description, version)
+        });
+        match result {
             font_engine::FontCompute::Ready(metrics) => Some(metrics),
-            font_engine::FontCompute::Pending(_) | font_engine::FontCompute::Error(_) => None,
+            font_engine::FontCompute::Pending(pending) => {
+                self.QueueSystemQueries(&pending);
+                self.state.borrow_mut().metrics_pending = true;
+                None
+            }
+            font_engine::FontCompute::Error(_) => None,
         }
     }
 }
@@ -494,6 +595,25 @@ pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColors(
     preferred_color_scheme: style::PreferredColorScheme,
     forced_colors: style::media_queries::forced_colors::ForcedColors,
 ) {
+    let font_metrics = Rc::new(StyleFontMetricsResolver::new(constraints));
+    ResolveLayoutStylesWithEngineAndForcedColorsUsingFontMetrics(
+        engine,
+        owner,
+        constraints,
+        preferred_color_scheme,
+        forced_colors,
+        font_metrics,
+    );
+}
+
+pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColorsUsingFontMetrics(
+    engine: &mut style::StyleEngine,
+    owner: &mut DOM,
+    constraints: &ConstraintSpace,
+    preferred_color_scheme: style::PreferredColorScheme,
+    forced_colors: style::media_queries::forced_colors::ForcedColors,
+    font_metrics: Rc<StyleFontMetricsResolver>,
+) {
     // Blink style resolution allocates ComputedStyle and its rare-data on the
     // document's cppgc heap before Layout begins. Keep that owner-thread heap
     // boundary in the browser assembly layer; StyleEngine itself remains
@@ -502,7 +622,8 @@ pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColors(
     let user_agent = UserAgentStyleSheets::new();
     let environment = MediaValuesForLayout(constraints, preferred_color_scheme, forced_colors);
     let sheets = user_agent.ForDocument(owner.GetDocument());
-    engine.SetFontMetricsResolver(Rc::new(StyleFontMetricsResolver::new(constraints)));
+    font_metrics.Update(constraints);
+    engine.SetFontMetricsResolver(font_metrics);
     engine
         .Update(owner, &environment, sheets)
         .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));

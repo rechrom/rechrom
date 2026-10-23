@@ -58,7 +58,8 @@ fn page_fixture(markup: &str, image: Option<&str>) -> Page {
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
@@ -771,7 +772,8 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
                 .as_slice()
                 .into(),
             ..Default::default()
-        }];
+        }]
+        .into();
         let mut styles = style::StyleEngine::new(&owner);
         styles
             .Update(&mut owner, &Default::default(), &host_styles())

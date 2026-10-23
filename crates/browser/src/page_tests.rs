@@ -252,7 +252,8 @@ fn create_page(
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     Page::Create(
         Rc::new(RefCell::new(Loader(root.to_path_buf(), trace.clone()))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
@@ -1091,7 +1092,8 @@ fn without_javascript(mode: &str) {
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader(root.clone(), trace.clone()))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
@@ -1367,7 +1369,8 @@ fn create_image_fixture_page(
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let loader = Rc::new(RefCell::new(Loader(root.to_path_buf(), trace.clone())));
     let images = Rc::new(RefCell::new(FixtureImageDecoder));
     let documents = Rc::new(RefCell::new(FixtureImageDecoder));

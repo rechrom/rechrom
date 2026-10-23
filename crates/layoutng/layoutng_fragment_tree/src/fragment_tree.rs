@@ -44,7 +44,7 @@ impl Default for FragmentKind {
 // cpp: layoutng_fragment_tree/fragment_tree.h:12-17
 #[derive(Clone, PartialEq)]
 pub struct PaintResources {
-    pub fonts: Vec<FontFace>,
+    pub fonts: font_engine::FontFaceCatalog,
     pub images: Vec<PaintImage>,
     pub device_pixel_ratio: f64,
     /// Embedding document preference, not the last use of an image resource.
@@ -66,7 +66,7 @@ pub struct PaintResources {
 impl Default for PaintResources {
     fn default() -> Self {
         Self {
-            fonts: Vec::new(),
+            fonts: font_engine::FontFaceCatalog::default(),
             images: Vec::new(),
             device_pixel_ratio: 1.0,
             preferred_color_scheme: 0,

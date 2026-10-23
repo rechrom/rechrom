@@ -11,12 +11,13 @@ pub enum PixelFormat {
 }
 
 /// Borrowed host output; no reference escapes Render.
-pub struct RenderTarget<'a> {
+pub struct RenderTarget {
     pub width: u32,
     pub height: u32,
     pub row_stride: usize,
     pub format: PixelFormat,
-    pub pixels: &'a mut [u32],
+    /// Move-only output storage bound directly as the root framebuffer.
+    pub pixels: Vec<u32>,
     /// The target still contains the pixels from this Renderer instance's
     /// previous completed aggregate at the same size and format.
     pub retained: bool,

@@ -62,6 +62,64 @@ pub struct FontFace {
     /// BCP-47 locales for which the platform catalog prefers this face.
     pub fallback_locales: Vec<String>,
 }
+
+/// Immutable font-resource catalog passed between engine boundaries.
+///
+/// Cloning this value retains the same catalog allocation. Hosts may still
+/// mutate a private snapshot through `DerefMut`; `Arc::make_mut` then performs
+/// copy-on-write, so the retained Layout/Paint snapshots remain immutable.
+#[derive(Clone, Debug, Default)]
+pub struct FontFaceCatalog(Arc<Vec<FontFace>>);
+
+impl FontFaceCatalog {
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl From<Vec<FontFace>> for FontFaceCatalog {
+    fn from(faces: Vec<FontFace>) -> Self {
+        Self(Arc::new(faces))
+    }
+}
+
+impl std::ops::Deref for FontFaceCatalog {
+    type Target = Vec<FontFace>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for FontFaceCatalog {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+impl<'a> IntoIterator for &'a FontFaceCatalog {
+    type Item = &'a FontFace;
+    type IntoIter = std::slice::Iter<'a, FontFace>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut FontFaceCatalog {
+    type Item = &'a mut FontFace;
+    type IntoIter = std::slice::IterMut<'a, FontFace>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Arc::make_mut(&mut self.0).iter_mut()
+    }
+}
+
+impl PartialEq for FontFaceCatalog {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr_eq(other) || self.0 == other.0
+    }
+}
 impl Default for FontFace {
     fn default() -> Self {
         Self {

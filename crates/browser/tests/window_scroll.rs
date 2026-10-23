@@ -64,7 +64,8 @@ fn fixture_with_theme(
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader(html.into_bytes()))),
         Rc::new(RefCell::new(

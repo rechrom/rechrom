@@ -438,12 +438,9 @@ impl ApplicationHandler<UserEvent> for App {
                 native,
                 ..
             } => {
-                let sample = self.input.native_wheel_sample(
-                    *delta,
-                    *phase,
-                    *native,
-                    window.scale_factor(),
-                );
+                let sample =
+                    self.input
+                        .native_wheel_sample(*delta, *phase, *native, window.scale_factor());
                 self.send(Command::NativeWheel(sample));
             }
             _ => {

@@ -55,7 +55,8 @@ fn page_fixture_at_scale(markup: &str, image: Option<&str>, scale: f64) -> Page 
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {

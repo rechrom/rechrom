@@ -61,7 +61,8 @@ fn page_fixture_with_preference(
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {

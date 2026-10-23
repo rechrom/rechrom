@@ -60,7 +60,8 @@ fn fixture() -> Page {
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader)),
         Rc::new(RefCell::new(

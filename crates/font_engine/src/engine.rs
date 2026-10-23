@@ -1,6 +1,8 @@
 //! Pure, retained font computation. Platform discovery and byte acquisition are
 //! explicit effects, completed by the embedding through `ApplyMutation`.
-use crate::resolver::{EqualFamilyName, FontFace, FontRequest, FontResolver, FontSmoothing};
+use crate::resolver::{
+    EqualFamilyName, FontFace, FontFaceCatalog, FontRequest, FontResolver, FontSmoothing,
+};
 use crate::system_fonts::*;
 use crate::{
     Font, FontBackendFactory, FontDescription, FontMetrics, FontVariation, HarfBuzzShaper,
@@ -8,7 +10,9 @@ use crate::{
 };
 use foundation::{Persistent, String as BlinkString, TextDirection as RunDirection};
 use std::{
+    cell::RefCell,
     ops::{Deref, Range},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -90,8 +94,46 @@ pub struct FontEngine {
     next_request: u64,
     backend: Option<Arc<dyn FontBackendFactory>>,
     resolver: Option<FontResolver>,
+    /// Canonical face ordering published to Layout/Paint/Raster. Rebuilding
+    /// this catalog is tied to font mutations, never to an ordinary layout
+    /// pass. Clones share the same immutable allocation.
+    resolved_faces: Option<FontFaceCatalog>,
     discover_system: bool,
     queries: Option<FontQueryCollector>,
+}
+
+/// Page-assembled handle to one retained font computation engine.
+///
+/// Style and Layout use this through their narrow adapter interfaces. The
+/// handle carries no Document knowledge and is deliberately !Send: Chromium's
+/// FontCache/HarfBuzz caches are likewise used on one renderer thread. Page's
+/// lifecycle guarantees that Style and Layout scopes never overlap.
+#[derive(Clone)]
+pub struct FontEngineHandle {
+    engine: Rc<RefCell<FontEngine>>,
+}
+
+impl FontEngineHandle {
+    pub fn new(engine: FontEngine) -> Self {
+        Self {
+            engine: Rc::new(RefCell::new(engine)),
+        }
+    }
+
+    pub fn with_mut<T>(&self, callback: impl FnOnce(&mut FontEngine) -> T) -> T {
+        callback(&mut self.engine.borrow_mut())
+    }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.engine, &other.engine)
+    }
+
+    /// Layout's native resolver returns references retained by FontEngine, so
+    /// its existing TLS scope cannot use a short `RefMut`. The caller must own
+    /// the exclusive Style/Layout lifecycle scope for the returned reference.
+    pub unsafe fn get_mut_for_exclusive_scope(&self) -> &mut FontEngine {
+        unsafe { &mut *self.engine.as_ptr() }
+    }
 }
 impl FontEngine {
     pub fn new(
@@ -107,6 +149,7 @@ impl FontEngine {
             next_request: 1,
             backend,
             resolver: None,
+            resolved_faces: None,
             discover_system: true,
             queries: Some(FontQueryCollector::default()),
         }
@@ -116,12 +159,25 @@ impl FontEngine {
     pub fn FromFaces(faces: &[FontFace], backend: Option<Arc<dyn FontBackendFactory>>) -> Self {
         let mut engine = Self::new(FontContextVersion::default(), backend);
         engine.faces = faces.to_vec();
+        engine.resolved_faces = Some(faces.to_vec().into());
         engine.discover_system = false;
         engine.queries = None;
         engine
     }
     pub fn SetQueryCollector(&mut self, collector: Option<FontQueryCollector>) {
+        let changed = match (&self.queries, &collector) {
+            (Some(current), Some(next)) => !current.ptr_eq(next),
+            (None, None) => false,
+            _ => true,
+        };
         self.queries = collector.clone();
+        // Building the canonical catalog also publishes the cached host
+        // match/face associations into a newly installed collector. Preserve
+        // that behavior without disturbing the steady-state snapshot when
+        // Page supplies the same collector on every layout transaction.
+        if changed {
+            self.resolved_faces = None;
+        }
         if let Some(resolver) = &mut self.resolver {
             resolver.SetQueryCollector(collector);
         }
@@ -141,10 +197,12 @@ impl FontEngine {
             FontMutation::SetFaces(faces) => {
                 self.faces = faces;
                 self.resolver = None;
+                self.resolved_faces = None;
             }
             FontMutation::SetRules(rules) => {
                 self.rules = rules;
                 self.resolver = None;
+                self.resolved_faces = None;
             }
             FontMutation::SetFaceState { rule_id, state } => {
                 self.rules
@@ -153,6 +211,7 @@ impl FontEngine {
                     .ok_or(FontError::UnknownRule)?
                     .state = state;
                 self.resolver = None;
+                self.resolved_faces = None;
             }
             FontMutation::EnvironmentChanged(version) => {
                 self.context_version = version;
@@ -162,6 +221,7 @@ impl FontEngine {
                     collector.Clear();
                 }
                 self.resolver = None;
+                self.resolved_faces = None;
             }
             FontMutation::SystemFontResponse(response) => {
                 if response.request.context_version != self.context_version {
@@ -219,6 +279,7 @@ impl FontEngine {
                 self.pending.remove(index);
                 self.answers.push(response);
                 self.resolver = None;
+                self.resolved_faces = None;
             }
         }
         Ok(())
@@ -345,7 +406,7 @@ impl FontEngine {
             }
             // Last-resort primary metrics also require a concrete base face.
             if families.is_empty()
-                || (pending.system_queries.is_empty() && self.AvailableFaces().is_empty())
+                || (pending.system_queries.is_empty() && !self.HasAvailableFaces())
             {
                 self.OpenCandidates(
                     SystemFontQuery::MatchGeneric {
@@ -360,10 +421,41 @@ impl FontEngine {
         }
         Ok(pending)
     }
-    pub fn ResolvedFaces(&self) -> Vec<FontFace> {
-        self.AvailableFaces()
+    pub fn ResolvedFaces(&mut self) -> FontFaceCatalog {
+        if self.resolved_faces.is_none() {
+            self.resolved_faces = Some(self.BuildAvailableFaces().into());
+        }
+        self.resolved_faces
+            .as_ref()
+            .expect("resolved face catalog")
+            .clone()
     }
-    fn AvailableFaces(&self) -> Vec<FontFace> {
+    fn HasAvailableFaces(&self) -> bool {
+        if self.resolver.is_some()
+            || !self.faces.is_empty()
+            || self
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.state, FontFaceState::Ready(_)))
+        {
+            return true;
+        }
+        self.answers.iter().any(|response| {
+            let SystemFontAnswer::Faces(descriptors) = &response.answer else {
+                return false;
+            };
+            descriptors.iter().any(|descriptor| {
+                self.answers.iter().any(|answer| {
+                    matches!(
+                        (&answer.request.query, &answer.answer),
+                        (SystemFontQuery::OpenFace { id }, SystemFontAnswer::Face(_))
+                            if *id == descriptor.id
+                    )
+                })
+            })
+        })
+    }
+    fn BuildAvailableFaces(&self) -> Vec<FontFace> {
         let mut faces = self.faces.clone();
         for rule in &self.rules {
             if let FontFaceState::Ready(face) = &rule.state {
@@ -413,7 +505,8 @@ impl FontEngine {
     }
     fn Resolver(&mut self) -> &mut FontResolver {
         if self.resolver.is_none() {
-            let mut resolver = FontResolver::new(&self.AvailableFaces(), self.backend.clone());
+            let faces = self.ResolvedFaces();
+            let mut resolver = FontResolver::new(&faces, self.backend.clone());
             resolver.SetQueryCollector(self.queries.clone());
             self.resolver = Some(resolver);
         }
@@ -469,7 +562,7 @@ impl FontEngine {
             }
             _ => {}
         }
-        if self.AvailableFaces().is_empty() {
+        if !self.HasAvailableFaces() {
             return FontCompute::Error(FontError::NoUsableFont);
         }
         let font = self.ResolveDescription(description);
@@ -533,7 +626,7 @@ impl FontEngine {
             }
             _ => {}
         }
-        if self.AvailableFaces().is_empty() {
+        if !self.HasAvailableFaces() {
             return FontCompute::Error(FontError::NoUsableFont);
         }
         if self.discover_system {
@@ -1097,6 +1190,23 @@ mod tests {
         assert_eq!(resolved[0].family, "sans-serif");
         assert_eq!(replacement.FaceId(&resolved[0]), Some(id));
         assert_eq!(replacement.MatchRank(&query, &resolved[0]), Some(0));
+    }
+
+    #[test]
+    fn canonical_face_catalog_is_retained_until_a_font_mutation() {
+        let mut engine = FontEngine::FromFaces(&[face()], None);
+        let first = engine.ResolvedFaces();
+        let second = engine.ResolvedFaces();
+        assert!(first.ptr_eq(&second));
+
+        let mut replacement = face();
+        replacement.family = "replacement".into();
+        engine
+            .ApplyMutation(FontMutation::SetFaces(vec![replacement]))
+            .unwrap();
+        let third = engine.ResolvedFaces();
+        assert!(!first.ptr_eq(&third));
+        assert_eq!(third[0].family, "replacement");
     }
 
     #[test]

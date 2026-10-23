@@ -137,17 +137,19 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
                 })
             }
             (None, None, None) => None,
-            _ => return Err("native timestamp, phase and momentum phase must be provided together".into()),
+            _ => {
+                return Err(
+                    "native timestamp, phase and momentum phase must be provided together".into(),
+                )
+            }
         };
         // Both synthetic control input and captured native replay enter before
         // the common phase handler, rails filter and frame-aligned queue.
         let sample = crate::input::NativeWheelSample {
-            delta: winit::event::MouseScrollDelta::PixelDelta(
-                winit::dpi::PhysicalPosition::new(
-                    -wheel.delta_x * scale,
-                    -wheel.delta_y * scale,
-                ),
-            ),
+            delta: winit::event::MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
+                -wheel.delta_x * scale,
+                -wheel.delta_y * scale,
+            )),
             phase,
             native,
             position: Offset {

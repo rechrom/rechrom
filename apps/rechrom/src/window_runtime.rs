@@ -247,9 +247,7 @@ fn run(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if let Some(frame) = scheduler.TakeIfDrawDue(Instant::now()) {
-            dispatch(DisplayWork::Command(display::Message::Submit {
-                frame,
-            }))?;
+            dispatch(DisplayWork::Command(display::Message::Submit { frame }))?;
         }
     }
 }

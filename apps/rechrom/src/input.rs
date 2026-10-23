@@ -88,7 +88,9 @@ impl InputState {
             }))
         });
         let Some(capture) = capture else { return };
-        let Ok(mut capture) = capture.lock() else { return };
+        let Ok(mut capture) = capture.lock() else {
+            return;
+        };
         capture.sequence += 1;
         let (delta_kind, host_delta_x, host_delta_y) = match delta {
             MouseScrollDelta::LineDelta(x, y) => ("line", f64::from(*x), f64::from(*y)),
@@ -195,11 +197,7 @@ impl InputState {
         }
     }
 
-    pub fn accept_native_wheel(
-        &mut self,
-        sample: NativeWheelSample,
-        now: Instant,
-    ) -> Vec<Command> {
+    pub fn accept_native_wheel(&mut self, sample: NativeWheelSample, now: Instant) -> Vec<Command> {
         let mut result = Vec::new();
         if let Some(end) = self.take_due_wheel_end(now) {
             result.push(end);
@@ -264,9 +262,7 @@ impl InputState {
                 if let Some(end) = self.take_pending_wheel_end() {
                     result.push(end);
                 }
-            } else if native.momentum_phase == 1
-                && self.pending_wheel_end.take().is_some()
-            {
+            } else if native.momentum_phase == 1 && self.pending_wheel_end.take().is_some() {
                 wheel.phase = WheelPhase::kChanged;
             }
             if native.phase & 16 != 0 || native.momentum_phase & 16 != 0 {

@@ -3352,6 +3352,7 @@ impl DocumentStyleEngine {
                                 collaborators.image_resolver = Some(&resolver_images);
                                 collaborators.property_registry = Some(&self.property_registry);
                                 collaborators.function_registry = Some(&function_registry);
+                                collaborators.font_metrics = self.font_metrics.as_deref();
                                 let animation_samples =
                                     document.AnimationStyles(document.Node(index).Id());
                                 let animation_interpolations = if animation_samples.is_empty() {
@@ -3925,6 +3926,7 @@ impl DocumentStyleEngine {
                                         collaborators.property_registry =
                                             Some(&self.property_registry);
                                         collaborators.function_registry = Some(&function_registry);
+                                        collaborators.font_metrics = self.font_metrics.as_deref();
                                         collaborators.matched_properties_cache =
                                             Some(self.matched_properties_cache.clone());
                                         collaborators.selectors = Some(self.selectors.clone());
@@ -6737,6 +6739,7 @@ impl DocumentStyleEngine {
                 collaborators.image_resolver = Some(&resolver_images);
                 collaborators.property_registry = Some(&self.property_registry);
                 collaborators.function_registry = function_registry;
+                collaborators.font_metrics = self.font_metrics.as_deref();
                 collaborators.matched_properties_cache =
                     Some(self.matched_properties_cache.clone());
                 collaborators.selectors = Some(self.selectors.clone());

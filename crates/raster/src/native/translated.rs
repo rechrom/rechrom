@@ -100,7 +100,15 @@ impl TypefaceCache {
             &item.font_variations
         };
         let variations = command::canonical_font_variations(source_variations);
-        let font_size_bits = item.font_size.to_bits();
+        // SkTypeface identity is face + variation coordinates. Text size lives
+        // on SkFont and must not split the typeface cache; doing so repeatedly
+        // rebuilt the selected face of a TTC into an owned standalone SFNT.
+        // Apple's private `hvgl` faces are the exception because their guarded
+        // native reconstruction is explicitly size-dependent.
+        let font_size_bits = sfnt_face_table(face.bytes, face.face_index, b"hvgl")
+            .is_some()
+            .then(|| item.font_size.to_bits())
+            .unwrap_or_default();
         let matches = |entry: &CachedTypeface| {
             entry.font_size_bits == font_size_bits
                 && entry.variations.as_slice() == variations.as_ref()
@@ -442,7 +450,6 @@ fn create_raster_typeface(
         .collect::<Vec<_>>();
     let coordinate_count = i32::try_from(coordinates.len())
         .map_err(|_| io::Error::other("translated glyph variation count overflow"))?;
-    let font_data = standalone_font_data(face.bytes, face.face_index)?;
     let mut arguments = SkFontArguments::new();
     arguments.setCollectionIndex(0);
     arguments.setVariationDesignPosition(VariationPosition {
@@ -457,6 +464,7 @@ fn create_raster_typeface(
     ) {
         return Ok(typeface);
     }
+    let font_data = standalone_font_data(face.bytes, face.face_index)?;
     let stream: core::pin::Pin<Box<dyn skia::src::core::SkStream::SkStreamAsset>> = unsafe {
         skia::src::core::SkStream::SkMemoryStream::MakeCopy(font_data.as_ptr(), font_data.len())
     };
@@ -3616,7 +3624,8 @@ mod tests {
                         bytes_owner: None,
                         face_index: 0,
                         variations: Vec::new(),
-                    }],
+                    }]
+                    .into(),
                     images: Vec::new(),
                 }),
             };

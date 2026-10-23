@@ -174,7 +174,8 @@ fn body() {
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let constraints = Rc::new(RefCell::new(constraints));
     let resources = Rc::new(ResourceFetcher::WithEngine(
         resource_engine,

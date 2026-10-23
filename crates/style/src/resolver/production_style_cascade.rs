@@ -4655,6 +4655,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         let supports = crate::style_rule::StyleRuleBase::<ProductionSheetBackend>::Supports(
@@ -4787,6 +4788,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let document = ();
         let element = Rc::new(ProductionElement {
@@ -4856,6 +4858,7 @@ mod tests {
             None,
             None,
             SubstitutionContext::default(),
+            None,
             None,
             None,
             None,
@@ -4933,6 +4936,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(backend.IsSimpleSum(String::from("calc(1px + 2em - 3ch)")));
         assert!(backend.IsSimpleSum(String::from("1px + 2em")));
@@ -4971,6 +4975,7 @@ mod tests {
             None,
             None,
             SubstitutionContext::default(),
+            None,
             None,
             None,
             None,

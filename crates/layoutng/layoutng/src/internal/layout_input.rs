@@ -2443,7 +2443,12 @@ pub struct ConstraintSpace {
         Option<std::sync::Arc<dyn font_engine::fonts::font_backend::FontBackendFactory>>,
     /// Pure font-discovery outbox; the embedding drains it between passes.
     pub font_queries: Option<font_engine::FontQueryCollector>,
-    pub fonts: Vec<FontFace>,
+    /// Retained document-agnostic font computation service assembled by Page.
+    /// Standalone callers may omit it and use the catalog compatibility path.
+    pub font_engine: Option<font_engine::FontEngineHandle>,
+    /// Shared immutable font resources. Clones retain the same snapshot;
+    /// mutation creates a new catalog generation through copy-on-write.
+    pub fonts: font_engine::FontFaceCatalog,
     pub images: Vec<PaintImage>,
 }
 impl Default for ConstraintSpace {
@@ -2468,8 +2473,9 @@ impl Default for ConstraintSpace {
             phrase_break: None,
             text_transform: None,
             font_backend_factory: None,
+            font_engine: None,
             font_queries: None,
-            fonts: Vec::new(),
+            fonts: font_engine::FontFaceCatalog::default(),
             images: Vec::new(),
         }
     }

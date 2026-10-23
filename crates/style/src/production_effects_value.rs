@@ -145,6 +145,14 @@ pub struct CSSBasicShapeInsetValue {
     pub radii: Option<[[Rc<Value>; 2]; 4]>, // tl, tr, br, bl; horizontal, vertical
 }
 
+/// css_basic_shape_values.h:219-281. `rect()` keeps edge coordinates until
+/// computed-value conversion, where Chromium lowers it to the equivalent
+/// `inset(top calc(100% - right) calc(100% - bottom) left)` shape.
+pub struct CSSBasicShapeRectValue {
+    pub sides: [Rc<Value>; 4],              // top, right, bottom, left
+    pub radii: Option<[[Rc<Value>; 2]; 4]>, // tl, tr, br, bl; horizontal, vertical
+}
+
 impl CSSValueSubclass for CSSBasicShapeInsetValue {
     fn CustomCSSText(&self) -> String {
         fn four(values: &[Rc<Value>; 4]) -> Vec<&Rc<Value>> {
@@ -204,6 +212,59 @@ impl CSSValueSubclass for CSSBasicShapeInsetValue {
 }
 
 impl CSSValueRandom for CSSBasicShapeInsetValue {
+    fn HasRandomFunctions(&self) -> bool {
+        self.sides.iter().any(|value| value.HasRandomFunctions())
+            || self.radii.as_ref().is_some_and(|radii| {
+                radii
+                    .iter()
+                    .flatten()
+                    .any(|value| value.HasRandomFunctions())
+            })
+    }
+}
+
+impl CSSValueSubclass for CSSBasicShapeRectValue {
+    fn CustomCSSText(&self) -> String {
+        let mut text = format!(
+            "rect({})",
+            self.sides
+                .iter()
+                .map(|value| value.CssText().Utf8())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        if let Some(radii) = &self.radii {
+            let horizontal = radii
+                .iter()
+                .map(|pair| pair[0].CssText().Utf8())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let vertical = radii
+                .iter()
+                .map(|pair| pair[1].CssText().Utf8())
+                .collect::<Vec<_>>()
+                .join(" ");
+            text.pop();
+            text.push_str(" round ");
+            text.push_str(&horizontal);
+            if radii
+                .iter()
+                .any(|pair| pair[0].as_ref() != pair[1].as_ref())
+            {
+                text.push_str(" / ");
+                text.push_str(&vertical);
+            }
+            text.push(')');
+        }
+        String::from(text.as_str())
+    }
+
+    fn Equals(&self, other: &Self) -> bool {
+        self.sides == other.sides && self.radii == other.radii
+    }
+}
+
+impl CSSValueRandom for CSSBasicShapeRectValue {
     fn HasRandomFunctions(&self) -> bool {
         self.sides.iter().any(|value| value.HasRandomFunctions())
             || self.radii.as_ref().is_some_and(|radii| {

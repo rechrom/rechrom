@@ -33,10 +33,43 @@ pub(crate) fn ReadFont(path: &str) -> std::io::Result<SharedFontBytes> {
     let started = std::env::var_os("BROWSER_PROFILE_INPUT")
         .is_some()
         .then(std::time::Instant::now);
-    let result = ReadFontBytes(path);
+    #[cfg(target_os = "macos")]
+    let (result, cache_hit) = if path.starts_with("/System/Library/") {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static IMMUTABLE_SYSTEM_FONTS: OnceLock<Mutex<HashMap<String, SharedFontBytes>>> =
+            OnceLock::new();
+        let cache = IMMUTABLE_SYSTEM_FONTS.get_or_init(Default::default);
+        let cached = {
+            cache
+                .lock()
+                .expect("system font byte cache poisoned")
+                .get(path)
+                .cloned()
+        };
+        if let Some(bytes) = cached {
+            (Ok(bytes), true)
+        } else {
+            let result = ReadFontBytes(path);
+            if let Ok(bytes) = &result {
+                let mut cache = cache.lock().expect("system font byte cache poisoned");
+                let bytes = cache
+                    .entry(path.to_owned())
+                    .or_insert_with(|| bytes.clone())
+                    .clone();
+                (Ok(bytes), false)
+            } else {
+                (result, false)
+            }
+        }
+    } else {
+        (ReadFontBytes(path), false)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (result, cache_hit) = (ReadFontBytes(path), false);
     if let Some(started) = started {
         eprintln!(
-            "browser-font-read-profile path={path:?} bytes={} succeeded={} mapped={} ms={:.3}",
+            "browser-font-read-profile path={path:?} bytes={} succeeded={} mapped={} cache_hit={cache_hit} ms={:.3}",
             result.as_ref().map_or(0, |bytes| bytes.len()),
             result.is_ok(),
             result.as_ref().is_ok_and(SharedFontBytes::is_mapped),

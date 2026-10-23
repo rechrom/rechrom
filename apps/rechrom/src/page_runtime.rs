@@ -808,13 +808,17 @@ fn run_presenter(
         // Partial damage requires the exact retained predecessor. A recycled
         // full-damage target may be older, so publish the complete root into it
         // even though its allocation itself can be reused without clearing.
-        let retained = !full_root_damage
-            && retained_target == Some((viewport.width, viewport.height));
+        let retained =
+            !full_root_damage && retained_target == Some((viewport.width, viewport.height));
         let target = Arc::make_mut(&mut pixels);
         if target.len() != pixel_count {
             target.resize(pixel_count, 0);
         }
-        presenter.RenderCurrent(viewport.width, viewport.height, target, retained)?;
+        let owned_target = std::mem::take(target);
+        let (update, owned_target) =
+            presenter.RenderCurrent(viewport.width, viewport.height, owned_target, retained)?;
+        pixels = Arc::new(owned_target);
+        render_trace.set("direct_root_target", update.direct_root_target as u8 as f64);
         render_trace.set("retained", retained as u8 as f64);
         render_trace.set("full_root_damage", full_root_damage as u8 as f64);
         render_trace.set("width", viewport.width as f64);
@@ -1028,7 +1032,9 @@ fn run_impl(
             .position(|command| matches!(command, ImplCommand::Tick(_)));
         let urgent = queued_commands
             .iter()
-            .position(|command| matches!(command, ImplCommand::Stop | ImplCommand::RendererFailed(_)))
+            .position(|command| {
+                matches!(command, ImplCommand::Stop | ImplCommand::RendererFailed(_))
+            })
             .or_else(|| tick_due_after_input.then_some(pending_tick).flatten())
             .or_else(|| {
                 queued_commands
@@ -1114,8 +1120,7 @@ fn run_impl(
                 }
             }
             ImplCommand::RequestMainFrame => {
-                let _impl_trace =
-                    browser_tracing::span("compositor", "Impl.RequestMainFrame");
+                let _impl_trace = browser_tracing::span("compositor", "Impl.RequestMainFrame");
                 if let Some(presentation) = presentation.as_mut() {
                     let result = presentation.pipeline.RequestMainFrame()?;
                     if !result.effects.is_empty() {
@@ -1310,8 +1315,7 @@ fn run_impl(
             pump_pending.store(false, Ordering::Release);
         }
         if presentation.as_ref().is_some_and(|presentation| {
-            presentation.needs_publish
-                || presentation.pipeline.NeedsBeginFrames()
+            presentation.needs_publish || presentation.pipeline.NeedsBeginFrames()
         }) {
             source.request_begin_frame();
         }
@@ -1432,7 +1436,7 @@ impl DocumentQueue {
                 Ok(Command::Wake) => self.ordinary(),
                 Ok(command) => self.post(command),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(mpsc::RecvTimeoutError::Disconnected)
+                    return Err(mpsc::RecvTimeoutError::Disconnected);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !matches!(
@@ -1453,7 +1457,7 @@ impl DocumentQueue {
                     Ok(command) => self.post(command),
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        return Err(mpsc::RecvTimeoutError::Disconnected)
+                        return Err(mpsc::RecvTimeoutError::Disconnected);
                     }
                 }
             }

@@ -42,7 +42,7 @@ pub(crate) type PassId = RenderPassId;
 
 pub(crate) struct PassBacking {
     pub(crate) rect: Rect,
-    pub(crate) pixels: Vec<u8>,
+    pub(crate) pixels: Vec<u32>,
     pub(crate) drawn_rect: Rect,
 }
 
@@ -50,8 +50,7 @@ impl PassBacking {
     pub(crate) fn new(rect: Rect) -> io::Result<Self> {
         let length = (rect.width as usize)
             .checked_mul(rect.height as usize)
-            .and_then(|value| value.checked_mul(4))
-            .filter(|value| *value <= isize::MAX as usize)
+            .filter(|value| *value <= isize::MAX as usize / 4)
             .ok_or_else(|| io::Error::other("translated render-pass allocation overflow"))?;
         Ok(Self {
             rect,
@@ -62,7 +61,7 @@ impl PassBacking {
 
     pub(crate) fn image(&self) -> io::Result<Arc<dyn SkImage>> {
         image_from_bytes(
-            &self.pixels,
+            bytemuck::cast_slice(&self.pixels),
             self.rect.width,
             self.rect.height,
             self.rect.width as usize * 4,
@@ -307,7 +306,7 @@ fn target_format(format: PixelFormat) -> TranslatedPixelFormat {
     }
 }
 
-pub(crate) fn validate_target(input: &VizOutput, target: &RenderTarget<'_>) -> io::Result<()> {
+pub(crate) fn validate_target(input: &VizOutput, target: &RenderTarget) -> io::Result<()> {
     let output = input.OutputRect();
     let length = target
         .row_stride
@@ -324,7 +323,7 @@ pub(crate) fn validate_target(input: &VizOutput, target: &RenderTarget<'_>) -> i
 
 pub(crate) fn publish(
     input: &VizOutput,
-    target: RenderTarget<'_>,
+    target: &mut RenderTarget,
     backings: &BTreeMap<PassId, PassBacking>,
     drawn_damage: &BTreeMap<PassId, Rect>,
 ) -> io::Result<()> {
@@ -371,16 +370,14 @@ pub(crate) fn publish(
             };
             damage.Intersect(full_bounds);
             if !damage.IsEmpty() {
-                let source_stride = backing.rect.width as usize * 4;
-                let target_stride = target.row_stride * 4;
-                let row_bytes = damage.width as usize * 4;
-                let target_bytes: &mut [u8] = bytemuck::cast_slice_mut(target.pixels);
+                let source_stride = backing.rect.width as usize;
+                let target_stride = target.row_stride;
+                let row_pixels = damage.width as usize;
                 for y in damage.y as usize..damage.bottom() as usize {
-                    let source_start = y * source_stride + damage.x as usize * 4;
-                    let target_start = y * target_stride + damage.x as usize * 4;
-                    target_bytes[target_start..target_start + row_bytes].copy_from_slice(
-                        &backing.pixels[source_start..source_start + row_bytes],
-                    );
+                    let source_start = y * source_stride + damage.x as usize;
+                    let target_start = y * target_stride + damage.x as usize;
+                    target.pixels[target_start..target_start + row_pixels]
+                        .copy_from_slice(&backing.pixels[source_start..source_start + row_pixels]);
                 }
             }
             return Ok(());
@@ -391,7 +388,7 @@ pub(crate) fn publish(
         .row_stride
         .checked_mul(4)
         .ok_or_else(|| io::Error::other("translated target row byte overflow"))?;
-    let pixels = bytemuck::cast_slice_mut(target.pixels);
+    let pixels = bytemuck::cast_slice_mut(target.pixels.as_mut_slice());
     let mut output = RasterTarget::new(
         pixels,
         target.width as i32,

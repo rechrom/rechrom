@@ -480,6 +480,57 @@ pub(super) fn Inset<T: TokenStreamTokenizer>(
         },
     ))))
 }
+
+// cpp: css_parsing_utils.cc:650-684. Unlike inset(), rect() requires exactly
+// four edge coordinates and admits `auto` for any edge. Border radii use the
+// same `round <radii> [/ <radii>]` grammar as the other basic rectangles.
+fn Rect<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let mut guard = RestoringBlockGuard::new(stream);
+    guard.ConsumeWhitespace();
+    let mut sides = Vec::with_capacity(4);
+    for _ in 0..4 {
+        if guard.Peek().Id() == kAuto {
+            sides.push(values::identifier(guard.ConsumeIncludingWhitespace().Id()));
+        } else if CanStartLength(&mut guard) {
+            sides.push(LengthValue(id, &mut guard, mode, true, false)?);
+        } else {
+            return Err(invalid(id));
+        }
+    }
+    let radii = if guard.Peek().Id() == kRound {
+        guard.ConsumeIncludingWhitespace();
+        let horizontal = RadiusList(id, &mut guard, mode)?;
+        let vertical = if guard.Peek().GetType() == kDelimiterToken
+            && guard.Peek().Delimiter() == b'/' as u16
+        {
+            guard.ConsumeIncludingWhitespace();
+            RadiusList(id, &mut guard, mode)?
+        } else {
+            horizontal.clone()
+        };
+        Some(std::array::from_fn(|index| {
+            [horizontal[index].clone(), vertical[index].clone()]
+        }))
+    } else {
+        None
+    };
+    if !guard.AtEnd() {
+        return Err(invalid(id));
+    }
+    guard.Release();
+    drop(guard);
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(CSSValuePayload::kBasicShapeRectClass(
+        crate::production_effects_value::CSSBasicShapeRectValue {
+            sides: std::array::from_fn(|index| sides[index].clone()),
+            radii,
+        },
+    ))))
+}
 fn BoxValue<T: TokenStreamTokenizer>(stream: &mut Stream<T>, geometry: bool) -> Option<Rc<Value>> {
     let keyword = stream.Peek().Id();
     if matches!(keyword, kContentBox | kPaddingBox | kBorderBox | kMarginBox)
@@ -535,7 +586,9 @@ fn Shape<T: TokenStreamTokenizer>(
         Some(Ellipse(id, stream, mode)?)
     } else if function == Some(kPath) {
         Some(Path(id, stream)?)
-    } else if matches!(function, Some(kRect | kXywh | kShape)) {
+    } else if function == Some(kRect) {
+        Some(Rect(id, stream, mode)?)
+    } else if matches!(function, Some(kXywh | kShape)) {
         return Err(unsupported(
             id,
             "BasicShape native Path/equality owner or typed shape subtype",

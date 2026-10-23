@@ -193,7 +193,8 @@ pub(crate) fn spawn(
                 (host.output.notify)(UserEvent::Message(error.to_string()));
             }
             loop {
-                let message = if let Some(deadline) = host.wheel_input.pending_wheel_end_deadline() {
+                let message = if let Some(deadline) = host.wheel_input.pending_wheel_end_deadline()
+                {
                     match inbox.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                         Ok(message) => message,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -690,10 +691,7 @@ impl Host {
             Command::Input(input) => self.input(input, Instant::now(), 1),
             Command::NativeWheel(sample) => {
                 let queued_at = sample.observed_at;
-                for command in self
-                    .wheel_input
-                    .accept_native_wheel(sample, Instant::now())
-                {
+                for command in self.wheel_input.accept_native_wheel(sample, Instant::now()) {
                     if let Command::Input(input) = command {
                         self.input(input, queued_at, 1)?;
                     }

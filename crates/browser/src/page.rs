@@ -330,9 +330,9 @@ impl PageFramePresenter {
         &mut self,
         width: u32,
         height: u32,
-        target: &mut [u32],
+        target: Vec<u32>,
         retained: bool,
-    ) -> io::Result<RenderUpdate> {
+    ) -> io::Result<(RenderUpdate, Vec<u32>)> {
         let output = viz::native::DeviceRect::new(0, 0, width as i32, height as i32);
         let placement = viz::native::SurfacePlacement {
             surface_id: self.surface,
@@ -342,7 +342,7 @@ impl PageFramePresenter {
             .viz
             .Aggregate(output, &[placement])
             .map_err(|error| io::Error::other(error.to_string()))?;
-        let update = self.renderer.Render(
+        let (update, target) = self.renderer.Render(
             &mut aggregated,
             renderer_skia::RenderTarget {
                 width,
@@ -355,7 +355,7 @@ impl PageFramePresenter {
         )?;
         self.viz.DidDraw(aggregated);
         self.rendered_surface = Some(self.surface);
-        Ok(update)
+        Ok((update, target.pixels))
     }
 }
 
@@ -632,7 +632,10 @@ impl PageRenderPipeline {
         let now = self.executor.Now();
         let interval = BeginFrameArgs::DefaultInterval();
         let mut trace = browser_tracing::span("compositor", "PageCompositor.ManualBeginFrame");
-        trace.set("external_presentation", self.external_presentation as u8 as f64);
+        trace.set(
+            "external_presentation",
+            self.external_presentation as u8 as f64,
+        );
         trace.set("sequence", self.begin_frame_sequence as f64);
         self.compositor
             .as_mut()
@@ -890,8 +893,7 @@ impl PageRenderPipeline {
         }
         result.submitted = submitted;
         self.input_frame_issued_since_physical |= submitted;
-        self.input_frame_pump_pending =
-            input_frame_pump && !submitted && self.work_pending;
+        self.input_frame_pump_pending = input_frame_pump && !submitted && self.work_pending;
         Ok(result)
     }
 
@@ -945,21 +947,23 @@ impl PageRenderPipeline {
                     let delta = wheel.DefaultScrollDelta();
                     Vector2dF::new(delta.x as f32, delta.y as f32)
                 },
-                unconstrained_delta: Vector2dF::new(
-                    wheel.delta.x as f32,
-                    wheel.delta.y as f32,
-                ),
+                unconstrained_delta: Vector2dF::new(wheel.delta.x as f32, wheel.delta.y as f32),
                 granularity: match wheel.delta_units {
-                    interaction::input_event::ScrollGranularity::kScrollByPrecisePixel =>
-                        compositor::adapter::input_types::ScrollGranularity::kScrollByPrecisePixel,
-                    interaction::input_event::ScrollGranularity::kScrollByPixel =>
-                        compositor::adapter::input_types::ScrollGranularity::kScrollByPixel,
-                    interaction::input_event::ScrollGranularity::kScrollByLine =>
-                        compositor::adapter::input_types::ScrollGranularity::kScrollByLine,
-                    interaction::input_event::ScrollGranularity::kScrollByPage =>
-                        compositor::adapter::input_types::ScrollGranularity::kScrollByPage,
-                    interaction::input_event::ScrollGranularity::kScrollByDocument =>
-                        compositor::adapter::input_types::ScrollGranularity::kScrollByDocument,
+                    interaction::input_event::ScrollGranularity::kScrollByPrecisePixel => {
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByPrecisePixel
+                    }
+                    interaction::input_event::ScrollGranularity::kScrollByPixel => {
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByPixel
+                    }
+                    interaction::input_event::ScrollGranularity::kScrollByLine => {
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByLine
+                    }
+                    interaction::input_event::ScrollGranularity::kScrollByPage => {
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByPage
+                    }
+                    interaction::input_event::ScrollGranularity::kScrollByDocument => {
+                        compositor::adapter::input_types::ScrollGranularity::kScrollByDocument
+                    }
                 },
                 is_inertial: wheel
                     .native
@@ -1260,17 +1264,19 @@ impl PageRenderPipeline {
                 .map_err(|error| io::Error::other(error.to_string()))?;
             let aggregated_at = profile_started.map(|_| std::time::Instant::now());
             let aggregate_damage_pixels = viz_output.DamagePixels();
-            let update = self.renderer.Render(
+            let owned_target = target.to_vec();
+            let (update, rendered_target) = self.renderer.Render(
                 &mut viz_output,
                 renderer_skia::RenderTarget {
                     width,
                     height,
-                    pixels: target,
+                    pixels: owned_target,
                     format,
                     row_stride: stride,
                     retained: retained && self.rendered_surface == Some(surface),
                 },
             )?;
+            target.copy_from_slice(&rendered_target.pixels);
             if let (Some(started), Some(committed), Some(aggregated)) =
                 (profile_started, committed_at, aggregated_at)
             {
@@ -1372,11 +1378,16 @@ struct PendingImageEvent {
 struct PageState {
     document: Rc<DocumentEngine>,
     style_engine: RefCell<style::StyleEngine>,
+    style_font_metrics: Rc<crate::style_services::StyleFontMetricsResolver>,
     layout_engine: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
     paint_engine: RefCell<paint::PaintEngine>,
     #[cfg(feature = "production_raster")]
     rendering: RefCell<PageRenderPipeline>,
     constraints: Rc<RefCell<ConstraintSpace>>,
+    /// Embedder/default faces plus decoded @font-face resources. System faces
+    /// stay in FontEngine's versioned query cache and are never promoted into
+    /// this document-owned catalog.
+    document_fonts: RefCell<font_engine::FontFaceCatalog>,
     system_fonts: RefCell<crate::font_session::SystemFontSession>,
     interaction: Rc<RefCell<UserInteractionState>>,
     layout_editing: Rc<layoutng_assembly::editing_state::LayoutEditingState>,
@@ -1411,10 +1422,26 @@ impl PageState {
         layout_engine: layoutng_assembly::layout_engine::LayoutEngine,
         paint_engine: paint::PaintEngine,
         #[cfg(feature = "production_raster")] rendering: PageRenderPipeline,
-        constraints: ConstraintSpace,
+        mut constraints: ConstraintSpace,
         client: Rc<RefCell<dyn PageClient>>,
     ) -> Rc<Self> {
         let style_engine = style::StyleEngine::new(&document.borrow());
+        let document_fonts = constraints.fonts.clone();
+        let mut font_engine = font_engine::FontEngine::new(
+            font_engine::FontContextVersion::default(),
+            constraints.font_backend_factory.clone(),
+        );
+        font_engine
+            .ApplyMutation(font_engine::FontMutation::SetFaces(
+                constraints.fonts.iter().cloned().collect(),
+            ))
+            .expect("initial font catalog mutation");
+        font_engine.SetQueryCollector(constraints.font_queries.clone());
+        let font_engine = font_engine::FontEngineHandle::new(font_engine);
+        constraints.font_engine = Some(font_engine.clone());
+        let style_font_metrics = Rc::new(crate::style_services::StyleFontMetricsResolver::new(
+            &constraints,
+        ));
         let connected_resources = open::ConnectedResourceDiscovery::new(document.Handle());
         let preferred_color_scheme = if constraints.preferred_color_scheme == 1 {
             PreferredColorScheme::kDark
@@ -1424,12 +1451,17 @@ impl PageState {
         Rc::new(Self {
             document,
             style_engine: RefCell::new(style_engine),
+            style_font_metrics,
             layout_engine: RefCell::new(layout_engine),
             paint_engine: RefCell::new(paint_engine),
             #[cfg(feature = "production_raster")]
             rendering: RefCell::new(rendering),
             constraints: Rc::new(RefCell::new(constraints)),
-            system_fonts: RefCell::new(crate::font_session::SystemFontSession::new()),
+            document_fonts: RefCell::new(document_fonts),
+            system_fonts: RefCell::new(crate::font_session::SystemFontSession::with_engine(
+                font_engine,
+                Box::new(crate::system_font_provider::BrowserSystemFontProvider::default()),
+            )),
             interaction: Rc::new(RefCell::new(UserInteractionState::default())),
             layout_editing: Rc::new(Default::default()),
             bindings: RefCell::new(Weak::new()),
@@ -1990,23 +2022,48 @@ impl PageState {
         if self.styles_resolved.get() {
             return;
         }
-        let svg_resources_changed = {
-            let interaction = *self.interaction.borrow();
-            let mut style_engine = self.style_engine.borrow_mut();
-            let mut document = self.document.borrow_mut();
-            style_engine
-                .SetUserInteractionState(&mut document, interaction)
-                .expect("Page StyleEngine belongs to its retained Document");
-            document.GetDocumentMut().UpdateSVGUseInstances();
-            crate::style_services::ResolveLayoutStylesWithEngineAndForcedColors(
-                &mut style_engine,
-                &mut document,
-                &self.constraints.borrow(),
-                self.preferred_color_scheme.get(),
-                self.forced_colors.get(),
-            );
-            document.UpdateSVGResources()
-        };
+        let mut svg_resources_changed = false;
+        let mut font_style_retries = 0;
+        loop {
+            svg_resources_changed |= {
+                let interaction = *self.interaction.borrow();
+                let mut style_engine = self.style_engine.borrow_mut();
+                let mut document = self.document.borrow_mut();
+                style_engine
+                    .SetUserInteractionState(&mut document, interaction)
+                    .expect("Page StyleEngine belongs to its retained Document");
+                document.GetDocumentMut().UpdateSVGUseInstances();
+                crate::style_services::ResolveLayoutStylesWithEngineAndForcedColorsUsingFontMetrics(
+                    &mut style_engine,
+                    &mut document,
+                    &self.constraints.borrow(),
+                    self.preferred_color_scheme.get(),
+                    self.forced_colors.get(),
+                    self.style_font_metrics.clone(),
+                );
+                document.UpdateSVGResources()
+            };
+
+            // CSSFontSelector::WillUseFontData reaches FontCache synchronously
+            // in Chromium. Keep Style and Layout platform-independent here:
+            // Style emits pure misses and Page completes them before Layout.
+            // Only metric-dependent CSS values require a style retry; an
+            // ordinary font-family miss can enter Layout with its face ready.
+            let metrics_pending = self.style_font_metrics.TakeMetricsPending();
+            let fonts_changed = self
+                .system_fonts
+                .borrow_mut()
+                .CompletePass(&mut self.constraints.borrow_mut());
+            if !fonts_changed || !metrics_pending {
+                trace.set("font_style_retries", font_style_retries as f64);
+                break;
+            }
+            font_style_retries += 1;
+            self.document
+                .borrow_mut()
+                .GetDocumentMut()
+                .InvalidateAllStyles();
+        }
         if svg_resources_changed {
             // Local SVG target/content changes invalidate consumers even when
             // every consumer's canonical clip-path is unchanged. Revoke an
@@ -2458,7 +2515,18 @@ impl PageState {
             }
             ResourceMutation::FontResourceReady(m) => {
                 self.InvalidateLayoutOutput();
-                self.constraints.borrow_mut().fonts.push(m.font);
+                self.document_fonts.borrow_mut().push(m.font);
+                let mut constraints = self.constraints.borrow_mut();
+                if let Some(engine) = &constraints.font_engine {
+                    let faces = self.document_fonts.borrow().iter().cloned().collect();
+                    engine
+                        .with_mut(|engine| {
+                            engine.ApplyMutation(font_engine::FontMutation::SetFaces(faces))
+                        })
+                        .expect("web font catalog mutation");
+                    constraints.fonts = engine.with_mut(|engine| engine.ResolvedFaces());
+                }
+                drop(constraints);
                 self.document.borrow_mut().InvalidateLayout();
                 self.scroll_only.set(false);
                 self.dirty.set(true);

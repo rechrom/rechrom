@@ -1333,11 +1333,11 @@ fn SameReplayResources(a: &PaintResources, b: &PaintResources) -> bool {
     {
         return false;
     }
-    let same_fonts = a
-        .fonts
-        .iter()
-        .zip(&b.fonts)
-        .all(|(left, right)| left.face_index == right.face_index && left.bytes == right.bytes);
+    let same_fonts = a.fonts.ptr_eq(&b.fonts)
+        || a.fonts
+            .iter()
+            .zip(&b.fonts)
+            .all(|(left, right)| left.face_index == right.face_index && left.bytes == right.bytes);
     same_fonts && a.images == b.images
 }
 

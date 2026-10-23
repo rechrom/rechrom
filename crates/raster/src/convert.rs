@@ -812,7 +812,7 @@ mod font_identity_tests {
         };
         let artifact = PaintArtifact {
             resources: Some(Arc::new(PaintResources {
-                fonts: vec![font],
+                fonts: vec![font].into(),
                 ..Default::default()
             })),
             items: Arc::new(vec![item]),
@@ -852,7 +852,8 @@ mod font_identity_tests {
                     family: "same family".into(),
                     bytes: Vec::from(b"old font data".as_slice()).into(),
                     ..Default::default()
-                }],
+                }]
+                .into(),
                 ..Default::default()
             })),
             ..Default::default()
@@ -902,7 +903,8 @@ mod font_identity_tests {
                     bytes,
                     face_index,
                     ..Default::default()
-                }],
+                }]
+                .into(),
                 ..Default::default()
             })),
             items: Arc::new(vec![DisplayItem {

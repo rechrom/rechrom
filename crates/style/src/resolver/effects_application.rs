@@ -334,6 +334,42 @@ pub(super) fn Shape(
             }
             Ok(MakeGarbageCollected(shape))
         }
+        CSSValuePayload::kBasicShapeRectClass(value) => {
+            let mut shape = BasicShapeInset::default();
+            let edge = |value: &Value, right_or_bottom: bool| {
+                if matches!(value.Payload(), CSSValuePayload::kIdentifierClass(keyword) if keyword.0 == CSSValueID::kAuto)
+                {
+                    return Ok(Length::Percent(0.0));
+                }
+                let length = LengthValue(id, value, b, root, media)?;
+                Ok::<_, LonghandApplicationError>(if right_or_bottom {
+                    length.SubtractFromOneHundredPercent()
+                } else {
+                    length
+                })
+            };
+            shape.SetTop(&edge(&value.sides[0], false)?);
+            shape.SetRight(&edge(&value.sides[1], true)?);
+            shape.SetBottom(&edge(&value.sides[2], true)?);
+            shape.SetLeft(&edge(&value.sides[3], false)?);
+            if let Some(radii) = &value.radii {
+                let resolved = radii
+                    .each_ref()
+                    .map(|pair| {
+                        Ok::<_, LonghandApplicationError>(LengthSize::new(
+                            &LengthValue(id, &pair[0], b, root, media)?,
+                            &LengthValue(id, &pair[1], b, root, media)?,
+                        ))
+                    })
+                    .into_iter()
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                shape.SetTopLeftRadius(&resolved[0]);
+                shape.SetTopRightRadius(&resolved[1]);
+                shape.SetBottomRightRadius(&resolved[2]);
+                shape.SetBottomLeftRadius(&resolved[3]);
+            }
+            Ok(MakeGarbageCollected(shape))
+        }
         CSSValuePayload::kBasicShapePathClass(value) => Ok(MakeGarbageCollected(StylePath::new(
             value.byte_stream.clone(),
             value.wind_rule,

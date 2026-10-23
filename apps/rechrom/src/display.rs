@@ -324,7 +324,10 @@ impl Display {
             drag_regions,
             is_handling_interaction,
         } = prepared;
-        frame_trace.set("is_handling_interaction", is_handling_interaction as u8 as f64);
+        frame_trace.set(
+            "is_handling_interaction",
+            is_handling_interaction as u8 as f64,
+        );
         // Source: SoftwareOutputDeviceMac::EndPaint ->
         // DisplayCALayerTree::GotIOSurfaceFrame. This output submits the ready
         // IOSurface immediately; the GPU overlay presenter's separate

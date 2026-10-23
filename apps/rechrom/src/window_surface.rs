@@ -178,8 +178,7 @@ fn placements_cover_viewport(
         let left = (destination.x as i64).clamp(0, width);
         let top = (destination.y as i64).clamp(0, height);
         let right = (destination.x as i64 + destination.width as i64).clamp(0, width);
-        let bottom =
-            (destination.y as i64 + destination.height as i64).clamp(0, height);
+        let bottom = (destination.y as i64 + destination.height as i64).clamp(0, height);
         if left < right && top < bottom {
             rectangles.push((left, top, right, bottom));
             y_edges.extend([top, bottom]);

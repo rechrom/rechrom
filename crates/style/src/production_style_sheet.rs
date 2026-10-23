@@ -57,6 +57,7 @@ impl crate::resolver::media_query_result::MediaQuerySet for QuerySet {
         self
     }
 }
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unavailable {}
 pub type SourceURL = values::ProductionURL;
@@ -2471,7 +2472,23 @@ impl CSSParserImplValueBackend for Backend {
         match crate::parser::production_property_parser::ParsePropertyWithContext(property, &text, false, context.unwrap()) {
             Ok(parsed) if allow_important || parsed.iter().all(|value| !value.IsImportant()) => properties.extend(parsed),
             Ok(_) => {},
-            Err(error) if error.kind == crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => ValueDiagnostic(DiagnosticKind::Unsupported, stream.LookAheadOffset().saturating_sub(text.length()), error.operation, error.source_line),
+            // cpp: css_parser_impl.cc:3366-3378. A generated property whose
+            // runtime Exposure predicate is false is an unknown declaration
+            // for this document and is discarded. It must not route the
+            // otherwise retained rule through the compatibility cascade: that
+            // parser evaluates the same runtime predicate and discards it too.
+            Err(error)
+                if error.kind
+                    == crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported
+                    && !error.operation.starts_with("CSSProperty::Exposure /") =>
+            {
+                ValueDiagnostic(
+                    DiagnosticKind::Unsupported,
+                    stream.LookAheadOffset().saturating_sub(text.length()),
+                    error.operation,
+                    error.source_line,
+                )
+            }
             Err(_) => {},
         }
     }
@@ -4776,6 +4793,26 @@ mod tests {
         ));
         assert!(sheet.TypedDeclarationsForProjectedRule(2).is_none());
         assert!(sheet.TypedDeclarationsForProjectedRule(1).is_some());
+    }
+
+    #[test]
+    fn unexposed_declaration_does_not_poison_retained_rule() {
+        let sheet = parse(".clamp{-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical}");
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        let declarations = sheet
+            .TypedDeclarationsForProjectedRule(0)
+            .expect("the exposed declarations remain authoritative");
+        assert_eq!(
+            declarations
+                .iter()
+                .map(|declaration| declaration.PropertyID())
+                .collect::<Vec<_>>(),
+            vec![
+                CSSPropertyID::kWebkitLineClamp,
+                CSSPropertyID::kWebkitBoxOrient,
+            ]
+        );
+        assert!(sheet.RetainedDeclarationsForProjectedRule(0).is_some());
     }
     #[test]
     fn source_ranges_are_utf16_and_duplicate_media_retains_same_query_owner() {

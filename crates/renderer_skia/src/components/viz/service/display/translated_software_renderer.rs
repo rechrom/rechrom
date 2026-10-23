@@ -79,6 +79,8 @@ pub struct TranslatedSoftwareRenderer {
     drawn_damage: BTreeMap<RenderPassId, Rect>,
     pending_draws: Vec<PendingDraw>,
     pending_clear: Option<(Rect, bool)>,
+    frame_target: Option<RenderTarget>,
+    direct_root_pass: Option<RenderPassId>,
 }
 
 impl TranslatedSoftwareRenderer {
@@ -114,6 +116,76 @@ impl TranslatedSoftwareRenderer {
             ));
         }
         Ok(())
+    }
+
+    fn BindFrameTarget(&mut self, input: &VizOutput, mut target: RenderTarget) -> io::Result<()> {
+        if self.frame_target.is_some() {
+            return Err(io::Error::other(
+                "translated renderer already has a bound frame target",
+            ));
+        }
+        self.direct_root_pass = None;
+        let full_bounds = Rect::new(0, 0, target.width as i32, target.height as i32);
+        let mut roots = input.Frame().RenderPasses().iter().filter_map(|pass| {
+            input
+                .RootDestination(pass.RenderPassId())
+                .map(|destination| (pass, destination))
+        });
+        let direct = roots.next().and_then(|(pass, destination)| {
+            if roots.next().is_some()
+                || target.format != crate::native::PixelFormat::Bgra8888
+                || target.row_stride != target.width as usize
+                || destination != full_bounds
+                || pass.OutputRect() != full_bounds
+            {
+                return None;
+            }
+            Some(pass.RenderPassId())
+        });
+        if let Some(id) = direct {
+            let backing = self
+                .render_pass_bitmaps
+                .get_mut(&id)
+                .ok_or_else(|| io::Error::other("translated root backing was not allocated"))?;
+            if backing.rect.size() == full_bounds.size()
+                && backing.pixels.len() == target.pixels.len()
+            {
+                std::mem::swap(&mut backing.pixels, &mut target.pixels);
+                if !target.retained {
+                    self.framebuffer_damage.insert(id, full_bounds);
+                    backing.drawn_rect = Rect::default();
+                }
+                self.direct_root_pass = Some(id);
+                self.update.direct_root_target = true;
+            }
+        }
+        self.frame_target = Some(target);
+        Ok(())
+    }
+
+    fn ReleaseFrameTarget(
+        &mut self,
+        input: &VizOutput,
+    ) -> io::Result<(RenderUpdate, RenderTarget)> {
+        let mut target = self
+            .frame_target
+            .take()
+            .ok_or_else(|| io::Error::other("translated renderer has no bound frame target"))?;
+        if let Some(id) = self.direct_root_pass.take() {
+            let backing = self
+                .render_pass_bitmaps
+                .get_mut(&id)
+                .ok_or_else(|| io::Error::other("translated root backing disappeared"))?;
+            std::mem::swap(&mut backing.pixels, &mut target.pixels);
+        } else {
+            publish(
+                input,
+                &mut target,
+                &self.render_pass_bitmaps,
+                &self.drawn_damage,
+            )?;
+        }
+        Ok((self.update, target))
     }
 
     fn EnsureScissorTestDisabled(&mut self) {
@@ -213,75 +285,76 @@ impl TranslatedSoftwareRenderer {
         let settings = self.settings.clone();
         target.save();
         let draw_result = (|| -> io::Result<()> {
-                if let Some(scissor) = scissor {
-                    target.clip_rect(&rect(scissor), SkClipOp::kIntersect, false);
-                }
-                target.set_matrix(&SkMatrix::Translate(
-                    -current_rect.x as f32,
-                    -current_rect.y as f32,
-                ));
-                if renderer::ShouldApplyRoundedCorner(quad, shared) {
-                    target.clip_rrect(
-                        &rrect(&shared.mask_filter_info.rounded_corner_bounds),
-                        SkClipOp::kIntersect,
-                        true,
-                    );
-                }
-                let transform = matrix(shared.quad_to_target_transform.native(), current_rect)?;
-                target.set_matrix(&transform);
-                let antialias =
-                    if settings.force_antialiasing || !is_scale_and_integer_translate(&transform) {
-                        self.linear_sampling = true;
-                        let exterior = quad.geometry.rect == shared.quad_layer_rect;
-                        settings.allow_antialiasing && (settings.force_antialiasing || exterior)
-                    } else {
-                        false
-                    };
-                let should_blend = quad.geometry.needs_blending
-                    || shared.opacity < 1.
-                    || !shared.mask_filter_info.IsEmpty()
-                    || shared.blend_mode != BlendMode::kSrcOver;
-                let blend = if should_blend {
-                    blend_mode(shared.blend_mode)
+            if let Some(scissor) = scissor {
+                target.clip_rect(&rect(scissor), SkClipOp::kIntersect, false);
+            }
+            target.set_matrix(&SkMatrix::Translate(
+                -current_rect.x as f32,
+                -current_rect.y as f32,
+            ));
+            if renderer::ShouldApplyRoundedCorner(quad, shared) {
+                target.clip_rrect(
+                    &rrect(&shared.mask_filter_info.rounded_corner_bounds),
+                    SkClipOp::kIntersect,
+                    true,
+                );
+            }
+            let transform = matrix(shared.quad_to_target_transform.native(), current_rect)?;
+            target.set_matrix(&transform);
+            let antialias =
+                if settings.force_antialiasing || !is_scale_and_integer_translate(&transform) {
+                    self.linear_sampling = true;
+                    let exterior = quad.geometry.rect == shared.quad_layer_rect;
+                    settings.allow_antialiasing && (settings.force_antialiasing || exterior)
                 } else {
-                    SkBlendMode::kSrc
+                    false
                 };
-                if let Some(region) = draw_region {
-                    Self::clip_draw_region(target, region, quad.geometry.visible_rect);
+            let should_blend = quad.geometry.needs_blending
+                || shared.opacity < 1.
+                || !shared.mask_filter_info.IsEmpty()
+                || shared.blend_mode != BlendMode::kSrcOver;
+            let blend = if should_blend {
+                blend_mode(shared.blend_mode)
+            } else {
+                SkBlendMode::kSrc
+            };
+            if let Some(region) = draw_region {
+                Self::clip_draw_region(target, region, quad.geometry.visible_rect);
+            }
+            match &quad.material {
+                QuadMaterial::SolidColor { .. } => {
+                    Self::DrawSolidColorQuad(target, quad, shared, blend, antialias)?;
+                    self.update.solid_quads += 1;
                 }
-                match &quad.material {
-                    QuadMaterial::SolidColor { .. } => {
-                        Self::DrawSolidColorQuad(target, quad, shared, blend, antialias)?;
-                        self.update.solid_quads += 1;
-                    }
-                    QuadMaterial::Tile { .. } => {
-                        self.DrawTileQuad(
-                            target,
-                            input,
-                            quad,
-                            shared,
-                            blend,
-                            antialias,
-                            draw_region.is_none(),
-                        )?;
-                        self.update.tile_quads += 1;
-                    }
-                    QuadMaterial::DebugBorder { .. } => {
-                        Self::DrawDebugBorderQuad(target, quad, shared, blend)?;
-                    }
-                    QuadMaterial::CompositorRenderPass { .. } => {
-                        self.DrawRenderPassQuad(target, input, quad, shared, blend, antialias)?;
-                    }
-                    QuadMaterial::Picture { .. } => {
-                        Self::DrawPictureQuad(target, quad, shared)?;
-                        self.update.picture_quads += 1;
-                    }
-                    QuadMaterial::SharedElement { .. } => {
-                        return Err(io::Error::other(
-                            "unresolved SharedElement reached translated SoftwareRenderer",
-                        ));
-                    }
+                QuadMaterial::Tile { .. } => {
+                    self.DrawTileQuad(
+                        target,
+                        input,
+                        quad,
+                        shared,
+                        blend,
+                        antialias,
+                        draw_region.is_none(),
+                    )?;
+                    self.update.tile_quads += 1;
                 }
+                QuadMaterial::DebugBorder { .. } => {
+                    Self::DrawDebugBorderQuad(target, quad, shared, blend)?;
+                }
+                QuadMaterial::CompositorRenderPass { .. } => {
+                    self.DrawRenderPassQuad(target, input, quad, shared, blend, antialias)?;
+                    self.update.render_pass_quads += 1;
+                }
+                QuadMaterial::Picture { .. } => {
+                    Self::DrawPictureQuad(target, quad, shared)?;
+                    self.update.picture_quads += 1;
+                }
+                QuadMaterial::SharedElement { .. } => {
+                    return Err(io::Error::other(
+                        "unresolved SharedElement reached translated SoftwareRenderer",
+                    ));
+                }
+            }
             Ok(())
         })();
         let restore_result = target
@@ -295,6 +368,7 @@ impl TranslatedSoftwareRenderer {
                 QuadMaterial::Tile { .. } => Some(&mut self.update.tile_ns),
                 QuadMaterial::Picture { .. } => Some(&mut self.update.picture_ns),
                 QuadMaterial::SolidColor { .. } => Some(&mut self.update.solid_ns),
+                QuadMaterial::CompositorRenderPass { .. } => Some(&mut self.update.render_pass_ns),
                 _ => None,
             };
             if let Some(counter) = counter {
@@ -390,9 +464,13 @@ impl TranslatedSoftwareRenderer {
         // concatenated the subset matrix with the device CTM.
         let device_left = quad.geometry.visible_rect.x as f64 + transform.rc(0, 3);
         let device_top = quad.geometry.visible_rect.y as f64 + transform.rc(1, 3);
-        let pixel_aligned_one_to_one = nearly(source.width() as f64, quad.geometry.visible_rect.width as f64)
-            && nearly(source.height() as f64, quad.geometry.visible_rect.height as f64)
-            && nearly(transform.rc(0, 0), 1.)
+        let pixel_aligned_one_to_one = nearly(
+            source.width() as f64,
+            quad.geometry.visible_rect.width as f64,
+        ) && nearly(
+            source.height() as f64,
+            quad.geometry.visible_rect.height as f64,
+        ) && nearly(transform.rc(0, 0), 1.)
             && nearly(transform.rc(1, 1), 1.)
             && nearly(transform.rc(0, 1), 0.)
             && nearly(transform.rc(1, 0), 0.)
@@ -416,11 +494,14 @@ impl TranslatedSoftwareRenderer {
             let target_width = quad.geometry.visible_rect.width.max(0) as f64 * target_scale_x;
             let target_height = quad.geometry.visible_rect.height.max(0) as f64 * target_scale_y;
             self.update.tile_source_pixels = self.update.tile_source_pixels.saturating_add(
-                (f64::from(source_width) * f64::from(source_height)).round().max(0.) as u64,
+                (f64::from(source_width) * f64::from(source_height))
+                    .round()
+                    .max(0.) as u64,
             );
-            self.update.tile_target_pixels = self.update.tile_target_pixels.saturating_add(
-                (target_width * target_height).round().max(0.) as u64,
-            );
+            self.update.tile_target_pixels = self
+                .update
+                .tile_target_pixels
+                .saturating_add((target_width * target_height).round().max(0.) as u64);
             self.update.tile_linear_quads += usize::from(!*nearest_neighbor);
             self.update.tile_fractional_source_quads += usize::from(fractional_source);
             self.update.tile_scaled_quads += usize::from(
@@ -430,8 +511,7 @@ impl TranslatedSoftwareRenderer {
             self.update.tile_blended_quads += usize::from(blend != SkBlendMode::kSrc);
             let integer_translation = |value: f64| (value - value.round()).abs() <= 1. / 4096.;
             self.update.tile_integer_translation_quads += usize::from(
-                integer_translation(transform.rc(0, 3))
-                    && integer_translation(transform.rc(1, 3)),
+                integer_translation(transform.rc(0, 3)) && integer_translation(transform.rc(1, 3)),
             );
         }
         // Keep the immutable read lease scoped to this draw. Chromium's
@@ -454,10 +534,8 @@ impl TranslatedSoftwareRenderer {
             self.update.tile_blit_eligible_quads += 1;
             let mapping = raster::native::MapResourceForRead(lease.as_ref())?;
             let format = mapping.format();
-            if format
-                == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
-                || format
-                    == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRX_8888
+            if format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
+                || format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRX_8888
             {
                 let mode = if blend == SkBlendMode::kSrc {
                     N32BlitMode::Src
@@ -491,11 +569,9 @@ impl TranslatedSoftwareRenderer {
                     );
                     let radii = &mask.rounded_corner_bounds.corner_radii;
                     let left = (bounds.x() + radii[0].x().max(radii[3].x())).ceil() as i32;
-                    let right =
-                        (bounds.right() - radii[1].x().max(radii[2].x())).floor() as i32;
+                    let right = (bounds.right() - radii[1].x().max(radii[2].x())).floor() as i32;
                     let top = (bounds.y() + radii[0].y().max(radii[1].y())).ceil() as i32;
-                    let bottom =
-                        (bounds.bottom() - radii[3].y().max(radii[2].y())).floor() as i32;
+                    let bottom = (bounds.bottom() - radii[3].y().max(radii[2].y())).floor() as i32;
                     let bounds = Rect::FromBounds(
                         bounds.x().ceil() as i32,
                         bounds.y().ceil() as i32,
@@ -510,24 +586,9 @@ impl TranslatedSoftwareRenderer {
                             bounds.right(),
                             bottom,
                         ));
-                        direct_regions.push(Rect::FromBounds(
-                            left,
-                            bottom,
-                            right,
-                            bounds.bottom(),
-                        ));
-                        corner_regions.push(Rect::FromBounds(
-                            bounds.x,
-                            bounds.y,
-                            left,
-                            top,
-                        ));
-                        corner_regions.push(Rect::FromBounds(
-                            right,
-                            bounds.y,
-                            bounds.right(),
-                            top,
-                        ));
+                        direct_regions.push(Rect::FromBounds(left, bottom, right, bounds.bottom()));
+                        corner_regions.push(Rect::FromBounds(bounds.x, bounds.y, left, top));
+                        corner_regions.push(Rect::FromBounds(right, bounds.y, bounds.right(), top));
                         corner_regions.push(Rect::FromBounds(
                             bounds.x,
                             bottom,
@@ -803,8 +864,8 @@ impl TranslatedSoftwareRenderer {
         if !child.Filters().IsEmpty() && filter_image.is_none() {
             return Ok(());
         }
-        let (image, dest, visible, content_size) = if let Some((filtered, dest)) = &filter_image {
-            (filtered.image()?, *dest, *dest, dest.size())
+        let (dest, visible, content_size) = if let Some((_, dest)) = &filter_image {
+            (*dest, *dest, dest.size())
         } else if let Some(backing) = backing {
             if backing.drawn_rect.IsEmpty() {
                 return Ok(());
@@ -814,12 +875,7 @@ impl TranslatedSoftwareRenderer {
             } else {
                 quad.geometry.rect.size()
             };
-            (
-                backing.image()?,
-                quad.geometry.rect,
-                quad.geometry.visible_rect,
-                size,
-            )
+            (quad.geometry.rect, quad.geometry.visible_rect, size)
         } else {
             return Ok(());
         };
@@ -877,6 +933,91 @@ impl TranslatedSoftwareRenderer {
                 .map_err(|error| raster_error("translated backdrop outer restore failed", error));
             draw_result.and(restore_result)?;
         }
+
+        // Source: components/viz/service/display/software_renderer.cc:505-541.
+        // Chromium hands an unfiltered, pixel-aligned render-pass image to
+        // SkCanvas::drawImageRect, whose raster sprite path selects the same
+        // original N32 row blitter used by the tile fast path above. Preserve
+        // that terminal operation without rebuilding an image shader.
+        let transform = shared.quad_to_target_transform.native();
+        let nearly = |a: f64, b: f64| (a - b).abs() <= 1. / 4096.;
+        let integral = |value: f64| (value - value.round()).abs() <= 1. / 4096.;
+        let direct_pass_blit = child.Filters().IsEmpty()
+            && mask_image.is_none()
+            && shared.mask_filter_info.IsEmpty()
+            && !antialias
+            && matches!(blend, SkBlendMode::kSrc | SkBlendMode::kSrcOver)
+            && nearly(transform.rc(0, 0), 1.)
+            && nearly(transform.rc(1, 1), 1.)
+            && nearly(transform.rc(0, 1), 0.)
+            && nearly(transform.rc(1, 0), 0.)
+            && integral(transform.rc(0, 3))
+            && integral(transform.rc(1, 3))
+            && dest.width == content_size.width()
+            && dest.height == content_size.height();
+        if direct_pass_blit {
+            if let Some(backing) = backing {
+                let mut region = visible;
+                let mut destination = Rect::new(
+                    region.x + transform.rc(0, 3).round() as i32 - self.current_rect.x,
+                    region.y + transform.rc(1, 3).round() as i32 - self.current_rect.y,
+                    region.width,
+                    region.height,
+                );
+                let original_destination = destination;
+                destination.Intersect(Rect::new(
+                    0,
+                    0,
+                    self.current_rect.width,
+                    self.current_rect.height,
+                ));
+                if let Some(scissor) = self.scissor_rect {
+                    destination.Intersect(scissor);
+                }
+                if destination.IsEmpty() {
+                    return Ok(());
+                }
+                region.x += destination.x - original_destination.x;
+                region.y += destination.y - original_destination.y;
+                region.width = destination.width;
+                region.height = destination.height;
+                let source_x = region.x.saturating_sub(dest.x);
+                let source_y = region.y.saturating_sub(dest.y);
+                let mode = if blend == SkBlendMode::kSrc {
+                    N32BlitMode::Src
+                } else {
+                    N32BlitMode::SrcOver
+                };
+                if target.blit_n32(
+                    bytemuck::cast_slice(backing.pixels.as_slice()),
+                    backing.rect.width,
+                    backing.rect.height,
+                    backing.rect.width as usize * 4,
+                    source_x,
+                    source_y,
+                    destination.x,
+                    destination.y,
+                    destination.width,
+                    destination.height,
+                    mode,
+                    (opacity * 255.).round().clamp(0., 255.) as u8,
+                    !child.has_transparent_background,
+                ) {
+                    self.update.render_pass_blit_quads += 1;
+                    return Ok(());
+                }
+            }
+        }
+        // RasterFromPixmapCopy owns an immutable copy of the pass. Construct
+        // it only for the SkCanvas fallback: the direct N32 path above reads
+        // the live pass backing synchronously and needs no snapshot.
+        let image = if let Some((filtered, _)) = &filter_image {
+            filtered.image()?
+        } else if let Some(backing) = backing {
+            backing.image()?
+        } else {
+            return Ok(());
+        };
         target.save();
         target.clip_rect(&rect(visible), SkClipOp::kIntersect, false);
         let draw_result = (|| -> io::Result<()> {
@@ -958,7 +1099,7 @@ impl TranslatedSoftwareRenderer {
         }
         let mut bitmap = PassBacking::new(Rect::new(0, 0, bounds.width, bounds.height))?;
         let mut target = RasterTarget::new(
-            &mut bitmap.pixels,
+            bytemuck::cast_slice_mut(bitmap.pixels.as_mut_slice()),
             bounds.width,
             bounds.height,
             bounds.width as usize * 4,
@@ -1053,7 +1194,7 @@ impl TranslatedSoftwareRenderer {
         let crop = if needs_mirror {
             let mut crop = PassBacking::new(Rect::new(0, 0, output.width, output.height))?;
             let mut target = RasterTarget::new(
-                &mut crop.pixels,
+                bytemuck::cast_slice_mut(crop.pixels.as_mut_slice()),
                 output.width,
                 output.height,
                 output.width as usize * 4,
@@ -1088,7 +1229,7 @@ impl TranslatedSoftwareRenderer {
 
         let mut result = PassBacking::new(Rect::new(0, 0, output.width, output.height))?;
         let mut target = RasterTarget::new(
-            &mut result.pixels,
+            bytemuck::cast_slice_mut(result.pixels.as_mut_slice()),
             output.width,
             output.height,
             output.width as usize * 4,
@@ -1224,7 +1365,13 @@ impl TranslatedSoftwareRenderer {
         )?;
         let row_bytes = captured.rect.width as usize * 4;
         if !target
-            .read_pixels(&info, &mut captured.pixels, row_bytes, left, top)
+            .read_pixels(
+                &info,
+                bytemuck::cast_slice_mut(captured.pixels.as_mut_slice()),
+                row_bytes,
+                left,
+                top,
+            )
             .map_err(|error| raster_error("translated backdrop readback failed", error))?
         {
             return Ok(());
@@ -1240,7 +1387,7 @@ impl TranslatedSoftwareRenderer {
         let mut clipped = PassBacking::new(Rect::new(0, 0, output.width, output.height))?;
         let clipped_image = {
             let mut clip_target = RasterTarget::new(
-                &mut clipped.pixels,
+                bytemuck::cast_slice_mut(clipped.pixels.as_mut_slice()),
                 output.width,
                 output.height,
                 output.width as usize * 4,
@@ -1436,7 +1583,7 @@ impl TranslatedSoftwareRenderer {
         let draws = std::mem::take(&mut self.pending_draws);
         let pending_clear = self.pending_clear.take();
         let result = match RasterTarget::new(
-            &mut backing.pixels,
+            bytemuck::cast_slice_mut(backing.pixels.as_mut_slice()),
             backing.rect.width,
             backing.rect.height,
             backing.rect.width as usize * 4,
@@ -1513,28 +1660,32 @@ impl TranslatedSoftwareRenderer {
         self.render_pass_bitmaps.clear();
         self.framebuffer_damage.clear();
         self.drawn_damage.clear();
+        self.frame_target = None;
+        self.direct_root_pass = None;
     }
 }
 
 impl RendererBackend for TranslatedSoftwareRenderer {
-    type Target<'a> = RenderTarget<'a>;
+    type Target = RenderTarget;
 
     fn Configure(&mut self, settings: &RendererSettings) {
         self.settings = settings.clone();
     }
 
-    fn ValidateTarget(&self, input: &VizOutput, target: &RenderTarget<'_>) -> io::Result<Size> {
+    fn ValidateTarget(&self, input: &VizOutput, target: &RenderTarget) -> io::Result<Size> {
         validate_target(input, target)?;
         Ok(Size::new(target.width as i32, target.height as i32))
     }
 
-    fn PublishFrame(
+    fn BindFrameTarget(&mut self, input: &VizOutput, target: RenderTarget) -> io::Result<()> {
+        Self::BindFrameTarget(self, input, target)
+    }
+
+    fn ReleaseFrameTarget(
         &mut self,
         input: &VizOutput,
-        target: RenderTarget<'_>,
-    ) -> io::Result<RenderUpdate> {
-        publish(input, target, &self.render_pass_bitmaps, &self.drawn_damage)?;
-        Ok(self.update)
+    ) -> io::Result<(RenderUpdate, RenderTarget)> {
+        Self::ReleaseFrameTarget(self, input)
     }
 
     fn CanPartialSwap(&self) -> bool {

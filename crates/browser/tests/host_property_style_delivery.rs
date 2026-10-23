@@ -70,7 +70,8 @@ fn fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
             .as_slice()
             .into(),
         ..Default::default()
-    }];
+    }]
+    .into();
     let errors = Rc::new(RefCell::new(Vec::new()));
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader)),

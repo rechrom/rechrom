@@ -2,12 +2,12 @@
 
 pub mod engine;
 pub mod resolver;
-pub use resolver::{FontFace, FontSmoothing, FontUnicodeRange};
+pub use resolver::{FontFace, FontFaceCatalog, FontSmoothing, FontUnicodeRange};
 pub mod system_fonts;
 mod web_fonts;
 pub use engine::{
-    FontCompute, FontEngine, FontError, FontFaceState, FontMutation, FontPending, FontRule,
-    FontShapeRequest, RetainedShapeResult,
+    FontCompute, FontEngine, FontEngineHandle, FontError, FontFaceState, FontMutation, FontPending,
+    FontRule, FontShapeRequest, RetainedShapeResult,
 };
 pub use system_fonts::*;
 pub use web_fonts::WebFontFace;

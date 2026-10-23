@@ -260,9 +260,11 @@ URL/input
   versioned system-query mutations; output is retained ShapeResult/metrics or
   explicit host requests. It owns selection, lazy face admission, fallback and
   shaping caches. Platform discovery and file I/O are supplied by the embedding
-  through SystemFontProvider and completed outside compute. The synchronous
-  Layout adapter may collect pure cache misses; Page completes them and retries
-  privately through existing invalidation gates before publishing fragments.
+  through SystemFontProvider and completed outside compute. Style may announce
+  the final FontDescription as a pure cache miss; Page completes that request
+  before Layout. The synchronous Layout adapter may still collect glyph-specific
+  fallback misses; Page completes them and retries privately through existing
+  invalidation gates before publishing fragments.
   Inline still owns item analysis, bidi, line breaking and boundary reshaping.
 - `layoutng`: input is `LayoutMutation` (constraints, tree/style/text/editing or
   scroll changes) containing Style's canonical result; output is a retained,

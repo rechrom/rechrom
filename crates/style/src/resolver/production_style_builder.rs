@@ -116,6 +116,11 @@ pub use color_ui_application::ColorSchemeSettings;
 /// font catalog that Layout will use; Style keeps ownership of CSS unit
 /// conversion and never reaches into Layout's objects.
 pub trait FontMetricsResolver {
+    /// Mirrors CSSFontSelector::WillUseFontData at Style's package boundary.
+    /// Implementations may record a pure cache miss, but must not perform
+    /// platform discovery or I/O from Style.
+    fn WillUseFont(&self, _description: &font_engine::FontDescription) {}
+
     fn Metrics(
         &self,
         description: &font_engine::FontDescription,
