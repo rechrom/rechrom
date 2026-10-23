@@ -2216,6 +2216,14 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
                 context.services,
             );
             let layer = pending.CcLayer();
+            if std::env::var_os("RECHROM_DIAG_STACKING").is_some() {
+                eprintln!(
+                    "pending-layer index={} cc_layer={} {:?}",
+                    index,
+                    layer.id(),
+                    pending.ToJSON()
+                );
+            }
             let clip = state.ClipNode();
             let effect = state.EffectNode();
             let transform = if effect.CanvasChildId() != B::InvalidDomNodeId() {

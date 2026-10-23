@@ -50,6 +50,10 @@ pub struct DOMMutation {
     pub mutation_type: DOMMutationType,
     pub target_node_id: u64,
     pub name: String,
+    /// Namespace prefix retained separately from the local name.  Ordinary
+    /// HTML attributes leave this empty; namespace-aware DOM entry points
+    /// populate it from the qualified name.
+    pub prefix: String,
     pub value: String,
     pub namespace_uri: String,
     pub bool_value: bool,
@@ -442,6 +446,7 @@ pub fn TryApplyDOMMutations(
                 document.SetAttributeWithInlineStyleChange(
                     target,
                     DOMAttribute {
+                        prefix: mutation.prefix.clone(),
                         local_name: mutation.name.clone(),
                         namespace_uri: mutation.namespace_uri.clone(),
                         value: mutation.value.clone(),

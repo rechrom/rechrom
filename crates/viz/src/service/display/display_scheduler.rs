@@ -475,6 +475,15 @@ impl<T: Copy> DisplayScheduler<T> {
         }
         self.inside_deadline_ = false;
         self.scheduled_deadline_ = None;
+        // Chromium finishes every deadline through DidFinishFrame(), which in
+        // turn calls DisplayDamageTracker::DidFinishFrame(). Interaction
+        // damage describes only the frame just completed; retaining it would
+        // incorrectly make a later frame immediate before its surface arrives.
+        self.DidFinishFrame(if drawn.is_some() {
+            DisplaySchedulerDrawResult::kDrawn
+        } else {
+            DisplaySchedulerDrawResult::kDidNotDraw
+        });
         drawn
     }
 
@@ -517,5 +526,48 @@ impl<T: Copy> DisplayScheduler<T> {
     pub fn DidReceiveSwapBuffersAck(&mut self) {
         self.pending_swaps_ = self.pending_swaps_.saturating_sub(1);
         self.RescheduleFromPending();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interaction_damage_draws_when_the_surface_arrives_and_resets_per_frame() {
+        let frame_time = Instant::now();
+        let interval = Duration::from_micros(16_667);
+        let timing = FrameTiming {
+            frame_time,
+            interval,
+            source_deadline: frame_time + interval,
+        };
+        let mut scheduler = DisplayScheduler::<u32>::default();
+
+        scheduler.BeginFrame(1, timing);
+        scheduler.OnPendingSurfacesChanged(true);
+        assert_eq!(
+            scheduler.NextDeadline(),
+            Some(timing.Deadlines().draw_and_swap)
+        );
+
+        let surface_arrival = frame_time + Duration::from_millis(2);
+        scheduler.SetDamageDueToInteraction(true);
+        scheduler.OnPendingSurfacesChanged(false);
+        scheduler.OnDisplayDamaged(surface_arrival);
+        assert_eq!(scheduler.NextDeadline(), Some(surface_arrival));
+        assert_eq!(scheduler.TakeIfDrawDue(surface_arrival), Some(1));
+
+        let next_timing = FrameTiming {
+            frame_time: frame_time + interval,
+            interval,
+            source_deadline: frame_time + interval * 2,
+        };
+        scheduler.BeginFrame(2, next_timing);
+        scheduler.OnPendingSurfacesChanged(true);
+        assert_eq!(
+            scheduler.NextDeadline(),
+            Some(next_timing.Deadlines().draw_and_swap)
+        );
     }
 }

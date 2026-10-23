@@ -373,6 +373,10 @@ pub struct TablePaintData {
 // cpp: layoutng_fragment_tree/fragment_tree.h:231-238
 #[derive(Clone, Default, PartialEq)]
 pub struct ScrollbarPaintAxis {
+    /// ScrollbarDisplayItem's compositor identity. This is distinct from the
+    /// owning scroll node id and uses Chromium's horizontal/vertical scrollbar
+    /// namespaces so cc can register and animate the layer independently.
+    pub compositor_element_id: foundation::CompositorElementId,
     /// Source DisplayItemClient::GetPaintInvalidationReason(), exported live.
     pub display_item_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
     pub needs_update_display: Option<bool>,
@@ -384,6 +388,7 @@ pub struct ScrollbarPaintAxis {
     pub thumb_offset: Offset,
     pub thumb_size: Size,
     pub horizontal: bool,
+    pub left_side_vertical: bool,
     pub has_buttons: bool,
 }
 
@@ -397,6 +402,7 @@ pub struct ScrollbarPaintData {
     pub horizontal: Option<ScrollbarPaintAxis>,
     pub vertical: Option<ScrollbarPaintAxis>,
     pub uses_overlay_scrollbars: bool,
+    pub minimum_thumb_length: i32,
     pub corner_offset: Offset,
     pub corner_size: Size,
     pub track_color: Color,

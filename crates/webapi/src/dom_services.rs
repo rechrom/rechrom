@@ -29,6 +29,17 @@ pub struct DOMBindingsHost {
     /// on a non-replaced inline); CSSOM then serializes the computed value.
     pub read_metric: Option<Box<dyn FnMut(HostObjectId, &str) -> Option<f64>>>,
     pub read_viewport_scroll: Option<Box<dyn FnMut() -> Option<ViewportScrollState>>>,
+    /// Programmatic viewport scrolls retain their behavior so Page can route
+    /// smooth requests through the translated Chromium animation curve.
+    pub write_viewport_scroll: Option<
+        Box<
+            dyn FnMut(
+                HostObjectId,
+                layoutng_assembly::internal::layout_input::Offset,
+                ViewportScrollBehavior,
+            ),
+        >,
+    >,
     pub read_geometry: Option<Box<dyn FnMut(HostObjectId) -> Vec<paint::PaintRect>>>,
     pub write_scroll:
         Option<Box<dyn FnMut(HostObjectId, layoutng_assembly::internal::layout_input::Offset)>>,

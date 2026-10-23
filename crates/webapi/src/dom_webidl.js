@@ -393,6 +393,19 @@ for (const cls of [Document, DocumentFragment]) nativeStringMethod(cls, 'getElem
 for (const name of ['matches','closest','getAttribute','hasAttribute','removeAttribute'])
   nativeStringMethod(Element, name);
 nativeStringMethod(Element, 'setAttribute', 2);
+// cpp: third_party/blink/renderer/core/dom/element.idl setAttributeNS;
+//      element.cc Element::ParseAttributeName / setAttributeNS.
+Object.defineProperty(Element.prototype, 'setAttributeNS', {
+  configurable: true,
+  enumerable: true,
+  writable: true,
+  value: function setAttributeNS(namespaceURI, qualifiedName, value) {
+    requireInterface(this, 'Element');
+    if (arguments.length < 3) throw new attributeTypeError('setAttributeNS requires 3 arguments');
+    return invoke(this, 'setAttributeNS', namespaceURI === null ? null : attributeDOMString(namespaceURI),
+                  attributeDOMString(qualifiedName), attributeDOMString(value));
+  }
+});
 Node.prototype.isEqualNode = function(other) {
   requireInterface(this, 'Node');
   if (!arguments.length) throw new TypeError('isEqualNode requires 1 argument');

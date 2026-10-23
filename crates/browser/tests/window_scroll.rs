@@ -226,28 +226,38 @@ fn viewport_scroll_uses_page_zoom_and_negative_native_ranges() {
 }
 
 #[test]
-fn unsupported_scroll_animation_and_snap_are_explicit_and_atomic() {
+fn smooth_scroll_falls_back_without_begin_frames_and_snap_remains_atomic() {
     native_test_thread::run(|| {
+        {
+            let mut page = fixture(
+                "html{scroll-behavior:smooth}body{height:2400px}",
+                "<div></div>",
+                true,
+            );
+            check(
+                &mut page,
+                r#"
+              scrollTo(0,100);
+              if(scrollY!==100)throw Error('CSS smooth fallback');
+              scrollBy({top:100,behavior:'smooth'});
+              if(scrollY!==200)throw Error('explicit smooth fallback');
+              scrollTo({top:100,behavior:'instant'});if(scrollY!==100)throw Error('instant overrides CSS smooth');
+            "#,
+            );
+            for _ in 0..4 {
+                page.RunTask().unwrap();
+            }
+        }
         let mut page = fixture(
-            "html{scroll-behavior:smooth}body{height:2400px}",
+            "html{scroll-snap-type:y mandatory}body{height:2400px}",
             "<div></div>",
             true,
         );
         check(
             &mut page,
-            r#"
-          var unsupported=[];
-          scrollTo(0,100).catch(e=>unsupported.push(e.name));
-          scrollBy({top:100,behavior:'smooth'}).catch(e=>unsupported.push(e.name));
-          if(scrollY!==0)throw Error('unsupported changed offset');
-          scrollTo({top:100,behavior:'instant'});if(scrollY!==100)throw Error('instant overrides CSS smooth');
-          document.documentElement.style.scrollBehavior='auto';
-          document.documentElement.style.scrollSnapType='y mandatory';
-          scrollTo({top:200,behavior:'instant'}).catch(e=>unsupported.push(e.name));
-          if(scrollY!==100)throw Error('snap unsupported changed offset');
-        "#,
+            r#"var unsupported=[]; scrollTo({top:200,behavior:'instant'}).catch(e=>unsupported.push(e.name)); if(scrollY!==0)throw Error('snap unsupported changed offset');"#,
         );
-        check(&mut page,"if(unsupported.join(',')!=='NotSupportedError,NotSupportedError,NotSupportedError')throw Error('unsupported results '+unsupported)");
+        check(&mut page,"if(unsupported.join(',')!=='NotSupportedError')throw Error('unsupported results '+unsupported)");
     });
 }
 

@@ -118,6 +118,7 @@ impl NativeEngineCore {
         frame_sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
         local_surface_id: LocalSurfaceId,
         next_property_owner: u64,
+        input_client: std::sync::Arc<super::native_input_client::NativeInputHandlerClient>,
     ) -> Result<Self, CompositorError> {
         let scroll_effects = NativePacScrollEffects::default();
         let callbacks = NativePacScrollCallbacks::new(scroll_effects.clone());
@@ -137,6 +138,16 @@ impl NativeEngineCore {
         host.BaseMutable().CreateInputHandler(&mut HostImplContext {
             services: &mut services,
         });
+        host.BaseMutable().WithInputHandler(
+            &mut HostImplContext {
+                services: &mut services,
+            },
+            |input, runtime| {
+                input
+                    .expect("source bound InputHandler")
+                    .BindToClient(runtime, input_client)
+            },
+        );
         let result = Self {
             host: Some(host),
             services,
@@ -436,9 +447,30 @@ impl NativeEngineCore {
 // on each call, matching Proxy's synchronous source callbacks without retaining
 // a Host/client pointer in Scheduler or external services.
 impl crate::cc::scheduler::scheduler::SchedulerClient for NativeEngineCore {
-    fn WillBeginImplFrame(&mut self, args: &BeginFrameArgs, _scheduler: &mut Scheduler) -> bool {
-        let _query = self.scheduler_queries.Enter(_scheduler.IsReadyToActivate());
-        NativeEngineCore::WillBeginImplFrame(self, args)
+    fn WillBeginImplFrame(&mut self, args: &BeginFrameArgs, scheduler: &mut Scheduler) -> bool {
+        let _query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
+        let redraw_sequence = self.lifecycle.redraw_sequence();
+        let has_damage = NativeEngineCore::WillBeginImplFrame(self, args);
+        // Source: cc/trees/proxy_impl.cc:394-396. LayerTreeHostImpl calls
+        // ProxyImpl::SetWaitingForScrollEvent from WillBeginImplFrame and the
+        // proxy updates Scheduler synchronously, before Scheduler chooses this
+        // frame's deadline. The Rust host delegate also records a FIFO effect
+        // because most callbacks must outlive the current Host borrow; mirror
+        // this one state value here while the SchedulerClient callback still
+        // owns Scheduler so WAIT_FOR_SCROLL is selected for the current frame.
+        scheduler.SetWaitingForScrollEvent(self.lifecycle.waiting_for_scroll_event());
+        // Source: cc/trees/proxy_impl.cc:550-554. Queued input is delivered by
+        // LayerTreeHostImpl::WillBeginImplFrame. ScrollUpdate can call
+        // ProxyImpl::SetNeedsRedrawOnImplThread from inside that same callback,
+        // and Chromium updates Scheduler synchronously before it selects this
+        // frame's deadline. The Rust delegate records the call while Host is
+        // borrowed, so mirror the resident state here while this callback owns
+        // Scheduler. The queued lifecycle effect remains useful to the outer
+        // owner and is idempotent when it is drained later.
+        if self.lifecycle.redraw_sequence() != redraw_sequence {
+            scheduler.SetNeedsRedraw(self);
+        }
+        has_damage
     }
     fn ScheduledActionSendBeginMainFrame(
         &mut self,

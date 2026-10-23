@@ -423,8 +423,7 @@ pub struct LayerTreeHostImpl<B: HostImplTypes> {
     // Source: cc/trees/layer_tree_host_impl.h:1337.
     has_non_fling_input_since_last_frame_: bool,
     // Source: cc/trees/layer_tree_host_impl.h:1336.
-    has_input_resetter_:
-        Arc<crate::cc::base::delayed_unique_notifier::DelayedUniqueNotifier>,
+    has_input_resetter_: Arc<crate::cc::base::delayed_unique_notifier::DelayedUniqueNotifier>,
     // Source: cc/trees/layer_tree_host_impl.h:1335.
     has_input_for_frame_interval_: bool,
     // Source: cc/trees/layer_tree_host_impl.h:1333.
@@ -1998,9 +1997,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
 use crate::adapter::{
     geometry::Point, input_services::InputHostTypes, layer_tree_impl::ScrollbarSet, time::TimeTicks,
 };
-use crate::cc::trees::{
-    compositor_commit_data::CompositorCommitData, frame_data::FrameData,
-};
+use crate::cc::trees::{compositor_commit_data::CompositorCommitData, frame_data::FrameData};
 impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     // Source: cc/trees/layer_tree_host_impl.cc:5182-5226.
     pub fn ProcessCompositorDeltas(
@@ -5332,7 +5329,9 @@ mod source_chunk_c {
                 "disabled-by-default-cc.debug",
                 "LayerTreeHostImpl::BuildEvictionQueue",
             );
-            let mut queue=Box::new(crate::cc::tiles::eviction_tile_priority_queue::EvictionTilePriorityQueue::new());
+            let mut queue = Box::new(
+                crate::cc::tiles::eviction_tile_priority_queue::EvictionTilePriorityQueue::new(),
+            );
             self.WithRasterQueueContext(context, |queries| {
                 queue.Build(
                     HostPictureQueueLayers::new(queries.active.as_ref()),
@@ -5345,10 +5344,12 @@ mod source_chunk_c {
         // Source: cc/trees/layer_tree_host_impl.cc:1914-1920.
         pub fn CreateTilesWithResourceIterator(
             &mut self,
-        ) -> crate::cc::tiles::tiles_with_resource_iterator::LayerResourceTileTraversal<'_,B>
+        ) -> crate::cc::tiles::tiles_with_resource_iterator::LayerResourceTileTraversal<'_, B>
         where
             B: crate::adapter::picture_layer_impl::PictureLayerImplTypes
-                + LayerTreeTypes<PictureLayer=crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
+                + LayerTreeTypes<
+                    PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
+                >,
         {
             // The source range contains pointers to these actual resident
             // pointees. The lending visitor keeps each mutable borrow scoped
@@ -8782,8 +8783,7 @@ pub(crate) struct HostImplViewportRuntime<'a, 'c, B: HostImplTypes> {
     pub(crate) scrollbar_animation_controllers_:
         &'a mut HashMap<ElementId, Option<Box<ScrollbarAnimationController>>>,
     pub(crate) image_animation_controller_: &'a mut Option<Box<ImageAnimationController>>,
-    pub(crate) input_view:
-        Option<crate::cc::input::input_handler::InputHandlerView<'a>>,
+    pub(crate) input_view: Option<crate::cc::input::input_handler::InputHandlerView<'a>>,
     pub(crate) context: &'a mut HostImplContext<'c, B>,
 }
 impl<B: HostImplTypes> HostImplViewportRuntime<'_, '_, B> {
@@ -12098,9 +12098,7 @@ mod source_input_host {
             !self.scrollbar_animation_controllers_.is_empty()
         }
         // Source: cc/trees/layer_tree_host_impl.h:580.
-        fn GetSettings(
-            &self,
-        ) -> &crate::cc::trees::layer_tree_settings::LayerTreeSettings {
+        fn GetSettings(&self) -> &crate::cc::trees::layer_tree_settings::LayerTreeSettings {
             self.core.settings_
         }
         // Source: cc/trees/layer_tree_host_impl.cc:562-564.
@@ -13263,9 +13261,7 @@ mod source_elasticity_runtime {
                 }
             }
             impl<B: HostImplTypes> ElasticityQueries for $type<'_, '_, B> {
-                fn GetScrollTree(
-                    &self,
-                ) -> &crate::cc::trees::property_tree::ScrollTree {
+                fn GetScrollTree(&self) -> &crate::cc::trees::property_tree::ScrollTree {
                     self.host
                         .active_tree_
                         .as_ref()
@@ -13298,9 +13294,7 @@ mod source_elasticity_runtime {
                         .settings_
                         .enable_elastic_overscroll_for_subscroll
                 }
-                fn active_scroll_tree(
-                    &self,
-                ) -> &crate::cc::trees::property_tree::ScrollTree {
+                fn active_scroll_tree(&self) -> &crate::cc::trees::property_tree::ScrollTree {
                     self.GetScrollTree()
                 }
                 fn TotalScrollOffset(&self, id: Option<ElementId>) -> PointF {
@@ -13957,8 +13951,7 @@ mod source_chunk_d {
             &mut self,
             frame: &mut FrameData<B>,
             context: &mut HostImplContext<'_, B>,
-        ) -> Option<crate::cc::metrics::submit_info::SubmitInfo<B::EventMetricsSet>>
-        {
+        ) -> Option<crate::cc::metrics::submit_info::SubmitInfo<B::EventMetricsSet>> {
             debug_assert!(self.CanDraw(context));
             debug_assert_eq!(frame.has_no_damage, frame.render_passes.is_empty());
             self.ResetRequiresHighResToDraw();
@@ -14264,28 +14257,34 @@ mod source_chunk_d {
             if context.services.NewContentForCheckerboardedScrollsEnabled() {
                 let param = context.services.NewContentForCheckerboardedScrollsMode();
                 if param == HostCheckerboardMode::kPerScroll {
-                    if self.GetActivelyScrollingType(context)!=crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone&&frame.checkerboarded_needs_record {self.prioritize_new_content_due_to_checkerboarding_=true;}
+                    if self.GetActivelyScrollingType(context)
+                        != crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone
+                        && frame.checkerboarded_needs_record
+                    {
+                        self.prioritize_new_content_due_to_checkerboarding_ = true;
+                    }
                 } else if param == HostCheckerboardMode::kPerFrame {
-                    self.prioritize_new_content_due_to_checkerboarding_=self.GetActivelyScrollingType(context)!=crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone&&frame.checkerboarded_needs_record;
+                    self.prioritize_new_content_due_to_checkerboarding_ = self
+                        .GetActivelyScrollingType(context)
+                        != crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone
+                        && frame.checkerboarded_needs_record;
                 }
             }
-            Some(
-                crate::cc::metrics::submit_info::SubmitInfo::new(
-                    frame_token,
-                    submit_time,
-                    frame.checkerboarded_needs_raster,
-                    frame.checkerboarded_needs_record,
-                    top_controls_moved,
-                    events_metrics,
-                    drawn_with_new_layer_tree,
-                    self.active_tree_
-                        .as_deref()
-                        .unwrap()
-                        .did_raster_inducing_scroll(),
-                    normalized_invalidated_area,
-                    trees_in_viz_submit_time,
-                ),
-            )
+            Some(crate::cc::metrics::submit_info::SubmitInfo::new(
+                frame_token,
+                submit_time,
+                frame.checkerboarded_needs_raster,
+                frame.checkerboarded_needs_record,
+                top_controls_moved,
+                events_metrics,
+                drawn_with_new_layer_tree,
+                self.active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .did_raster_inducing_scroll(),
+                normalized_invalidated_area,
+                trees_in_viz_submit_time,
+            ))
         }
         // Source: cc/trees/layer_tree_host_impl.cc:3074-3419.
         pub fn GenerateCompositorFrame(
@@ -14582,7 +14581,14 @@ mod source_chunk_d {
                 self.last_draw_render_frame_metadata_ =
                     Some(self.MakeRenderFrameMetadata(frame, context));
                 if let Some(ink) = metadata.delegated_ink_metadata() {
-                    self.last_draw_render_frame_metadata_.as_mut().unwrap().delegated_ink_metadata=Some(crate::cc::trees::render_frame_metadata::DelegatedInkBrowserMetadata::new(context.services.DelegatedInkIsHovering(ink)));
+                    self.last_draw_render_frame_metadata_
+                        .as_mut()
+                        .unwrap()
+                        .delegated_ink_metadata = Some(
+                        crate::cc::trees::render_frame_metadata::DelegatedInkBrowserMetadata::new(
+                            context.services.DelegatedInkIsHovering(ink),
+                        ),
+                    );
                 }
                 if self
                     .last_draw_render_frame_metadata_
@@ -15305,11 +15311,8 @@ impl<B: HostImplTypes + crate::adapter::picture_layer_impl::PictureLayerImplType
     }
     fn PageScaleTransformNode(
         &self,
-    ) -> Option<
-        &crate::cc::trees::transform_node::TransformNode<
-            <B as LayerTreeTypes>::Transform,
-        >,
-    > {
+    ) -> Option<&crate::cc::trees::transform_node::TransformNode<<B as LayerTreeTypes>::Transform>>
+    {
         self.tree.PageScaleTransformNode()
     }
     fn external_page_scale_factor(&self) -> f32 {
@@ -15330,9 +15333,7 @@ impl<B> HostPictureSiblingQueries<'_, B>
 where
     B: HostImplTypes
         + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-        + LayerTreeTypes<
-            PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
-        >,
+        + LayerTreeTypes<PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
 {
     fn PictureByClient(
         &self,
@@ -15374,9 +15375,7 @@ impl<B> crate::adapter::picture_layer_tiling::PictureLayerTilingQueries<B>
 where
     B: HostImplTypes
         + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-        + LayerTreeTypes<
-            PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
-        >,
+        + LayerTreeTypes<PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
 {
     fn WithClient(
         &self,
@@ -15386,10 +15385,9 @@ where
         ),
     ) {
         let (picture, tree) = self.PictureByClient(id);
-        let client =
-            crate::cc::layers::picture_layer_impl::PictureTilingReadClient::new(
-                picture.ReadView(tree),
-            );
+        let client = crate::cc::layers::picture_layer_impl::PictureTilingReadClient::new(
+            picture.ReadView(tree),
+        );
         callback(&client)
     }
     fn PaintWorkletRecordsForClient(
@@ -15432,8 +15430,7 @@ where
         &self,
         id: crate::adapter::picture_layer_tiling::PictureLayerTilingClientId,
         scale: f32,
-    ) -> Option<&crate::cc::tiles::picture_layer_tiling::PictureLayerTilingState<B>>
-    {
+    ) -> Option<&crate::cc::tiles::picture_layer_tiling::PictureLayerTilingState<B>> {
         self.PictureByClient(id)
             .0
             .picture_layer_tiling_set()
@@ -15682,9 +15679,7 @@ where
     B: HostImplTypes
         + crate::adapter::picture_layer_impl::PictureLayerImplTypes
         + crate::adapter::tile_manager::TileManagerTypes
-        + LayerTreeTypes<
-            PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
-        >,
+        + LayerTreeTypes<PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
 {
     fn WithClient(
         &self,
@@ -15718,8 +15713,7 @@ where
         &self,
         id: crate::adapter::picture_layer_tiling::PictureLayerTilingClientId,
         scale: f32,
-    ) -> Option<&crate::cc::tiles::picture_layer_tiling::PictureLayerTilingState<B>>
-    {
+    ) -> Option<&crate::cc::tiles::picture_layer_tiling::PictureLayerTilingState<B>> {
         self.queries.TilingStateForClientAndScale(id, scale)
     }
     fn PendingInvalidationById(
@@ -15771,9 +15765,7 @@ where
     B: HostImplTypes
         + crate::adapter::picture_layer_impl::PictureLayerImplTypes
         + crate::adapter::tile_manager::TileManagerTypes
-        + LayerTreeTypes<
-            PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
-        >,
+        + LayerTreeTypes<PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
 {
     fn TwinLayerRead(
         &self,
@@ -16024,9 +16016,7 @@ impl<'a, B> HostPictureQueueLayers<'a, B>
 where
     B: HostImplTypes
         + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-        + LayerTreeTypes<
-            PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
-        >,
+        + LayerTreeTypes<PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
 {
     fn new(tree: Option<&'a HostPictureSiblingTree<'a, B>>) -> Self {
         Self {
@@ -16039,9 +16029,7 @@ impl<'a, B> Iterator for HostPictureQueueLayers<'a, B>
 where
     B: HostImplTypes
         + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-        + LayerTreeTypes<
-            PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
-        >,
+        + LayerTreeTypes<PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
 {
     type Item = crate::cc::layers::picture_layer_impl::PictureQueueLayerRead<'a, B>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -16056,9 +16044,7 @@ impl<B> crate::cc::tiles::raster_tile_priority_queue::RasterQueueContext<B>
 where
     B: HostImplTypes
         + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-        + LayerTreeTypes<
-            PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
-        >,
+        + LayerTreeTypes<PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>>,
 {
     fn TilingSetById(
         &self,
@@ -16384,11 +16370,7 @@ fn NotifyAllTileTasksCompletedForLiveParts<B: HostImplTypes>(
 }
 
 trait HostPictureNotification<B: crate::adapter::picture_layer_impl::PictureLayerImplTypes> {
-    fn NotifyTileStateChanged(
-        &mut self,
-        tile: &crate::cc::tiles::tile::Tile<B>,
-        damage: bool,
-    );
+    fn NotifyTileStateChanged(&mut self, tile: &crate::cc::tiles::tile::Tile<B>, damage: bool);
     fn layer(&self) -> &dyn PictureLayerDisplayRead;
     fn should_batch_updated_tiles(&self) -> bool;
 }
@@ -16398,11 +16380,7 @@ struct ReleasedPictureNotification<'a, B: crate::adapter::picture_layer_impl::Pi
 impl<B: crate::adapter::picture_layer_impl::PictureLayerImplTypes> HostPictureNotification<B>
     for ReleasedPictureNotification<'_, B>
 {
-    fn NotifyTileStateChanged(
-        &mut self,
-        tile: &crate::cc::tiles::tile::Tile<B>,
-        damage: bool,
-    ) {
+    fn NotifyTileStateChanged(&mut self, tile: &crate::cc::tiles::tile::Tile<B>, damage: bool) {
         assert!(
             !damage,
             "source resource Release passes update_damage=false"
@@ -16569,7 +16547,6 @@ pub(crate) mod source_tile_manager_runtime {
             picture_layer_tiling::PictureLayerTilingQueries,
             tile_manager::{ResourceTileReleaseTraversal, TileStateNotification},
         },
-        runtime::types::{CpuCompositorTypes, CpuSkiaBackend},
         cc::{
             layers::{
                 layer_collections::LayerTracking,
@@ -16581,6 +16558,7 @@ pub(crate) mod source_tile_manager_runtime {
                 tiles_with_resource_iterator::ForEachResourceTileInPicture,
             },
         },
+        runtime::types::{CpuCompositorTypes, CpuSkiaBackend},
     };
     use std::{collections::HashSet, marker::PhantomData, ops::ControlFlow};
     type Cpu<R> = CpuCompositorTypes<R>;
@@ -16864,9 +16842,7 @@ pub(crate) mod source_tile_manager_runtime {
         pub frame_tracker: &'a BeginFrameTracker,
         pub input: Option<InputHandlerView<'a>>,
         pub delegate: HostImplDelegateId,
-        pub pool: &'a mut Option<
-            Box<crate::cc::resources::resource_pool::ResourcePool<Cpu<R>>>,
-        >,
+        pub pool: &'a mut Option<Box<crate::cc::resources::resource_pool::ResourcePool<Cpu<R>>>>,
         pub provider: &'a mut Option<Box<<Cpu<R> as LayerTreeTypes>::ClientResourceProvider>>,
         pub layer_context: &'a mut Option<Box<<Cpu<R> as HostImplTypes>::LayerContext>>,
         pub monitors: &'a BTreeSet<HostImplLatencyMonitorId>,
@@ -16888,11 +16864,9 @@ pub(crate) mod source_tile_manager_runtime {
         // Resolve the Rust IDs once per native TileManager call so hot raster
         // queue iteration keeps the same O(1) owner lookup semantics instead
         // of rescanning every layer for every tile.
-        pub picture_locations:
-            HashMap<PictureLayerTilingClientId, (LayerTreeId, i32)>,
+        pub picture_locations: HashMap<PictureLayerTilingClientId, (LayerTreeId, i32)>,
         pub tiling_locations: HashMap<PictureLayerTilingId, (LayerTreeId, i32)>,
-        pub tiling_set_locations:
-            HashMap<PictureLayerTilingSetId, (LayerTreeId, i32)>,
+        pub tiling_set_locations: HashMap<PictureLayerTilingSetId, (LayerTreeId, i32)>,
     }
     impl<R: CpuSkiaBackend> Runtime<'_, R> {
         fn ReadFields(&self) -> TileReadFields<'_, R> {
@@ -17019,9 +16993,7 @@ pub(crate) mod source_tile_manager_runtime {
             &self,
             id: PictureLayerTilingClientId,
             callback: &mut dyn FnMut(
-                &dyn crate::cc::tiles::picture_layer_tiling::PictureLayerTilingClient<
-                    Cpu<R>,
-                >,
+                &dyn crate::cc::tiles::picture_layer_tiling::PictureLayerTilingClient<Cpu<R>>,
             ),
         ) {
             self.WithQueries(|queries| queries.WithClient(id, callback))
@@ -17142,12 +17114,12 @@ pub(crate) mod source_tile_manager_runtime {
         tile_manager::*,
         time::{TimeDelta, TimeTicks},
     };
+    use crate::cc::resources::resource_pool::{InUsePoolResource, ResourcePool};
     use crate::runtime::{
         execution::EngineTask,
         paint::{CpuPlaybackImageProvider, CpuWorkletProvider},
         resources::RasterColorSpace,
     };
-    use crate::cc::resources::resource_pool::{InUsePoolResource, ResourcePool};
     use std::sync::{Arc, Weak};
     impl<R: CpuSkiaBackend> TileManagerInitialization<Cpu<R>> for Runtime<'_, R> {
         fn CreateImageController(
@@ -17301,8 +17273,7 @@ pub(crate) mod source_tile_manager_runtime {
         fn RasterQueryCapability(
             &self,
             id: RasterQueryQueueId,
-        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerRasterQueryQueue>
-        {
+        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerRasterQueryQueue> {
             let query = self
                 .raster_queries
                 .as_deref()
@@ -17333,13 +17304,10 @@ pub(crate) mod source_tile_manager_runtime {
         }
         fn WorkerDiagnostics(
             &self,
-        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerWorkerDiagnostics>
-        {
+        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerWorkerDiagnostics> {
             self.execution.diagnostics.clone()
         }
-        fn GraphTrace(
-            &self,
-        ) -> &dyn crate::cc::tiles::tile_manager::TileManagerGraphTrace {
+        fn GraphTrace(&self) -> &dyn crate::cc::tiles::tile_manager::TileManagerGraphTrace {
             self.execution.diagnostics.as_ref()
         }
         fn OnceCommand(
@@ -17540,10 +17508,7 @@ pub(crate) mod source_tile_manager_runtime {
     use crate::cc::tiles::tile_priority::{TreePriority, WhichTree};
     struct CurrentFullPictureNotification<'a, 'p, R: CpuSkiaBackend> {
         parts:
-            &'a mut crate::cc::layers::picture_layer_impl::PictureTileNotificationParts<
-                'p,
-                Cpu<R>,
-            >,
+            &'a mut crate::cc::layers::picture_layer_impl::PictureTileNotificationParts<'p, Cpu<R>>,
         push: &'a mut dyn LayerImplPushContext<Types = Cpu<R>>,
     }
     impl<R: CpuSkiaBackend> HostPictureNotification<Cpu<R>>
@@ -18123,9 +18088,7 @@ pub(crate) mod source_tile_manager_runtime {
         ) -> crate::adapter::resource_types::SharedImageFormat {
             Runtime::<R>::GetTileFormat(self, client)
         }
-        fn GraphTrace(
-            &self,
-        ) -> &dyn crate::cc::tiles::tile_manager::TileManagerGraphTrace {
+        fn GraphTrace(&self) -> &dyn crate::cc::tiles::tile_manager::TileManagerGraphTrace {
             Runtime::<R>::GraphTrace(self)
         }
         fn ShouldRecordSubsampledMetric(&self, sampling_rate: f32) -> bool {
@@ -18186,8 +18149,7 @@ pub(crate) mod source_tile_manager_runtime {
         fn RasterQueryCapability(
             &self,
             id: RasterQueryQueueId,
-        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerRasterQueryQueue>
-        {
+        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerRasterQueryQueue> {
             Runtime::<R>::RasterQueryCapability(self, id)
         }
         fn RasterFlushCapability(
@@ -18248,8 +18210,7 @@ pub(crate) mod source_tile_manager_runtime {
         }
         fn WorkerDiagnostics(
             &self,
-        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerWorkerDiagnostics>
-        {
+        ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerWorkerDiagnostics> {
             Runtime::<R>::WorkerDiagnostics(self)
         }
         fn CreatePlaybackImageProvider(
@@ -18861,146 +18822,37 @@ pub(crate) fn ShutdownCpuResidentTree<R: crate::runtime::types::CpuSkiaBackend>(
     id: crate::adapter::layer_tree_impl::LayerTreeId,
     context: &mut HostImplContext<'_, crate::runtime::types::CpuCompositorTypes<R>>,
 ) {
-    use crate::runtime::{layer::CompositorLayer, types::CpuCompositorTypes as Cpu};
-    use crate::cc::layers::picture_layer_impl::{
-        PictureLayerImpl, PictureLayerTwinAccess,
-    };
-    type Tree<R> = crate::cc::trees::layer_tree_impl::LayerTreeImpl<Cpu<R>>;
-    struct Twins<'a, R: crate::runtime::types::CpuSkiaBackend> {
-        trees: [Option<&'a mut Tree<R>>; 2],
-    }
-    impl<R: crate::runtime::types::CpuSkiaBackend> PictureLayerTwinAccess<Cpu<R>> for Twins<'_, R> {
-        fn TwinMutable(
-            &mut self,
-            id: crate::cc::layers::picture_layer_impl::PictureLayerImplId,
-        ) -> &mut PictureLayerImpl<Cpu<R>> {
-            let tree = self
-                .trees
-                .iter_mut()
-                .filter_map(Option::as_deref_mut)
-                .find(|tree| tree.id == id.tree)
-                .expect("native twin belongs to a remaining resident tree");
-            let layer = tree
-                .LayerByIdMutable(id.layer)
-                .expect("native resident twin layer");
-            let CompositorLayer::Picture(picture) = layer else {
-                panic!("native twin is a PictureLayerImpl")
-            };
-            assert_eq!(picture.identity(), id);
-            picture
-        }
-    }
-    struct Tiles<'a, 'b, R: crate::runtime::types::CpuSkiaBackend> {
-        manager: &'a mut crate::cc::tiles::tile_manager::TileManager<Cpu<R>>,
-        parts: HostPictureReleaseParts<'b, Cpu<R>>,
-        trace: &'a dyn crate::adapter::host_picture::HostPictureTileServices,
-    }
-    impl<R: crate::runtime::types::CpuSkiaBackend>
-        crate::adapter::picture_layer_tiling::PictureLayerTileDestroyer<Cpu<R>>
-        for Tiles<'_, '_, R>
-    {
-        fn RebindTileWithManager(
-            &mut self,
-            _old: crate::adapter::tile::TileId,
-            _new: crate::adapter::tile::TileId,
-        ) {
-            unreachable!("tree shutdown never transfers a resident tile")
-        }
-        fn DestroyTileWithManager(
-            &mut self,
-            manager: crate::adapter::tile::TileManagerId,
-            tile: &mut crate::cc::tiles::tile::Tile<Cpu<R>>,
-            tiling: &crate::cc::tiles::picture_layer_tiling::PictureLayerTilingState<
-                Cpu<R>,
-            >,
-        ) {
-            assert_eq!(self.manager.identity(), manager);
-            self.manager.DestroyTileWithRelease(
-                tile,
-                &mut HostPictureTileRelease {
-                    parts: &mut self.parts,
-                    trace: self.trace,
-                    tiling,
-                    notification: None,
-                },
-            );
-        }
-    }
+    use crate::runtime::types::CpuCompositorTypes as Cpu;
+
+    // Source: cc/trees/layer_tree_impl.cc:182-187 and the implicit
+    // unique_ptr<LayerImpl> destructors owned by LayerTreeImpl.  Use the same
+    // most-derived destruction path as TreeSynchronizer: it disconnects
+    // PictureLayerImpl twins, releases their tiles, and synchronously shuts
+    // down registered scrollbar layers while this tree and Host are live.
+    // Keeping a separate Picture-only teardown here skipped the scrollbar
+    // destructor contract during Host shutdown.
     let owner = host.owner_id_;
-    let active_id = host.active_tree_.as_ref().map(|tree| tree.id);
-    let (tree, mut twins) = if active_id == Some(id) {
-        (
-            host.active_tree_.as_deref_mut().unwrap(),
-            Twins {
-                trees: [
-                    host.pending_tree_.as_deref_mut(),
-                    host.recycle_tree_.as_deref_mut(),
-                ],
-            },
-        )
-    } else if host.pending_tree_.as_ref().map(|tree| tree.id) == Some(id) {
-        (
-            host.pending_tree_.as_deref_mut().unwrap(),
-            Twins {
-                trees: [
-                    host.active_tree_.as_deref_mut(),
-                    host.recycle_tree_.as_deref_mut(),
-                ],
-            },
-        )
-    } else {
-        let tree = host
-            .recycle_tree_
-            .as_deref_mut()
-            .expect("source resident recycle tree");
-        assert_eq!(tree.id, id);
-        (
-            tree,
-            Twins {
-                trees: [
-                    host.active_tree_.as_deref_mut(),
-                    host.pending_tree_.as_deref_mut(),
-                ],
-            },
-        )
+    let active = host.active_tree_.as_ref().map(|tree| tree.id) == Some(id);
+    let shutdown = |tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<Cpu<R>>,
+                    tree_context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<
+        '_,
+        Cpu<R>,
+    >| {
+        let layers = tree.DetachLayers();
+        tree.DestroyDetachedLayers(layers, tree_context);
+        tree.FinishShutdownWithHost(owner, |_| active, || tree_context.host.MonotonicTimeNow());
     };
-    let mut layers = tree.DetachLayers();
-    let mut latency_promises = Vec::new();
-    context
-        .services
-        .WithPictureExternalParts(&mut |_, _, trace, _, _, release| {
-            let mut tiles = Tiles {
-                manager: &mut host.tile_manager_,
-                parts: HostPictureReleaseParts {
-                    settings: &host.settings_,
-                    delegate: host.delegate_,
-                    monitors: &host.latency_info_swap_promise_monitor_,
-                    events: &mut host.events_metrics_manager_,
-                    pool: &mut host.resource_pool_,
-                    provider: &mut host.resource_provider_,
-                    layer_context: &mut host.layer_context_,
-                    sink: &host.layer_tree_frame_sink_,
-                    latency_promises: &mut latency_promises,
-                    services: release,
-                },
-                trace,
-            };
-            for layer in layers.iter_mut() {
-                if let CompositorLayer::Picture(picture) = layer {
-                    picture.Destroy(&mut twins, &mut tiles);
-                }
-            }
-        });
-    // The source destructor releases every most-derived owner, including its
-    // ordinary base destructor, before breaking this tree's swap promises.
-    drop(layers);
-    assert!(
-        latency_promises.is_empty(),
-        "resource teardown cannot schedule a new frame"
-    );
-    tree.FinishShutdownWithHost(
-        owner,
-        |tree| Some(tree) == active_id,
-        || context.services.MonotonicTimeNow(),
-    );
+
+    if active {
+        host.WithActiveTree(context, shutdown);
+    } else if host.pending_tree_.as_ref().map(|tree| tree.id) == Some(id) {
+        host.WithPendingTree(context, shutdown);
+    } else {
+        assert_eq!(
+            host.recycle_tree_.as_ref().map(|tree| tree.id),
+            Some(id),
+            "source resident recycle tree"
+        );
+        host.WithRecycleTree(context, shutdown);
+    }
 }

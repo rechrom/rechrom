@@ -66,6 +66,7 @@ pub(crate) mod native_host_lifecycle;
 pub(crate) mod native_host_metadata;
 pub(crate) mod native_host_picture;
 pub(crate) mod native_images;
+pub(crate) mod native_input_client;
 pub(crate) mod native_latency;
 pub mod native_metrics;
 pub(crate) mod native_pac_scroll;

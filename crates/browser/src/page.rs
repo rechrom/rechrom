@@ -44,7 +44,9 @@ use std::{
 pub use style::{media_queries::forced_colors::ForcedColors, PreferredColorScheme};
 use url_loader::{URLLoader, URLRequest, URLWakeCallback};
 use webapi::{
-    dom_bindings::{DOMBindingsHost, DOMJavaScriptBindings, ViewportScrollState},
+    dom_bindings::{
+        DOMBindingsHost, DOMJavaScriptBindings, ViewportScrollBehavior, ViewportScrollState,
+    },
     web_api_engine::{WebApiEffect, WebApiEngine, WebApiMutation},
     window_bindings::WindowJavaScriptBindings,
 };
@@ -204,9 +206,9 @@ pub struct PageRenderPipeline {
     // Polls to reach ScheduledActionDraw. Keep those Polls runnable, then hold
     // later input work for the next physical interval once a frame is sent.
     input_frame_pump_pending: bool,
-    // A committed input remains strongly identified until its compositor frame
-    // reaches Viz. Calls made while it is pending advance that commit instead
-    // of issuing a second main commit.
+    // A main-frame input remains strongly identified until cc consumes it at
+    // ScheduledActionCommit. Drawing and FrameSink submission are allowed to
+    // follow asynchronously after this slot is released.
     pending: Option<PendingPageRender>,
     // A weak identity marker avoids forcing PaintEngine's next property-only
     // scroll update to deep-copy the complete PaintArtifact.
@@ -581,7 +583,11 @@ impl PageRenderPipeline {
         if let Some(pending) = self.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
-        if !main_commit_pending && (submitted || stable_frame_reuse) {
+        // ProxyImpl releases DataForCommit at ScheduledActionCommit. Drawing
+        // and CompositorFrame submission may happen on a later BeginFrame;
+        // keeping the Page commit slot occupied until then deadlocks the next
+        // BeginMainFrame behind an otherwise valid active tree.
+        if !main_commit_pending && (self.external_presentation || submitted || stable_frame_reuse) {
             let pending = self
                 .pending
                 .take()
@@ -724,7 +730,7 @@ impl PageRenderPipeline {
         if let Some(pending) = self.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
-        if !main_commit_pending && (submitted || stable_frame_reuse) {
+        if !main_commit_pending && (self.external_presentation || submitted || stable_frame_reuse) {
             if let Some(pending) = self.pending.take() {
                 self.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
@@ -775,7 +781,7 @@ impl PageRenderPipeline {
         if let Some(pending) = self.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
-        if !main_commit_pending && (submitted || stable_frame_reuse) {
+        if !main_commit_pending && (self.external_presentation || submitted || stable_frame_reuse) {
             if let Some(pending) = self.pending.take() {
                 self.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
@@ -823,7 +829,7 @@ impl PageRenderPipeline {
         if let Some(pending) = self.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
-        if !main_commit_pending && (submitted || stable_frame_reuse) {
+        if !main_commit_pending && (self.external_presentation || submitted || stable_frame_reuse) {
             if let Some(pending) = self.pending.take() {
                 self.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
@@ -883,7 +889,7 @@ impl PageRenderPipeline {
         if let Some(pending) = self.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
-        if !main_commit_pending && (submitted || stable_frame_reuse) {
+        if !main_commit_pending && (self.external_presentation || submitted || stable_frame_reuse) {
             if let Some(pending) = self.pending.take() {
                 self.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
@@ -999,7 +1005,7 @@ impl PageRenderPipeline {
         if let Some(pending) = self.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
-        if !main_commit_pending && (submitted || stable_frame_reuse) {
+        if !main_commit_pending && (self.external_presentation || submitted || stable_frame_reuse) {
             if let Some(pending) = self.pending.take() {
                 self.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
@@ -1375,6 +1381,11 @@ struct PendingImageEvent {
     loaded: bool,
     active: Rc<Cell<bool>>,
 }
+struct ProgrammaticScrollAnimation {
+    target_node_id: u64,
+    curve: compositor::cc::animation::scroll_offset_animation_curve::ScrollOffsetAnimationCurve,
+    start_time: Option<std::time::Instant>,
+}
 struct PageState {
     document: Rc<DocumentEngine>,
     style_engine: RefCell<style::StyleEngine>,
@@ -1413,6 +1424,8 @@ struct PageState {
     scroll_updates: RefCell<Vec<(u64, Offset)>>,
     animation_engine: RefCell<animation::AnimationEngine>,
     animation_begin_frame_requested: Cell<bool>,
+    has_begin_frame_source: Cell<bool>,
+    programmatic_scroll_animation: RefCell<Option<ProgrammaticScrollAnimation>>,
     preferred_color_scheme: Cell<PreferredColorScheme>,
     forced_colors: Cell<ForcedColors>,
 }
@@ -1483,6 +1496,8 @@ impl PageState {
             scroll_updates: RefCell::new(Vec::new()),
             animation_engine: RefCell::new(animation::AnimationEngine::new()),
             animation_begin_frame_requested: Cell::new(false),
+            has_begin_frame_source: Cell::new(false),
+            programmatic_scroll_animation: RefCell::new(None),
             preferred_color_scheme: Cell::new(preferred_color_scheme),
             forced_colors: Cell::new(ForcedColors::kNone),
         })
@@ -1499,6 +1514,88 @@ impl PageState {
             constraints,
             client,
         )
+    }
+
+    fn SetProgrammaticScrollOffset(
+        &self,
+        target_node_id: u64,
+        offset: Offset,
+        behavior: ViewportScrollBehavior,
+    ) {
+        use compositor::{
+            adapter::{geometry::PointF, time::TimeDelta},
+            cc::animation::{
+                scroll_offset_animation_curve::{ScrollCurveConfig, ScrollType},
+                scroll_offset_animation_curve_factory::ScrollOffsetAnimationCurveFactory,
+            },
+        };
+
+        if behavior == ViewportScrollBehavior::Instant || !self.has_begin_frame_source.get() {
+            self.programmatic_scroll_animation.borrow_mut().take();
+            self.ApplyMutation(PageMutation::ScrollMutation(
+                page_mutation::ScrollMutation {
+                    target_node_id,
+                    offset,
+                },
+            ));
+            return;
+        }
+
+        let current = {
+            let owner = self.document.borrow();
+            let document = owner.GetDocument();
+            document
+                .FindNodeById(target_node_id)
+                .map_or(offset, |node| document.ScrollOffsetFor(node))
+        };
+        if current == offset {
+            self.programmatic_scroll_animation.borrow_mut().take();
+            return;
+        }
+        // Source: ProgrammaticScrollAnimator::AnimateToOffset. Reuse cc's
+        // translated kProgrammatic delta-based curve; Page is the owner that
+        // registers the animation against the embedding's BeginFrame source.
+        let mut curve = ScrollOffsetAnimationCurveFactory::CreateAnimation(
+            PointF::new(offset.x as f32, offset.y as f32),
+            ScrollType::kProgrammatic,
+            Arc::new(ScrollCurveConfig::default()),
+        );
+        curve.SetInitialValue(
+            PointF::new(current.x as f32, current.y as f32),
+            TimeDelta::default(),
+            0.0,
+        );
+        *self.programmatic_scroll_animation.borrow_mut() = Some(ProgrammaticScrollAnimation {
+            target_node_id,
+            curve,
+            start_time: None,
+        });
+        self.animation_begin_frame_requested.set(true);
+    }
+
+    fn TickProgrammaticScroll(&self, frame_time: std::time::Instant) {
+        use compositor::adapter::time::TimeDelta;
+
+        let Some(mut animation) = self.programmatic_scroll_animation.borrow_mut().take() else {
+            return;
+        };
+        let start = *animation.start_time.get_or_insert(frame_time);
+        let elapsed = frame_time.saturating_duration_since(start);
+        let elapsed = TimeDelta::Microseconds(elapsed.as_micros().min(i64::MAX as u128) as i64);
+        let value = animation.curve.GetValue(elapsed);
+        self.ApplyMutation(PageMutation::ScrollMutation(
+            page_mutation::ScrollMutation {
+                target_node_id: animation.target_node_id,
+                offset: Offset {
+                    x: f64::from(value.x()),
+                    y: f64::from(value.y()),
+                },
+            },
+        ));
+        if elapsed < animation.curve.Duration() {
+            *self.programmatic_scroll_animation.borrow_mut() = Some(animation);
+            self.animation_begin_frame_requested.set(true);
+        }
     }
 
     fn InvalidateLayoutOutput(&self) {
@@ -1748,10 +1845,15 @@ impl PageState {
         let geometry = state.clone();
         let scroll = state.clone();
         let viewport_scroll = state.clone();
+        let viewport_scroll_write = state.clone();
         let stylesheet = state.clone();
         let animation = state.clone();
         let host = DOMBindingsHost {
+            write_viewport_scroll: Some(Box::new(move |target_node_id, offset, behavior| {
+                viewport_scroll_write.SetProgrammaticScrollOffset(target_node_id, offset, behavior);
+            })),
             write_scroll: Some(Box::new(move |target_node_id, offset| {
+                scroll.programmatic_scroll_animation.borrow_mut().take();
                 scroll.ApplyMutation(PageMutation::ScrollMutation(
                     page_mutation::ScrollMutation {
                         target_node_id,
@@ -3527,9 +3629,15 @@ impl Page {
             // A clean frame does not imply that late image/font requests have no
             // work. Continue their transport/completion lifecycle after window load.
             if !was_loading
-                && (self.resources.HasPendingImages() || self.resources.HasPendingFonts())
+                && (self.resources.HasPendingStyleSheets()
+                    || self.resources.HasPendingImages()
+                    || self.resources.HasPendingFonts())
             {
-                self.ResolveStylesAndLoadResources()?;
+                // Resource completion is an ordinary Page task. Keep the
+                // same one-completion admission used while the document is
+                // loading; a late image/font must not turn one wake into an
+                // unbounded decode batch.
+                self.ResolveStylesAndLoadResources(1)?;
             }
             let loading_done = started.map(|start| start.elapsed());
             let run_host_tasks = if let Some(scripts) = &mut self.scripts {
@@ -3572,9 +3680,10 @@ impl Page {
             }
             if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
                 eprintln!(
-                    "page-loading-state loading={} document={:?} images={} fonts={}",
+                    "page-loading-state loading={} document={:?} styles={} images={} fonts={}",
                     self.open_engine.IsLoading(),
                     self.open_engine.LoaderStatus(),
+                    self.resources.HasPendingStyleSheets(),
                     self.resources.HasPendingImages(),
                     self.resources.HasPendingFonts()
                 );
@@ -3897,6 +4006,7 @@ impl Page {
     // resource-completion contract. Network navigation never enters this adapter.
     fn FinishSuppliedDocumentResources(&mut self) -> io::Result<()> {
         self.state.ResolveStyles();
+        self.resources.QueueReferencedStyleSheets()?;
         self.resources.QueueReferencedImages()?;
         self.resources.PrepareFontFaces();
         self.state.EnsureLayoutOutput();
@@ -3905,6 +4015,7 @@ impl Page {
             state: self.state.clone(),
             scripts: self.scripts.as_deref_mut(),
         };
+        self.resources.LoadPendingStyleSheets(&mut client);
         self.resources.LoadPendingImages(&mut client);
         self.resources.LoadPendingFonts(&mut client);
         self.state.ResolveStyles();
@@ -3912,12 +4023,12 @@ impl Page {
     }
 
     // cpp: browser/browser.cc:1761-1771
-    fn ResolveStylesAndLoadResources(&mut self) -> io::Result<()> {
+    fn ResolveStylesAndLoadResources(&mut self, completion_allowance: usize) -> io::Result<()> {
         opening::ResolvePageStylesAndLoadResources(
             &self.state,
             &self.resources,
             &mut self.scripts,
-            usize::MAX,
+            completion_allowance,
             true,
         )
         .map(|_| ())
@@ -3969,7 +4080,12 @@ impl Page {
             && self.state.document.borrow().GetStyleImpact().IsEmpty();
         trace.set("retained_input_only", retained_input_only as u8 as f64);
         if !retained_input_only {
-            self.ResolveStylesAndLoadResources()?;
+            // Blink runs resource completion callbacks as ordinary tasks.
+            // A rendering opportunity may discover references and resolve
+            // already-applied style mutations, but it must not synchronously
+            // poll/decode unrelated network completions. This keeps the
+            // compositor active tree drawable while BeginMainFrame is busy.
+            self.ResolveStylesAndLoadResources(0)?;
         }
         let resources_done = profile.map(|start| start.elapsed());
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());

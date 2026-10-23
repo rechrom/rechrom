@@ -68,6 +68,30 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 },
                 AbsoluteRect(self.node, axis.track_offset, axis.track_size),
                 self.node.contents_properties.nodes.transform.clone(),
+                crate::paint_engine::ScrollbarDisplayItemData {
+                    element_id: axis.compositor_element_id,
+                    track_rect: PaintRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: axis.track_size.width,
+                        height: axis.track_size.height,
+                    },
+                    thumb_rect: PaintRect {
+                        x: axis.thumb_offset.x - axis.track_offset.x,
+                        y: axis.thumb_offset.y - axis.track_offset.y,
+                        width: axis.thumb_size.width,
+                        height: axis.thumb_size.height,
+                    },
+                    thumb_color: data.thumb_color,
+                    horizontal: axis.horizontal,
+                    overlay: data.uses_overlay_scrollbars,
+                    left_side_vertical: axis.left_side_vertical,
+                    minimum_thumb_length: data.minimum_thumb_length,
+                    needs_update_display: axis.needs_update_display.unwrap_or(true),
+                    // A visible scrollbar is an opaque input target. This is
+                    // ScrollableAreaPainter's kMixed -> kOpaque normalization.
+                    hit_test_opaqueness: crate::paint_engine::PaintHitTestOpaqueness::Opaque,
+                },
                 self.node.paint_snap_offset,
             );
             self.context.borrow_mut().Append(

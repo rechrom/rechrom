@@ -17,6 +17,12 @@ pub struct ViewportScrollState {
     pub snap: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportScrollBehavior {
+    Instant,
+    Smooth,
+}
+
 impl DOMJavaScriptBindings {
     pub(super) fn CallViewportScroll(
         &mut self,
@@ -69,8 +75,6 @@ impl DOMJavaScriptBindings {
         };
         let unsupported = if state.snap {
             Some("Viewport scroll snapping is not implemented")
-        } else if behavior == "smooth" || (behavior == "auto" && state.smooth_behavior) {
-            Some("Smooth viewport scrolling is not implemented")
         } else {
             None
         };
@@ -129,6 +133,15 @@ impl DOMJavaScriptBindings {
             x: rounded.x() as f64,
             y: rounded.y() as f64,
         };
+        let behavior = if behavior == "smooth" || (behavior == "auto" && state.smooth_behavior) {
+            ViewportScrollBehavior::Smooth
+        } else {
+            ViewportScrollBehavior::Instant
+        };
+        if let Some(write) = self.services.host.write_viewport_scroll.as_mut() {
+            write(state.target_node_id, offset, behavior);
+            return Some(Self::value(HostValue::String(String::new())));
+        }
         let Some(write) = self.services.host.write_scroll.as_mut() else {
             return Some(Self::value(HostValue::String(
                 "Viewport scrolling requires a connected host".into(),

@@ -108,6 +108,7 @@ pub struct NativeTaskRunnerServices {
     main: Arc<dyn CompositorExecutor>,
     compositor_id: HostImplTaskRunnerId,
     main_id: HostImplTaskRunnerId,
+    has_impl_thread: bool,
 }
 impl NativeTaskRunnerServices {
     pub fn new(compositor: Arc<dyn CompositorExecutor>, main: Arc<dyn CompositorExecutor>) -> Self {
@@ -117,10 +118,31 @@ impl NativeTaskRunnerServices {
         let compositor_id = identity(&compositor);
         let main_id = identity(&main);
         Self {
+            has_impl_thread: !Arc::ptr_eq(&compositor, &main),
             compositor,
             main,
             compositor_id,
             main_id,
+        }
+    }
+
+    /// The native engine serializes both Proxy sequences through one injected
+    /// owner executor, while Page keeps the document sequence outside that
+    /// engine. Preserve the two logical runner identities so cc selects the
+    /// same threaded ProxyImpl lifecycle as Chromium production widgets.
+    pub(crate) fn new_threaded_on_single_executor(executor: Arc<dyn CompositorExecutor>) -> Self {
+        let compositor_id =
+            HostImplTaskRunnerId(Arc::as_ptr(&executor) as *const () as usize as u64);
+        // Trait-object allocations are pointer-aligned, so the low bit is free
+        // for the colocated main-sequence identity and remains stable across
+        // independently assembled service facets.
+        let main_id = HostImplTaskRunnerId(compositor_id.0 ^ 1);
+        Self {
+            compositor: executor.clone(),
+            main: executor,
+            compositor_id,
+            main_id,
+            has_impl_thread: true,
         }
     }
     pub fn Resolve(&self, id: HostImplTaskRunnerId) -> Option<&Arc<dyn CompositorExecutor>> {
@@ -155,7 +177,7 @@ impl HostImplTaskRunnerServices for NativeTaskRunnerServices {
         self.compositor_id
     }
     fn HasImplThread(&self, _provider: HostImplTaskRunnerProviderId) -> bool {
-        !Arc::ptr_eq(&self.compositor, &self.main)
+        self.has_impl_thread
     }
 }
 

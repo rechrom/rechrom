@@ -285,6 +285,8 @@ impl Page {
         wheel: &WheelEvent,
         target_node_id: Option<u64>,
     ) -> io::Result<()> {
+        // User scrolling interrupts ProgrammaticScrollAnimator in Chromium.
+        self.state.programmatic_scroll_animation.borrow_mut().take();
         if wheel.compositor_owned {
             // InputHandler already moved the impl tree. Main receives its
             // actual (clamped) delta at BeginMainFrame, including corrections.

@@ -136,6 +136,7 @@ struct HostLifecycleState {
     needs_prepare_tiles: bool,
     needs_commit: bool,
     needs_redraw: bool,
+    redraw_sequence: u64,
     needs_one_begin_impl_frame: bool,
     has_active_threaded_scroll: bool,
     waiting_for_scroll_event: bool,
@@ -157,6 +158,7 @@ impl NativeHostLifecycle {
                 needs_prepare_tiles: false,
                 needs_commit: false,
                 needs_redraw: false,
+                redraw_sequence: 0,
                 needs_one_begin_impl_frame: false,
                 has_active_threaded_scroll: false,
                 waiting_for_scroll_event: false,
@@ -255,6 +257,13 @@ impl NativeHostLifecycle {
             .Push(HostLifecycleEffect::SetWaitingForScrollEvent { delegate, waiting });
     }
 
+    pub(crate) fn waiting_for_scroll_event(&self) -> bool {
+        self.state
+            .lock()
+            .expect("impl lifecycle state")
+            .waiting_for_scroll_event
+    }
+
     pub(crate) fn SetDeferBeginMainFrameFromImpl(&self, delegate: HostImplDelegateId, defer: bool) {
         self.state
             .lock()
@@ -281,12 +290,19 @@ impl NativeHostLifecycle {
     }
 
     pub(crate) fn SetNeedsRedraw(&self, delegate: HostImplDelegateId) {
+        let mut state = self.state.lock().expect("impl lifecycle state");
+        state.needs_redraw = true;
+        state.redraw_sequence = state.redraw_sequence.wrapping_add(1);
+        drop(state);
+        self.effects
+            .Push(HostLifecycleEffect::SetNeedsRedraw { delegate });
+    }
+
+    pub(crate) fn redraw_sequence(&self) -> u64 {
         self.state
             .lock()
             .expect("impl lifecycle state")
-            .needs_redraw = true;
-        self.effects
-            .Push(HostLifecycleEffect::SetNeedsRedraw { delegate });
+            .redraw_sequence
     }
 
     pub(crate) fn SetNeedsImplSideInvalidation(

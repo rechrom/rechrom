@@ -227,6 +227,12 @@ impl<B: LayerImplTypes> ScrollbarLayerImplBase<B> {
         self.scroll_element_id_ = value;
         c.tree.RegisterScrollbar(self);
     }
+    /// Property synchronization writes the same native field before the new
+    /// tree's registration walk. Registration itself is owned by
+    /// LayerTreeImpl once the resident layer is installed.
+    pub fn SetScrollElementIdForPropertyPush(&mut self, value: ElementId) {
+        self.scroll_element_id_ = value;
+    }
     // Source: cc/layers/scrollbar_layer_impl_base.h:30; cc/layers/scrollbar_layer_impl_base.cc:79-86.
     pub fn SetCurrentPos(&mut self, value: f32, c: &mut LayerImplContext<'_, B>) -> bool {
         let (base, mut fields) = self.SplitGeometryFields();

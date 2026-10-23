@@ -27,7 +27,7 @@ use host_graph::{DOMHostGraph, LiveCollectionIds};
 pub use services::DOMBindingsHost;
 #[path = "viewport_scroll.rs"]
 mod viewport_scroll;
-pub use viewport_scroll::ViewportScrollState;
+pub use viewport_scroll::{ViewportScrollBehavior, ViewportScrollState};
 #[path = "dom_mutation_notification.rs"]
 mod mutation_notifications;
 pub use mutation_notifications::MutationNotification;
@@ -2116,12 +2116,15 @@ impl DOMJavaScriptBindings {
                 )
             }
             // cpp: webapi/dom_bindings.cc:963-995
-            "getAttribute" | "hasAttribute" | "removeAttribute" | "setAttribute" => {
+            "getAttribute" | "hasAttribute" | "removeAttribute" | "setAttribute"
+            | "setAttributeNS" => {
                 if node.Type() != DOMNodeType::kElement {
                     return Self::type_error("attribute method requires an element receiver");
                 }
-                let name = if member == "setAttribute" {
-                    dom_string_argument(arguments.first())
+                let namespaced = member == "setAttributeNS";
+                let name_argument = usize::from(namespaced);
+                let name = if matches!(member, "setAttribute" | "setAttributeNS") {
+                    dom_string_argument(arguments.get(name_argument))
                 } else {
                     match arguments.first() {
                         Some(HostValue::String(name)) => Some(name.clone()),
@@ -2129,14 +2132,60 @@ impl DOMJavaScriptBindings {
                     }
                 };
                 let Some(name) = name else {
-                    return Self::type_error(if member == "setAttribute" {
-                        "setAttribute requires string-convertible name and value"
-                    } else {
-                        "attribute method requires a name"
-                    });
+                    return Self::type_error(
+                        if matches!(member, "setAttribute" | "setAttributeNS") {
+                            "setAttribute requires string-convertible name and value"
+                        } else {
+                            "attribute method requires a name"
+                        },
+                    );
                 };
+                let (prefix, local_name) = if namespaced {
+                    let mut parts = name.split(':');
+                    let first = parts.next().unwrap_or_default();
+                    match (parts.next(), parts.next()) {
+                        (None, _) if !first.is_empty() => (String::new(), first.to_owned()),
+                        (Some(local), None) if !first.is_empty() && !local.is_empty() => {
+                            (first.to_owned(), local.to_owned())
+                        }
+                        _ => {
+                            return Self::type_error(
+                                "setAttributeNS requires a valid qualified name",
+                            )
+                        }
+                    }
+                } else {
+                    (String::new(), name.clone())
+                };
+                let namespace_uri = if namespaced {
+                    match arguments.first() {
+                        Some(HostValue::Null(_)) | None => String::new(),
+                        Some(value) => dom_string_argument(Some(value)).unwrap_or_default(),
+                    }
+                } else {
+                    String::new()
+                };
+                if namespaced
+                    && ((!prefix.is_empty() && namespace_uri.is_empty())
+                        || (prefix == "xml"
+                            && namespace_uri != "http://www.w3.org/XML/1998/namespace")
+                        || ((prefix == "xmlns" || name == "xmlns")
+                            && namespace_uri != "http://www.w3.org/2000/xmlns/")
+                        || (namespace_uri == "http://www.w3.org/2000/xmlns/"
+                            && prefix != "xmlns"
+                            && name != "xmlns"))
+                {
+                    return Self::type_error(
+                        "setAttributeNS namespace does not match qualified name",
+                    );
+                }
                 let attribute = node
-                    .FindAttribute(&name)
+                    .Attributes()
+                    .iter()
+                    .find(|attribute| {
+                        attribute.local_name == local_name
+                            && attribute.namespace_uri == namespace_uri
+                    })
                     .map(|attribute| attribute.value.clone());
                 if member == "getAttribute" {
                     return Self::value(
@@ -2146,8 +2195,10 @@ impl DOMJavaScriptBindings {
                 if member == "hasAttribute" {
                     return Self::value(HostValue::Boolean(attribute.is_some()));
                 }
-                let value = if member == "setAttribute" {
-                    let Some(value) = dom_string_argument(arguments.get(1)) else {
+                let value = if matches!(member, "setAttribute" | "setAttributeNS") {
+                    let Some(value) =
+                        dom_string_argument(arguments.get(if namespaced { 2 } else { 1 }))
+                    else {
                         return Self::type_error(
                             "setAttribute requires string-convertible name and value",
                         );
@@ -2162,21 +2213,23 @@ impl DOMJavaScriptBindings {
                 let mut trace = browser_tracing::span("dom", "DOMMutationHost");
                 trace.set(
                     "mutation_type",
-                    if member == "setAttribute" {
+                    if matches!(member, "setAttribute" | "setAttributeNS") {
                         DOMMutationType::kSetAttribute as u8 as f64
                     } else {
                         DOMMutationType::kRemoveAttribute as u8 as f64
                     },
                 );
                 (self.emit_mutation.borrow_mut())(&DOMMutation {
-                    mutation_type: if member == "setAttribute" {
+                    mutation_type: if matches!(member, "setAttribute" | "setAttributeNS") {
                         DOMMutationType::kSetAttribute
                     } else {
                         DOMMutationType::kRemoveAttribute
                     },
                     target_node_id: receiver,
-                    name,
+                    name: local_name,
+                    prefix,
                     value,
+                    namespace_uri,
                     ..Default::default()
                 });
                 HostResult::default()
@@ -2402,6 +2455,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     | "removeChild"
                     | "setStyle"
                     | "setAttribute"
+                    | "setAttributeNS"
                     | "removeAttribute"
                     | "__setSlotName"
                     | "assign"
@@ -2647,7 +2701,7 @@ fn is_method(node_type: DOMNodeType, member: &str) -> bool {
     }
     if matches!(
         member,
-        "getAttribute" | "hasAttribute" | "setAttribute" | "removeAttribute"
+        "getAttribute" | "hasAttribute" | "setAttribute" | "setAttributeNS" | "removeAttribute"
     ) {
         return node_type == DOMNodeType::kElement;
     }

@@ -1187,6 +1187,22 @@ impl FlexLayoutAlgorithm {
             depends_on_min_max_sizes.get(),
             self.is_horizontal_flow_,
         );
+        if std::env::var_os("RECHROM_DIAG_FLEX").is_some()
+            && self.is_horizontal_flow_
+            && base_border_size.ToDouble() >= 250.0
+        {
+            eprintln!(
+                "flex-item base_border={} base_content={} min={} max={} grow={} shrink={} auto_min={} container_main={}",
+                base_border_size.ToDouble(),
+                base_content_size.ToDouble(),
+                min_max_sizes.min_size.ToDouble(),
+                min_max_sizes.max_size.ToDouble(),
+                flex_grow,
+                flex_shrink,
+                auto_min_length.is_some(),
+                self.MainAxisContentExtent(kIndefiniteSize).ToDouble(),
+            );
+        }
         (item, min_content_contribution, has_percent_basis)
     }
 
@@ -1822,6 +1838,24 @@ impl FlexLayoutAlgorithm {
                     &*To::<PhysicalBoxFragment>(layout_result.GetPhysicalFragment() as *const _)
                 };
                 let fragment = LogicalBoxFragment::new(writing_direction, physical_fragment);
+                if std::env::var_os("RECHROM_DIAG_FLEX").is_some() && !self.is_column_ {
+                    let expected = item.FlexedBorderBoxSize();
+                    let actual = fragment.InlineSize();
+                    if expected != actual {
+                        eprintln!(
+                            "flex-final-size-mismatch expected={} actual={} base={} hypothetical={} flexed={} min={} max={} grow={} shrink={}",
+                            expected.ToDouble(),
+                            actual.ToDouble(),
+                            item.base_content_size.ToDouble(),
+                            item.hypothetical_content_size.ToDouble(),
+                            item.flexed_content_size.ToDouble(),
+                            item.main_axis_min_max_sizes.min_size.ToDouble(),
+                            item.main_axis_min_max_sizes.max_size.ToDouble(),
+                            item.flex_grow,
+                            item.flex_shrink,
+                        );
+                    }
+                }
                 let cross_axis_size = if self.is_column_ {
                     fragment.InlineSize()
                 } else {

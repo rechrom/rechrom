@@ -926,6 +926,10 @@ fn generated_shader_paint(flags: &CpuPaintFlags<SkRegion>, alpha: f32) -> io::Re
     let authored = authored.to_skia();
     let shader = gradient_shader(&authored)?;
     paint.setShader(Some(shader));
+    // Source: third_party/blink/renderer/platform/graphics/gradient.cc
+    // Gradient::ApplyToFlags. Blink preserves the legacy rule that every
+    // gradient is dithered when it hands the shader to Skia.
+    paint.setDither(true);
     Ok(paint)
 }
 
@@ -2202,6 +2206,10 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
 
         let mut paint = command_paint(item, false);
         paint.setShader(Some(gradient_shader(&shader)?));
+        // Source: third_party/blink/renderer/platform/graphics/gradient.cc
+        // Gradient::ApplyToFlags. Without this flag, 8-bit output quantizes a
+        // long CSS gradient into visible full-width color bands.
+        paint.setDither(true);
         unsafe {
             self.target
                 .draw_rect(&rect(destination), &paint)

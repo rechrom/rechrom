@@ -157,8 +157,7 @@ pub(crate) fn Create(
         sink_id,
         resources.clone(),
     )));
-    let runners = Arc::new(NativeTaskRunnerServices::new(
-        executors.compositor.clone(),
+    let runners = Arc::new(NativeTaskRunnerServices::new_threaded_on_single_executor(
         executors.compositor.clone(),
     ));
     let main_animations = NativeAnimationOwner::default();
@@ -229,7 +228,7 @@ pub(crate) fn Create(
     let core_owners = NativeHostCoreOwners::new(
         NativeMetricsServices::new(options.metrics, options.events.clone()),
         impl_animations.clone(),
-        NativeTaskRunnerServices::new(executors.compositor.clone(), executors.compositor.clone()),
+        NativeTaskRunnerServices::new_threaded_on_single_executor(executors.compositor.clone()),
         commands.clone(),
         Arc::new(ImageAnimationDelivery(commands.clone())),
         Arc::new(OsSurfaceTokenSource),
@@ -335,8 +334,7 @@ pub(crate) fn Create(
             options.events.clone(),
             options.metadata,
         )),
-        task_runners: Box::new(NativeTaskRunnerServices::new(
-            executors.compositor.clone(),
+        task_runners: Box::new(NativeTaskRunnerServices::new_threaded_on_single_executor(
             executors.compositor.clone(),
         )),
         resource_returns: Box::new(g()),
@@ -391,6 +389,7 @@ pub(crate) fn Create(
             &OsSurfaceTokenSource,
         ),
     };
+    let input_client = Arc::new(super::native_input_client::NativeInputHandlerClient::default());
     let core = NativeEngineCore::new(
         services,
         init,
@@ -402,6 +401,7 @@ pub(crate) fn Create(
         sink,
         local_surface_id,
         owner + 1,
+        input_client.clone(),
     )?;
     super::engine_assembly::NativeEngineAssembly::new(
         core,
@@ -414,6 +414,7 @@ pub(crate) fn Create(
         native.render.clone(),
         native.resource_effects.clone(),
         native.latency_monitors.clone(),
+        input_client,
     )
 }
 
@@ -431,13 +432,10 @@ impl NativeFactoryOptions {
             defer_impl_invalidation: true,
             defer_impl_invalidation_frames: 4,
             scroll_event_dispatch_mode: "DispatchScrollEventsUntilDeadline".into(),
-            // Chromium enables late-scroll deadline waiting only when
-            // InputHandler is bound to an InputHandlerProxy/CTEQ client whose
-            // HasQueuedInput() reports frame-aligned input. This embedding
-            // dispatches wheel input synchronously on the impl sequence and
-            // has no CTEQ client, so waiting would spend one third of every
-            // frame on an input queue that cannot become non-empty.
-            wait_for_late_scroll_events: false,
+            // NativeInputHandlerClient is the embedding's CTEQ boundary. It
+            // reports queued precision-wheel updates and InputHandler drains
+            // them from WillBeginImplFrame before the deadline decision.
+            wait_for_late_scroll_events: true,
             wait_for_late_scroll_events_deadline_ratio: 0.333,
             renderer_image_decode_working_set_bytes: 128 * 1024 * 1024,
             browser_image_decode_working_set_bytes: 128 * 1024 * 1024,
@@ -450,6 +448,10 @@ impl NativeFactoryOptions {
         let mut settings = LayerTreeSettings::new(picture.as_ref());
         // Source: third_party/blink/renderer/platform/widget/compositing/layer_tree_settings.cc:364.
         settings.use_layer_lists = true;
+        // Source: third_party/blink/renderer/platform/widget/compositing/
+        //         layer_tree_settings.cc:374-379. Production renderer widgets
+        // use ProxyImpl scheduling, including the late-scroll deadline mode.
+        settings.single_thread_proxy_scheduler = false;
         // Chromium enables fractional commit deltas only when the experimental
         // FractionalScrollOffsets runtime feature is enabled. That feature is
         // disabled by default; keep cc's source default so Blink receives
@@ -458,6 +460,18 @@ impl NativeFactoryOptions {
         //         layer_tree_settings.cc:364-370.
         // Source: content/public/common/content_features.cc:521.
         settings.commit_fractional_scroll_deltas = false;
+        // Source: third_party/blink/renderer/platform/widget/compositing/
+        //         layer_tree_settings.cc:65-85,472-493 and
+        //         ui/native_theme/overlay_scrollbar_constants.cc:12-20.
+        // The browser constraint theme uses desktop overlay scrollbars, so cc
+        // owns their visibility and fade lifecycle rather than leaving the
+        // solid-color thumb permanently visible.
+        settings.scrollbar_animator =
+            crate::cc::trees::layer_tree_settings::ScrollbarAnimator::AURA_OVERLAY;
+        settings.scrollbar_fade_delay = crate::adapter::time::TimeDelta::Milliseconds(500);
+        settings.scrollbar_fade_duration = crate::adapter::time::TimeDelta::Milliseconds(200);
+        settings.scrollbar_thinning_duration = crate::adapter::time::TimeDelta::Milliseconds(200);
+        settings.idle_thickness_scale = 0.4;
         // This assembly implements the renderer's pending-tree ProxyImpl
         // protocol even when both logical sequences use one injected executor.
         // Source settings defaults target SingleThreadProxy and commit active;
@@ -537,10 +551,8 @@ impl NativeFactoryOptions {
             },
             input: NativeInputConfig {
                 // Keep this capability in lockstep with the picture feature
-                // above. InputHandler::BindToClient is what installs Chromium's
-                // queue-aware client; until that boundary exists, immediate
-                // impl dispatch must use the ordinary regular deadline.
-                wait_for_late_scroll_events: false,
+                // and the queue-aware InputHandlerClient above.
+                wait_for_late_scroll_events: true,
                 overscroll_effect_on_non_root_scrollers: true,
                 snap_fling_near_extremes: true,
                 limit_scroll_delta_to_scroller_size: true,
@@ -582,7 +594,7 @@ pub(crate) fn CreateDefault(
             layer_merge_distance_limit: 0x10000000,
         },
         super::paint::CpuNativePaintDiagnostics {
-            trace: false,
+            trace: std::env::var_os("RECHROM_DIAG_STACKING").is_some(),
             verbose_level: 0,
             histogram: false,
         },

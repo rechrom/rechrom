@@ -2,7 +2,8 @@
 //! Source Page resource state. Page supplies mutation and event delivery, so
 //! decoding and polling do not replace the source DOM/dirty/task lifecycle.
 use crate::{
-    resource_loader::{ResourceLoadResult, ResourceLoader},
+    resource_loader::{RequireResponse, ResourceLoadResult, ResourceLoader},
+    text_decode::DecodeText,
     url_reference::ResolveUrl,
 };
 use cssom::{CSSFontFaceRule, CSSStyleSheet};
@@ -53,6 +54,18 @@ struct PendingImage {
     decode: Option<decode::ImageDecodeJob>,
     is_multipart_response: Option<bool>,
     blocks_load: bool,
+}
+
+// cpp: third_party/blink/renderer/core/html/link_style.h;
+//      third_party/blink/renderer/core/loader/resource/css_style_sheet_resource.h
+struct PendingStyleSheet {
+    owner_node_id: u64,
+    signature: String,
+    url: String,
+    resource: ResourceLoader,
+    alternate: bool,
+    title: String,
+    media: String,
 }
 
 struct DeferredImage {
@@ -120,8 +133,11 @@ pub struct ResourceFetcher {
     document: Rc<RefCell<DOM>>,
     constraints: Rc<RefCell<ConstraintSpace>>,
     base_url: RefCell<String>,
+    style_sheet_signatures: RefCell<HashMap<u64, String>>,
+    pending_style_sheets: RefCell<Vec<PendingStyleSheet>>,
     loaded_image_sources: RefCell<HashSet<String>>,
     image_event_sources: RefCell<HashMap<u64, String>>,
+    cached_image_event_sources: RefCell<HashSet<String>>,
     image_event_subtrees: RefCell<Option<ImageEventSubtrees>>,
     pending_images: RefCell<Vec<PendingImage>>,
     deferred_images: RefCell<Vec<DeferredImage>>,
@@ -147,8 +163,11 @@ impl ResourceFetcher {
             document,
             constraints,
             base_url: RefCell::new(current_url.clone()),
+            style_sheet_signatures: RefCell::new(HashMap::new()),
+            pending_style_sheets: RefCell::new(Vec::new()),
             loaded_image_sources: RefCell::new(HashSet::new()),
             image_event_sources: RefCell::new(HashMap::new()),
+            cached_image_event_sources: RefCell::new(HashSet::new()),
             image_event_subtrees: RefCell::new(None),
             pending_images: RefCell::new(Vec::new()),
             deferred_images: RefCell::new(Vec::new()),
@@ -320,14 +339,6 @@ impl ResourceFetcher {
         mut sheet: CSSStyleSheet,
         base: &str,
     ) -> io::Result<()> {
-        if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
-            eprintln!(
-                "stylesheet-resource base={base} active={} rules={} font_faces={}",
-                d.StyleSheetCanBeActivated(&sheet),
-                sheet.rules.len(),
-                sheet.font_faces.len(),
-            );
-        }
         let detached = d
             .FindNodeById(sheet.owner_node_id)
             .is_some_and(|i| d.Node(i).OwnerDocumentNode() != Some(d.RootHandle()));
@@ -347,6 +358,204 @@ impl ResourceFetcher {
 
     pub fn OwnsDocument(&self, document: &Rc<RefCell<DOM>>) -> bool {
         Rc::ptr_eq(&self.document, document)
+    }
+
+    /// Discover stylesheet links created or changed after the HTML parser's
+    /// insertion callback. Blink gives every connected HTMLLinkElement a
+    /// LinkStyle loader; the document-wide lifecycle walk here is the Rust
+    /// ownership equivalent and deliberately shares ResourceEngine with the
+    /// parser so URL requests remain coalesced.
+    pub fn QueueReferencedStyleSheets(&self) -> io::Result<usize> {
+        struct Request {
+            owner_node_id: u64,
+            signature: String,
+            href: String,
+            referrer_policy: Option<ReferrerPolicy>,
+            alternate: bool,
+            title: String,
+            media: String,
+        }
+
+        let mut requests = Vec::new();
+        let mut metadata_updates = Vec::new();
+        {
+            let owner = self.document.borrow();
+            let document = owner.GetDocument();
+            for i in 0..document.NodeCount() {
+                if !document.IsConnectedToDocument(i) {
+                    continue;
+                }
+                let node = document.Node(i);
+                if !node.IsHTMLElement("link") {
+                    continue;
+                }
+                let attr = |name| node.FindAttribute(name).map_or("", |a| a.value.as_str());
+                let disabled = node.FindAttribute("disabled").is_some();
+                let disposition =
+                    html::link_style::ClassifyStyleSheetLink(attr("rel"), attr("type"), disabled);
+                let signature = format!(
+                    "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
+                    attr("href"),
+                    attr("rel"),
+                    attr("type"),
+                    disabled,
+                    attr("title"),
+                    attr("media")
+                );
+                let existing = document
+                    .StyleSheets(None)
+                    .iter()
+                    .find(|sheet| sheet.owner_node_id == node.Id());
+                if self.style_sheet_signatures.borrow().get(&node.Id()) == Some(&signature) {
+                    continue;
+                }
+                if !disposition.is_style_sheet || disabled || attr("href").is_empty() {
+                    if let Some(sheet) = existing {
+                        if !sheet.disabled {
+                            let mut sheet = sheet.clone();
+                            sheet.disabled = true;
+                            metadata_updates.push(sheet);
+                        }
+                    }
+                    self.style_sheet_signatures
+                        .borrow_mut()
+                        .insert(node.Id(), signature);
+                    continue;
+                }
+                // Parser-owned links have already completed before Page's
+                // ordinary discovery pass. Seed their signature without
+                // issuing a second request; ResourceEngine coalescing alone
+                // would not avoid a second CSS parse and owner replacement.
+                if existing.is_some()
+                    && !self
+                        .style_sheet_signatures
+                        .borrow()
+                        .contains_key(&node.Id())
+                {
+                    self.style_sheet_signatures
+                        .borrow_mut()
+                        .insert(node.Id(), signature);
+                    continue;
+                }
+                requests.push(Request {
+                    owner_node_id: node.Id(),
+                    signature,
+                    href: attr("href").to_owned(),
+                    referrer_policy: ReferrerPolicy::FromString(attr("referrerpolicy")),
+                    alternate: disposition.alternate,
+                    title: attr("title").to_owned(),
+                    media: attr("media").to_owned(),
+                });
+            }
+        }
+        for sheet in metadata_updates {
+            self.CommitStyleSheet(self.document.borrow_mut().GetDocumentMut(), sheet);
+        }
+        let current_url = self.engine.DocumentURL();
+        let base_url = self.base_url.borrow().clone();
+        let mut queued = 0;
+        for request in requests {
+            let url = ResolveUrl(&base_url, &request.href)?;
+            let resource = self.engine.Start(URLRequest {
+                url: url.clone(),
+                referrer: current_url.clone(),
+                referrer_policy: request.referrer_policy,
+                destination: RequestDestination::kStyleSheet,
+                ..Default::default()
+            });
+            self.style_sheet_signatures
+                .borrow_mut()
+                .insert(request.owner_node_id, request.signature.clone());
+            self.pending_style_sheets
+                .borrow_mut()
+                .push(PendingStyleSheet {
+                    owner_node_id: request.owner_node_id,
+                    signature: request.signature,
+                    url,
+                    resource,
+                    alternate: request.alternate,
+                    title: request.title,
+                    media: request.media,
+                });
+            queued += 1;
+        }
+        Ok(queued)
+    }
+
+    pub fn HasPendingStyleSheets(&self) -> bool {
+        !self.pending_style_sheets.borrow().is_empty()
+    }
+
+    pub fn PollPendingStyleSheetsWithBudget(
+        &self,
+        client: &mut dyn ResourceFetcherClient,
+        max_completions: usize,
+    ) -> usize {
+        if max_completions == 0 {
+            return 0;
+        }
+        let count = self.pending_style_sheets.borrow().len();
+        let mut completed = 0;
+        for _ in 0..count {
+            let mut pending = self
+                .pending_style_sheets
+                .borrow_mut()
+                .pop()
+                .expect("stylesheet count changed during poll");
+            if completed >= max_completions || !pending.resource.Poll() {
+                self.pending_style_sheets.borrow_mut().insert(0, pending);
+                continue;
+            }
+            completed += 1;
+            let result = RequireResponse(pending.resource.TakeResult()).and_then(|response| {
+                let base = if response.final_url.is_empty() {
+                    pending.url.clone()
+                } else {
+                    response.final_url.clone()
+                };
+                let css = DecodeText(&response)?;
+                let mut sheet = style::ParseCSSWithBase(&css, &base);
+                sheet.SetLinkMetadata(
+                    pending.owner_node_id,
+                    pending.alternate,
+                    false,
+                    pending.title.clone(),
+                    pending.media.clone(),
+                );
+                self.AddParsedStyleSheet(sheet, &base)
+            });
+            if let Err(error) = result {
+                // A changed href may retry. Do not pin the failed signature as
+                // a successful LinkStyle state.
+                if self
+                    .style_sheet_signatures
+                    .borrow()
+                    .get(&pending.owner_node_id)
+                    == Some(&pending.signature)
+                {
+                    self.style_sheet_signatures
+                        .borrow_mut()
+                        .remove(&pending.owner_node_id);
+                }
+                client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
+                    ResourceLoadFailed {
+                        kind: ResourceKind::kStyleSheet,
+                        source: None,
+                        url: pending.url,
+                        error: error.to_string(),
+                    },
+                ));
+            }
+        }
+        completed
+    }
+
+    pub fn LoadPendingStyleSheets(&self, client: &mut dyn ResourceFetcherClient) {
+        while self.HasPendingStyleSheets() {
+            if self.PollPendingStyleSheetsWithBudget(client, usize::MAX) == 0 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
     }
     // cpp: browser/browser.cc:1130-1172
     pub fn QueueFontFace(&self, rule: &CSSFontFaceRule, base: &str) -> io::Result<()> {
@@ -842,6 +1051,32 @@ impl ResourceFetcher {
         }
         let root = self.document.borrow().GetDocument().Root();
         visit(self, root, source, loaded, client);
+        // HTMLImageElement starts fetching while detached (`new Image()` is
+        // the common preload path), and Blink delivers its load/error event
+        // without requiring insertion into the document. The rooted walk
+        // above preserves shadow-including document order; finish with the
+        // matching detached image owners in arena creation order.
+        //
+        // Source: third_party/blink/renderer/core/html/html_image_element.cc
+        // ImageLoader::UpdatedHasPendingEvent / DispatchPendingEvent.
+        let detached = {
+            let owner = self.document.borrow();
+            let document = owner.GetDocument();
+            (0..document.NodeCount())
+                .filter_map(|i| {
+                    let node = document.Node(i);
+                    (!document.IsConnectedToDocument(i)
+                        && node.IsHTMLElement("img")
+                        && document
+                            .CurrentImageSource(i)
+                            .is_some_and(|current| current == source))
+                    .then_some(node.Id())
+                })
+                .collect::<Vec<_>>()
+        };
+        for id in detached {
+            self.DispatchImageEvent(id, loaded, client);
+        }
     }
 
     // cpp: browser/browser.cc:1359-1393
@@ -978,6 +1213,43 @@ impl ResourceFetcher {
                 &mut requests,
                 &mut selections,
             );
+            // ImageLoader is attached to HTMLImageElement rather than to the
+            // document tree. Discover every detached image as an independent
+            // owner so `new Image(); image.src = ...` participates in the same
+            // cache, decode and event lifecycle as an inserted element. Image
+            // elements cannot contain descendant images, so each visit is
+            // disjoint.
+            //
+            // Source: third_party/blink/renderer/core/html/
+            // html_image_element.cc; loader/image_loader.cc.
+            let detached_roots = (0..d.NodeCount())
+                .filter(|&i| !d.IsConnectedToDocument(i) && d.Node(i).IsHTMLElement("img"))
+                .collect::<Vec<_>>();
+            for root in detached_roots {
+                node(
+                    d,
+                    root,
+                    &constraints,
+                    selector.as_deref(),
+                    &is_loaded,
+                    &admitted,
+                    &mut seen,
+                    &mut requests,
+                    &mut selections,
+                );
+            }
+        }
+        {
+            let owner = self.document.borrow();
+            let document = owner.GetDocument();
+            let mut cached = self.cached_image_event_sources.borrow_mut();
+            for (_, selection) in &selections {
+                if let Some(selection) = selection {
+                    if document.ImageResourceFor(&selection.source).is_some() {
+                        cached.insert(selection.source.clone());
+                    }
+                }
+            }
         }
         let selection_changed = {
             let mut owner = self.document.borrow_mut();
@@ -1159,6 +1431,23 @@ impl ResourceFetcher {
         let count = self.pending_images.borrow().len();
         let mut completed = 0;
         let mut admitted = 0;
+        // A cache hit still queues a load event for each ImageLoader owner.
+        // Discovery records sources without calling script; this ordinary
+        // resource turn performs delivery with the same per-element dedupe as
+        // a fresh decode completion.
+        let cached_sources = {
+            let mut pending = self.cached_image_event_sources.borrow_mut();
+            let take = pending.len().min(max_completions);
+            let sources = pending.iter().take(take).cloned().collect::<Vec<_>>();
+            for source in &sources {
+                pending.remove(source);
+            }
+            sources
+        };
+        for source in cached_sources {
+            self.DispatchImageEvents(&source, true, client);
+            completed += 1;
+        }
         let mut index = 0;
         for _ in 0..count {
             if completed + admitted >= max_completions {
@@ -1196,16 +1485,6 @@ impl ResourceFetcher {
             };
             self.ApplyImageResult(image, result, client);
             completed += 1;
-        }
-        if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
-            eprintln!(
-                "image-loading-state completed={completed} pending={:?}",
-                self.pending_images
-                    .borrow()
-                    .iter()
-                    .map(|image| image.url.as_str())
-                    .collect::<Vec<_>>()
-            );
         }
         if let Some(start) = started {
             if start.elapsed().as_millis() >= 50 {
@@ -1275,17 +1554,6 @@ impl ResourceFetcher {
             index += 1;
         }
         self.PrepareFontFaces();
-        if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
-            eprintln!(
-                "font-loading-state completed={completed} pending={}",
-                self.pending_fonts
-                    .borrow()
-                    .iter()
-                    .filter(|face| face.resource.is_some()
-                        || (!face.loaded && face.next_url < face.metadata.urls.len()))
-                    .count()
-            );
-        }
         completed
     }
     // cpp: browser/browser.cc:1395-1407

@@ -521,13 +521,21 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         }
     }
 
-    fn UpdateScrollbarLayer(&mut self, old_pending_layer: Option<&mut Self>) {
+    fn UpdateScrollbarLayer(
+        &mut self,
+        old_pending_layer: Option<&mut Self>,
+        c: &mut LayerContext<'_, B>,
+    ) {
         debug_assert_eq!(self.compositing_type_, CompositingType::kScrollbarLayer);
         let item = self.FirstDisplayItem();
         debug_assert!(item.IsScrollbar());
         let old_layer = old_pending_layer.and_then(|old| old.cc_layer_.take());
         let layer =
-            item.CreateOrReuseScrollbarLayer(old_layer, self.offset_of_decomposited_transforms_);
+            item.CreateOrReuseScrollbarLayer(
+                old_layer,
+                self.offset_of_decomposited_transforms_,
+                c,
+            );
         debug_assert!(self.cc_layer_.is_none());
         self.cc_layer_ = Some(layer);
     }
@@ -606,7 +614,7 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
                 self.UpdateScrollHitTestLayer(old_pending_layer.as_deref_mut(), c)
             }
             CompositingType::kScrollbarLayer => {
-                self.UpdateScrollbarLayer(old_pending_layer.as_deref_mut())
+                self.UpdateScrollbarLayer(old_pending_layer.as_deref_mut(), c)
             }
             _ => {
                 debug_assert!(!self.ChunkRequiresOwnLayer());

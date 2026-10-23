@@ -75,10 +75,7 @@ impl<B: PaintChunksTypes<PaintArtifact = PaintArtifact, DisplayItem = DisplayIte
         )
     }
     fn IsScrollbar(&self) -> bool {
-        // The CPU producer supplies a complete PaintRecord rather than a
-        // compositor-owned ScrollbarLayer. Keep it in the ordinary picture
-        // path until PaintArtifact carries the native scrollbar layer inputs.
-        false
+        matches!(self.kind, RecordedDisplayItemKind::Scrollbar) && self.scrollbar.is_some()
     }
     fn GetPaintRecord(
         &self,
@@ -95,7 +92,13 @@ impl<B: PaintChunksTypes<PaintArtifact = PaintArtifact, DisplayItem = DisplayIte
         s.NativePaintRecord(a, self)
     }
     fn ScrollbarElementId(&self) -> ElementId {
-        unreachable!("PaintInput rejects absent native scrollbar layer owner")
+        ElementId::new(
+            self.scrollbar
+                .as_ref()
+                .expect("ScrollbarDisplayItem retains its compositor identity")
+                .element_id
+                .GetInternalValue(),
+        )
     }
 }
 impl<R, B> ConversionHitTestData<B> for paint::paint_engine::PaintHitTestData

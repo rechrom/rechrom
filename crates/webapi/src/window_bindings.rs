@@ -175,6 +175,7 @@ impl WindowJavaScriptBindings {
             "devicePixelRatio",
             "structuredClone",
             "queueMicrotask",
+            "__queueTask",
             "__request",
             "__cancelRequest",
             "__urlParts",
@@ -729,6 +730,32 @@ impl WindowJavaScriptBindings {
                     return error("queueMicrotask requires a function");
                 }
                 return runtime.as_mut().unwrap().EnqueueMicrotask(&callback);
+            }
+        }
+        if receiver == 0 && name == "__queueTask" {
+            if call.operation == HostOperation::kGet {
+                return method(0, name);
+            }
+            if call.operation == HostOperation::kCall {
+                let Some(callback) = function_arg(args, 0) else {
+                    return error("Task queue requires a function");
+                };
+                let callback = callback.clone();
+                // MessagePort dispatch belongs to the posted-message task
+                // source. It is a macrotask, but unlike a nested DOM timer it
+                // does not acquire timer nesting or the 4 ms timer clamp.
+                self.EnqueueTaskWithRuntime(
+                    Box::new(move |runtime, realm| {
+                        let _ = runtime.Call(
+                            realm,
+                            &callback,
+                            &HostValue::default(),
+                            &[],
+                        );
+                    }),
+                    None,
+                );
+                return HostResult::default();
             }
         }
         if receiver == 0
@@ -1729,6 +1756,10 @@ mod tests {
             __request('GET','fail','','',()=>{throw Error('unexpected success')},e=>{if(e!=='network failure')throw Error('failure');log.push('failure')});
             setTimeout((a,b)=>{if(a!==7||b!==8)throw Error('arguments');log.push('timer');queueMicrotask(()=>log.push('timer-job'));},0,7,8);
             var dropped=setTimeout(()=>{throw Error('cleared timer ran')},0);clearTimeout(dropped);
+            var channelLog=[];
+            var channel=new MessageChannel();
+            channel.port1.onmessage=event=>channelLog.push(event.data.value);
+            channel.port2.postMessage({value:9});
             true
         "#,
         );
@@ -1760,6 +1791,7 @@ mod tests {
             });
         }
         assert!(errors.is_empty(), "{errors:?}");
+        assert_script(&mut runtime, &realm, "JSON.stringify(channelLog) === '[9]'");
         assert_script(&mut runtime,&realm,"JSON.stringify(log) === JSON.stringify(['queued','promise','network','network-job','timer','timer-job','failure'])");
         assert_eq!(
             requests.borrow()[0].url,

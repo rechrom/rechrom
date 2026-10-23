@@ -246,6 +246,12 @@ impl Display {
                     provenance.content.map_or(0, |c| c.recording_revision) as f64,
                 ),
                 (
+                    "compositor_scroll_sequence",
+                    provenance
+                        .content
+                        .map_or(0, |c| c.compositor_scroll_sequence) as f64,
+                ),
+                (
                     "prepare_phase_ms",
                     Instant::now()
                         .saturating_duration_since(frame.frame_time)
@@ -388,6 +394,12 @@ impl Display {
                 (
                     "content_recording_revision",
                     provenance.content.map_or(0, |c| c.recording_revision) as f64,
+                ),
+                (
+                    "compositor_scroll_sequence",
+                    provenance
+                        .content
+                        .map_or(0, |c| c.compositor_scroll_sequence) as f64,
                 ),
             ],
         );

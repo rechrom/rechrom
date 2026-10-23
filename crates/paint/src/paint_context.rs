@@ -124,27 +124,21 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
     record: &[DisplayItem],
 ) -> PaintRect {
     const OP_COUNT_LIMIT: usize = 8;
-    // Official Blink stops at its prefix. This flat adapter also permits custom
-    // state ops, so an uninspected tail cannot certify that later DstIn/filters
-    // preserve the prefix's alpha. Reject long records without traversing them.
-    if record.is_empty() || record.len() > OP_COUNT_LIMIT {
+    if record.is_empty() {
         return PaintRect::default();
     }
     let mut opaque = PaintRect::default();
     let mut clip = visual_rect.enclosed();
-    for op in record {
+    for op in record.iter().take(OP_COUNT_LIMIT) {
         match op.r#type {
             DisplayItemType::kSave => continue,
             DisplayItemType::kClipRect => {
                 clip = clip.intersection(op.rect.enclosed());
                 continue;
             }
-            // Keep the narrower clip as a conservative enclosure after restore.
-            // Continue checking the bounded tail so DstIn cannot destroy a proof.
-            DisplayItemType::kRestore => continue,
-            // Source blending/filter states could remove a previous alpha
-            // proof. Other unrecognized state ops conservatively reject too.
-            kind if (kind as u8) < DisplayItemType::kDrawRect as u8 => return PaintRect::default(),
+            // Source drawing_display_item.cc stops when the bounded prefix
+            // reaches any other non-draw operation, including Restore.
+            kind if (kind as u8) < DisplayItemType::kDrawRect as u8 => break,
             _ => {}
         }
         if op.blend_mode != PaintBlendMode::kNormal
@@ -152,7 +146,7 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
             || !op.mask_layers.is_empty()
             || op.r#type == DisplayItemType::kDrawMask
         {
-            return PaintRect::default();
+            continue;
         }
         if op.paint_shader.is_some()
             || op.color.alpha != 1.0
@@ -198,6 +192,9 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
             _ => continue,
         };
         opaque = PaintRect::maximum_covered_rect(opaque, rect).intersection(clip);
+        if opaque == visual_rect.enclosed() {
+            break;
+        }
     }
     opaque
 }
@@ -216,6 +213,7 @@ pub struct PaintContext<'o> {
         PaintRect,
         usize,
         RecordedDisplayItemKind,
+        Option<crate::paint_engine::ScrollbarDisplayItemData>,
         Option<std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>>,
         RasterEffectOutset,
         bool,
@@ -335,6 +333,7 @@ impl<'o> PaintContext<'o> {
             paint_invalidation_reason: client.invalidation_reason,
             image_content_revisions: Vec::new(),
             scrollbar_needs_update_display: client.scrollbar_needs_update_display,
+            scrollbar: None,
             kind: RecordedDisplayItemKind::Drawing,
             scroll_translation: None,
             id,
@@ -381,8 +380,8 @@ impl<'o> PaintContext<'o> {
             node.paint_snap_offset,
         );
         if let Some(recorder) = &mut self.drawing_recorder {
-            recorder.7 = fragment.paint.display_item_raster_effect_outset;
-            recorder.8 = fragment.paint.self_ink_overflow.is_some()
+            recorder.8 = fragment.paint.display_item_raster_effect_outset;
+            recorder.9 = fragment.paint.self_ink_overflow.is_some()
                 || fragment.paint.box_self_visual_overflow.is_some();
         }
     }
@@ -403,6 +402,7 @@ impl<'o> PaintContext<'o> {
             self.output.items.len(),
             RecordedDisplayItemKind::Drawing,
             None,
+            None,
             RasterEffectOutset::kNone,
             true,
             delta,
@@ -415,6 +415,7 @@ impl<'o> PaintContext<'o> {
         client: DisplayItemClientInfo,
         visual_rect: PaintRect,
         scroll_translation: std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>,
+        scrollbar: crate::paint_engine::ScrollbarDisplayItemData,
         delta: Offset,
     ) {
         assert!(
@@ -428,6 +429,7 @@ impl<'o> PaintContext<'o> {
             visual_rect,
             self.output.items.len(),
             RecordedDisplayItemKind::Scrollbar,
+            Some(scrollbar),
             Some(scroll_translation),
             RasterEffectOutset::kNone,
             true,
@@ -443,6 +445,7 @@ impl<'o> PaintContext<'o> {
             visual_rect,
             record_begin,
             kind,
+            scrollbar,
             scroll_translation,
             raster_effect_outset,
             visual_rect_is_accurate,
@@ -515,6 +518,7 @@ impl<'o> PaintContext<'o> {
             paint_invalidation_reason: client.invalidation_reason,
             image_content_revisions: Vec::new(),
             scrollbar_needs_update_display: client.scrollbar_needs_update_display,
+            scrollbar,
             kind,
             scroll_translation,
             id,
@@ -1475,9 +1479,9 @@ mod opaque_record_tests {
             r#type: DisplayItemType::kSaveLayerDstIn,
             ..Default::default()
         });
-        assert!(CalculateRectKnownToBeOpaqueForRecord(visual, &destroying).is_empty());
+        assert!(!CalculateRectKnownToBeOpaqueForRecord(visual, &destroying).is_empty());
         assert!(!CalculateRectKnownToBeOpaqueForRecord(visual, &vec![solid.clone(); 8]).is_empty());
-        assert!(CalculateRectKnownToBeOpaqueForRecord(visual, &vec![solid.clone(); 9]).is_empty());
+        assert!(!CalculateRectKnownToBeOpaqueForRecord(visual, &vec![solid.clone(); 9]).is_empty());
         let left = PaintRect {
             x: 0.0,
             y: 0.0,

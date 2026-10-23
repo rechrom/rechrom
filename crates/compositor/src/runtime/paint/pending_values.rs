@@ -182,21 +182,80 @@ where
         self.chunks.len()
     }
 }
-impl<B: PendingLayerTypes> PendingDisplayItem<B> for DisplayItem {
+impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayItem {
     fn ForeignLayerVisualRect(&self) -> RectF {
         rect(self.visual_rect)
     }
-    fn ForeignLayer(&self) -> crate::cc::layers::layer::LayerRef<B> {
+    fn ForeignLayer(&self) -> crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
         unreachable!("PaintInput rejects missing foreign-layer native owner")
     }
     fn IsScrollbar(&self) -> bool {
-        false
+        matches!(self.kind, RecordedDisplayItemKind::Scrollbar) && self.scrollbar.is_some()
     }
     fn CreateOrReuseScrollbarLayer(
         &self,
-        _old: Option<crate::cc::layers::layer::LayerRef<B>>,
-        _offset: Vector2dF,
-    ) -> crate::cc::layers::layer::LayerRef<B> {
-        unreachable!("PaintInput rejects missing scrollbar native layer owner")
+        old: Option<crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>>>,
+        offset: Vector2dF,
+        c: &mut crate::adapter::main_layer::LayerContext<'_, CpuCompositorTypes<R>>,
+    ) -> crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
+        use crate::{
+            adapter::{geometry::Size, input_types::ElementId},
+            cc::input::scrollbar::Scrollbar,
+            cc::layers::scrollbar_layer_base::ScrollbarLayerBase,
+        };
+        let data = self
+            .scrollbar
+            .as_ref()
+            .expect("ScrollbarDisplayItem retains its cc scrollbar inputs");
+        let native = super::NativeScrollbar::from_paint(data);
+        let needs_display = native.NeedsUpdateDisplay();
+        let layer = ScrollbarLayerBase::<CpuCompositorTypes<R>>::CreateOrReuse(
+            Arc::new(native),
+            old.as_ref().map(|layer| layer.borrow()),
+            c,
+        )
+        .expect("solid-color scrollbar constructor is registered");
+        layer.SetIsDrawable(true, c);
+        layer.SetContentsOpaque(!data.overlay && data.thumb_color.alpha >= 1.0, c);
+        let opaqueness = match data.hit_test_opaqueness {
+            paint::paint_engine::PaintHitTestOpaqueness::Transparent => {
+                crate::cc::input::hit_test_opaqueness::HitTestOpaqueness::kTransparent
+            }
+            paint::paint_engine::PaintHitTestOpaqueness::Mixed => {
+                crate::cc::input::hit_test_opaqueness::HitTestOpaqueness::kMixed
+            }
+            paint::paint_engine::PaintHitTestOpaqueness::Opaque => {
+                crate::cc::input::hit_test_opaqueness::HitTestOpaqueness::kOpaque
+            }
+        };
+        layer.SetHitTestOpaqueness(opaqueness, c);
+        layer.SetElementId(ElementId::new(data.element_id.GetInternalValue()), c);
+        let scroll_element_id = self
+            .scroll_translation
+            .as_ref()
+            .map(|node| TransformNode::<R>::from_arc(node.clone()).ScrollCompositorElementId())
+            .unwrap_or_default();
+        layer.borrow().WithSource(c, |object, c| {
+            object
+                .AsScrollbarLayer()
+                .expect("solid scrollbar resident subtype")
+                .scrollbar_base()
+                .SetScrollElementId(scroll_element_id, c);
+        });
+        layer.SetOffsetToTransformParent(
+            Vector2dF::new(self.visual_rect.x as f32, self.visual_rect.y as f32) + offset,
+            c,
+        );
+        layer.SetBounds(
+            Size::new(
+                self.visual_rect.width.round() as i32,
+                self.visual_rect.height.round() as i32,
+            ),
+            c,
+        );
+        if needs_display {
+            layer.SetNeedsDisplay(c);
+        }
+        layer
     }
 }

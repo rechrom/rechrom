@@ -357,9 +357,18 @@ impl TranslatedSoftwareRenderer {
             }
             Ok(())
         })();
+        let restore_started = self.profile_input.then(std::time::Instant::now);
         let restore_result = target
             .restore()
             .map_err(|error| raster_error("translated draw-quad restore failed", error));
+        if matches!(&quad.material, QuadMaterial::CompositorRenderPass { .. }) {
+            if let Some(started) = restore_started {
+                self.update.render_pass_restore_ns = self
+                    .update
+                    .render_pass_restore_ns
+                    .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+            }
+        }
         draw_result.and(restore_result)?;
 
         if let Some(started) = quad_started {
@@ -826,6 +835,7 @@ impl TranslatedSoftwareRenderer {
         blend: SkBlendMode,
         antialias: bool,
     ) -> io::Result<()> {
+        let setup_started = self.profile_input.then(std::time::Instant::now);
         let QuadMaterial::CompositorRenderPass {
             render_pass_id,
             mask_resource_id,
@@ -844,6 +854,11 @@ impl TranslatedSoftwareRenderer {
             .iter()
             .find(|pass| pass.RenderPassId() == *render_pass_id)
             .ok_or_else(|| io::Error::other("referenced aggregate pass is absent"))?;
+        self.update.render_pass_pixels = self.update.render_pass_pixels.saturating_add(
+            quad.geometry.visible_rect.width.max(0) as u64
+                * quad.geometry.visible_rect.height.max(0) as u64,
+        );
+        self.update.transparent_render_pass_quads += child.has_transparent_background as usize;
         let local = SkMatrix::MakeAll(
             filters_scale.x(),
             0.,
@@ -920,6 +935,7 @@ impl TranslatedSoftwareRenderer {
             });
             let draw_result = Self::DrawBackdropFilter(
                 target,
+                &mut self.update,
                 child.BackdropFilters(),
                 child.BackdropFilterBounds(),
                 &local,
@@ -988,6 +1004,13 @@ impl TranslatedSoftwareRenderer {
                 } else {
                     N32BlitMode::SrcOver
                 };
+                if let Some(started) = setup_started {
+                    self.update.render_pass_setup_ns = self
+                        .update
+                        .render_pass_setup_ns
+                        .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+                }
+                let blit_started = self.profile_input.then(std::time::Instant::now);
                 if target.blit_n32(
                     bytemuck::cast_slice(backing.pixels.as_slice()),
                     backing.rect.width,
@@ -1003,6 +1026,12 @@ impl TranslatedSoftwareRenderer {
                     (opacity * 255.).round().clamp(0., 255.) as u8,
                     !child.has_transparent_background,
                 ) {
+                    if let Some(started) = blit_started {
+                        self.update.render_pass_blit_ns =
+                            self.update.render_pass_blit_ns.saturating_add(
+                                started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                            );
+                    }
                     self.update.render_pass_blit_quads += 1;
                     return Ok(());
                 }
@@ -1112,22 +1141,16 @@ impl TranslatedSoftwareRenderer {
         filter_matrix.preConcat(local);
         let filter =
             raster::native::BuildTranslatedFilterOperations(filters, &SkM44::from(&filter_matrix))?;
-        let mut layer = SkPaint::default();
-        layer.setImageFilter(filter);
-        layer.setBlendMode(SkBlendMode::kSrcOver);
+        let mut paint = SkPaint::default();
+        paint.setImageFilter(filter);
+        paint.setBlendMode(SkBlendMode::kSrcOver);
         target.set_matrix(&offset);
-        target
-            .save_layer(None, Some(&layer))
-            .map_err(|error| raster_error("translated image-filter layer failed", error))?;
         if let Some(source) = source {
             let image = source.image()?;
             let source_rect =
                 SkRect::MakeLTRB(0., 0., source.rect.width as f32, source.rect.height as f32);
             let destination = Rect::new(quad.x, quad.y, source.rect.width, source.rect.height);
             let sampling = SkSamplingOptions::with_filter(SkFilterMode::kNearest);
-            let mut paint = SkPaint::default();
-            paint.setAlphaf(1.);
-            paint.setBlendMode(SkBlendMode::kSrcOver);
             unsafe {
                 target.draw_image_rect(
                     &image,
@@ -1140,7 +1163,6 @@ impl TranslatedSoftwareRenderer {
             }
             .map_err(|error| raster_error("translated image-filter source draw failed", error))?;
         } else {
-            let mut paint = SkPaint::default();
             paint.setColor4f(
                 &skia::src::core::SkColor::SkColor4f {
                     fR: 0.,
@@ -1150,13 +1172,9 @@ impl TranslatedSoftwareRenderer {
                 },
                 None,
             );
-            paint.setBlendMode(SkBlendMode::kSrcOver);
             unsafe { target.draw_rect(&rect(bounds), &paint) }
                 .map_err(|error| raster_error("translated image-filter fill failed", error))?;
         }
-        target
-            .restore()
-            .map_err(|error| raster_error("translated image-filter layer restore failed", error))?;
         target
             .finish()
             .map_err(|error| raster_error("translated image-filter target finish failed", error))?;
@@ -1177,6 +1195,7 @@ impl TranslatedSoftwareRenderer {
         source: &PassBacking,
         local: &SkMatrix,
         output: Rect,
+        update: &mut RenderUpdate,
     ) -> io::Result<PassBacking> {
         let mut trace = browser_tracing::span("renderer", "Renderer.BackdropFilter");
         trace.set("width", output.width as f64);
@@ -1227,6 +1246,7 @@ impl TranslatedSoftwareRenderer {
             None
         };
 
+        let alloc_started = std::time::Instant::now();
         let mut result = PassBacking::new(Rect::new(0, 0, output.width, output.height))?;
         let mut target = RasterTarget::new(
             bytemuck::cast_slice_mut(result.pixels.as_mut_slice()),
@@ -1237,21 +1257,29 @@ impl TranslatedSoftwareRenderer {
             None,
         )
         .map_err(|error| raster_error("translated backdrop output allocation failed", error))?;
+        update.backdrop_filter_alloc_ns = update
+            .backdrop_filter_alloc_ns
+            .saturating_add(alloc_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         let offset = SkMatrix::Translate(-output.x as f32, -output.y as f32);
         let mut filter_matrix = offset.clone();
         filter_matrix.preConcat(local);
+        let build_started = std::time::Instant::now();
         let filter =
             raster::native::BuildTranslatedFilterOperations(filters, &SkM44::from(&filter_matrix))?;
-        let mut layer = SkPaint::default();
-        layer.setImageFilter(filter);
-        layer.setBlendMode(SkBlendMode::kSrcOver);
+        update.backdrop_filter_build_ns = update
+            .backdrop_filter_build_ns
+            .saturating_add(build_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+        let mut paint = SkPaint::default();
+        paint.setImageFilter(filter);
+        paint.setBlendMode(SkBlendMode::kSrcOver);
         target.set_matrix(&offset);
-        target
-            .save_layer(None, Some(&layer))
-            .map_err(|error| raster_error("translated backdrop filter layer failed", error))?;
         let sampling = SkSamplingOptions::with_filter(SkFilterMode::kNearest);
         if let Some(crop) = &crop {
+            let snapshot_started = std::time::Instant::now();
             let image = crop.image()?;
+            update.backdrop_filter_snapshot_ns = update
+                .backdrop_filter_snapshot_ns
+                .saturating_add(snapshot_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
             let local_matrix = SkMatrix::Translate(output.x as f32, output.y as f32);
             let shader = image
                 .makeShaderWithMatrix(
@@ -1261,18 +1289,23 @@ impl TranslatedSoftwareRenderer {
                     &local_matrix,
                 )
                 .ok_or_else(|| io::Error::other("translated backdrop mirror shader failed"))?;
-            let mut paint = SkPaint::default();
             paint.setShader(Some(shader));
-            paint.setBlendMode(SkBlendMode::kSrcOver);
+            let draw_started = std::time::Instant::now();
             unsafe { target.draw_rect(&rect(reverse), &paint) }
                 .map_err(|error| raster_error("translated backdrop mirror draw failed", error))?;
+            update.backdrop_filter_draw_ns = update
+                .backdrop_filter_draw_ns
+                .saturating_add(draw_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         } else {
+            let snapshot_started = std::time::Instant::now();
             let image = source.image()?;
+            update.backdrop_filter_snapshot_ns = update
+                .backdrop_filter_snapshot_ns
+                .saturating_add(snapshot_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
             let source_rect =
                 SkRect::MakeLTRB(0., 0., source.rect.width as f32, source.rect.height as f32);
             let destination = Rect::new(output.x, output.y, source.rect.width, source.rect.height);
-            let mut paint = SkPaint::default();
-            paint.setBlendMode(SkBlendMode::kSrcOver);
+            let draw_started = std::time::Instant::now();
             unsafe {
                 target.draw_image_rect(
                     &image,
@@ -1284,13 +1317,17 @@ impl TranslatedSoftwareRenderer {
                 )
             }
             .map_err(|error| raster_error("translated backdrop source draw failed", error))?;
+            update.backdrop_filter_draw_ns = update
+                .backdrop_filter_draw_ns
+                .saturating_add(draw_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
-        target.restore().map_err(|error| {
-            raster_error("translated backdrop filter layer restore failed", error)
-        })?;
+        let finish_started = std::time::Instant::now();
         target
             .finish()
             .map_err(|error| raster_error("translated backdrop output finish failed", error))?;
+        update.backdrop_filter_finish_ns = update
+            .backdrop_filter_finish_ns
+            .saturating_add(finish_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         result.drawn_rect = result.rect;
         Ok(result)
     }
@@ -1298,6 +1335,7 @@ impl TranslatedSoftwareRenderer {
     /// Source: components/viz/service/display/software_renderer.cc:888-1028.
     fn DrawBackdropFilter(
         target: &mut RasterTarget<'_>,
+        update: &mut RenderUpdate,
         filters: &paint::cc::paint::filter_operations::FilterOperations,
         bounds: Option<&SkPath>,
         filter_matrix: &SkMatrix,
@@ -1357,6 +1395,7 @@ impl TranslatedSoftwareRenderer {
             return Ok(());
         }
 
+        let readback_started = std::time::Instant::now();
         let mut captured = PassBacking::new(Rect::new(0, 0, right - left, bottom - top))?;
         let info = image_info(
             captured.rect.width,
@@ -1377,13 +1416,22 @@ impl TranslatedSoftwareRenderer {
             return Ok(());
         }
         captured.drawn_rect = captured.rect;
+        update.backdrop_readback_ns = update
+            .backdrop_readback_ns
+            .saturating_add(readback_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+        let filter_started = std::time::Instant::now();
         let filtered = Self::ApplyBackdropFilterWithExactOutputSize(
             filters,
             &captured,
             filter_matrix,
             output,
+            update,
         )?;
+        update.backdrop_filter_ns = update
+            .backdrop_filter_ns
+            .saturating_add(filter_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
 
+        let clip_started = std::time::Instant::now();
         let mut clipped = PassBacking::new(Rect::new(0, 0, output.width, output.height))?;
         let clipped_image = {
             let mut clip_target = RasterTarget::new(
@@ -1426,7 +1474,11 @@ impl TranslatedSoftwareRenderer {
             clipped.drawn_rect = clipped.rect;
             clipped.image()?
         };
+        update.backdrop_clip_ns = update
+            .backdrop_clip_ns
+            .saturating_add(clip_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
 
+        let composite_started = std::time::Instant::now();
         let mut image_tf = SkMatrix::Translate(-(left as f32), -(top as f32));
         image_tf.preConcat(&matrix);
         let Some(image_tf_inv) = image_tf.invert() else {
@@ -1485,7 +1537,11 @@ impl TranslatedSoftwareRenderer {
         let restore_result = target
             .restore()
             .map_err(|error| raster_error("translated backdrop shader restore failed", error));
-        draw_result.and(restore_result)
+        let result = draw_result.and(restore_result);
+        update.backdrop_composite_ns = update
+            .backdrop_composite_ns
+            .saturating_add(composite_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+        result
     }
 
     fn DidChangeVisibility(&mut self, _visible: bool) {}
@@ -1582,62 +1638,82 @@ impl TranslatedSoftwareRenderer {
             .ok_or_else(|| io::Error::other("translated active pass backing disappeared"))?;
         let draws = std::mem::take(&mut self.pending_draws);
         let pending_clear = self.pending_clear.take();
-        let result = match RasterTarget::new(
-            bytemuck::cast_slice_mut(backing.pixels.as_mut_slice()),
-            backing.rect.width,
-            backing.rect.height,
-            backing.rect.width as usize * 4,
-            PixelFormat::Bgra8888,
-            None,
-        ) {
-            Ok(mut target) => {
-                let draw_result = (|| -> io::Result<()> {
-                    if let Some((bounds, transparent)) = pending_clear {
-                        let mut paint = SkPaint::default();
-                        paint.setBlendMode(SkBlendMode::kSrc);
-                        paint.setAntiAlias(false);
-                        paint.setColor4f(
-                            &skia::src::core::SkColor::SkColor4f {
-                                fR: 0.,
-                                fG: 0.,
-                                fB: if transparent || !cfg!(debug_assertions) {
-                                    0.
-                                } else {
-                                    1.
-                                },
-                                fA: if transparent { 0. } else { 1. },
-                            },
-                            None,
+        let target_started = self.profile_input.then(std::time::Instant::now);
+        let result =
+            match RasterTarget::new(
+                bytemuck::cast_slice_mut(backing.pixels.as_mut_slice()),
+                backing.rect.width,
+                backing.rect.height,
+                backing.rect.width as usize * 4,
+                PixelFormat::Bgra8888,
+                None,
+            ) {
+                Ok(mut target) => {
+                    if let Some(started) = target_started {
+                        self.update.target_create_ns = self.update.target_create_ns.saturating_add(
+                            started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
                         );
-                        unsafe { target.draw_rect(&rect(bounds), &paint) }.map_err(|error| {
-                            raster_error("translated framebuffer clear failed", error)
-                        })?;
                     }
-                    for draw in draws {
-                        self.scissor_rect = draw.scissor_rect;
-                        self.DrawQuadIntoTarget(
-                            &mut target,
-                            input,
-                            pass,
-                            draw.index,
-                            draw.draw_region.as_ref(),
-                        )?;
+                    let draw_result = (|| -> io::Result<()> {
+                        if let Some((bounds, transparent)) = pending_clear {
+                            let clear_started = self.profile_input.then(std::time::Instant::now);
+                            let mut paint = SkPaint::default();
+                            paint.setBlendMode(SkBlendMode::kSrc);
+                            paint.setAntiAlias(false);
+                            paint.setColor4f(
+                                &skia::src::core::SkColor::SkColor4f {
+                                    fR: 0.,
+                                    fG: 0.,
+                                    fB: if transparent || !cfg!(debug_assertions) {
+                                        0.
+                                    } else {
+                                        1.
+                                    },
+                                    fA: if transparent { 0. } else { 1. },
+                                },
+                                None,
+                            );
+                            unsafe { target.draw_rect(&rect(bounds), &paint) }.map_err(
+                                |error| raster_error("translated framebuffer clear failed", error),
+                            )?;
+                            if let Some(started) = clear_started {
+                                self.update.target_clear_ns =
+                                    self.update.target_clear_ns.saturating_add(
+                                        started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                                    );
+                            }
+                        }
+                        for draw in draws {
+                            self.scissor_rect = draw.scissor_rect;
+                            self.DrawQuadIntoTarget(
+                                &mut target,
+                                input,
+                                pass,
+                                draw.index,
+                                draw.draw_region.as_ref(),
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    let finish_started = self.profile_input.then(std::time::Instant::now);
+                    let finish_result = target.finish().map_err(|error| {
+                        raster_error("translated render-pass target finish failed", error)
+                    });
+                    if let Some(started) = finish_started {
+                        self.update.target_finish_ns = self.update.target_finish_ns.saturating_add(
+                            started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                        );
                     }
-                    Ok(())
-                })();
-                let finish_result = target.finish().map_err(|error| {
-                    raster_error("translated render-pass target finish failed", error)
-                });
-                match (draw_result, finish_result) {
-                    (Ok(()), Ok(())) => Ok(()),
-                    (Err(error), _) | (_, Err(error)) => Err(error),
+                    match (draw_result, finish_result) {
+                        (Ok(()), Ok(())) => Ok(()),
+                        (Err(error), _) | (_, Err(error)) => Err(error),
+                    }
                 }
-            }
-            Err(error) => Err(raster_error(
-                "translated render-pass target creation failed",
-                error,
-            )),
-        };
+                Err(error) => Err(raster_error(
+                    "translated render-pass target creation failed",
+                    error,
+                )),
+            };
         if result.is_ok() {
             backing.drawn_rect = self.current_rect;
         }

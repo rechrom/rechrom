@@ -30,8 +30,26 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) type FrameRoutes =
-    Arc<Mutex<BTreeMap<Document, (mpsc::Sender<ImplCommand>, Arc<AtomicBool>)>>>;
+pub(crate) type FrameRoutes = Arc<Mutex<BTreeMap<Document, Arc<FrameRoute>>>>;
+
+pub(crate) struct FrameRoute {
+    sender: mpsc::Sender<ImplCommand>,
+    visible: Arc<AtomicBool>,
+}
+
+impl FrameRoute {
+    pub(crate) fn visible(&self) -> bool {
+        self.visible.load(Ordering::Acquire)
+    }
+
+    /// CVDisplayLinkMac posts the frame directly to the compositor task
+    /// runner. The impl mailbox is that runner's sequenced ingress here; an
+    /// extra hop through cc's worker executor introduces a second queue and can
+    /// leave a requested BeginMainFrame behind self-posted deadline work.
+    pub(crate) fn begin_frame(&self, frame: NativeBeginFrame) {
+        let _ = self.sender.send(ImplCommand::Tick(frame));
+    }
+}
 #[derive(Clone)]
 pub(crate) enum Event {
     Status {
@@ -341,11 +359,13 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         document_sender: doc_sender.clone(),
         impl_sender: impl_sender.clone(),
     };
-    params
-        .routes
-        .lock()
-        .unwrap()
-        .insert(document, (impl_sender.clone(), visible.clone()));
+    params.routes.lock().unwrap().insert(
+        document,
+        Arc::new(FrameRoute {
+            sender: impl_sender.clone(),
+            visible: visible.clone(),
+        }),
+    );
     let impl_reporter = reporter.clone();
     let impl_self = impl_sender.clone();
     let impl_source = params.source.clone();
@@ -580,7 +600,7 @@ impl ImplPresentation {
         artifact: Arc<paint::PaintArtifact>,
         content: ContentFrameProvenance,
         viewport: Viewport,
-    ) {
+    ) -> bool {
         // ProxyImpl::data_for_commit_ pairs a commit with the BeginMainFrame
         // that produced it. An older Page artifact cannot satisfy a newer BMF:
         // doing so advances SyncedScrollOffset's reflected slot without the
@@ -590,12 +610,13 @@ impl ImplPresentation {
         if content.main_frame_epoch < self.required_main_frame_epoch
             || content.compositor_scroll_sequence < self.required_scroll_sequence
         {
-            return;
+            return false;
         }
         self.artifact = Some(artifact);
         self.content = Some(content);
         self.viewport = viewport;
         self.needs_publish = true;
+        true
     }
 
     fn publish(&mut self) -> Result<bool, RuntimeFailure> {
@@ -1041,11 +1062,7 @@ fn run_impl(
                     .iter()
                     .position(|command| matches!(command, ImplCommand::Wheel { .. }))
             })
-            .or_else(|| {
-                queued_commands
-                    .iter()
-                    .position(|command| matches!(command, ImplCommand::Tick(_)))
-            })
+            .or_else(|| pending_tick)
             .unwrap_or(0);
         let command = queued_commands
             .remove(urgent)
@@ -1180,8 +1197,25 @@ fn run_impl(
                 content,
                 viewport,
             } => {
-                let _impl_trace = browser_tracing::span("compositor", "Impl.Commit");
+                let mut impl_trace = browser_tracing::span("compositor", "Impl.Commit");
                 if let Some(presentation) = presentation.as_mut() {
+                    impl_trace.set("content_main_frame_epoch", content.main_frame_epoch as f64);
+                    impl_trace.set(
+                        "required_main_frame_epoch",
+                        presentation.required_main_frame_epoch as f64,
+                    );
+                    impl_trace.set(
+                        "responded_main_frame_epoch",
+                        presentation.responded_main_frame_epoch as f64,
+                    );
+                    impl_trace.set(
+                        "content_scroll_sequence",
+                        content.compositor_scroll_sequence as f64,
+                    );
+                    impl_trace.set(
+                        "required_scroll_sequence",
+                        presentation.required_scroll_sequence as f64,
+                    );
                     // Chromium admits a main-tree update to ProxyImpl only as
                     // the response to a dispatched BeginMainFrame.  Page may
                     // produce animation artifacts between those transactions;
@@ -1206,8 +1240,11 @@ fn run_impl(
                             });
                         }
                     }
-                    if !presentation.is_unsolicited(content) {
-                        presentation.commit(artifact, content, viewport);
+                    let unsolicited = presentation.is_unsolicited(content);
+                    impl_trace.set("unsolicited", unsolicited as u8 as f64);
+                    if !unsolicited {
+                        let accepted = presentation.commit(artifact, content, viewport);
+                        impl_trace.set("accepted", accepted as u8 as f64);
                     }
                     let _ = presentation.publish()?;
                 }
@@ -1227,6 +1264,18 @@ fn run_impl(
                 );
                 let mut input_trace = browser_tracing::span("input", "CompositorWheel");
                 input_trace.set("samples", samples as f64);
+                input_trace.set("delta_x", wheel.delta.x);
+                input_trace.set("delta_y", wheel.delta.y);
+                input_trace.set(
+                    "phase",
+                    match wheel.phase {
+                        WheelPhase::kNone => 0.0,
+                        WheelPhase::kBegan => 1.0,
+                        WheelPhase::kChanged => 2.0,
+                        WheelPhase::kEnded => 3.0,
+                        WheelPhase::kCancelled => 4.0,
+                    },
+                );
                 let Some(presentation) = presentation.as_mut() else {
                     let _ = main.send(Command::Input {
                         input: InputEvent::Wheel(wheel),

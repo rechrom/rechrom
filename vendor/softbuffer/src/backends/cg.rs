@@ -573,7 +573,6 @@ struct MainThreadPresent {
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
 impl MainThreadPresent {
     fn commit(self: Box<Self>) {
-        use objc2::ClassType;
         let _main =
             MainThreadMarker::new().expect("IOSurface layer commit requires the main thread");
         let started = std::time::Instant::now();
@@ -599,28 +598,15 @@ impl MainThreadPresent {
                 ));
             }
         }
-        // SoftwareOutputDeviceMac keeps the IOSurface alive until the native
-        // swap transaction completes.  Returning the target to the pool when
-        // CATransaction::commit merely returns lets a following frame rewrite
-        // bytes before WindowServer has consumed them.  It also acknowledges
-        // a swap that Core Animation has not accepted yet, defeating Viz's
-        // normal one-swap-in-flight backpressure.
-        let completion_state = std::sync::Arc::new(std::sync::Mutex::new(Some((
-            self.surface.clone(),
-            self._lease.clone(),
-            self.callback,
-        ))));
-        let completion = completion_state.clone();
-        let block = block2::RcBlock::new(move || {
-            if let Some((_surface, _lease, callback)) = completion.lock().unwrap().take() {
-                callback(started, std::time::Instant::now());
-            }
-        });
-        let transaction_class = CATransaction::class();
-        unsafe {
-            let _: () = msg_send![transaction_class, setCompletionBlock: &*block];
-        }
         CATransaction::commit();
+        // SoftwareOutputDevice::OnSwapBuffers posts its acknowledgement as
+        // soon as EndPaint has handed the IOSurface to the platform client;
+        // it does not wait for a Core Animation transaction completion.
+        // IOSurfaceIsInUse is the reuse fence, matching
+        // SoftwareOutputDeviceMac::BeginPaint.  Keeping the display scheduler
+        // swap pending until the CA completion skips the following VSync and
+        // turns adjacent trackpad deltas into one visible 33 ms step.
+        (self.callback)(started, std::time::Instant::now());
     }
 }
 

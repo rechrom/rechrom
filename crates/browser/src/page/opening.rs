@@ -39,6 +39,12 @@ pub(super) fn ResolvePageStylesAndLoadResources(
         // intact. DOM and stylesheet changes still discover resources;
         // image completion only refreshes consumers. Completions are polled on
         // every pass with the existing event and admission budget.
+        let style_discovery = browser_tracing::span("lifecycle", "Page.DiscoverStyleSheets");
+        if let Err(error) = resources.QueueReferencedStyleSheets() {
+            state.resource_references_dirty.set(true);
+            return Err(error);
+        }
+        drop(style_discovery);
         let image_discovery = browser_tracing::span("lifecycle", "Page.DiscoverImages");
         if let Err(error) = resources.QueueReferencedImages() {
             state.resource_references_dirty.set(true);
@@ -56,17 +62,25 @@ pub(super) fn ResolvePageStylesAndLoadResources(
         state: state.clone(),
         scripts: scripts.as_deref_mut(),
     };
+    let style_sheets = {
+        let _trace = browser_tracing::span("lifecycle", "Page.PollStyleSheets");
+        resources.PollPendingStyleSheetsWithBudget(&mut client, allowance)
+    };
     let images = {
         let _trace = browser_tracing::span("lifecycle", "Page.PollImages");
-        resources.PollPendingImagesWithBudget(&mut client, allowance)
+        resources.PollPendingImagesWithBudget(&mut client, allowance.saturating_sub(style_sheets))
     };
     let images_polled_done = elapsed();
     let fonts = {
         let _trace = browser_tracing::span("lifecycle", "Page.PollFonts");
-        resources.PollPendingFontsWithBudget(&mut client, allowance.saturating_sub(images))
+        resources.PollPendingFontsWithBudget(
+            &mut client,
+            allowance.saturating_sub(style_sheets + images),
+        )
     };
     trace.set("image_completions", images as f64);
     trace.set("font_completions", fonts as f64);
+    trace.set("stylesheet_completions", style_sheets as f64);
     let fonts_polled_done = elapsed();
     drop(client);
     if rendering_opportunity {
@@ -93,7 +107,7 @@ pub(super) fn ResolvePageStylesAndLoadResources(
             );
         }
     }
-    Ok(images + fonts)
+    Ok(style_sheets + images + fonts)
 }
 
 /// Browser-facing wiring for `OpenEngine`.

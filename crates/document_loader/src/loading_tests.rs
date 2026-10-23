@@ -1,5 +1,8 @@
 use super::*;
-use dom::{Document, DOM};
+use dom::{
+    persistent_document::{DOMAttribute, DOMNamespace},
+    Document, DOM,
+};
 use html::html_parser::HTMLParserStatus;
 use html::{HTMLParserHost, ParserElementEvent};
 use std::{
@@ -320,6 +323,87 @@ fn fetcher_with_constraints(
     ));
     ResourceFetcher::WithEngine(resources, Rc::new(RefCell::new(DOM::new())), constraints)
 }
+
+fn fetcher_with_document(
+    backend: Rc<RefCell<dyn URLLoader>>,
+) -> (ResourceFetcher, Rc<RefCell<DOM>>) {
+    let decode = Rc::new(decode::DecodeEngine::WithDecoders(
+        Rc::new(RefCell::new(Images)),
+        Rc::new(RefCell::new(DocumentImages)),
+    ));
+    let resources = Rc::new(resource::ResourceEngine::WithDecodeEngine(
+        backend,
+        decode,
+        "https://page.test/root/entry".into(),
+    ));
+    let document = Rc::new(RefCell::new(DOM::new()));
+    (
+        ResourceFetcher::WithEngine(
+            resources,
+            document.clone(),
+            Rc::new(RefCell::new(Default::default())),
+        ),
+        document,
+    )
+}
+
+#[test]
+fn dynamic_link_stylesheet_uses_stylesheet_resource_and_enters_document_cssom() {
+    let (backend, drops) = backend(
+        Ok(URLResponse {
+            final_url: "https://cdn.test/theme/final.css".into(),
+            body: b":root{--theme-color:#fff}.card{color:var(--theme-color)}".to_vec(),
+            mime_type: "text/css".into(),
+            ..Default::default()
+        }),
+        1,
+    );
+    let (fetcher, document) = fetcher_with_document(backend.clone());
+    let owner_node_id = {
+        let mut owner = document.borrow_mut();
+        let document = owner.GetDocumentMut();
+        let link = document.CreateElement(
+            DOMNamespace::kHTML,
+            "link".into(),
+            vec![
+                DOMAttribute {
+                    local_name: "rel".into(),
+                    value: "stylesheet".into(),
+                    ..Default::default()
+                },
+                DOMAttribute {
+                    local_name: "href".into(),
+                    value: "theme.css".into(),
+                    ..Default::default()
+                },
+            ],
+        );
+        document.AppendChild(document.Root(), link);
+        document.Node(link).Id()
+    };
+
+    assert_eq!(fetcher.QueueReferencedStyleSheets().unwrap(), 1);
+    let requests = backend.borrow().requests.borrow().clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, "https://page.test/root/theme.css");
+    assert_eq!(requests[0].destination, RequestDestination::kStyleSheet);
+    let mut client = Client::default();
+    assert_eq!(fetcher.PollPendingStyleSheetsWithBudget(&mut client, 1), 0);
+    assert!(fetcher.HasPendingStyleSheets());
+    assert_eq!(fetcher.PollPendingStyleSheetsWithBudget(&mut client, 1), 1);
+    assert!(!fetcher.HasPendingStyleSheets());
+    let owner = document.borrow();
+    let sheet = owner
+        .GetDocument()
+        .StyleSheets(None)
+        .iter()
+        .find(|sheet| sheet.owner_node_id == owner_node_id)
+        .expect("dynamic link sheet must be attached to its DOM owner");
+    assert_eq!(sheet.rules.len(), 2);
+    assert!(client.mutations.is_empty());
+    assert_eq!(drops.get(), 1);
+}
+
 #[test]
 fn fetcher_deduplicates_image_requests_and_delivers_only_completed_mutations() {
     let (backend, drops) = backend(

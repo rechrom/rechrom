@@ -129,6 +129,7 @@ pub trait PendingDisplayItem<B: PendingLayerTypes> {
         &self,
         old_layer: Option<LayerRef<B>>,
         decomposited_offset: super::geometry::Vector2dF,
+        c: &mut super::main_layer::LayerContext<'_, B>,
     ) -> LayerRef<B>;
 }
 

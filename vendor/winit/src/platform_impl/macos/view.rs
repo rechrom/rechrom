@@ -726,8 +726,6 @@ declare_class!(
             let event_position = self.convertPoint_fromView(window_point, None);
             profile_native_wheel(event, scale_factor, fields);
 
-            self.mouse_motion(event);
-
             let delta = match fields {
                 // Chromium uses CG PointDelta for continuous, precise-pixel
                 // scrolling. Winit's PixelDelta API carries physical pixels;

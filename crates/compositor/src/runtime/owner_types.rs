@@ -167,6 +167,96 @@ impl<R: CpuSkiaBackend> MainLayerTypes for CpuCompositorTypes<R> {
     type ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, Self>;
     type DerivedServices = dyn super::paint::CpuPaintServices<Self>;
 }
+impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes
+    for CpuCompositorTypes<R>
+{
+    type ScrollbarCanvas = ();
+    type Scrollbar = super::paint::NativeScrollbar;
+}
+impl<R: CpuSkiaBackend> crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes
+    for CpuCompositorTypes<R>
+{
+}
+impl<R: CpuSkiaBackend>
+    crate::adapter::scrollbar_layer_base::ScrollbarLayerImplTarget<CpuCompositorTypes<R>>
+    for CompositorLayer<CpuCompositorTypes<R>>
+{
+    fn scrollbar_orientation(&self) -> crate::cc::input::scrollbar::ScrollbarOrientation {
+        crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBase(self)
+            .expect("native scrollbar target subtype")
+            .orientation()
+    }
+
+    fn scrollbar_is_left_side_vertical(&self) -> bool {
+        crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBase(self)
+            .expect("native scrollbar target subtype")
+            .is_left_side_vertical_scrollbar()
+    }
+
+    fn scrollbar_SetHasFindInPageTickmarks(
+        &mut self,
+        value: bool,
+        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+    ) {
+        crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
+            self,
+        )
+        .expect("native scrollbar target subtype")
+        .SetHasFindInPageTickmarks(value, tree);
+    }
+
+    fn scrollbar_SetScrollElementId(
+        &mut self,
+        value: crate::adapter::input_types::ElementId,
+        _tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+    ) {
+        crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
+            self,
+        )
+        .expect("native scrollbar target subtype")
+        .SetScrollElementIdForPropertyPush(value);
+    }
+}
+impl<R: CpuSkiaBackend>
+    crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<
+        CpuCompositorTypes<R>,
+    > for CompositorLayer<CpuCompositorTypes<R>>
+{
+    fn CreateSolidColorScrollbar(
+        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
+        id: i32,
+        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
+        thumb_thickness: i32,
+        track_start: i32,
+        left: bool,
+        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
+    ) -> Box<Self> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
+            crate::cc::layers::solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImpl::<
+                CpuCompositorTypes<R>,
+            >::Create(
+                tree_id,
+                id,
+                orientation,
+                thumb_thickness,
+                track_start,
+                left,
+                c,
+            )
+        })
+    }
+
+    fn scrollbar_set_color(
+        &mut self,
+        color: crate::adapter::layer_tree_impl::Color4f,
+        _tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+    ) {
+        let CompositorLayer::SolidColorScrollbar(layer) = self else {
+            panic!("native solid-color scrollbar target subtype")
+        };
+        layer.set_color(color);
+    }
+}
 impl<R: CpuSkiaBackend> LayerImplTypes for CpuCompositorTypes<R> {
     type SharedQuadState = super::frame::SharedQuadState<Transform<R>>;
     type DrawQuad = super::frame::DrawQuad<super::paint::ContentDisplayItemList<R>>;

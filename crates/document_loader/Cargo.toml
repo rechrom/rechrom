@@ -17,9 +17,9 @@ layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 page_mutation = { path = "../page_mutation" }
 font_engine = { path = "../font_engine" }
 javascript = { path = "../javascript" }
+style = { path = "../style" }
 
 [dev-dependencies]
 image_decoder = { path = "../image_decoder" }
-style = { path = "../style" }
 layoutng_replaced = { path = "../layoutng/layoutng_replaced" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }

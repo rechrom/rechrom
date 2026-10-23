@@ -75,13 +75,16 @@ struct OrderedFrameDispatch {
 
 impl OrderedFrameDispatch {
     fn issue(&self, frame: NativeBeginFrame) {
-        // Clone one callback at a time and release the lock before invoking
-        // client code. The physical source is the sole dispatcher, so this
-        // preserves phase order without holding a lock across a mailbox send.
+        // These logical clients are ordered phases of one browser frame, not
+        // independent BeginFrameObservers. NativeFrameDemand already gates the
+        // physical source. Once it emits a pulse, input, compositor and display
+        // must all observe that same identity in order. Gating the phases again
+        // can consume Page demand in one phase while another keeps the native
+        // source active, leaving BeginMainFrame permanently outstanding.
         for index in 0..LOGICAL_FRAME_SOURCE_COUNT {
-            let client = self.clients.lock().unwrap()[index].clone();
-            if let Some(client) = client {
-                client(frame);
+            let callback = self.clients.lock().unwrap()[index].clone();
+            if let Some(callback) = callback {
+                callback(frame);
             }
         }
     }

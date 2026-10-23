@@ -277,6 +277,34 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
     // cpp: paint/paint_layer_painter.h:29
     // cpp: paint/paint_layer_painter.cc:157-230
     fn PaintWithPhase(&self, node: &PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
+        if std::env::var_os("RECHROM_DIAG_STACKING").is_some()
+            && paint_info.phase == PaintPhase::kForeground
+            && node.absolute_offset.y < 90.0
+        {
+            let fragment = node
+                .fragment
+                .as_deref()
+                .expect("PrePaint node must own a fragment");
+            eprintln!(
+                "foreground-node owner={} node={} debug={:?} at=({:.1},{:.1}) size=({:.1},{:.1}) layer={} context={} hidden={} atomic={} children={}",
+                self.layer
+                    .fragment
+                    .as_deref()
+                    .expect("PrePaint node must own a fragment")
+                    .node_id,
+                fragment.node_id,
+                fragment.paint.display_item_client_debug_name,
+                node.absolute_offset.x,
+                node.absolute_offset.y,
+                fragment.size.width,
+                fragment.size.height,
+                node.is_paint_layer,
+                node.is_stacking_context,
+                fragment.paint.hidden,
+                fragment.paint.painted_atomically,
+                node.children.len()
+            );
+        }
         if node
             .fragment
             .as_deref()
@@ -464,6 +492,50 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         let mut path = Vec::new();
         collect(self.layer, &mut path, &mut children);
         children.sort_by_key(|child| ZIndex(child.layer));
+        if std::env::var_os("RECHROM_DIAG_STACKING").is_some() {
+            let owner = self
+                .layer
+                .fragment
+                .as_deref()
+                .expect("PrePaint node must own a fragment");
+            if self.layer.absolute_offset.y < 220.0 {
+                eprintln!(
+                    "stack owner node={} debug={:?} layer={} context={} z={} at=({:.1},{:.1}) children={}",
+                    owner.node_id,
+                    owner.paint.display_item_client_debug_name,
+                    self.layer.is_paint_layer,
+                    self.layer.is_stacking_context,
+                    self.layer.stacking_level,
+                    self.layer.absolute_offset.x,
+                    self.layer.absolute_offset.y,
+                    children.len()
+                );
+                for child in &children {
+                    let fragment = child
+                        .layer
+                        .fragment
+                        .as_deref()
+                        .expect("PrePaint node must own a fragment");
+                    if child.layer.absolute_offset.y < 220.0 {
+                        eprintln!(
+                            "  child node={} debug={:?} layer={} context={} z={} at=({:.1},{:.1}) size=({:.1},{:.1}) native={} client={} self={}",
+                            fragment.node_id,
+                            fragment.paint.display_item_client_debug_name,
+                            child.layer.is_paint_layer,
+                            child.layer.is_stacking_context,
+                            child.layer.stacking_level,
+                            child.layer.absolute_offset.x,
+                            child.layer.absolute_offset.y,
+                            fragment.size.width,
+                            fragment.size.height,
+                            fragment.paint.paint_layer_state_is_native,
+                            fragment.paint.paint_layer_client_id,
+                            fragment.paint.paint_layer_is_self_painting,
+                        );
+                    }
+                }
+            }
+        }
         children
     }
 

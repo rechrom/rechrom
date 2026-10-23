@@ -37,6 +37,7 @@ pub(crate) struct NativeEngineAssembly {
     deferred: Option<HostLifecycleEffect>,
     resource_effects: NativeResourceEffects,
     latency_monitors: super::native_latency::NativeLatencyMonitorRegistry,
+    input_client: Arc<super::native_input_client::NativeInputHandlerClient>,
     smoothness_priority_expiration_notifier:
         Arc<crate::cc::base::delayed_unique_notifier::DelayedUniqueNotifier>,
 }
@@ -52,6 +53,7 @@ impl NativeEngineAssembly {
         main_features: NativeRenderServices,
         resource_effects: NativeResourceEffects,
         latency_monitors: super::native_latency::NativeLatencyMonitorRegistry,
+        input_client: Arc<super::native_input_client::NativeInputHandlerClient>,
     ) -> Result<Self, CompositorError> {
         // Host and Scheduler share the exact same reporting allocation. Event
         // metrics submission is the canonical move-only SubmitInfo, not an ID.
@@ -106,6 +108,7 @@ impl NativeEngineAssembly {
             deferred: None,
             resource_effects,
             latency_monitors,
+            input_client,
             smoothness_priority_expiration_notifier,
         })
     }
@@ -204,6 +207,108 @@ impl NativeEngineAssembly {
         let mut context = HostImplContext {
             services: &mut self.core.services,
         };
+        if matches!(
+            input,
+            CompositorInput::Wheel {
+                phase: ScrollPhase::Begin,
+                ..
+            }
+        ) {
+            self.input_client.BeginGesture();
+        }
+        if matches!(
+            input,
+            CompositorInput::Wheel {
+                phase: ScrollPhase::End,
+                ..
+            }
+        ) {
+            let pending = self.input_client.TakeQueued();
+            if !pending.is_empty() {
+                host.WithInputHandler(&mut context, |input, runtime| {
+                    let input = input.expect("source bound InputHandler");
+                    for data in pending {
+                        input.ScrollUpdate(runtime, ScrollState::new(data), TimeDelta::default());
+                    }
+                });
+            }
+        }
+        if let CompositorInput::Wheel {
+            position,
+            delta,
+            unconstrained_delta,
+            granularity,
+            is_inertial,
+            phase: ScrollPhase::Update,
+        } = input
+        {
+            let compositor_owned = host.WithInputHandler(&mut context, |input, runtime| {
+                input.is_some_and(|input| input.IsCurrentlyScrolling(runtime))
+            });
+            if compositor_owned {
+                let position = point(position)?;
+                if !delta.x().is_finite() || !delta.y().is_finite() {
+                    return Err(CompositorError::Backend(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "nonfinite wheel delta",
+                    )));
+                }
+                let mut data = ScrollStateData::default();
+                data.position_x = position.x();
+                data.position_y = position.y();
+                data.delta_x = f64::from(delta.x());
+                data.delta_y = f64::from(delta.y());
+                data.delta_x_unconstrained = f64::from(unconstrained_delta.x());
+                data.delta_y_unconstrained = f64::from(unconstrained_delta.y());
+                data.is_in_inertial_phase = is_inertial;
+                data.delta_granularity = granularity;
+                data.from_user_input = true;
+                let route = self.input_client.RouteUpdate(data, self.scheduler.Now());
+                if route != super::native_input_client::ScrollUpdateRoute::Dispatch {
+                    // Source: blink InputHandlerProxy::RouteToTypeSpecificHandler.
+                    // The transition from an empty compositor event queue to a
+                    // non-empty queue requests one BeginImplFrame through cc's
+                    // resident InputHandler/LayerTreeHostImpl/Scheduler chain.
+                    // The output bit below mirrors the current subscription to
+                    // the embedder; it is not a substitute for this cc state.
+                    if route
+                        == super::native_input_client::ScrollUpdateRoute::EnqueueAndRequestAnimation
+                    {
+                        host.WithInputHandler(&mut context, |input, runtime| {
+                            input
+                                .expect("source bound InputHandler")
+                                .SetNeedsAnimateInput(runtime)
+                        });
+                    }
+                    drop(query);
+                    // Source: cc/trees/proxy_impl.cc:469-471. The native
+                    // InputHandler calls SetNeedsOneBeginImplFrame through
+                    // LayerTreeHostImpl::SetNeedsAnimateInput, and ProxyImpl
+                    // updates Scheduler synchronously on the impl sequence.
+                    // Our delegate stores that callback while Host is
+                    // borrowed, so deliver it before returning to the
+                    // embedder. Otherwise the current physical BeginFrame can
+                    // overtake the request and input advances every other
+                    // display interval.
+                    while let Some(effect) = self.lifecycle.Pop() {
+                        self.Lifecycle(effect)?;
+                    }
+                    if let Some(error) = self.core.failure.take() {
+                        return Err(error);
+                    }
+                    self.core
+                        .effects
+                        .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
+                    return Ok(CompositorOutput {
+                        frame: None,
+                        main_thread_effects: std::mem::take(&mut self.core.effects),
+                        needs_begin_frames: true,
+                        work_pending: true,
+                        main_commit_pending: self.core.HasReadyCommit(),
+                    });
+                }
+            }
+        }
         let compositor_owned = match input {
             CompositorInput::Wheel {
                 position,
@@ -649,6 +754,19 @@ impl NativeEngineAssembly {
     }
     fn Lifecycle(&mut self, effect: HostLifecycleEffect) -> Result<(), CompositorError> {
         use HostLifecycleEffect as E;
+        if std::env::var_os("RECHROM_DIAG_CC_LIFECYCLE").is_some() {
+            if matches!(effect, E::NotifyReadyToActivate { .. }) {
+                eprintln!("cc-lifecycle NotifyReadyToActivate");
+            } else if matches!(effect, E::NotifyReadyToDraw { .. }) {
+                eprintln!("cc-lifecycle NotifyReadyToDraw");
+            } else if matches!(effect, E::DidPrepareTiles { .. }) {
+                eprintln!("cc-lifecycle DidPrepareTiles");
+            } else if matches!(effect, E::SetNeedsPrepareTiles { .. }) {
+                eprintln!("cc-lifecycle SetNeedsPrepareTiles");
+            } else if matches!(effect, E::SetNeedsRedraw { .. }) {
+                eprintln!("cc-lifecycle SetNeedsRedraw");
+            }
+        }
         match effect {
             E::NotifyReadyToActivate { .. } => self.scheduler.NotifyReadyToActivate(&mut self.core),
             E::NotifyReadyToDraw { .. } => self.scheduler.NotifyReadyToDraw(&mut self.core),
@@ -960,6 +1078,26 @@ impl NativeEngineAssembly {
             || !self.lifecycle.IsEmpty()
             || !self.resource_effects.IsEmpty()
             || !self.scheduler_effects.IsEmpty();
+        if std::env::var_os("RECHROM_DIAG_CC_LIFECYCLE").is_some()
+            && (self.core.HasReadyCommit()
+                || self.scheduler.CommitPending()
+                || self.scheduler.RedrawPending()
+                || self.scheduler.PrepareTilesPending())
+        {
+            let host = self.core.host.as_ref().unwrap().Base();
+            eprintln!(
+                "cc-state pending_tree={} ready_activate={} commit_pending={} ready_commit={} redraw={} prepare={} can_draw={} needs_bf={} work_pending={}",
+                host.pending_tree().is_some(),
+                self.scheduler.pending_tree_is_ready_for_activation(),
+                self.scheduler.CommitPending(),
+                self.core.HasReadyCommit(),
+                self.scheduler.RedrawPending(),
+                self.scheduler.PrepareTilesPending(),
+                host.CanDraw(&HostImplContext { services: &mut self.core.services }),
+                self.needs_begin_frames,
+                work_pending,
+            );
+        }
         Ok(CompositorOutput {
             frame: self.core.TakeFrame(),
             main_thread_effects: effects,

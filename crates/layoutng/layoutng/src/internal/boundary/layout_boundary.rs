@@ -2126,6 +2126,7 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
         corner_client_is_cacheable: corner_client.is_some_and(|client| client.IsCacheable()),
         corner_client_is_just_created: corner_client.is_some_and(|client| client.IsJustCreated()),
         uses_overlay_scrollbars: theme.uses_overlay_scrollbars,
+        minimum_thumb_length: theme.minimum_thumb_length,
         track_color: theme.track_color,
         thumb_color: theme.thumb_color,
         button_color: theme.button_color,
@@ -2152,6 +2153,10 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
         let scrollbar = area.HorizontalScrollbar();
         let client = (!scrollbar.is_null()).then(|| unsafe { &*scrollbar }.DisplayItemClient());
         let mut axis = ScrollbarPaintAxis {
+            compositor_element_id: foundation::CompositorElementIdFromUniqueObjectId(
+                layout_box.UniqueId(),
+                foundation::CompositorElementIdNamespace::kHorizontalScrollbar,
+            ),
             display_item_client_id: client.map_or(0, |client| client.Id() as u64),
             display_item_client_invalidation_reason: client
                 .map(|client| client.GetPaintInvalidationReason()),
@@ -2163,6 +2168,7 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
             display_item_client_is_just_created: client
                 .is_some_and(|client| client.IsJustCreated()),
             horizontal: true,
+            left_side_vertical: false,
             track_offset: Offset {
                 x: border_left
                     + if !theme.uses_overlay_scrollbars && vertical_on_left {
@@ -2198,6 +2204,10 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
         let scrollbar = area.VerticalScrollbar();
         let client = (!scrollbar.is_null()).then(|| unsafe { &*scrollbar }.DisplayItemClient());
         let mut axis = ScrollbarPaintAxis {
+            compositor_element_id: foundation::CompositorElementIdFromUniqueObjectId(
+                layout_box.UniqueId(),
+                foundation::CompositorElementIdNamespace::kVerticalScrollbar,
+            ),
             display_item_client_id: client.map_or(0, |client| client.Id() as u64),
             display_item_client_invalidation_reason: client
                 .map(|client| client.GetPaintInvalidationReason()),
@@ -2206,6 +2216,7 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
             display_item_client_is_just_created: client
                 .is_some_and(|client| client.IsJustCreated()),
             horizontal: false,
+            left_side_vertical: vertical_on_left,
             track_offset: Offset {
                 x: if vertical_on_left {
                     border_left

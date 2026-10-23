@@ -101,6 +101,7 @@ fn PriorityFor(
     match destination {
         crate::RequestDestination::kDocument
         | crate::RequestDestination::kStyleSheet
+        | crate::RequestDestination::kFont
         | crate::RequestDestination::kImage => HTTPRequestPriority::High,
         crate::RequestDestination::kScript if defer == crate::RequestDefer::None => {
             HTTPRequestPriority::High

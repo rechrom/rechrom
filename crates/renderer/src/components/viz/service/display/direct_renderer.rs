@@ -217,6 +217,9 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         viewport: Size,
         target: B::Target,
     ) -> io::Result<(crate::RenderUpdate, B::Target)> {
+        let profile_started = std::env::var_os("BROWSER_PROFILE_INPUT")
+            .is_some()
+            .then(std::time::Instant::now);
         assert!(self.visible);
         let surface_size = self.CalculateSizeForOutputSurface(viewport);
         let reshape =
@@ -226,6 +229,7 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         self.skipped_render_pass_ids.clear();
         self.total_pixels_rendered_this_frame = 0;
         self.backend.BeginDrawingFrame(input)?;
+        let began_at = profile_started.map(|_| std::time::Instant::now());
         // Source: components/viz/service/display/direct_renderer.cc:265-291.
         if !self.rpdq_filter_lookup_optimizations {
             let mut candidates = BTreeMap::new();
@@ -271,7 +275,9 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
                 self.EnsureRenderPassAllocated(pass, true)?;
             }
         }
+        let allocated_at = profile_started.map(|_| std::time::Instant::now());
         self.backend.BindFrameTarget(input, target)?;
+        let bound_at = profile_started.map(|_| std::time::Instant::now());
         let frame = DrawingFrame {
             input,
             device_viewport_size: viewport,
@@ -311,9 +317,27 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
                 self.DrawRenderPassAndExecuteCopyRequests(&frame, pass, true, damage)?
             }
         }
+        let passes_at = profile_started.map(|_| std::time::Instant::now());
 
         self.backend.FinishDrawingFrame()?;
+        let finished_at = profile_started.map(|_| std::time::Instant::now());
         let output = self.backend.ReleaseFrameTarget(input)?;
+        if let Some(started) = profile_started {
+            let began = began_at.unwrap();
+            let allocated = allocated_at.unwrap();
+            let bound = bound_at.unwrap();
+            let passes = passes_at.unwrap();
+            let finished = finished_at.unwrap();
+            eprintln!(
+                "direct-renderer-profile begin_ms={:.3} allocate_ms={:.3} bind_ms={:.3} passes_ms={:.3} finish_ms={:.3} release_ms={:.3}",
+                (began - started).as_secs_f64() * 1000.,
+                (allocated - began).as_secs_f64() * 1000.,
+                (bound - allocated).as_secs_f64() * 1000.,
+                (passes - bound).as_secs_f64() * 1000.,
+                (finished - passes).as_secs_f64() * 1000.,
+                finished.elapsed().as_secs_f64() * 1000.,
+            );
+        }
         self.backdrop_filter_output_rects.clear();
         self.has_pixel_moving_foreground_filters = false;
         Ok(output)
@@ -485,6 +509,27 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         let mut polygons = VecDeque::new();
         let mut next_polygon_id = 0;
         let mut last_sorting_context_id = 0;
+        if std::env::var_os("RECHROM_DIAG_STACKING").is_some() && root {
+            eprintln!("root-quad-list count={}", pass.quad_list.len());
+            for (index, quad) in pass.quad_list.iter().enumerate() {
+                if quad.geometry.rect.y < 220 {
+                    let shared = quad
+                        .geometry
+                        .shared_quad_state
+                        .and_then(|id| pass.TrySharedQuadState(id));
+                    eprintln!(
+                        "  quad index={} material={:?} rect={:?} visible={:?} layer={} opacity={} transform={:?}",
+                        index,
+                        std::mem::discriminant(&quad.material),
+                        quad.geometry.rect,
+                        quad.geometry.visible_rect,
+                        shared.map_or(0, |state| state.layer_id),
+                        shared.map_or(1.0, |state| state.opacity),
+                        shared.map(|state| &state.quad_to_target_transform),
+                    );
+                }
+            }
+        }
         for index in (0..pass.quad_list.len()).rev() {
             let quad = &pass.quad_list[index];
             if self.ShouldSkipQuad(

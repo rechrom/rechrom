@@ -58,6 +58,72 @@ for (const [property,axis] of [['scrollX','x'],['pageXOffset','x'],['scrollY','y
 const request = __request;
 const cancelRequest = __cancelRequest;
 const randomHex = __randomHex;
+const queueTask = __queueTask;
+
+class MessageEvent extends Event {
+  constructor(type, options = {}) {
+    super(type, options);
+    this.data = options.data === undefined ? null : options.data;
+    this.origin = options.origin === undefined ? '' : String(options.origin);
+    this.lastEventId = options.lastEventId === undefined ? '' : String(options.lastEventId);
+    this.source = options.source === undefined ? null : options.source;
+    this.ports = options.ports === undefined ? [] : Array.from(options.ports);
+  }
+}
+globalThis.MessageEvent = MessageEvent;
+
+class MessagePort extends EventTarget {
+  constructor(token) {
+    super();
+    if (token !== messagePortToken) throw new TypeError('Illegal constructor');
+    this._peer = null;
+    this._started = false;
+    this._closed = false;
+    this._pending = [];
+    this._onmessage = null;
+    this._onmessageerror = null;
+  }
+  postMessage(message, transfer = []) {
+    if (this._closed || !this._peer || this._peer._closed) return;
+    const transfers = transfer == null ? [] : Array.from(transfer);
+    if (transfers.length) throw new DOMException('Transferable objects are not supported', 'DataCloneError');
+    const data = structuredClone(message);
+    const target = this._peer;
+    queueTask(() => {
+      if (target._closed) return;
+      if (!target._started) { target._pending.push(data); return; }
+      target.dispatchEvent(new MessageEvent('message', {data}));
+    });
+  }
+  start() {
+    if (this._closed || this._started) return;
+    this._started = true;
+    const pending = this._pending.splice(0);
+    for (const data of pending)
+      queueTask(() => { if (!this._closed) this.dispatchEvent(new MessageEvent('message', {data})); });
+  }
+  close() { this._closed = true; this._pending.length = 0; }
+  get onmessage() { return this._onmessage; }
+  set onmessage(callback) {
+    this._onmessage = typeof callback === 'function' ? callback : null;
+    if (this._onmessage) this.start();
+  }
+  get onmessageerror() { return this._onmessageerror; }
+  set onmessageerror(callback) { this._onmessageerror = typeof callback === 'function' ? callback : null; }
+}
+const messagePortToken = {};
+globalThis.MessagePort = MessagePort;
+
+class MessageChannel {
+  constructor() {
+    this.port1 = new MessagePort(messagePortToken);
+    this.port2 = new MessagePort(messagePortToken);
+    this.port1._peer = this.port2;
+    this.port2._peer = this.port1;
+  }
+}
+globalThis.MessageChannel = MessageChannel;
+
 let nextIdleCallback = 1;
 const idleCallbacks = new Map();
 globalThis.requestIdleCallback = function(callback, options = {}) {

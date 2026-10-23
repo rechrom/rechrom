@@ -32,6 +32,7 @@ impl Page {
     }
 
     pub fn SetBeginFrameSource(&mut self, source: Option<Arc<dyn BeginFrameSource>>) {
+        self.state.has_begin_frame_source.set(source.is_some());
         if let Some(scripts) = &self.scripts {
             scripts.SetBeginFrameSource(source.clone());
         }
@@ -180,6 +181,10 @@ impl Page {
             self.DrainFrameInputs()?;
             #[cfg(feature = "production_raster")]
             self.AdvanceCompositorBeginFrame(args)?;
+            // Source: ProgrammaticScrollAnimator::TickAnimation. Smooth CSSOM
+            // viewport scrolling samples on the rendering opportunity before
+            // scroll events and requestAnimationFrame observe the new offset.
+            self.state.TickProgrammaticScroll(args.frame_time);
             // The scroll event observes the new visual scroll offset. Commit
             // the retained scroll properties before script geometry queries;
             // otherwise getBoundingClientRect() would rebuild layout merely to

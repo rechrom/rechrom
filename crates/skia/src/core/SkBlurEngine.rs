@@ -606,6 +606,91 @@ impl<'a> ThreeBoxApproxPass<'a> {
             cursors: [0, buffer1, buffer2],
         }
     }
+
+    #[cfg(all(target_arch = "aarch64", not(skvx_disable_simd)))]
+    unsafe fn blur_segment_neon(
+        &mut self,
+        mut n: i32,
+        mut src32: *const u32,
+        src_stride: i32,
+        mut dst32: *mut u32,
+        dst_stride: i32,
+    ) {
+        use core::arch::aarch64::*;
+
+        let mut cursor = self.cursors;
+        let mut sum0 = unsafe { vld1q_u32(self.fSum0.as_ptr()) };
+        let mut sum1 = unsafe { vld1q_u32(self.fSum1.as_ptr()) };
+        let mut sum2 = unsafe { vld1q_u32(self.fSum2.as_ptr()) };
+        let factor = self.fDivider.divisorFactor();
+
+        while n > 0 {
+            n -= 1;
+            let leading = if src32.is_null() {
+                unsafe { vdupq_n_u32(0) }
+            } else {
+                let packed = unsafe { core::ptr::read_unaligned(src32) };
+                let bytes = unsafe { vcreate_u8(packed as u64) };
+                unsafe { vmovl_u16(vget_low_u16(vmovl_u8(bytes))) }
+            };
+
+            sum0 = unsafe { vaddq_u32(sum0, leading) };
+            sum1 = unsafe { vaddq_u32(sum1, sum0) };
+            sum2 = unsafe { vaddq_u32(sum2, sum1) };
+            let lo = unsafe { vmull_n_u32(vget_low_u32(sum2), factor) };
+            let hi = unsafe { vmull_n_u32(vget_high_u32(sum2), factor) };
+            let blurred = unsafe { vcombine_u32(vshrn_n_u64::<32>(lo), vshrn_n_u64::<32>(hi)) };
+
+            let trailing2 = unsafe { vld1q_u32(self.buffer[cursor[2]].as_ptr()) };
+            sum2 = unsafe { vsubq_u32(sum2, trailing2) };
+            unsafe { vst1q_u32(self.buffer[cursor[2]].as_mut_ptr(), sum1) };
+            cursor[2] = if cursor[2] + 1 < self.ends[2] {
+                cursor[2] + 1
+            } else {
+                self.starts[2]
+            };
+
+            let trailing1 = unsafe { vld1q_u32(self.buffer[cursor[1]].as_ptr()) };
+            sum1 = unsafe { vsubq_u32(sum1, trailing1) };
+            unsafe { vst1q_u32(self.buffer[cursor[1]].as_mut_ptr(), sum0) };
+            cursor[1] = if cursor[1] + 1 < self.ends[1] {
+                cursor[1] + 1
+            } else {
+                self.starts[1]
+            };
+
+            let trailing0 = unsafe { vld1q_u32(self.buffer[cursor[0]].as_ptr()) };
+            sum0 = unsafe { vsubq_u32(sum0, trailing0) };
+            unsafe { vst1q_u32(self.buffer[cursor[0]].as_mut_ptr(), leading) };
+            cursor[0] = if cursor[0] + 1 < self.ends[0] {
+                cursor[0] + 1
+            } else {
+                self.starts[0]
+            };
+
+            if !dst32.is_null() {
+                let words = unsafe { vmovn_u32(blurred) };
+                let bytes = unsafe { vmovn_u16(vcombine_u16(words, vdup_n_u16(0))) };
+                unsafe {
+                    core::ptr::write_unaligned(
+                        dst32,
+                        vget_lane_u32::<0>(vreinterpret_u32_u8(bytes)),
+                    );
+                }
+                dst32 = dst32.wrapping_offset(dst_stride as isize);
+            }
+            if !src32.is_null() {
+                src32 = src32.wrapping_offset(src_stride as isize);
+            }
+        }
+
+        unsafe {
+            vst1q_u32(self.fSum0.as_mut_ptr(), sum0);
+            vst1q_u32(self.fSum1.as_mut_ptr(), sum1);
+            vst1q_u32(self.fSum2.as_mut_ptr(), sum2);
+        }
+        self.cursors = cursor;
+    }
 }
 // Source: src/core/SkBlurEngine.cpp:505-511
 // Source: src/core/SkBlurEngine.cpp:513-515
@@ -644,6 +729,11 @@ impl Pass for ThreeBoxApproxPass<'_> {
         mut dst32: *mut u32,
         dst_stride: i32,
     ) {
+        #[cfg(all(target_arch = "aarch64", not(skvx_disable_simd)))]
+        {
+            unsafe { self.blur_segment_neon(n, src32, src_stride, dst32, dst_stride) };
+            return;
+        }
         let mut cursor = self.cursors;
         let (mut sum0, mut sum1, mut sum2) = (self.fSum0, self.fSum1, self.fSum2);
         let mut process_value = |leading_edge: [u32; 4]| -> [u8; 4] {

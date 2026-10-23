@@ -219,7 +219,10 @@ pub trait InputHandlerClient {
         min: f32,
         max_scale: f32,
     );
-    fn DeliverInputForBeginFrame(&self, args: &BeginFrameArgs);
+    // Rust ownership adaptation: Chromium's callback re-enters InputHandler
+    // through InputHandlerProxy. Return the same queued values so this owner
+    // can apply them in the identical WillBeginImplFrame call stack.
+    fn DeliverInputForBeginFrame(&self, args: &BeginFrameArgs) -> Vec<ScrollStateData>;
     fn DeliverInputForHighLatencyMode(&self);
     fn DeliverInputForDeadline(&self);
     fn DidFinishImplFrame(&self);
@@ -1813,14 +1816,14 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         host: &mut C,
         args: &BeginFrameArgs,
     ) {
-        let view = InputHandlerView {
-            pinch_gesture_active_: &self.pinch_gesture_active_,
-            external_pinch_gesture_active_: &self.external_pinch_gesture_active_,
-            last_scroll_update_state_: &self.last_scroll_update_state_,
-            delta_consumed_for_scroll_gesture_: &self.delta_consumed_for_scroll_gesture_,
-            snap_animation_data_map_: &self.snap_animation_data_map_,
-        };
-        if let Some(client) = &self.input_handler_client_ {
+        if let Some(client) = self.input_handler_client_.clone() {
+            let view = InputHandlerView {
+                pinch_gesture_active_: &self.pinch_gesture_active_,
+                external_pinch_gesture_active_: &self.external_pinch_gesture_active_,
+                last_scroll_update_state_: &self.last_scroll_update_state_,
+                delta_consumed_for_scroll_gesture_: &self.delta_consumed_for_scroll_gesture_,
+                snap_animation_data_map_: &self.snap_animation_data_map_,
+            };
             host.WithScrollbarHost(
                 &view,
                 self.last_scroll_update_state_.as_ref(),
@@ -1829,7 +1832,9 @@ impl<B: InputHandlerTypes> InputHandler<B> {
                         .WillBeginImplFrame(scrollbar_host)
                 },
             );
-            client.DeliverInputForBeginFrame(args);
+            for data in client.DeliverInputForBeginFrame(args) {
+                self.ScrollUpdate(host, ScrollState::new(data), TimeDelta::default());
+            }
         }
     }
     // Source: cc/input/input_handler.cc:1413-1423

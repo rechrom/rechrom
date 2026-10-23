@@ -199,24 +199,30 @@ fn run(
                 return Ok(());
             }
             Ok(Command::Display(message)) => {
-                let page_surface_changed = matches!(&message, display::Message::Prepare { .. });
+                let interaction = match &message {
+                    display::Message::Prepare { submitted } => {
+                        Some(submitted.is_handling_interaction)
+                    }
+                    _ => None,
+                };
                 dispatch(DisplayWork::Command(message))?;
-                if page_surface_changed {
-                    // Chromium's DisplayScheduler waits for a Surface update
-                    // until its regular draw deadline, but moves the deadline
-                    // forward as soon as damage from a producer arrives.  The
-                    // Page compositor and Display share the physical
-                    // BeginFrame here, so drawing the old surface immediately
-                    // would race the Page's deadline by a few hundred
-                    // microseconds and add a full refresh interval.
-                    scheduler.OnPendingSurfacesChanged(false);
-                    scheduler.OnDisplayDamaged(Instant::now());
+                if let Some(interaction) = interaction {
                     // Damage after a completed deadline belongs to the next
                     // scheduler opportunity. Chromium's optional previous-frame
                     // swap requires CanDrawForPreviousFrame; a deadline alone
                     // does not authorize another Submit for the same frame.
                     // Source: components/viz/service/display/
                     //         display_scheduler.cc OnDisplayDamaged.
+                    //
+                    // SurfaceDamageObserver has already folded the submitted
+                    // CompositorFrameMetadata into DamageTracker at this
+                    // point in Chromium. Preserve that ordering here: active
+                    // scroll damage is ready now and therefore selects the
+                    // immediate deadline instead of waiting until the regular
+                    // display draw deadline and missing Core Animation's latch.
+                    scheduler.SetDamageDueToInteraction(interaction);
+                    scheduler.OnPendingSurfacesChanged(false);
+                    scheduler.OnDisplayDamaged(Instant::now());
                 }
                 source.request_begin_frame();
             }

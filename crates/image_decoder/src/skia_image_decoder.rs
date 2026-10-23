@@ -2,7 +2,7 @@
 
 use std::io::{self, Cursor};
 
-use image::ImageDecoder as _;
+use image::{AnimationDecoder as _, ImageDecoder as _};
 
 use crate::image_decoder::{DecodedImage, ImageDecodeInput, ImageDecoder};
 
@@ -28,6 +28,45 @@ fn DecodeImage(
         reader = reader.with_guessed_format().map_err(|error| {
             io::Error::other(format!("image format could not be read: {error}"))
         })?;
+    }
+    // Chromium's GIFImageDecoder publishes kAnimationNone for a one-frame GIF,
+    // so BitmapImage may expose that frame as an ordinary static PaintImage.
+    // Inspect the native frame stream before erasing the concrete decoder. A
+    // multi-frame GIF still needs the retained timeline/frame owner and stays
+    // explicitly unavailable through the current immutable bitmap ABI.
+    //
+    // Source: third_party/blink/renderer/platform/image-decoders/gif/
+    // gif_image_decoder.cc; platform/graphics/bitmap_image.cc:636-680.
+    if reader.format() == Some(image::ImageFormat::Gif) {
+        let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(input.bytes))
+            .map_err(io::Error::other)?;
+        let mut frames = decoder.into_frames();
+        let first = frames
+            .next()
+            .transpose()
+            .map_err(io::Error::other)?
+            .ok_or_else(|| io::Error::other("GIF image contains no frames"))?;
+        let has_more_frames = frames
+            .next()
+            .transpose()
+            .map_err(io::Error::other)?
+            .is_some();
+        let animation = if has_more_frames {
+            image_resource::PaintImageAnimationMetadata::Unavailable(
+                image_resource::PaintImageMetadataUnavailable::EncodedAnimationTimeline {
+                    format: "GIF",
+                },
+            )
+        } else {
+            image_resource::PaintImageAnimationMetadata::Known(
+                image_resource::PaintImageAnimationInfo::confirmed_static(),
+            )
+        };
+        return IntoDecodedImage(
+            image::DynamicImage::ImageRgba8(first.into_buffer()),
+            image::metadata::Orientation::NoTransforms,
+            animation,
+        );
     }
     // Keep the codec's actual animation classification before erasing its
     // concrete type. The current pixel ABI cannot retain animated frame sets.

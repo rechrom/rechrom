@@ -635,6 +635,23 @@ pub enum RecordedDisplayItemKind {
     Scrollbar,
 }
 
+/// Source-owned inputs retained by ScrollbarDisplayItem until PAC chooses
+/// composited or non-composited painting. The cc layer is created only at the
+/// compositor boundary; Paint retains geometry and identity, not a cc owner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScrollbarDisplayItemData {
+    pub element_id: foundation::CompositorElementId,
+    pub track_rect: PaintRect,
+    pub thumb_rect: PaintRect,
+    pub thumb_color: Color,
+    pub horizontal: bool,
+    pub overlay: bool,
+    pub left_side_vertical: bool,
+    pub minimum_thumb_length: i32,
+    pub needs_update_display: bool,
+    pub hit_test_opaqueness: PaintHitTestOpaqueness,
+}
+
 /// A semantic item containing a PaintRecord range in the flat replay ABI.
 /// Save/restore and multiple draw ops inside a recorder count as one item.
 #[derive(Clone, Debug, PartialEq)]
@@ -653,6 +670,7 @@ pub struct RecordedDisplayItem {
     /// either direction without retaining Paint or Page state.
     pub image_content_revisions: Vec<(image_resource::ImageId, u64)>,
     pub scrollbar_needs_update_display: Option<bool>,
+    pub scrollbar: Option<ScrollbarDisplayItemData>,
     pub kind: RecordedDisplayItemKind,
     pub id: crate::display_item_id::DisplayItemId,
     pub visual_rect: PaintRect,
@@ -1201,6 +1219,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
         image_content_revisions: Vec::new(),
         scrollbar_needs_update_display: None,
+        scrollbar: None,
         kind: RecordedDisplayItemKind::Drawing,
         id: Default::default(),
         visual_rect: draw.rect,

@@ -108,16 +108,17 @@ pub(crate) fn spawn(
     };
     let routes: page::FrameRoutes = Arc::new(Mutex::new(Default::default()));
     let ticks = routes.clone();
-    native.GetFrameSource(1)?.SetClient(Arc::new(move |frame| {
+    let compositor_source = native.GetFrameSource(1)?;
+    compositor_source.SetClient(Arc::new(move |frame| {
         let targets: Vec<_> = ticks
             .lock()
             .unwrap()
             .values()
-            .filter(|(_, visible)| visible.load(std::sync::atomic::Ordering::Acquire))
-            .map(|(s, _)| s.clone())
+            .filter(|route| route.visible())
+            .cloned()
             .collect();
-        for sender in targets {
-            let _ = sender.send(page::ImplCommand::Tick(frame));
+        for route in targets {
+            route.begin_frame(frame);
         }
     }))?;
     // Input is routed on receipt; compositor pulses and window draw deadlines
@@ -140,7 +141,7 @@ pub(crate) fn spawn(
                 }
             }
         })?;
-    let source: Arc<dyn BeginFrameSource> = native;
+    let source: Arc<dyn BeginFrameSource> = compositor_source;
     let toolbar = page::spawn(page::Params {
         document: (0, 0),
         url: "browser://toolbar".into(),
@@ -690,6 +691,34 @@ impl Host {
             }
             Command::Input(input) => self.input(input, Instant::now(), 1),
             Command::NativeWheel(sample) => {
+                let (delta_x, delta_y) = match &sample.delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                        (f64::from(*x), f64::from(*y))
+                    }
+                    winit::event::MouseScrollDelta::PixelDelta(point) => (point.x, point.y),
+                };
+                browser_tracing::instant(
+                    "input",
+                    "NativeWheelDispatched",
+                    &[
+                        ("delta_x", delta_x),
+                        ("delta_y", delta_y),
+                        (
+                            "native_phase",
+                            sample
+                                .native
+                                .as_ref()
+                                .map_or(0.0, |event| event.phase as f64),
+                        ),
+                        (
+                            "momentum_phase",
+                            sample
+                                .native
+                                .as_ref()
+                                .map_or(0.0, |event| event.momentum_phase as f64),
+                        ),
+                    ],
+                );
                 let queued_at = sample.observed_at;
                 for command in self.wheel_input.accept_native_wheel(sample, Instant::now()) {
                     if let Command::Input(input) = command {
@@ -709,11 +738,11 @@ impl Host {
                     .lock()
                     .unwrap()
                     .values()
-                    .filter(|(_, v)| v.load(std::sync::atomic::Ordering::Acquire))
-                    .map(|(s, _)| s.clone())
+                    .filter(|route| route.visible())
+                    .cloned()
                     .collect();
-                for s in targets {
-                    let _ = s.send(page::ImplCommand::Tick(frame));
+                for route in targets {
+                    route.begin_frame(frame);
                 }
                 Ok(())
             }

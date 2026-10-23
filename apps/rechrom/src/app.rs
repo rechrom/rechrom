@@ -438,10 +438,39 @@ impl ApplicationHandler<UserEvent> for App {
                 native,
                 ..
             } => {
+                let (delta_x, delta_y) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                        (f64::from(*x), f64::from(*y))
+                    }
+                    winit::event::MouseScrollDelta::PixelDelta(point) => (point.x, point.y),
+                };
+                browser_tracing::instant(
+                    "input",
+                    "NativeWheelReceived",
+                    &[
+                        ("delta_x", delta_x),
+                        ("delta_y", delta_y),
+                        (
+                            "native_phase",
+                            native.as_ref().map_or(0.0, |event| event.phase as f64),
+                        ),
+                        (
+                            "momentum_phase",
+                            native
+                                .as_ref()
+                                .map_or(0.0, |event| event.momentum_phase as f64),
+                        ),
+                        (
+                            "native_timestamp_seconds",
+                            native.as_ref().map_or(0.0, |event| event.timestamp_seconds),
+                        ),
+                    ],
+                );
                 let sample =
                     self.input
                         .native_wheel_sample(*delta, *phase, *native, window.scale_factor());
                 self.send(Command::NativeWheel(sample));
+                browser_tracing::instant("input", "NativeWheelHandled", &[]);
             }
             _ => {
                 if matches!(&event, WindowEvent::CursorLeft { .. }) {

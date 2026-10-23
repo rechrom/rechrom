@@ -1545,7 +1545,8 @@ impl Scheduler {
     pub fn RunTask(&mut self, task: SchedulerTask, client: &mut dyn SchedulerClient) {
         match task.kind {
             SchedulerTaskKind::BeginImplFrameDeadline => {
-                if self.begin_impl_frame_deadline_timer_.Consume(task) {
+                let consumed = self.begin_impl_frame_deadline_timer_.Consume(task);
+                if consumed {
                     self.OnBeginImplFrameDeadline(client);
                 }
             }
