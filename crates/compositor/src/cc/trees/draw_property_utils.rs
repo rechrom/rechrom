@@ -1072,17 +1072,23 @@ fn ComputeLayerClipAndVisibleRect<C: DrawContext>(
     id: C::Layer,
     p: &DrawPropertyTrees<C>,
 ) {
-    let (clip, visible) = {
+    let clip = {
         let layer = context.layer(id);
-        (
-            LayerClipRect::<C>(p, layer),
-            LayerVisibleRect::<C>(layer, layer.bounds(p), Some(p)),
-        )
+        LayerClipRect::<C>(p, layer)
     };
-    let layer = context.layer_mut(id);
-    layer.SetIsClipped(clip.is_clipped);
-    layer.SetClipRect(ToEnclosingClipRect(clip.clip_rect));
-    layer.SetVisibleLayerRect(visible);
+    {
+        // LayerVisibleRect reads both of these values. Chromium deliberately
+        // installs the current clip before computing visibility; using the
+        // previous frame's clip can transiently empty every visible layer.
+        let layer = context.layer_mut(id);
+        layer.SetIsClipped(clip.is_clipped);
+        layer.SetClipRect(ToEnclosingClipRect(clip.clip_rect));
+    }
+    let visible = {
+        let layer = context.layer(id);
+        LayerVisibleRect::<C>(layer, layer.bounds(p), Some(p))
+    };
+    context.layer_mut(id).SetVisibleLayerRect(visible);
 }
 // Source: cc/trees/draw_property_utils.cc:1068-1082.
 fn ComputeLayerDrawableContentRect<C: DrawContext>(

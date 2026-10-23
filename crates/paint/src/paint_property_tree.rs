@@ -858,6 +858,8 @@ pub(crate) enum PaintPropertyRole {
     Filter,
     PixelMovingFilterClipExpander,
     OverflowClip,
+    HorizontalScrollbarEffect,
+    VerticalScrollbarEffect,
     Scroll,
     ScrollTranslation,
     ReplacedContentTransform,

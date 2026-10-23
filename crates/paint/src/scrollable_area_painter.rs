@@ -50,6 +50,14 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
         let _border_properties =
             ScopedPaintChunkProperties::properties_only(self.context, self.node);
         let paint_axis = |axis: &ScrollbarPaintAxis| {
+            let scrollbar_properties = if axis.horizontal {
+                self.node.horizontal_scrollbar_properties.as_ref()
+            } else {
+                self.node.vertical_scrollbar_properties.as_ref()
+            };
+            let _scrollbar_effect = scrollbar_properties
+                .cloned()
+                .map(|state| ScopedPaintChunkProperties::state(self.context, state));
             self.context.borrow_mut().BeginScrollbarDisplayItem(
                 DisplayItemId {
                     client_id: axis.display_item_client_id,

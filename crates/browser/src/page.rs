@@ -4091,6 +4091,32 @@ impl Page {
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
         trace.set("scroll_records_reused", reused_recordings as u8 as f64);
         let scroll_done = profile.map(|start| start.elapsed());
+        // A retained resource mutation may admit a document image after the
+        // display list has already recorded its concrete use-site container.
+        // Chromium resolves SVGImageForContainer before publishing that
+        // PaintRecord. Do not take the resource-only fast path until every
+        // recorded container has an exact producer-owned variant; the normal
+        // Paint pass below will configure the missing variants and re-record.
+        let paint_resource_update_requires_repaint = self.frame.as_ref().is_some_and(|frame| {
+            let requirements = frame.display_items.DocumentImageContainerRequirements();
+            let constraints = self.state.constraints.borrow();
+            requirements.iter().any(|(resource_id, container)| {
+                constraints
+                    .images
+                    .iter()
+                    .find(|image| image.id == *resource_id)
+                    .is_some_and(|image| match &image.content {
+                        image_resource::PaintImageContent::Document(content) => {
+                            content.exact_record_for(container).is_none()
+                        }
+                        image_resource::PaintImageContent::Bitmap(_) => false,
+                    })
+            })
+        });
+        trace.set(
+            "paint_resource_update_requires_repaint",
+            paint_resource_update_requires_repaint as u8 as f64,
+        );
         // A CSSOM flush already brought native geometry up to date even when
         // the document's frame impact remains pending until Paint commits.
         let revision = self
@@ -4137,6 +4163,7 @@ impl Page {
         if self.frame.is_some()
             && !self.editing_paint_dirty
             && self.state.document.borrow().GetStyleImpact().IsEmpty()
+            && !paint_resource_update_requires_repaint
         {
             trace.set("frame_retained", 1.0);
             if self.state.paint_resources_dirty.get() {

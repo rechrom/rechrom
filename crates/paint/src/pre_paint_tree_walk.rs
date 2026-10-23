@@ -281,6 +281,10 @@ pub struct PaintTreeNode<'a> {
     /// The composited fixed background paints in the LayoutView transform,
     /// while its BackgroundClip remains in this box's local transform space.
     pub fixed_background_properties: Option<crate::paint_property_tree::PropertyTreeState>,
+    /// Overlay scrollbars animate opacity independently from page contents.
+    /// These are ObjectPaintProperties' horizontal/vertical scrollbar effects.
+    pub horizontal_scrollbar_properties: Option<crate::paint_property_tree::PropertyTreeState>,
+    pub vertical_scrollbar_properties: Option<crate::paint_property_tree::PropertyTreeState>,
     /// Mask source uses a separate DstIn effect and the pre-MaskClip output
     /// clip, matching PaintLayerPainter::PaintFragmentWithPhase(kMask).
     pub mask_properties: Option<crate::paint_property_tree::PropertyTreeState>,
@@ -347,6 +351,8 @@ impl<'a> Default for PaintTreeNode<'a> {
             properties: PropertyTreeState::default(),
             contents_properties: PropertyTreeState::default(),
             fixed_background_properties: None,
+            horizontal_scrollbar_properties: None,
+            vertical_scrollbar_properties: None,
             mask_properties: None,
             children: Vec::new(),
         }
@@ -498,6 +504,8 @@ struct NodeCache {
     raw_properties: PropertyTreeState,
     raw_contents: PropertyTreeState,
     raw_fixed_background: Option<crate::paint_property_tree::PropertyTreeState>,
+    raw_horizontal_scrollbar: Option<crate::paint_property_tree::PropertyTreeState>,
+    raw_vertical_scrollbar: Option<crate::paint_property_tree::PropertyTreeState>,
     raw_mask: Option<crate::paint_property_tree::PropertyTreeState>,
     raw_opacity: f32,
     raw_compositing: bool,
@@ -2997,6 +3005,16 @@ fn RebindLogicalEffectState(
         effect.parent = Some(content);
         mask.effect = Arc::new(effect);
     }
+    for scrollbar in [
+        &mut node.horizontal_scrollbar_properties,
+        &mut node.vertical_scrollbar_properties,
+    ] {
+        if let Some(scrollbar) = scrollbar {
+            let mut effect = (*scrollbar.effect).clone();
+            effect.parent = Some(node.properties.nodes.effect.clone());
+            scrollbar.effect = Arc::new(effect);
+        }
+    }
     node.contents_properties.effect_id = node.properties.effect_id;
     node.contents_properties.nodes.effect = node.properties.nodes.effect.clone();
     for child in &mut node.children {
@@ -3237,6 +3255,14 @@ fn GatherFinalEffects(
     if let Some(mask) = &node.mask_properties {
         effects.insert(mask.effect.id, mask.effect.clone());
     }
+    for scrollbar in [
+        &node.horizontal_scrollbar_properties,
+        &node.vertical_scrollbar_properties,
+    ] {
+        if let Some(scrollbar) = scrollbar {
+            effects.insert(scrollbar.effect.id, scrollbar.effect.clone());
+        }
+    }
     for child in &node.children {
         GatherFinalEffects(child, effects);
     }
@@ -3258,6 +3284,12 @@ fn PersistPropertyStates(node: &mut PaintTreeNode<'_>, updater: &mut PropertyNod
     }
     if let Some(mask) = &mut node.mask_properties {
         updater.state(mask);
+    }
+    if let Some(scrollbar) = &mut node.horizontal_scrollbar_properties {
+        updater.state(scrollbar);
+    }
+    if let Some(scrollbar) = &mut node.vertical_scrollbar_properties {
+        updater.state(scrollbar);
     }
     for child in &mut node.children {
         PersistPropertyStates(child, updater);
@@ -3314,6 +3346,8 @@ fn RestoreBuilderStates(node: &mut PaintTreeNode<'_>) {
     node.properties = cache.raw_properties.clone();
     node.contents_properties = cache.raw_contents.clone();
     node.fixed_background_properties = cache.raw_fixed_background.clone();
+    node.horizontal_scrollbar_properties = cache.raw_horizontal_scrollbar.clone();
+    node.vertical_scrollbar_properties = cache.raw_vertical_scrollbar.clone();
     node.mask_properties = cache.raw_mask.clone();
     node.opacity = cache.raw_opacity;
     node.applies_compositing_layer = cache.raw_compositing;
@@ -3585,6 +3619,26 @@ impl PrePaintTreeWalk {
                 ),
                 _ => false,
             }
+            && match (&old.raw_horizontal_scrollbar, &new.raw_horizontal_scrollbar) {
+                (None, None) => true,
+                (Some(a), Some(b)) => state_compare::SameBuilderState(
+                    a,
+                    b,
+                    &self.property_keys,
+                    &self.prior_property_keys,
+                ),
+                _ => false,
+            }
+            && match (&old.raw_vertical_scrollbar, &new.raw_vertical_scrollbar) {
+                (None, None) => true,
+                (Some(a), Some(b)) => state_compare::SameBuilderState(
+                    a,
+                    b,
+                    &self.property_keys,
+                    &self.prior_property_keys,
+                ),
+                _ => false,
+            }
     }
 
     /// Preserve completed geometry/property/phase data when the exact builder
@@ -3748,6 +3802,9 @@ impl PrePaintTreeWalk {
                     built.properties = old.properties.clone();
                     built.contents_properties = old.contents_properties.clone();
                     built.fixed_background_properties = old.fixed_background_properties.clone();
+                    built.horizontal_scrollbar_properties =
+                        old.horizontal_scrollbar_properties.clone();
+                    built.vertical_scrollbar_properties = old.vertical_scrollbar_properties.clone();
                     built.mask_properties = old.mask_properties.clone();
                     built.opacity = old.opacity;
                     built.outline_rects = std::mem::take(&mut old.outline_rects);
@@ -3761,6 +3818,8 @@ impl PrePaintTreeWalk {
                     new_cache.raw_properties = old_cache.raw_properties.clone();
                     new_cache.raw_contents = old_cache.raw_contents.clone();
                     new_cache.raw_fixed_background = old_cache.raw_fixed_background.clone();
+                    new_cache.raw_horizontal_scrollbar = old_cache.raw_horizontal_scrollbar.clone();
+                    new_cache.raw_vertical_scrollbar = old_cache.raw_vertical_scrollbar.clone();
                     new_cache.raw_mask = old_cache.raw_mask.clone();
                     new_cache.children = old_cache.children.clone();
                     new_cache.own_keys = old_cache.own_keys.clone();
@@ -3956,6 +4015,12 @@ impl PrePaintTreeWalk {
                     }
                     if let Some(mask) = &mut node.mask_properties {
                         refresh(mask);
+                    }
+                    if let Some(scrollbar) = &mut node.horizontal_scrollbar_properties {
+                        refresh(scrollbar);
+                    }
+                    if let Some(scrollbar) = &mut node.vertical_scrollbar_properties {
+                        refresh(scrollbar);
                     }
                 }
                 self.property_node_store = store;
@@ -5305,6 +5370,74 @@ impl PrePaintTreeWalk {
             }
         }
 
+        // Source: core/paint/paint_property_tree_builder.cc:3666-3741.
+        // Overlay scrollbar opacity is animated on the compositor. Each axis
+        // therefore needs its own effect node; sharing the page effect would
+        // make the scrollbar fade mutate the entire document's opacity.
+        if let Some(scrollbars) = fragment
+            .paint
+            .scrollbars
+            .as_ref()
+            .filter(|scrollbars| scrollbars.uses_overlay_scrollbars)
+        {
+            for (axis, role, horizontal) in [
+                (
+                    scrollbars.horizontal.as_ref(),
+                    PaintPropertyRole::HorizontalScrollbarEffect,
+                    true,
+                ),
+                (
+                    scrollbars.vertical.as_ref(),
+                    PaintPropertyRole::VerticalScrollbarEffect,
+                    false,
+                ),
+            ] {
+                let Some(axis) = axis else { continue };
+                let id = self.next_property_id;
+                self.next_property_id += 1;
+                self.RegisterProperty(fragment, role, id);
+                let effect = Arc::new(
+                    EffectPaintPropertyNode {
+                        compositor: crate::paint_property_tree::EffectCompositorState {
+                            compositor_element_id: axis.compositor_element_id,
+                            ..Default::default()
+                        },
+                        backdrop_filter_bounds: None,
+                        self_or_ancestor_participates_in_view_transition: false,
+                        lifecycle: Default::default(),
+                        id,
+                        parent: Some(node.properties.nodes.effect.clone()),
+                        local_transform_space: border_box_properties.nodes.transform.clone(),
+                        output_clip: Some(border_box_properties.nodes.clip.clone()),
+                        filter_reference_box: None,
+                        filter_reference_scale: 1.0,
+                        opacity: 1.0,
+                        blend_mode: PaintBlendMode::kNormal,
+                        filters: Default::default(),
+                        backdrop_filters: Default::default(),
+                        backdrop_filter_has_reference: false,
+                        backdrop_filter_clip: None,
+                        isolates_blending: false,
+                        has_mask: false,
+                        is_mask: false,
+                        direct_compositing_reasons: vec!["ActiveOpacityAnimation"],
+                    }
+                    .with_filter_presence()
+                    .with_inherited_view_transition(),
+                );
+                let state = crate::paint_property_tree::PropertyTreeState {
+                    transform: border_box_properties.nodes.transform.clone(),
+                    clip: border_box_properties.nodes.clip.clone(),
+                    effect,
+                };
+                if horizontal {
+                    node.horizontal_scrollbar_properties = Some(state);
+                } else {
+                    node.vertical_scrollbar_properties = Some(state);
+                }
+            }
+        }
+
         // Source: core/paint/paint_property_tree_builder.cc
         // UpdateScrollTranslation. Descendant display items stay in the
         // scroller's local coordinate space; the ScrollTranslation property
@@ -5486,6 +5619,8 @@ impl PrePaintTreeWalk {
             raw_properties: node.properties.clone(),
             raw_contents: node.contents_properties.clone(),
             raw_fixed_background: node.fixed_background_properties.clone(),
+            raw_horizontal_scrollbar: node.horizontal_scrollbar_properties.clone(),
+            raw_vertical_scrollbar: node.vertical_scrollbar_properties.clone(),
             raw_mask: node.mask_properties.clone(),
             raw_opacity: node.opacity,
             raw_compositing: node.applies_compositing_layer,
