@@ -32,6 +32,68 @@ pub(crate) fn SameBuilderState(
         && compare.effect(&a.effect, &b.effect)
 }
 
+/// Chromium keeps property nodes in stable mutable owner/role slots. A value
+/// change on an ancestor slot does not by itself require rebuilding clean
+/// descendants; their references are rebound to the updated slot during the
+/// persistence pass. This comparison admits only that case: each inherited
+/// top slot must still name the same semantic owner/role entry.
+pub(crate) fn SameBuilderStructure(
+    a: &PropertyTreeState,
+    b: &PropertyTreeState,
+    current_keys: &BTreeMap<u64, PaintPropertyKey>,
+    prior_keys: &BTreeMap<u64, PaintPropertyKey>,
+) -> bool {
+    fn same_slot<T>(
+        a: &Arc<T>,
+        b: &Arc<T>,
+        aid: u64,
+        bid: u64,
+        alife: &PaintPropertyNodeLifecycle,
+        blife: &PaintPropertyNodeLifecycle,
+        current_keys: &BTreeMap<u64, PaintPropertyKey>,
+        prior_keys: &BTreeMap<u64, PaintPropertyKey>,
+    ) -> bool {
+        if aid == 0 || bid == 0 {
+            return aid == 0 && bid == 0 && alife.same_node(blife);
+        }
+        match (
+            current_keys.get(&aid).or_else(|| prior_keys.get(&aid)),
+            current_keys.get(&bid).or_else(|| prior_keys.get(&bid)),
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => Arc::ptr_eq(a, b),
+        }
+    }
+    same_slot(
+        &a.transform,
+        &b.transform,
+        a.transform.id,
+        b.transform.id,
+        &a.transform.lifecycle,
+        &b.transform.lifecycle,
+        current_keys,
+        prior_keys,
+    ) && same_slot(
+        &a.clip,
+        &b.clip,
+        a.clip.id,
+        b.clip.id,
+        &a.clip.lifecycle,
+        &b.clip.lifecycle,
+        current_keys,
+        prior_keys,
+    ) && same_slot(
+        &a.effect,
+        &b.effect,
+        a.effect.id,
+        b.effect.id,
+        &a.effect.lifecycle,
+        &b.effect.lifecycle,
+        current_keys,
+        prior_keys,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum Compared {
     Visiting,

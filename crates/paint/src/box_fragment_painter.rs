@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use layoutng_assembly::fragment_tree::FragmentKind;
 use layoutng_assembly::internal::layout_input::{
@@ -47,6 +47,14 @@ use crate::svg_shape_painter::SVGShapePainter;
 use crate::table_painters::TablePainter;
 use crate::theme_painter::ThemePainter;
 use crate::PaintRect;
+
+fn ProcessFlag(flag: &'static OnceLock<bool>, name: &str) -> bool {
+    *flag.get_or_init(|| std::env::var_os(name).is_some())
+}
+
+static TRACE_STYLE_BACKGROUNDS: OnceLock<bool> = OnceLock::new();
+static TRACE_STYLE_IMAGES: OnceLock<bool> = OnceLock::new();
+static TRACE_TEXT_ORIGIN: OnceLock<bool> = OnceLock::new();
 
 // cpp: paint/box_fragment_painter.h:10-48
 pub struct BoxFragmentPainter<'n, 'f, 'c, 'o> {
@@ -930,7 +938,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 unsnapped_rect.height = (unsnapped_rect.height - inset.top - inset.bottom).max(0.0);
             }
             let rect = unsnapped_rect;
-            if std::env::var_os("BROWSER_TRACE_STYLE_BACKGROUNDS").is_some() {
+            if ProcessFlag(&TRACE_STYLE_BACKGROUNDS, "BROWSER_TRACE_STYLE_BACKGROUNDS") {
                 eprintln!(
                     "style-background-paint node={} rect={:.3},{:.3},{:.3},{:.3} color={:.6},{:.6},{:.6},{:.6} images={}",
                     fragment.node_id,
@@ -1903,7 +1911,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         already_clipped: bool,
         background_color: Option<Color>,
     ) {
-        if std::env::var_os("BROWSER_TRACE_STYLE_IMAGES").is_some()
+        if ProcessFlag(&TRACE_STYLE_IMAGES, "BROWSER_TRACE_STYLE_IMAGES")
             && (layer.shader.is_some() || !layer.source_url.is_empty() || layer.resource_id != 0)
         {
             eprintln!(
@@ -3339,7 +3347,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     let line_top = self.node.paint_offset.y + text_line_top_offset;
                     text_line_top = line_top;
                     let snap_delta = self.node.RoundedPaintY(line_top) - line_top;
-                    if std::env::var_os("RECHROM_TRACE_TEXT_ORIGIN").is_some() {
+                    if ProcessFlag(&TRACE_TEXT_ORIGIN, "RECHROM_TRACE_TEXT_ORIGIN") {
                         eprintln!(
                             "text-origin node={} offset={:.4},{:.4} line_top={:.4} snap={:.4} baseline={:.4} origin={:.4},{:.4} font={:.4}",
                             fragment.node_id,

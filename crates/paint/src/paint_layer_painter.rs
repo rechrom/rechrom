@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use layoutng_assembly::internal::layout_input::FloatSide;
 
@@ -15,6 +16,11 @@ use crate::PaintRect;
 // cpp: paint/paint_layer_painter.cc:12-14
 fn ZIndex(node: &PaintTreeNode<'_>) -> i32 {
     node.stacking_level
+}
+
+fn TraceStacking() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_DIAG_STACKING").is_some())
 }
 
 // cpp: paint/paint_layer_painter.cc:16-19
@@ -277,7 +283,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
     // cpp: paint/paint_layer_painter.h:29
     // cpp: paint/paint_layer_painter.cc:157-230
     fn PaintWithPhase(&self, node: &PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
-        if std::env::var_os("RECHROM_DIAG_STACKING").is_some()
+        if TraceStacking()
             && paint_info.phase == PaintPhase::kForeground
             && node.absolute_offset.y < 90.0
         {
@@ -492,7 +498,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         let mut path = Vec::new();
         collect(self.layer, &mut path, &mut children);
         children.sort_by_key(|child| ZIndex(child.layer));
-        if std::env::var_os("RECHROM_DIAG_STACKING").is_some() {
+        if TraceStacking() {
             let owner = self
                 .layer
                 .fragment

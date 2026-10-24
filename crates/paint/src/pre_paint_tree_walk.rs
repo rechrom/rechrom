@@ -544,6 +544,7 @@ pub struct PrePaintTreeWalk {
     retained_tree_valid: bool,
     logical_tree_changed: bool,
     viewport: Option<PaintRect>,
+    retained_root_cull: Option<PaintRect>,
     viewport_properties: PropertyTreeState,
     root_fixed_position: Option<RootFixedPositionContext>,
     // Source: core/paint/paint_property_tree_builder.cc:4692-4701.
@@ -569,6 +570,7 @@ impl Default for PrePaintTreeWalk {
             retained_tree_valid: false,
             logical_tree_changed: false,
             viewport: None,
+            retained_root_cull: None,
             viewport_properties: PropertyTreeState::default(),
             root_fixed_position: None,
             requires_main_thread_for_background_attachment_fixed: None,
@@ -3487,6 +3489,42 @@ struct ContentUpdate {
 }
 
 impl PrePaintTreeWalk {
+    fn RectContains(outer: &PaintRect, inner: &PaintRect) -> bool {
+        let values = [
+            outer.x,
+            outer.y,
+            outer.width,
+            outer.height,
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height,
+        ];
+        values.iter().all(|value| value.is_finite())
+            && outer.x <= inner.x
+            && outer.y <= inner.y
+            && outer.x + outer.width >= inner.x + inner.width
+            && outer.y + outer.height >= inner.y + inner.height
+    }
+
+    fn ClipContextCovers(old: &Option<PaintRect>, new: &Option<PaintRect>) -> bool {
+        match (old, new) {
+            (None, None) => true,
+            (Some(old), Some(new)) => Self::RectContains(old, new),
+            _ => false,
+        }
+    }
+
+    fn CullContextCovers(old: &Option<PaintRect>, new: &Option<PaintRect>) -> bool {
+        match (old, new) {
+            // No retained cull means the node recorded without culling, which
+            // covers any finite successor range.
+            (None, _) => true,
+            (Some(old), Some(new)) => Self::RectContains(old, new),
+            (Some(_), None) => false,
+        }
+    }
+
     /// The existing standalone LayoutView is explicitly a single-layout-
     /// viewport producer. No visual viewport/PageScale/overscroll node is
     /// synthesized from dimensions or guessed later by CompositorEngine.
@@ -3515,10 +3553,16 @@ impl PrePaintTreeWalk {
         })
     }
     fn SameContext(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
+        let cull_covers = Self::CullContextCovers(&a.cull, &b.cull);
         a.offset == b.offset
             && a.paint_space == b.paint_space
-            && a.clip == b.clip
-            && a.cull == b.cull
+            // A shrinking inherited clip/cull cannot expose content omitted
+            // by the retained node. The updated ancestor still publishes its
+            // exact current clip; descendants may keep their larger recorded
+            // coverage and rebind to that same property slot, matching Blink's
+            // mutable property-node and cull-hysteresis behavior.
+            && (Self::ClipContextCovers(&a.clip, &b.clip) || cull_covers)
+            && cull_covers
             && a.transforms == b.transforms
             && a.opacity == b.opacity
             && a.scroll == b.scroll
@@ -3528,7 +3572,7 @@ impl PrePaintTreeWalk {
             && a.can_inherit_backface_visibility == b.can_inherit_backface_visibility
             && a.root == b.root
             && a.flex_or_grid_item == b.flex_or_grid_item
-            && state_compare::SameBuilderState(
+            && state_compare::SameBuilderStructure(
                 &a.properties.nodes,
                 &b.properties.nodes,
                 &self.property_keys,
@@ -4074,6 +4118,12 @@ impl PrePaintTreeWalk {
                 );
             }
         }
+        let desired_root_cull = viewport.map(|rect| Expand(rect, ScrollCullExpansion(root, true)));
+        if viewport.is_none()
+            || !matches!((self.retained_root_cull, viewport), (Some(cull), Some(visible)) if Self::RectContains(&cull, &visible))
+        {
+            self.retained_root_cull = desired_root_cull;
+        }
         if self.viewport_properties.clip_id != 0 {
             self.property_keys.insert(
                 self.viewport_properties.clip_id,
@@ -4087,7 +4137,11 @@ impl PrePaintTreeWalk {
             offset: Offset::default(),
             paint_space: Offset::default(),
             clip: viewport,
-            cull: viewport.map(|rect| Expand(rect, ScrollCullExpansion(root, true))),
+            // Blink's CullRect::ChangedEnough keeps an expanded sliding
+            // window until the visible viewport approaches its edge. This
+            // lets incremental resize update the exact viewport clip without
+            // repainting clean descendants which already have coverage.
+            cull: self.retained_root_cull,
             transforms: Vec::new(),
             opacity: 1.0,
             scroll: Offset::default(),

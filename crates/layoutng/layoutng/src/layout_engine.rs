@@ -425,6 +425,14 @@ pub trait PaintCommitOutput {
     fn IntoLayoutCommit(self) -> (Self::Artifact, PaintClientCommit);
 }
 
+#[derive(Clone, Copy)]
+struct LayoutTreeFacts {
+    object_count: usize,
+    contains_annotations: bool,
+    has_floating_object: bool,
+    has_form_control: bool,
+}
+
 /// Owns the resident native input tree, its constraints and exported result.
 /// DOM adapters provide mutations; Paint consumes only the fragment output.
 pub struct LayoutEngine {
@@ -447,9 +455,21 @@ pub struct LayoutEngine {
     objects_: LayoutObjectFactorySet,
     boundary_: LayoutBoundarySupport,
     boundary_export_cache_: crate::layout_boundary_support::LayoutBoundaryExportCache,
+    tree_facts_: Option<LayoutTreeFacts>,
 }
 
 impl LayoutEngine {
+    fn CachedScrollIndexObjects(
+        &self,
+    ) -> Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)> {
+        (!self.boundary_export_cache_.source_objects.is_empty()).then(|| {
+            (
+                Arc::clone(&self.boundary_export_cache_.source_objects),
+                Arc::clone(&self.boundary_export_cache_.sticky_objects),
+            )
+        })
+    }
+
     // cpp: layoutng/layout_engine.h:21-23
     pub fn new(assembly: &LayoutAssembly) -> Self {
         Self {
@@ -467,6 +487,7 @@ impl LayoutEngine {
             objects_: assembly.objects,
             boundary_: assembly.boundary,
             boundary_export_cache_: Default::default(),
+            tree_facts_: None,
         }
     }
 
@@ -534,6 +555,7 @@ impl LayoutEngine {
                 | LayoutMutation::EditingState(_)
         ) {
             self.boundary_export_cache_.Clear();
+            self.tree_facts_ = None;
         }
         // Native topology, style, constraints and layout results may change at
         // all other mutation entries. Never keep borrowed native pointers or
@@ -882,7 +904,11 @@ impl LayoutEngine {
                     // RunLayout's temporary pass has ended. Walking native SVG
                     // children still needs this engine's real virtual factories.
                     let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-                    ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &fragments)
+                    ScrollPaintPropertyIndex::new(
+                        unsafe { &mut *root },
+                        &fragments,
+                        self.CachedScrollIndexObjects(),
+                    )
                 });
             }
             self.fragments = Some(Rc::new(fragments));
@@ -984,7 +1010,11 @@ impl LayoutEngine {
         }
         self.scroll_paint_index_ = Some({
             let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-            ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &fragments)
+            ScrollPaintPropertyIndex::new(
+                unsafe { &mut *root },
+                &fragments,
+                self.CachedScrollIndexObjects(),
+            )
         });
         self.pending_scroll_ids_.clear();
         self.fragments = Some(Rc::new(fragments));
@@ -1208,7 +1238,11 @@ impl LayoutEngine {
                 self.pre_paint_inputs_.update(&mut exported);
                 self.scroll_paint_index_ = Some({
                     let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-                    ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &exported)
+                    ScrollPaintPropertyIndex::new(
+                        unsafe { &mut *root },
+                        &exported,
+                        self.CachedScrollIndexObjects(),
+                    )
                 });
                 *fragments = exported;
                 self.pending_scroll_ids_.clear();
@@ -1226,6 +1260,7 @@ impl LayoutEngine {
                 self.scroll_paint_index_ = Some(ScrollPaintPropertyIndex::new(
                     unsafe { &mut *root },
                     fragments,
+                    self.CachedScrollIndexObjects(),
                 ));
             }
             self.pending_scroll_ids_.clear();
@@ -1291,7 +1326,6 @@ impl LayoutEngine {
         } else {
             unsafe { &*root_box }.GetLayoutResult(0)
         };
-        let mut contains_annotations = false;
         let missing_forms = self
             .algorithms_
             .forms_support
@@ -1310,61 +1344,52 @@ impl LayoutEngine {
             || self.algorithms_.float_support.position.is_none()
             || self.algorithms_.float_support.create_shape.is_none();
 
-        // C++ virtual dispatch remains available while walking the tree before
-        // LayoutPassScope. Rust's explicit SVG vtable needs the same factory
-        // callbacks during this walk.
-        let _object_factory_scope = LayoutObjectFactoryScope::new(&self.objects_);
-        let mut object: *mut LayoutObject = root;
-        let mut object_count = 0usize;
-        let mut needs_layout_count = 0usize;
-        let mut self_needs_full_layout_count = 0usize;
-        let mut child_needs_full_layout_count = 0usize;
-        while !object.is_null() {
-            let current = unsafe { &*object };
-            object_count += 1;
-            needs_layout_count += current.NeedsLayout() as usize;
-            self_needs_full_layout_count += current.SelfNeedsFullLayout() as usize;
-            child_needs_full_layout_count += current.ChildNeedsFullLayout() as usize;
-            if missing_float && current.IsFloating() {
-                std::panic::panic_any(UnsupportedLayout::new(
-                    "float layout module is not installed",
-                ));
+        // These facts change with LayoutObject topology or style ownership,
+        // both of which invalidate tree_facts_ at the mutation boundary. A
+        // viewport constraint update keeps that ownership stable, so do not
+        // walk the entire resident tree before every incremental layout.
+        let facts = *self.tree_facts_.get_or_insert_with(|| {
+            // C++ virtual dispatch remains available while walking the tree
+            // before LayoutPassScope. Rust's explicit SVG vtable needs the
+            // same factory callbacks during this one-time scan.
+            let _object_factory_scope = LayoutObjectFactoryScope::new(&self.objects_);
+            let mut facts = LayoutTreeFacts {
+                object_count: 0,
+                contains_annotations: false,
+                has_floating_object: false,
+                has_form_control: false,
+            };
+            let mut object: *mut LayoutObject = root;
+            while !object.is_null() {
+                let current = unsafe { &*object };
+                facts.object_count += 1;
+                facts.has_floating_object |= current.IsFloating();
+                let node = current.GetNode();
+                facts.has_form_control |=
+                    !node.is_null() && unsafe { &*node }.InputKind() == NodeKind::kFormControl;
+                facts.contains_annotations |= current.IsInlineRubyText()
+                    || current.StyleRef().GetTextEmphasisMark() != TextEmphasisMark::kNone;
+                object = current.NextInPreOrder(root);
             }
-            let node = current.GetNode();
-            if missing_forms
-                && !node.is_null()
-                && unsafe { &*node }.InputKind() == NodeKind::kFormControl
-            {
-                std::panic::panic_any(UnsupportedLayout::new(
-                    "forms layout module is not installed",
-                ));
-            }
-            if current.IsInlineRubyText()
-                || current.StyleRef().GetTextEmphasisMark() != TextEmphasisMark::kNone
-            {
-                contains_annotations = true;
-                if !missing_forms {
-                    break;
-                }
-            }
-            object = current.NextInPreOrder(root);
+            facts
+        });
+        trace.set("objects", facts.object_count as f64);
+        if missing_float && facts.has_floating_object {
+            std::panic::panic_any(UnsupportedLayout::new(
+                "float layout module is not installed",
+            ));
         }
-        trace.set("objects", object_count as f64);
-        trace.set("needs_layout_objects", needs_layout_count as f64);
-        trace.set(
-            "self_needs_full_layout_objects",
-            self_needs_full_layout_count as f64,
-        );
-        trace.set(
-            "child_needs_full_layout_objects",
-            child_needs_full_layout_count as f64,
-        );
+        if missing_forms && facts.has_form_control {
+            std::panic::panic_any(UnsupportedLayout::new(
+                "forms layout module is not installed",
+            ));
+        }
 
         let root_node = root.GetNode();
         let constraints = prepare_constraints(
             unsafe { &*root_node }.InputStyle(),
             space,
-            contains_annotations,
+            facts.contains_annotations,
         );
         let _layout_pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
         let reuses_prepared_fonts = environment.ReusesPreparedFonts();

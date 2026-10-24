@@ -12,9 +12,7 @@ use dom::{Document, DOM};
 use image_resource::{
     ContainerKey, DocumentImageMutation, DocumentPaintContent, PaintImageContent,
 };
-use layoutng_assembly::internal::layout_input::{
-    ComputedStyle, ConstraintSpace, FontFace, PaintImage,
-};
+use layoutng_assembly::internal::layout_input::{ConstraintSpace, FontFace, PaintImage};
 use page_mutation::{
     DocumentImageFrameChanged, DocumentImageIntrinsicSizeChanged, FontResourceReady,
     ImageResourceReady, ResourceKind, ResourceLoadFailed, ResourceMutation,
@@ -81,6 +79,15 @@ struct ImageEventSubtrees {
     ancestors: HashMap<String, HashSet<usize>>,
 }
 
+struct ReferencedImageOwners {
+    key: Option<(dom::persistent_document::DOMOwnerHandle, u64)>,
+    // Resource loading observes shadow-including document order. Cache only
+    // owner positions and HTMLImageElement membership; current selections and
+    // resolved-style dependencies are still read on every lifecycle pass.
+    order: HashMap<usize, usize>,
+    image_nodes: Vec<usize>,
+}
+
 fn SVGImageViewSpecification(source: &str) -> &str {
     source.rsplit_once('#').map_or("", |(_, fragment)| fragment)
 }
@@ -139,6 +146,7 @@ pub struct ResourceFetcher {
     image_event_sources: RefCell<HashMap<u64, String>>,
     cached_image_event_sources: RefCell<HashSet<String>>,
     image_event_subtrees: RefCell<Option<ImageEventSubtrees>>,
+    referenced_image_owners: RefCell<Option<ReferencedImageOwners>>,
     pending_images: RefCell<Vec<PendingImage>>,
     deferred_images: RefCell<Vec<DeferredImage>>,
     document_image_sources: RefCell<HashMap<u64, String>>,
@@ -169,6 +177,7 @@ impl ResourceFetcher {
             image_event_sources: RefCell::new(HashMap::new()),
             cached_image_event_sources: RefCell::new(HashSet::new()),
             image_event_subtrees: RefCell::new(None),
+            referenced_image_owners: RefCell::new(None),
             pending_images: RefCell::new(Vec::new()),
             deferred_images: RefCell::new(Vec::new()),
             document_image_sources: RefCell::new(HashMap::new()),
@@ -1105,7 +1114,7 @@ impl ResourceFetcher {
                 }
             }
         }
-        fn node(
+        fn image_node(
             d: &Document,
             i: usize,
             constraints: &ConstraintSpace,
@@ -1120,78 +1129,39 @@ impl ResourceFetcher {
             )>,
         ) {
             let n = d.Node(i);
-            if n.IsHTMLElement("img") {
-                let selection = if let Some(selector) = selector {
-                    selector(d, i, constraints, is_loaded)
-                } else {
-                    n.FindAttribute("src")
-                        .filter(|attribute| !attribute.value.is_empty())
-                        .map(
-                            |attribute| dom::persistent_document::ResponsiveImageSelection {
-                                source: attribute.value.clone(),
-                                density: None,
-                            },
-                        )
-                };
-                if let Some(selection) = selection.as_ref() {
-                    if d.ImageResourceFor(&selection.source).is_none() {
-                        let lazy = n
-                            .FindAttribute("loading")
-                            .is_some_and(|loading| loading.value.eq_ignore_ascii_case("lazy"));
-                        let policy = n
-                            .FindAttribute("referrerpolicy")
-                            .and_then(|attribute| ReferrerPolicy::FromString(&attribute.value));
-                        request(
-                            &selection.source,
-                            false,
-                            !lazy,
-                            policy,
-                            admitted,
-                            seen,
-                            requests,
-                        );
-                    }
-                }
-                selections.push((i, selection));
-            }
-            if let Some(r) = d.ResolvedStyleFor(i) {
-                for source in r.ReferencedStyleImageSources() {
-                    if !source.is_empty() {
-                        request(&source, true, true, None, admitted, seen, requests);
-                    }
+            debug_assert!(n.IsHTMLElement("img"));
+            let selection = if let Some(selector) = selector {
+                selector(d, i, constraints, is_loaded)
+            } else {
+                n.FindAttribute("src")
+                    .filter(|attribute| !attribute.value.is_empty())
+                    .map(
+                        |attribute| dom::persistent_document::ResponsiveImageSelection {
+                            source: attribute.value.clone(),
+                            density: None,
+                        },
+                    )
+            };
+            if let Some(selection) = selection.as_ref() {
+                if d.ImageResourceFor(&selection.source).is_none() {
+                    let lazy = n
+                        .FindAttribute("loading")
+                        .is_some_and(|loading| loading.value.eq_ignore_ascii_case("lazy"));
+                    let policy = n
+                        .FindAttribute("referrerpolicy")
+                        .and_then(|attribute| ReferrerPolicy::FromString(&attribute.value));
+                    request(
+                        &selection.source,
+                        false,
+                        !lazy,
+                        policy,
+                        admitted,
+                        seen,
+                        requests,
+                    );
                 }
             }
-            // Blink resolves pending resources for shadow descendants as it
-            // resolves their native style. Ordinary DOM Children excludes this
-            // edge; shadow-including order visits it before light children.
-            // Do not use flat-tree children: unassigned light-DOM images load
-            // too, and slot assignment must not discover a consumer twice.
-            if let Some(shadow_root) = d.ShadowRoot(i) {
-                node(
-                    d,
-                    shadow_root,
-                    constraints,
-                    selector,
-                    is_loaded,
-                    admitted,
-                    seen,
-                    requests,
-                    selections,
-                );
-            }
-            for &c in n.Children() {
-                node(
-                    d,
-                    c,
-                    constraints,
-                    selector,
-                    is_loaded,
-                    admitted,
-                    seen,
-                    requests,
-                    selections,
-                );
-            }
+            selections.push((i, selection));
         }
         {
             let owner = self.document.borrow();
@@ -1202,33 +1172,79 @@ impl ResourceFetcher {
             let is_loaded = |source: &str| {
                 d.ImageResourceFor(source).is_some() || self.IsLoadedImageSource(source)
             };
-            node(
-                d,
-                d.Root(),
-                &constraints,
-                selector.as_deref(),
-                &is_loaded,
-                &admitted,
-                &mut seen,
-                &mut requests,
-                &mut selections,
-            );
-            // ImageLoader is attached to HTMLImageElement rather than to the
-            // document tree. Discover every detached image as an independent
-            // owner so `new Image(); image.src = ...` participates in the same
-            // cache, decode and event lifecycle as an inserted element. Image
-            // elements cannot contain descendant images, so each visit is
-            // disjoint.
-            //
-            // Source: third_party/blink/renderer/core/html/
-            // html_image_element.cc; loader/image_loader.cc.
-            let detached_roots = (0..d.NodeCount())
-                .filter(|&i| !d.IsConnectedToDocument(i) && d.Node(i).IsHTMLElement("img"))
+            let key = d.CollectionMembershipKey();
+            let mut cached = self.referenced_image_owners.borrow_mut();
+            if key.is_none() || cached.as_ref().is_none_or(|owners| owners.key != key) {
+                fn visit(
+                    d: &Document,
+                    node: usize,
+                    order: &mut HashMap<usize, usize>,
+                    image_nodes: &mut Vec<usize>,
+                ) {
+                    order.insert(node, order.len());
+                    if d.Node(node).IsHTMLElement("img") {
+                        image_nodes.push(node);
+                    }
+                    // Blink resolves pending resources for shadow descendants
+                    // before light children, including unassigned light DOM.
+                    if let Some(shadow_root) = d.ShadowRoot(node) {
+                        visit(d, shadow_root, order, image_nodes);
+                    }
+                    for &child in d.Node(node).Children() {
+                        visit(d, child, order, image_nodes);
+                    }
+                }
+                let mut order = HashMap::new();
+                let mut image_nodes = Vec::new();
+                visit(d, d.Root(), &mut order, &mut image_nodes);
+                // ImageLoader belongs to HTMLImageElement and also operates
+                // while detached. Preserve the previous arena creation order.
+                for node in 0..d.NodeCount() {
+                    if !d.IsConnectedToDocument(node) && d.Node(node).IsHTMLElement("img") {
+                        order.insert(node, order.len());
+                        image_nodes.push(node);
+                    }
+                }
+                *cached = Some(ReferencedImageOwners {
+                    key,
+                    order,
+                    image_nodes,
+                });
+            }
+            let owners = cached.as_ref().unwrap();
+            let mut style_owners = d
+                .ReferencedStyleImageConsumers()
+                .into_iter()
+                .filter_map(|(node, sources)| {
+                    owners
+                        .order
+                        .get(&node)
+                        .copied()
+                        .map(|order| (order, sources))
+                })
                 .collect::<Vec<_>>();
-            for root in detached_roots {
-                node(
+            style_owners.sort_unstable_by_key(|(order, _)| *order);
+            let mut style = style_owners.into_iter().peekable();
+            for &node in &owners.image_nodes {
+                let node_order = owners.order[&node];
+                while style.peek().is_some_and(|(order, _)| *order < node_order) {
+                    for source in style.next().unwrap().1.iter() {
+                        if !source.is_empty() {
+                            request(
+                                source,
+                                true,
+                                true,
+                                None,
+                                &admitted,
+                                &mut seen,
+                                &mut requests,
+                            );
+                        }
+                    }
+                }
+                image_node(
                     d,
-                    root,
+                    node,
                     &constraints,
                     selector.as_deref(),
                     &is_loaded,
@@ -1237,6 +1253,39 @@ impl ResourceFetcher {
                     &mut requests,
                     &mut selections,
                 );
+                if style.peek().is_some_and(|(order, _)| *order == node_order) {
+                    for source in style.next().unwrap().1.iter() {
+                        if !source.is_empty() {
+                            request(
+                                source,
+                                true,
+                                true,
+                                None,
+                                &admitted,
+                                &mut seen,
+                                &mut requests,
+                            );
+                        }
+                    }
+                }
+            }
+            for (_, sources) in style {
+                for source in sources.iter() {
+                    if !source.is_empty() {
+                        request(
+                            source,
+                            true,
+                            true,
+                            None,
+                            &admitted,
+                            &mut seen,
+                            &mut requests,
+                        );
+                    }
+                }
+            }
+            if key.is_none() {
+                cached.take();
             }
         }
         {

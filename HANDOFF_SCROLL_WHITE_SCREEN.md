@@ -1,6 +1,6 @@
 # Rechrom scroll-stop white-screen handoff
 
-Updated: 2026-10-24, Asia/Singapore
+Updated: 2026-10-25, Asia/Singapore
 
 ## User-visible symptom
 
@@ -723,3 +723,116 @@ Artifacts:
 
 The final Release browser is open on the MDN page as PID 6264 with the
 Performance endpoint on `127.0.0.1:9406`.
+
+## Continuation: 2026-10-25, retained live-resize lifecycle work
+
+The current change reduces repeated work in the layout/export/pre-paint path
+while preserving the normal current-layout and PaintArtifact publication
+sequence. It does not scale an old surface, export stale geometry, bypass
+PaintArtifact synchronization, or add an application-side resize throttle.
+
+The retained state is limited to data whose lifetime already follows resident
+layout/style ownership: LayoutObject preorder/source/style maps, scroll-index
+object lists, exact viewport-dependent elements, resolved style-image source
+lists, and stable paint-property owner/role slots. A root cull window is kept
+while it still covers the current viewport, corresponding to Blink cull-rect
+hysteresis; the exact current viewport clip is still published. Process-wide
+diagnostic environment flags are read once instead of on each painted
+fragment.
+
+One measured experiment was removed. It matched retained fragments by native
+owner/client identity across exports, which is broader than the export-local
+fragment identity. On MDN it incorrectly reused the
+`.navigation__button:before` pseudo and removed the narrow-layout hamburger
+icon. The final code retains the conservative fragment-instance comparison.
+That incorrect experiment and its traces are not validation evidence.
+
+Correctness was checked in one Release process with
+wide -> narrow -> wide -> narrow resizing. The two narrow captures and the two
+wide captures each had zero changed pixels. The final narrow capture contains
+search, hamburger, Theme, and English controls, matching the Chrome reference
+structure. Relevant files are:
+
+```text
+/private/tmp/rechrom-roundtrip-narrow-1.png
+/private/tmp/chrome-mdn-1044-r1.png
+```
+
+The same MDN trace driver used 120 width samples at 16 ms spacing,
+1280 -> 1044 -> 1280, CSS height 763, and DPR 2. Both final recordings have
+zero dropped events and zero incomplete spans. Heavy current-layout frames
+(`target_id=1`, at least 500 pre-paint nodes) changed as follows:
+
+| Metric | Aligned baseline | Final run 1 | Final run 2 |
+| --- | ---: | ---: | ---: |
+| Heavy/full frames | 28 | 32 | 33 |
+| MainFrameCycle p50 | 33.121 ms | 30.492 ms | 30.616 ms |
+| RunLayout p50 | 15.560 ms | 13.988 ms | 14.143 ms |
+| NativeLayout p50 | 4.495 ms | 4.315 ms | 4.373 ms |
+| ExportFragments p50 | 8.013 ms | 7.286 ms | 7.090 ms |
+| CertifyPaintInputs p50 | 1.529 ms | 1.538 ms | 1.469 ms |
+| PaintEngine.Paint p50 | 8.867 ms | 6.871 ms | 7.329 ms |
+| PrePaintTreeWalk p50 | 5.416 ms | 4.597 ms | 4.574 ms |
+| PaintLayerPainter.Paint p50 | 1.974 ms | 1.391 ms | 1.470 ms |
+| Full-present interval p50 | 53.202 ms | 51.127 ms | 48.788 ms |
+
+The two-run MainFrameCycle midpoint is 30.554 ms, 7.8% below the aligned
+baseline. The full-present midpoint is 49.958 ms, 6.1% lower. This remains
+roughly a 20 fps accepted-commit stream and is not a 60 fps live resize. The
+remaining cost is the real native layout, complete boundary export, pre-paint,
+and paint work; MDN's responsive breakpoint still produces a tail spike.
+
+Trace artifacts:
+
+```text
+/private/tmp/rechrom-resize-final-aligned-full.json
+/private/tmp/rechrom-resize-correct-final-r1.json
+/private/tmp/rechrom-resize-correct-final-r2.json
+```
+
+Release validation retained the established test status:
+
+- application `queue_tests`: 3 passed;
+- `scroll_frame_lifecycle`: 2 passed and the same 2 baseline failures
+  (`async default applied twice` and the root sticky/fixed pixel comparison);
+- Release application build: passed;
+- corrected canonical native fixture replay: 917 inputs on each of two runs,
+  833/840 captured frames, 775 unique hashes on the first run, different
+  first/final hashes, and the browser survived both runs.
+
+The second native replay trace has zero dropped events and zero incomplete
+spans. Compared with the aligned native baseline, the relevant scheduler and
+presentation-return observations are:
+
+| Metric | Before p50/p95/max | After p50/p95/max |
+| --- | ---: | ---: |
+| Input owner queue | 0.041/2.998/9.469 ms | 0.039/1.234/7.418 ms |
+| Main input frame wait | 25.432/84.816/172.829 ms | 19.815/84.830/170.553 ms |
+| Input dispatch | 0.226/0.573/0.868 ms | 0.212/0.655/1.681 ms |
+| Compositor wheel | 0.015/0.070/0.493 ms | 0.017/0.097/0.386 ms |
+| Frame cycle | 1.667/2.949/4.289 ms | 1.387/2.426/3.943 ms |
+| Present return | 0.096/0.174/0.335 ms | 0.094/0.159/0.261 ms |
+| Scroll commit interval | 16.713/18.266/50.296 ms | 16.662/17.852/44.020 ms |
+
+The trace exposes WindowServer transaction return rather than physical panel
+presentation, so no physical input-to-pixel latency is inferred from it.
+
+Native artifacts:
+
+```text
+/private/tmp/rechrom-resize-final-native-valid.trace.json
+/private/tmp/rechrom-resize-correct-final-native-1.frames.jsonl
+/private/tmp/rechrom-resize-correct-final-native-1.inputs.jsonl
+/private/tmp/rechrom-resize-correct-final-native-2.frames.jsonl
+/private/tmp/rechrom-resize-correct-final-native-2.inputs.jsonl
+/private/tmp/rechrom-resize-correct-final-native-trace.json
+```
+
+The visible Release process is PID 24339 on port 9406 with command URL
+`https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Grid_layout/Basic_concepts`
+and window bounds `(80,25) 1280x791`. A separate headless measurement process
+uses port 9413. A prior replay selected another visible window; do not treat it
+as evidence. Before any future native input, require the listener PID, process
+command URL, on-screen window owner PID/title/bounds, and frontmost PID all to
+match 24339. Abort instead of sending input if any check differs. PID 98417 is
+an unrelated red fixture and must not be touched.

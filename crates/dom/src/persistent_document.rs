@@ -626,6 +626,11 @@ pub struct ResolvedNodeStyle {
     /// StyleBuilder's explicit-inheritance dependency after variable resolution.
     /// None denotes an external/old style without a dependency proof.
     pub has_explicit_inheritance: Option<bool>,
+    // Blink resolves pending StyleImages while producing ComputedStyle. Keep
+    // the corresponding immutable dependency list with that resolved result;
+    // resource discovery must not re-walk every native style field on each
+    // rendering opportunity.
+    referenced_style_image_sources: std::sync::Arc<[String]>,
     pub before: Option<PseudoElement>,
     pub after: Option<PseudoElement>,
     pub first_letter: Option<PseudoElement>,
@@ -666,6 +671,7 @@ impl Default for ResolvedNodeStyle {
             display_contents: false,
             custom_properties: Default::default(),
             has_explicit_inheritance: None,
+            referenced_style_image_sources: Default::default(),
             before: None,
             after: None,
             first_letter: None,
@@ -679,13 +685,18 @@ impl ResolvedNodeStyle {
     pub fn SetNativeStyle(&mut self, native_style: Persistent<NativeComputedStyle>) {
         self.style.native_style = native_style.Get();
         self.native_style = native_style;
+        self.referenced_style_image_sources = Default::default();
     }
 
     /// URLs referenced by the canonical native computed style, including
     /// generated-content pseudos. Resource loading consumes this dependency
     /// view without re-parsing CSS or flattening StyleImage into DOM state.
-    pub fn ReferencedStyleImageSources(&self) -> Vec<String> {
-        StyleImageSources(self)
+    pub fn ReferencedStyleImageSources(&self) -> &[String] {
+        self.referenced_style_image_sources.as_ref()
+    }
+
+    fn RefreshReferencedStyleImageSources(&mut self) {
+        self.referenced_style_image_sources = StyleImageSources(self).into();
     }
 }
 
@@ -6289,6 +6300,22 @@ impl PersistentDocument {
     pub fn ResolvedStyleHandle(&self, node: usize) -> Option<std::sync::Arc<ResolvedNodeStyle>> {
         self.resolved_styles.get(&self.arena[node].id).cloned()
     }
+    /// Resolved-style owners with pending image dependencies. The source list
+    /// preserves native ComputedStyle field order; callers may place owners in
+    /// shadow-including document order without scanning unrelated DOM nodes.
+    pub fn ReferencedStyleImageConsumers(&self) -> Vec<(usize, std::sync::Arc<[String]>)> {
+        let mut nodes = BTreeSet::new();
+        for consumers in self.style_image_consumers.values() {
+            nodes.extend(consumers.iter().copied());
+        }
+        nodes
+            .into_iter()
+            .filter_map(|node| {
+                self.ResolvedStyleFor(node)
+                    .map(|style| (node, style.referenced_style_image_sources.clone()))
+            })
+            .collect()
+    }
     fn IsSVGResourceStyleNode(&self, node: usize) -> bool {
         let mut current = Some(node);
         while let Some(index) = current {
@@ -6325,7 +6352,7 @@ impl PersistentDocument {
         }
         false
     }
-    pub fn SetResolvedStyle(&mut self, node: usize, style: ResolvedNodeStyle) {
+    pub fn SetResolvedStyle(&mut self, node: usize, mut style: ResolvedNodeStyle) {
         if self.ResolvedStyleFor(node) == Some(&style) {
             return;
         }
@@ -6339,6 +6366,7 @@ impl PersistentDocument {
                 .insert(self.arena[node].id, std::sync::Arc::new(style));
             return;
         }
+        style.RefreshReferencedStyleImageSources();
         let same_pseudo = |a: &Option<PseudoElement>, b: &Option<PseudoElement>| match (a, b) {
             (Some(a), Some(b)) => a.SamePaintInput(b),
             (None, None) => true,
@@ -6380,13 +6408,13 @@ impl PersistentDocument {
         if self.IsSVGResourceStyleNode(node) {
             self.svg_resource_style_revision = self.svg_resource_style_revision.saturating_add(1);
         }
-        let new_sources = StyleImageSources(&style);
+        let new_sources = style.referenced_style_image_sources.clone();
         let same_sources = self
             .ResolvedStyleFor(node)
-            .is_some_and(|old| StyleImageSources(old) == new_sources);
+            .is_some_and(|old| old.referenced_style_image_sources == new_sources);
         if !same_sources {
             self.RemoveResolvedStyle(node);
-            for source in &new_sources {
+            for source in new_sources.iter() {
                 self.style_image_consumers
                     .entry(source.clone())
                     .or_default()
@@ -6431,11 +6459,11 @@ impl PersistentDocument {
         if self.IsSVGResourceStyleNode(node) {
             self.svg_resource_style_revision = self.svg_resource_style_revision.saturating_add(1);
         }
-        for source in StyleImageSources(&style) {
-            if let Some(consumers) = self.style_image_consumers.get_mut(&source) {
+        for source in style.referenced_style_image_sources.iter() {
+            if let Some(consumers) = self.style_image_consumers.get_mut(source) {
                 consumers.remove(&node);
                 if consumers.is_empty() {
-                    self.style_image_consumers.remove(&source);
+                    self.style_image_consumers.remove(source);
                 }
             }
         }

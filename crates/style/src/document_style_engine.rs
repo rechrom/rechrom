@@ -1175,6 +1175,11 @@ pub struct DocumentStyleEngine {
     font_feature_values: crate::font_feature_values_registry::FontFeatureValuesRegistry,
     translated_rule_set_environment: Option<MediaValuesCachedData>,
     pseudo_rule_candidates: Option<ProductionPseudoRuleCandidates>,
+    // Blink discovers viewport-unit users by walking the live element tree
+    // when the viewport dirty flags are consumed. Keep the equivalent exact
+    // result set alongside the resolved styles so the Rust boundary does not
+    // rescan every connected element on each native resize sample.
+    viewport_dependent_elements: HashSet<usize>,
     container_dependent_elements: HashSet<usize>,
     translated_rule_shadow_stats: TranslatedRuleShadowStats,
     sheet_revision: Option<u64>,
@@ -1316,6 +1321,7 @@ impl DocumentStyleEngine {
             font_feature_values: Default::default(),
             translated_rule_set_environment: None,
             pseudo_rule_candidates: None,
+            viewport_dependent_elements: HashSet::new(),
             container_dependent_elements: HashSet::new(),
             translated_rule_shadow_stats: Default::default(),
             sheet_revision: None,
@@ -2169,10 +2175,9 @@ impl DocumentStyleEngine {
                 // consumed viewport units. Media queries whose truth value did
                 // not change keep their RuleSet and unrelated ComputedStyles.
                 // Layout still receives the new containing-block constraint.
-                dirty.extend(
-                    ConnectedElements(document)
-                        .filter(|&index| ResolvedStyleUsesViewportUnits(document, index)),
-                );
+                self.viewport_dependent_elements
+                    .retain(|&index| ConnectedElement(document, index));
+                dirty.extend(self.viewport_dependent_elements.iter().copied());
             }
             let state = document.StyleState();
             let dom_invalidation =
@@ -2645,8 +2650,11 @@ impl DocumentStyleEngine {
                 let mut native_invalidated_count = 0usize;
                 let mut signature_invalidated_count = 0usize;
                 let mut missing_old_match_count = 0usize;
-                let mut elements = HashSet::new();
-                AddSubtree(document, document.Root(), &mut elements);
+                // Blink runs ApplyRuleSetInvalidationForTreeScope in element
+                // traversal order and keeps SelectorFilter's ancestor stack in
+                // step with that walk. Preserve the same order here; iterating
+                // a HashSet rebuilds the ancestor filter for almost every node.
+                let elements = ConnectedElements(document).collect::<Vec<_>>();
                 let native_invalidated = native_changed_rules.as_ref().and_then(|rules| {
                     crate::production_rule_matching::InvalidateProductionRuleSets(
                         rules,
@@ -4605,9 +4613,15 @@ impl DocumentStyleEngine {
             self.matches.remove(&index);
             self.cascade_values.remove(&index);
             self.custom_properties.remove(&index);
+            self.viewport_dependent_elements.remove(&index);
             self.container_dependent_elements.remove(&index);
         }
         for (index, style) in pending {
+            if ResolvedStyleUsesViewportUnits(&style) {
+                self.viewport_dependent_elements.insert(index);
+            } else {
+                self.viewport_dependent_elements.remove(&index);
+            }
             document.SetResolvedStyle(index, style)
         }
         document
@@ -8653,10 +8667,7 @@ fn PseudoUsesViewportUnits(pseudo: &dom::persistent_document::PseudoElement) -> 
             .is_some_and(PseudoUsesViewportUnits)
 }
 
-fn ResolvedStyleUsesViewportUnits(document: &Document, index: usize) -> bool {
-    let Some(style) = document.ResolvedStyleFor(index) else {
-        return false;
-    };
+fn ResolvedStyleUsesViewportUnits(style: &dom::persistent_document::ResolvedNodeStyle) -> bool {
     unsafe { style.native_style.Get().as_ref() }.is_some_and(|style| style.HasViewportUnits())
         || [
             style.before.as_ref(),

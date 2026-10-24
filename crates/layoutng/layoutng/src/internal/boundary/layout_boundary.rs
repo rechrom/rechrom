@@ -1,10 +1,13 @@
 #![allow(non_snake_case)]
 
-use crate::layout_boundary_support::{LayoutBoundaryExportCache, LayoutUpdateKind};
+use crate::layout_boundary_support::{
+    LayoutBoundaryExportCache, LayoutBoundaryHashMap, LayoutBoundaryHashSet,
+    LayoutBoundarySourceEntry, LayoutUpdateKind,
+};
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use font_engine::fonts::canvas_rotation_in_vertical::IsCanvasRotationInVerticalUpright;
 use font_engine::fonts::opentype::open_type_math_support::{MathConstants, OpenTypeMathSupport};
@@ -838,14 +841,17 @@ fn PublicWritingMode(mode: NativeWritingMode) -> WritingMode {
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:705-712
-struct SourceEntry {
-    node: *const Node,
-    logical_tree_order: u64,
+type SourceEntry = LayoutBoundarySourceEntry;
+type SourceMap = LayoutBoundaryHashMap<*const LayoutObject, SourceEntry>;
+type StyleSourceMap = LayoutBoundaryHashMap<*const NativeComputedStyle, *const ComputedStyle>;
+type ExportedStyleCache = LayoutBoundaryHashMap<(usize, usize), PaintStyle>;
+type CaretPositionCache =
+    LayoutBoundaryHashMap<(usize, u32, u32, u32, u32, u64), Arc<Vec<(u32, f64)>>>;
+
+fn TraceInlineExport() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_TRACE_INLINE_EXPORT").is_some())
 }
-type SourceMap = HashMap<*const LayoutObject, SourceEntry>;
-type StyleSourceMap = HashMap<*const NativeComputedStyle, *const ComputedStyle>;
-type ExportedStyleCache = HashMap<(usize, usize), PaintStyle>;
-type CaretPositionCache = HashMap<(usize, u32, u32, u32, u32, u64), Arc<Vec<(u32, f64)>>>;
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:735-830
 fn ExportPaintProperties(
@@ -2891,8 +2897,10 @@ fn BuildPaintCullRect(root: &mut LayoutObject, space: &ConstraintSpace) -> Optio
     })
 }
 
-fn MarkUncullablePaintAncestors(objects: &[*mut LayoutObject]) -> HashSet<*const LayoutObject> {
-    let mut result = HashSet::new();
+fn MarkUncullablePaintAncestors(
+    objects: &[*mut LayoutObject],
+) -> LayoutBoundaryHashSet<*const LayoutObject> {
+    let mut result = LayoutBoundaryHashSet::default();
     for &object in objects {
         let current = unsafe { &*object };
         let style = current.StyleRef();
@@ -2920,12 +2928,12 @@ fn MarkUncullablePaintAncestors(objects: &[*mut LayoutObject]) -> HashSet<*const
 
 #[derive(Default)]
 struct FragmentOwners {
-    paint: HashSet<*const PhysicalBoxFragment>,
-    instances: HashMap<*const PhysicalBoxFragment, u64>,
+    paint: LayoutBoundaryHashSet<*const PhysicalBoxFragment>,
+    instances: LayoutBoundaryHashMap<*const PhysicalBoxFragment, u64>,
     exported_styles: ExportedStyleCache,
     cached_caret_positions: CaretPositionCache,
     exported_caret_positions: CaretPositionCache,
-    uncullable_objects: HashSet<*const LayoutObject>,
+    uncullable_objects: Arc<LayoutBoundaryHashSet<*const LayoutObject>>,
 }
 impl FragmentOwners {
     fn insert(&mut self, native: *const PhysicalBoxFragment, instance: u64) -> bool {
@@ -3248,7 +3256,7 @@ fn ExportInlineItem(
             };
             if let Some(line_offset) = containing_line_offset {
                 output.paint.text_line_top_offset = Some(Number(line_offset.top - rect.offset.top));
-                if std::env::var_os("RECHROM_TRACE_INLINE_EXPORT").is_some() {
+                if TraceInlineExport() {
                     eprintln!(
                         "inline-export node={} item={:.4},{:.4} line={:.4},{:.4} parent={:.4},{:.4} local={:.4},{:.4}",
                         output.node_id,
@@ -3277,7 +3285,6 @@ fn ExportInlineItem(
             if purpose == LayoutUpdateKind::Paint {
                 let text = item.Text(fragment_items);
                 let view = item.TextShapeResult();
-                let shape = (!view.is_null()).then(|| unsafe { &*view }.CreateShapeResult());
                 let mut text_hash = 0xcbf29ce484222325u64;
                 for &unit in text.Span16() {
                     text_hash ^= u64::from(unit);
@@ -3304,6 +3311,7 @@ fn ExportInlineItem(
                 {
                     cached
                 } else {
+                    let shape = (!view.is_null()).then(|| unsafe { &*view }.CreateShapeResult());
                     let mut positions =
                         Vec::with_capacity((item.EndOffset() - item.StartOffset()) as usize + 1);
                     for offset in item.StartOffset()..=item.EndOffset() {
@@ -5041,8 +5049,8 @@ pub(crate) fn RefreshRetainedPaintInputs(
     changed: &HashSet<u64>,
     inline_ink_changes: &HashSet<u64>,
 ) -> bool {
-    let mut sources = SourceMap::new();
-    let mut style_sources = StyleSourceMap::new();
+    let mut sources = SourceMap::default();
+    let mut style_sources = StyleSourceMap::default();
     let mut clients = HashMap::new();
     let mut objects = Vec::new();
     let root_ptr: *mut LayoutObject = root;
@@ -5229,40 +5237,53 @@ fn ExportObjectTree(
     purpose: LayoutUpdateKind,
     cache: &mut LayoutBoundaryExportCache,
 ) -> FragmentNode {
-    let mut sources = SourceMap::new();
-    let mut style_sources = StyleSourceMap::new();
-    let mut objects = Vec::new();
-    let mut logical_order = 0;
-    let root_ptr: *mut LayoutObject = root;
-    let mut object = root_ptr;
-    while !object.is_null() {
-        // Export runs inside LayoutHeapScope; the resident tree already owns
-        // these objects. Temporary Persistent cells only retire the same roots
-        // and spuriously force another full-heap collection after each export.
-        objects.push(object);
-        let current = unsafe { &*object };
-        let node = current.GetNode();
-        if !node.is_null() {
-            let input_node = unsafe { &*node };
-            logical_order += 1;
-            sources.entry(object).or_insert(SourceEntry {
-                node,
-                logical_tree_order: logical_order,
-            });
-            style_sources
-                .entry(current.StyleRef())
-                .or_insert(input_node.InputStyle());
-            let first_line_style = input_node.InputFirstLineStyle();
-            if !first_line_style.is_null() {
-                if let Some(first_line_data) = input_node.InputFirstLineStyleData() {
-                    style_sources
-                        .entry(first_line_style)
-                        .or_insert(first_line_data);
+    if cache.objects.is_empty() {
+        let mut logical_order = 0;
+        let mut source_objects = Vec::new();
+        let mut sticky_objects = Vec::new();
+        let root_ptr: *mut LayoutObject = root;
+        let mut object = root_ptr;
+        while !object.is_null() {
+            // Export runs inside LayoutHeapScope; the resident tree already
+            // owns these objects. The mutation boundary clears all cached
+            // pointers before topology or style ownership can change.
+            cache.objects.push(object);
+            let current = unsafe { &*object };
+            let node = current.GetNode();
+            if !node.is_null() {
+                source_objects.push(object);
+                let input_node = unsafe { &*node };
+                logical_order += 1;
+                cache.sources.entry(object).or_insert(SourceEntry {
+                    node,
+                    logical_tree_order: logical_order,
+                });
+                cache
+                    .style_sources
+                    .entry(current.StyleRef())
+                    .or_insert(input_node.InputStyle());
+                let first_line_style = input_node.InputFirstLineStyle();
+                if !first_line_style.is_null() {
+                    if let Some(first_line_data) = input_node.InputFirstLineStyleData() {
+                        cache
+                            .style_sources
+                            .entry(first_line_style)
+                            .or_insert(first_line_data);
+                    }
                 }
             }
+            if current.StyleRef().HasStickyConstrainedPosition() {
+                sticky_objects.push(object);
+            }
+            object = current.NextInPreOrder(root_ptr);
         }
-        object = current.NextInPreOrder(root_ptr);
+        cache.source_objects = Arc::new(source_objects);
+        cache.sticky_objects = Arc::new(sticky_objects);
+        cache.uncullable_objects = Arc::new(MarkUncullablePaintAncestors(&cache.objects));
     }
+    let objects = &cache.objects;
+    let sources = &cache.sources;
+    let style_sources = &cache.style_sources;
     UpdateStickyOffsets(objects.iter().copied(), false);
     let resources = Arc::new(PaintResources {
         fonts: if purpose == LayoutUpdateKind::Paint {
@@ -5284,7 +5305,7 @@ fn ExportObjectTree(
     let mut paint_state_owners = FragmentOwners {
         exported_styles: std::mem::take(&mut cache.styles),
         cached_caret_positions: std::mem::take(&mut cache.caret_positions),
-        uncullable_objects: MarkUncullablePaintAncestors(&objects),
+        uncullable_objects: Arc::clone(&cache.uncullable_objects),
         ..FragmentOwners::default()
     };
     let mut next_fragment_instance_id = 1;
@@ -5298,8 +5319,8 @@ fn ExportObjectTree(
         PhysicalOffset::default(),
         paint_cull,
         true,
-        &sources,
-        &style_sources,
+        sources,
+        style_sources,
         &resources,
         purpose,
         &mut paint_state_owners,
@@ -5309,14 +5330,14 @@ fn ExportObjectTree(
         &mut next_fragmentainer_instance_id,
     );
     if purpose == LayoutUpdateKind::Paint {
-        ExportCanvasBackground(root, &objects, &mut output);
-        ExportGlobalMainThreadScrollFacts(root, &objects, &mut output);
+        ExportCanvasBackground(root, objects, &mut output);
+        ExportGlobalMainThreadScrollFacts(root, objects, &mut output);
     }
     // Screen CSSOM geometry is served from LayoutOutput's native fragment
     // owners. Keeping this legacy paint-tree index would force every offscreen
     // geometry container into the paint projection and defeat culling.
     if paint_cull.is_none() {
-        output.inline_geometry = ExportInlineGeometry(&objects, &paint_state_owners);
+        output.inline_geometry = ExportInlineGeometry(objects, &paint_state_owners);
     }
     ResolveLogicalParentOccurrences(&mut output);
     if purpose == LayoutUpdateKind::Paint {

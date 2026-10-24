@@ -184,6 +184,8 @@ pub(crate) fn InvalidateProductionRuleSets(
     trace.set("groups", groups.len() as f64);
     let session = selectors.StyleMatchSession(document);
     let runtime = ProductionElementRuleCollectorRuntime::new(&session);
+    let tree_scope = Rc::new(ProductionTreeScope(document.Root()));
+    let scope_root = Rc::new(document.Root());
     let mut invalidated = HashSet::new();
     if invalidates_parts {
         invalidated.extend(
@@ -209,9 +211,9 @@ pub(crate) fn InvalidateProductionRuleSets(
             &mut result,
             EInsideLink::kNotInsideLink,
         );
-        collector.BeginAddingAuthorRulesForTreeScope(Rc::new(ProductionTreeScope(document.Root())));
+        collector.BeginAddingAuthorRulesForTreeScope(tree_scope.clone());
         for group in &groups {
-            let request = MatchRequest::new(group, Some(Rc::new(document.Root())), None);
+            let request = MatchRequest::new(group, Some(scope_root.clone()), None);
             if collector.CheckIfAnyRuleMatches(&request)
                 || [
                     MatchFlag::kAffectedByDrag,

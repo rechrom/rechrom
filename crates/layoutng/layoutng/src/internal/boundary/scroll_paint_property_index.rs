@@ -8,6 +8,7 @@ use super::{
 };
 use layoutng_fragment_tree::fragment_tree::pre_paint_revision::MarkScrollPropertyChange;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 struct FragmentEntry {
     path: Vec<usize>,
@@ -17,37 +18,46 @@ struct FragmentEntry {
 
 pub(crate) struct ScrollPaintPropertyIndex {
     root: *mut LayoutObject,
-    sources: Vec<*mut LayoutObject>,
+    sources: Arc<Vec<*mut LayoutObject>>,
     // Preorder is required for nested sticky constraints, just as in the full
     // refresh. Include anonymous native sticky objects even without an output.
-    sticky_objects: Vec<*mut LayoutObject>,
+    sticky_objects: Arc<Vec<*mut LayoutObject>>,
     fragments: Vec<FragmentEntry>,
     by_source_id: HashMap<u64, Vec<usize>>,
     sticky_fragments: Vec<usize>,
 }
 
 impl ScrollPaintPropertyIndex {
-    pub(crate) fn new(root: &mut LayoutObject, fragments: &FragmentNode) -> Self {
+    pub(crate) fn new(
+        root: &mut LayoutObject,
+        fragments: &FragmentNode,
+        cached_objects: Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)>,
+    ) -> Self {
         let root = root as *mut LayoutObject;
+        let (sources, sticky_objects) = cached_objects.unwrap_or_else(|| {
+            let mut sources = Vec::new();
+            let mut sticky_objects = Vec::new();
+            let mut object = root;
+            while !object.is_null() {
+                let current = unsafe { &*object };
+                if !current.GetNode().is_null() {
+                    sources.push(object);
+                }
+                if current.StyleRef().HasStickyConstrainedPosition() {
+                    sticky_objects.push(object);
+                }
+                object = current.NextInPreOrder(root);
+            }
+            (Arc::new(sources), Arc::new(sticky_objects))
+        });
         let mut index = Self {
             root,
-            sources: Vec::new(),
-            sticky_objects: Vec::new(),
+            sources,
+            sticky_objects,
             fragments: Vec::new(),
             by_source_id: HashMap::new(),
             sticky_fragments: Vec::new(),
         };
-        let mut object = root;
-        while !object.is_null() {
-            let current = unsafe { &*object };
-            if !current.GetNode().is_null() {
-                index.sources.push(object);
-            }
-            if current.StyleRef().HasStickyConstrainedPosition() {
-                index.sticky_objects.push(object);
-            }
-            object = current.NextInPreOrder(root);
-        }
         fn collect(
             index: &mut ScrollPaintPropertyIndex,
             fragment: &FragmentNode,

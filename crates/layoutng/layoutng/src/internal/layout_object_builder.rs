@@ -950,6 +950,7 @@ impl LayoutObjectTree {
             return false;
         }
         let previous = unsafe { &*record.node }.previousSibling();
+        let mut collect_trace = browser_tracing::span("layout", "LayoutTree.CollectSubtree");
         let mut affected = keys;
         let mut position = 0;
         while position < affected.len() {
@@ -957,6 +958,8 @@ impl LayoutObjectTree {
             affected.extend_from_slice(storage.ChildKeys(object));
             position += 1;
         }
+        collect_trace.set("objects", affected.len() as f64);
+        drop(collect_trace);
         let mut index = storage.input_index.take().unwrap();
         assert!(storage.pending.is_empty());
         storage.updating = true;
@@ -966,6 +969,7 @@ impl LayoutObjectTree {
         unsafe { &mut *(*parent).GetNode() }.UnsealForTreeUpdate();
         storage.attached_keys.clear();
         storage.stats = LayoutTreeUpdateStats::default();
+        let prepare_trace = browser_tracing::span("layout", "LayoutTree.PrepareSubtree");
         for key in affected {
             let record = storage.managed.remove(&key).unwrap();
             index.Remove(&key, &record);
@@ -974,6 +978,7 @@ impl LayoutObjectTree {
             NativeNodeMetadataRelations::ResetForTreeUpdate(node);
             storage.pending.insert(key, record);
         }
+        drop(prepare_trace);
         storage.partial_index = Some(index);
         self.CompleteUpdate(|tree| build(tree, unsafe { &mut *parent }));
         true
@@ -1056,6 +1061,8 @@ impl LayoutObjectTree {
         let storage = unsafe { &mut *self.storage_ };
         assert!(storage.updating, "layout tree update is not active");
         let _factory_scope = LayoutObjectFactoryScope::new(&storage.factories);
+        let mut retire_trace = browser_tracing::span("layout", "LayoutTree.RetireObjects");
+        retire_trace.set("objects", storage.pending.len() as f64);
         for old in storage.pending.values() {
             if !unsafe { &*old.object }.WasDestroyedForTreeUpdate() {
                 unsafe { &mut *old.object }.Destroy();
@@ -1072,6 +1079,7 @@ impl LayoutObjectTree {
             storage.objects.remove(&object);
             storage.metadata.remove(&node);
         }
+        drop(retire_trace);
         if let Some(mut index) = storage.partial_index.take() {
             for key in storage.attached_keys.drain(..) {
                 index.Insert(key.clone(), &storage.managed[&key]);
