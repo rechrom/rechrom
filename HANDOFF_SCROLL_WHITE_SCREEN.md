@@ -721,5 +721,5 @@ Artifacts:
 /private/tmp/rechrom-queue-tests-release.log
 ```
 
-The final Release browser is open on the MDN page as PID 5960 with the
+The final Release browser is open on the MDN page as PID 6264 with the
 Performance endpoint on `127.0.0.1:9406`.
