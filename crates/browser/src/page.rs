@@ -224,7 +224,6 @@ pub struct PageRenderPipeline {
 pub struct CompositorWheelResult {
     pub compositor_owned: bool,
     pub submitted: bool,
-    pub waiting_for_scroll_deadline: bool,
     pub effects: Vec<CompositorMainThreadEffect>,
 }
 
@@ -711,7 +710,6 @@ impl PageRenderPipeline {
         let began_at = profile.map(|_| std::time::Instant::now());
         let mut result = CompositorWheelResult::default();
         let mut output = output;
-        result.waiting_for_scroll_deadline = output.waiting_for_scroll_deadline;
         let stable_frame_reuse = self.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
@@ -770,7 +768,6 @@ impl PageRenderPipeline {
                 .iter()
                 .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
         let mut result = CompositorWheelResult::default();
-        result.waiting_for_scroll_deadline = output.waiting_for_scroll_deadline;
         for effect in std::mem::take(&mut output.main_thread_effects) {
             if let CompositorMainThreadEffect::WheelDisposition { compositor_owned } = effect {
                 result.compositor_owned |= compositor_owned;
@@ -824,7 +821,6 @@ impl PageRenderPipeline {
             .expect("initialized compositor")
             .RequestMainFrame()
             .map_err(|error| io::Error::other(error.to_string()))?;
-        let waiting_for_scroll_deadline = output.waiting_for_scroll_deadline;
         let stable_frame_reuse = self.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
@@ -846,7 +842,6 @@ impl PageRenderPipeline {
         }
         Ok(CompositorWheelResult {
             submitted,
-            waiting_for_scroll_deadline,
             effects: self.TakeMainThreadEffects(),
             ..Default::default()
         })
@@ -872,7 +867,6 @@ impl PageRenderPipeline {
             .Poll()
             .map_err(|error| io::Error::other(error.to_string()))?;
         let mut result = CompositorWheelResult::default();
-        result.waiting_for_scroll_deadline = output.waiting_for_scroll_deadline;
         let stable_frame_reuse = self.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
@@ -990,7 +984,6 @@ impl PageRenderPipeline {
         let input_done = profile.map(|start| start.elapsed());
         let mut result = CompositorWheelResult::default();
         let mut output = first;
-        result.waiting_for_scroll_deadline = output.waiting_for_scroll_deadline;
         let stable_frame_reuse = self.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
@@ -1335,6 +1328,10 @@ pub struct PageFrame {
     pub compositor_scroll_sequence: u64,
     pub fragments: Rc<FragmentNode>,
     pub display_items: Arc<paint::paint_engine::PaintArtifact>,
+    /// Rechrom-specific certification for its immutable document-image record
+    /// catalog. Blink's SVGImage instead sizes its isolated document and asks
+    /// the view for a PaintRecord at draw time.
+    ///
     /// Certified once when this immutable artifact enters the frame. Retained
     /// scroll-property updates do not change display items or their catalog.
     pub document_image_records_complete: bool,

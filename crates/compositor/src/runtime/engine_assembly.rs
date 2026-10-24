@@ -303,7 +303,6 @@ impl NativeEngineAssembly {
                         frame: None,
                         main_thread_effects: std::mem::take(&mut self.core.effects),
                         needs_begin_frames: true,
-                        waiting_for_scroll_deadline: self.scheduler.IsWaitingForScrollDeadline(),
                         work_pending: true,
                         main_commit_pending: self.core.HasReadyCommit(),
                     });
@@ -454,7 +453,6 @@ impl NativeEngineAssembly {
             frame: None,
             main_thread_effects: effects,
             needs_begin_frames: true,
-            waiting_for_scroll_deadline: self.scheduler.IsWaitingForScrollDeadline(),
             work_pending: true,
             main_commit_pending: self.core.HasReadyCommit(),
         })
@@ -1104,7 +1102,6 @@ impl NativeEngineAssembly {
             frame: self.core.TakeFrame(),
             main_thread_effects: effects,
             needs_begin_frames: self.needs_begin_frames,
-            waiting_for_scroll_deadline: self.scheduler.IsWaitingForScrollDeadline(),
             work_pending,
             main_commit_pending: self.core.HasReadyCommit(),
         })

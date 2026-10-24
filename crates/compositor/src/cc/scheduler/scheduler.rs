@@ -837,14 +837,6 @@ impl Scheduler {
             .set_waiting_for_scroll_event(waiting_for_scroll_event);
     }
 
-    /// Whether the active BeginFrame is currently reserving its early input
-    /// window. Scheduler remains the sole owner of the deadline and clears it
-    /// through its normal posted task.
-    pub fn IsWaitingForScrollDeadline(&self) -> bool {
-        self.deadline_mode_ == BeginImplFrameDeadlineMode::WAIT_FOR_SCROLL
-            && self.begin_impl_frame_deadline_timer_.IsRunning()
-    }
-
     // Source: cc/scheduler/scheduler.cc:546-566
     pub fn OnDrawForLayerTreeFrameSink(
         &mut self,

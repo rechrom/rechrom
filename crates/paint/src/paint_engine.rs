@@ -663,7 +663,11 @@ pub struct RecordedDisplayItem {
     pub is_cacheable: bool,
     pub is_tombstone: bool,
     pub paint_invalidation_reason: Option<foundation::PaintInvalidationReason>,
-    /// Revision of the LayoutNG fragment inputs that produced this record.
+    /// Rechrom's validation token for the LayoutNG fragment inputs that
+    /// produced this record. Blink carries the equivalent validity through
+    /// DisplayItemClient::Invalidate()/IsValid() rather than storing a revision
+    /// on DrawingDisplayItem.
+    ///
     /// A drawing cache hit requires the same nonzero certified revision.
     pub source_revision: u64,
     /// Immutable content versions of image resources sampled by this record.

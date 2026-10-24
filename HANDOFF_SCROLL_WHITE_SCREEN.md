@@ -432,9 +432,16 @@ Artifacts:
 /private/tmp/rechrom-resize-memory-fix-trace.json
 ```
 
-## Continuation: 2026-10-24, late-scroll scheduling without commit shortcuts
+## Retracted experiment: 2026-10-24, commit deferral during the scroll deadline
 
-This iteration changes only owner-sequence scheduling. `Scheduler` exposes a
+This experiment was removed after a direct source audit against local Chromium
+`6c1d401fcca5`. Chromium gives its compositor input task queue highest priority,
+but `WAIT_FOR_SCROLL` only delays the BeginImplFrame draw deadline; it does not
+hold a ready main-thread commit in anticipation of a future input task. Rechrom
+already selects queued wheel input ahead of ordinary compositor commands. The
+extra commit deferral described below went beyond Chromium semantics.
+
+The retracted experiment changed only owner-sequence scheduling. `Scheduler` exposes a
 read-only `IsWaitingForScrollDeadline()` state while its real
 `WAIT_FOR_SCROLL` deadline task is active. `run_impl` retains the newest raw
 `ImplCommand::Commit` behind that input window and releases it when an actual
@@ -499,7 +506,7 @@ Full artifacts:
 The final Release browser is left open on the same MDN page as PID 78401 with
 the Performance endpoint on `127.0.0.1:9394` for interactive verification.
 
-## Continuation: 2026-10-24, resize correctness and final scheduling audit
+## Continuation: 2026-10-24, resize correctness (historical scheduler measurements)
 
 The resize corruption was three independent retained-content correctness
 problems rather than a reason to bypass PaintArtifact synchronization:
@@ -528,8 +535,10 @@ The final Release build survived eight complete native replays of the same
 MDN content remained correct. The earlier full resize audit completed 12 such
 cycles with a 1.922710-second mean.
 
-The comparable zero-drop traces are the pre-scheduler baseline
-`/private/tmp/rechrom-scroll-trace-export.json` and final corrected build
+These measurements include the subsequently retracted commit-deferral experiment and
+are retained only as historical evidence. They do not describe the current scheduler.
+The comparable zero-drop traces were the pre-scheduler baseline
+`/private/tmp/rechrom-scroll-trace-export.json` and that measured build
 `/private/tmp/rechrom-mdn-final-cache-complete.trace.json`. The latter contains
 93,564 complete spans, 9,376 instants, zero dropped events, and zero incomplete
 spans.
@@ -574,3 +583,54 @@ Final artifacts:
 
 The final Release browser is left open on the MDN page as PID 97869 with the
 Performance endpoint on `127.0.0.1:9406` for interactive verification.
+
+
+## Source audit: 2026-10-24, direct Chromium correspondence
+
+The audit used local Chromium revision `6c1d401fcca5`. Current correspondence is:
+
+1. Input priority: Chromium creates separate default and input compositor task
+   queues and assigns the input queue `kHighestPriority`
+   (`third_party/blink/renderer/platform/scheduler/worker/`
+   `non_main_thread_scheduler_helper.cc:24-37`). Rechrom's owner sequence drains
+   available commands and chooses wheel input before ordinary compositor work.
+   It no longer delays a ready commit while waiting for an input that has not
+   arrived.
+2. Scroll deadline: Chromium's `WAIT_FOR_SCROLL` selects a deadline at
+   `frame_time + interval * scroll_deadline_ratio` and delays drawing
+   (`cc/scheduler/scheduler.cc:855-859`;
+   `scheduler_state_machine.cc:1367-1381`). It is not a commit barrier;
+   `ShouldCommit()` has no scroll-deadline condition
+   (`scheduler_state_machine.cc:667-686`). Rechrom's temporary commit barrier
+   and its exported `IsWaitingForScrollDeadline()` state were removed.
+3. Partial transparent raster: Rechrom follows Chromium's order directly: full
+   transparent raster clears the whole target, while partial raster translates,
+   clips, then clears only the playback region
+   (`cc/raster/raster_source.cc:86-119`).
+4. Drawing cache validation: Blink uses `DisplayItemClient::Invalidate()` and
+   `IsValid()` before moving a cached item
+   (`paint_controller.cc:228-285`). Rechrom does not share Blink's GC-owned
+   DisplayItemClient lifecycle, so its fragment revision and current visual-rect
+   check is a stricter local validation adapter, not Chromium source copied
+   verbatim.
+5. SVG document images: Blink resizes the isolated SVG view, updates all
+   lifecycle phases, then gets a PaintRecord for the requested container
+   (`core/svg/graphics/svg_image.cc:454-499`). Rechrom's immutable per-container
+   record catalog and `document_image_records_complete` proof are local adapters
+   for the same output requirement, not Chromium data structures.
+
+The resize correctness fixes remain. The earlier latency tables that include
+the retracted commit deferral must not be cited as current Chromium-aligned
+performance results.
+
+The corrected Release build completed one canonical 917-input native replay,
+capturing 847 frames with 784 unique hashes and different first/final hashes;
+the browser remained alive. `cargo check -p rechrom_app` and the Release build
+passed. The Release `scroll_frame_lifecycle` binary retained its existing
+result of two passes and the same two known failures. The visible audited build
+is PID 99236 on DevTools port 9406. Replay artifacts are:
+
+```text
+/private/tmp/rechrom-chromium-audit-native-1.frames.jsonl
+/private/tmp/rechrom-chromium-audit-native-1.inputs.jsonl
+```
