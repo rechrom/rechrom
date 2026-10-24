@@ -1016,6 +1016,52 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         }
     }
 
+    fn viewport_length_flags(value: &ResolverValue<Self>) -> u32 {
+        let uses_any = |units: &[UnitType]| {
+            Self::primitive_literal(value).is_some_and(|value| units.contains(&value.GetType()))
+                || Self::primitive_math_value(value)
+                    .is_some_and(|value| units.iter().any(|&unit| value.expression.UsesUnit(unit)))
+        };
+        let mut flags = 0;
+        if uses_any(&[
+            UnitType::kViewportWidth,
+            UnitType::kViewportHeight,
+            UnitType::kViewportInlineSize,
+            UnitType::kViewportBlockSize,
+            UnitType::kViewportMin,
+            UnitType::kViewportMax,
+        ]) {
+            flags |= 1 << 3;
+        }
+        if uses_any(&[
+            UnitType::kSmallViewportWidth,
+            UnitType::kSmallViewportHeight,
+            UnitType::kSmallViewportInlineSize,
+            UnitType::kSmallViewportBlockSize,
+            UnitType::kSmallViewportMin,
+            UnitType::kSmallViewportMax,
+            UnitType::kLargeViewportWidth,
+            UnitType::kLargeViewportHeight,
+            UnitType::kLargeViewportInlineSize,
+            UnitType::kLargeViewportBlockSize,
+            UnitType::kLargeViewportMin,
+            UnitType::kLargeViewportMax,
+        ]) {
+            flags |= 1 << 4;
+        }
+        if uses_any(&[
+            UnitType::kDynamicViewportWidth,
+            UnitType::kDynamicViewportHeight,
+            UnitType::kDynamicViewportInlineSize,
+            UnitType::kDynamicViewportBlockSize,
+            UnitType::kDynamicViewportMin,
+            UnitType::kDynamicViewportMax,
+        ]) {
+            flags |= 1 << 5;
+        }
+        flags
+    }
+
     fn compute_primitive(
         &self,
         value: &ResolverValue<Self>,
@@ -3120,6 +3166,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         value: &ResolverValue<Self>,
         state: &StyleResolverState<'_, Self>,
     ) -> Length {
+        state.AddLengthConversionFlags(Self::viewport_length_flags(value));
         let mut resolver = self.math_length_resolver(state);
         let result = if let Some(value) = Self::primitive_literal(value) {
             if value.GetType() == UnitType::kPercentage {
@@ -3576,6 +3623,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                 _ => None,
             };
             let value = resolved_light_dark.as_deref().unwrap_or(value);
+            state.AddLengthConversionFlags(Self::viewport_length_flags(value));
             // cpp: longhands_custom.cc Color::ApplyValue resolves system
             // colors through StyleResolverState before storing the retained
             // keyword and platform color. Keep that document-owned decision

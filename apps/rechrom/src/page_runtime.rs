@@ -111,6 +111,7 @@ pub(crate) enum Command {
     },
     Main(MainThreadEvent),
     Resize(Viewport),
+    ResizeTask,
     Active(bool),
     Patch(Patch),
     StopLoading,
@@ -1380,6 +1381,8 @@ struct DocumentQueue {
     task_queued: bool,
     collection_queued: bool,
     javascript_collection_queued: bool,
+    resize_queued: bool,
+    pending_resize: Option<Viewport>,
 }
 struct SelectedCommand(Option<Command>);
 impl event_loop::EventLoopExecutor<Command, MainThreadEvent> for SelectedCommand {
@@ -1410,6 +1413,8 @@ impl DocumentQueue {
             task_queued: false,
             collection_queued: false,
             javascript_collection_queued: false,
+            resize_queued: false,
+            pending_resize: None,
         };
         queue.ordinary();
         queue
@@ -1435,6 +1440,16 @@ impl DocumentQueue {
     fn post(&mut self, command: Command) {
         use event_loop::*;
         let now = Instant::now();
+        let command = if let Command::Resize(viewport) = command {
+            self.pending_resize = Some(viewport);
+            if self.resize_queued {
+                return;
+            }
+            self.resize_queued = true;
+            Command::ResizeTask
+        } else {
+            command
+        };
         if let Command::Main(event @ MainThreadEvent::BeginFrame { .. }) = command {
             self.engine.Apply(
                 EventLoopMutation::BeginMainFrame {
@@ -1519,6 +1534,14 @@ impl DocumentQueue {
                     self.collection_queued = false;
                 } else if matches!(command, Command::CollectJavaScriptHeap) {
                     self.javascript_collection_queued = false;
+                } else if matches!(command, Command::ResizeTask) {
+                    self.resize_queued = false;
+                    self.ordinary();
+                    return Ok(Command::Resize(
+                        self.pending_resize
+                            .take()
+                            .expect("queued resize owns a viewport"),
+                    ));
                 } else {
                     self.ordinary();
                 }
@@ -1712,6 +1735,7 @@ fn run_document(
     let mut last_memory_report: Option<Instant> = None;
     let mut hovered = Vec::new();
     let mut press_discarded = false;
+    let mut resize_event_pending = false;
     let mut queue = DocumentQueue::new();
     loop {
         let command = queue.next(&receiver, page.NextTaskDeadline(Instant::now()));
@@ -1750,6 +1774,12 @@ fn run_document(
             }
             Ok(Command::Main(MainThreadEvent::BeginFrame { frame, .. })) => {
                 let started = Instant::now();
+                if std::mem::take(&mut resize_event_pending) && params.scripting {
+                    let _ = page.Evaluate(
+                        "window.dispatchEvent(new Event('resize'))",
+                        "rechrom:resize",
+                    );
+                }
                 let result = page.UpdateRendering(frame.args);
                 if let Err(error) = result {
                     return Err(error);
@@ -1929,13 +1959,9 @@ fn run_document(
                     f64::from(next.height) / next.scale,
                     next.scale,
                 )?;
-                if params.scripting {
-                    let _ = page.Evaluate(
-                        "window.dispatchEvent(new Event('resize'))",
-                        "rechrom:resize",
-                    );
-                }
+                resize_event_pending = true;
             }
+            Ok(Command::ResizeTask) => unreachable!("DocumentQueue resolves resize tasks"),
             Ok(Command::Active(active)) => page.SetActive(active)?,
             Ok(Command::Patch(patch)) => patches.push_back(patch),
             Ok(Command::StopLoading) => page.StopLoading(),
@@ -2213,6 +2239,25 @@ mod queue_tests {
         assert!(matches!(
             queue.next(&receiver, None),
             Ok(Command::CollectLayoutHeap)
+        ));
+    }
+
+    #[test]
+    fn resize_tasks_coalesce_to_the_latest_viewport() {
+        let (sender, receiver) = mpsc::channel();
+        let mut queue = DocumentQueue::new();
+        for width in [900, 901, 902] {
+            sender
+                .send(Command::Resize(Viewport {
+                    width,
+                    height: 700,
+                    scale: 1.0,
+                }))
+                .unwrap();
+        }
+        assert!(matches!(
+            queue.next(&receiver, None),
+            Ok(Command::Resize(Viewport { width: 902, .. }))
         ));
     }
 }

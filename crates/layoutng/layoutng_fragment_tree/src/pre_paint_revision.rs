@@ -186,7 +186,7 @@ impl PrePaintRevisionTracker {
         generation: u64,
         previous: &mut HashMap<Vec<usize>, Box<Input>>,
         next: &mut HashMap<Vec<usize>, Box<Input>>,
-        resource_matches: &mut HashMap<(usize, usize), bool>,
+        resource_matches: &mut HashMap<(usize, usize, bool), bool>,
         previous_owners: &mut HashMap<u64, LiveOwner>,
         next_owners: &mut HashMap<u64, LiveOwner>,
     ) {
@@ -216,7 +216,13 @@ impl PrePaintRevisionTracker {
         let self_same = old.as_ref().is_some_and(|old| {
             (!just_created(&node.paint) || node.pre_paint_owner_retained)
                 && self_equal(&old.fragment, node)
-                && resources_equal(&old.resources, &node.paint.resources, resource_matches)
+                && resources_equal(
+                    &old.resources,
+                    &node.paint.resources,
+                    resource_matches,
+                    paint_uses_viewport_resource(&old.fragment.paint)
+                        || paint_uses_viewport_resource(&node.paint),
+                )
         });
         let children_same = old.as_ref().is_some_and(|old| {
             old.children.iter().copied().eq(node
@@ -268,6 +274,9 @@ impl Input {
         let FragmentNode {
             // CSSOM-only inline rectangles do not affect paint recording.
             inline_geometry: _,
+            // Cull hysteresis belongs to the projection lifecycle, not this
+            // fragment's PrePaint input.
+            paint_cull_scroll_offset: _,
             pre_paint_revision: _,
             pre_paint_subtree_revision: _,
             pre_paint_owner_retained: _,
@@ -288,6 +297,7 @@ impl Input {
         Self {
             fragment: FragmentNode {
                 inline_geometry: Vec::new(),
+                paint_cull_scroll_offset: None,
                 pre_paint_revision: 0,
                 pre_paint_subtree_revision: 0,
                 pre_paint_owner_retained: false,
@@ -316,7 +326,23 @@ impl Input {
 pub fn SamePrePaintInput(a: &FragmentNode, b: &FragmentNode) -> bool {
     (!just_created(&b.paint) || (b.pre_paint_revision != 0 && b.pre_paint_owner_retained))
         && self_equal(a, b)
-        && resources_equal(&a.paint.resources, &b.paint.resources, &mut HashMap::new())
+        && resources_equal(
+            &a.paint.resources,
+            &b.paint.resources,
+            &mut HashMap::new(),
+            paint_uses_viewport_resource(&a.paint) || paint_uses_viewport_resource(&b.paint),
+        )
+}
+
+fn paint_uses_viewport_resource(paint: &PaintProperties) -> bool {
+    use layoutng::internal::paint_input::BackgroundAttachment;
+    paint.is_layout_view
+        || paint.canvas_background.is_some()
+        || paint
+            .style
+            .background_images
+            .iter()
+            .any(|layer| layer.attachment == BackgroundAttachment::kFixed)
 }
 
 fn owner_ids(paint: &PaintProperties) -> [u64; 5] {
@@ -627,7 +653,8 @@ fn just_created(paint: &PaintProperties) -> bool {
 fn resources_equal(
     a: &Option<Arc<PaintResources>>,
     b: &Option<Arc<PaintResources>>,
-    matches: &mut HashMap<(usize, usize), bool>,
+    matches: &mut HashMap<(usize, usize, bool), bool>,
+    compare_viewport: bool,
 ) -> bool {
     let (a, b) = match (a, b) {
         (None, None) => return true,
@@ -637,7 +664,11 @@ fn resources_equal(
     if Arc::ptr_eq(a, b) {
         return true;
     }
-    let key = (Arc::as_ptr(a) as usize, Arc::as_ptr(b) as usize);
+    let key = (
+        Arc::as_ptr(a) as usize,
+        Arc::as_ptr(b) as usize,
+        compare_viewport,
+    );
     *matches.entry(key).or_insert_with(|| {
         // These are immutable resource-provider identities, not the catalog
         // allocation rebuilt by every export. New storage conservatively dirties.
@@ -654,7 +685,7 @@ fn resources_equal(
             && *preferred_color_scheme == b.preferred_color_scheme
             && *layout_zoom_factor == b.layout_zoom_factor
             && *paints_opaque_base_background == b.paints_opaque_base_background
-            && *viewport == b.viewport
+            && (!compare_viewport || *viewport == b.viewport)
             && fonts.len() == b.fonts.len()
             && images.len() == b.images.len()
             && (fonts.ptr_eq(&b.fonts)
@@ -683,6 +714,38 @@ mod tests {
             fragment.pre_paint_subtree_revision,
             visible.pre_paint_subtree_revision
         );
+    }
+
+    #[test]
+    fn viewport_resource_change_only_dirties_viewport_dependent_fragments() {
+        let resources = |width| {
+            let mut resources = PaintResources::default();
+            resources.viewport = Some(layoutng::internal::layout_input::ViewportGeometry {
+                size: layoutng::internal::layout_input_types::IntSize { width, height: 600 },
+                ..Default::default()
+            });
+            Arc::new(resources)
+        };
+        let mut ordinary = FragmentNode::default();
+        ordinary.paint.resources = Some(resources(800));
+        let mut resized = ordinary.clone();
+        resized.paint.resources = Some(resources(700));
+        assert!(SamePrePaintInput(&ordinary, &resized));
+
+        ordinary.paint.is_layout_view = true;
+        resized.paint.is_layout_view = true;
+        assert!(!SamePrePaintInput(&ordinary, &resized));
+
+        ordinary.paint.is_layout_view = false;
+        resized.paint.is_layout_view = false;
+        ordinary.paint.style.background_images.push(
+            layoutng::internal::paint_input::BackgroundImageLayer {
+                attachment: layoutng::internal::paint_input::BackgroundAttachment::kFixed,
+                ..Default::default()
+            },
+        );
+        resized.paint.style = ordinary.paint.style.clone();
+        assert!(!SamePrePaintInput(&ordinary, &resized));
     }
 
     #[test]

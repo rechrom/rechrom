@@ -127,18 +127,20 @@ fn draw_page_surfaces(
         }
     }
     for (frame, destination) in pages {
-        if frame.viewport.width != destination.width || frame.viewport.height != destination.height
-        {
-            return Err(io::Error::other(
-                "Page placement must match rendered dimensions",
-            ));
-        }
+        // A top-level resize may embed the preceding Page surface for one or
+        // more compositor frames. Keep its pixels at their native size and
+        // clip them to the new layer bounds. This is SurfaceLayer's
+        // stretch_content_to_fill_bounds=false behavior: expanding exposes the
+        // cleared gutter, shrinking clips, and a newly laid-out surface
+        // replaces the fallback as soon as it arrives.
         let left = destination.x.max(0) as usize;
         let top = destination.y.max(0) as usize;
-        let right = (destination.x as i64 + destination.width as i64)
-            .clamp(0, viewport.width as i64) as usize;
-        let bottom = (destination.y as i64 + destination.height as i64)
-            .clamp(0, viewport.height as i64) as usize;
+        let drawn_width = destination.width.min(frame.viewport.width);
+        let drawn_height = destination.height.min(frame.viewport.height);
+        let right =
+            (destination.x as i64 + drawn_width as i64).clamp(0, viewport.width as i64) as usize;
+        let bottom =
+            (destination.y as i64 + drawn_height as i64).clamp(0, viewport.height as i64) as usize;
         if left >= right || top >= bottom {
             continue;
         }
@@ -174,11 +176,13 @@ fn placements_cover_viewport(
     }
     let mut rectangles = Vec::with_capacity(pages.len());
     let mut y_edges = vec![0, height];
-    for (_, destination) in pages {
+    for (frame, destination) in pages {
         let left = (destination.x as i64).clamp(0, width);
         let top = (destination.y as i64).clamp(0, height);
-        let right = (destination.x as i64 + destination.width as i64).clamp(0, width);
-        let bottom = (destination.y as i64 + destination.height as i64).clamp(0, height);
+        let right = (destination.x as i64 + destination.width.min(frame.viewport.width) as i64)
+            .clamp(0, width);
+        let bottom = (destination.y as i64 + destination.height.min(frame.viewport.height) as i64)
+            .clamp(0, height);
         if left < right && top < bottom {
             rectangles.push((left, top, right, bottom));
             y_edges.extend([top, bottom]);
@@ -665,6 +669,48 @@ fn rgba_to_window_rgb(dst: &mut [u32], src: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn page_frame(
+        width: u32,
+        height: u32,
+        pixels: Vec<u32>,
+    ) -> crate::page_presentation::PageFrame {
+        crate::page_presentation::PageFrame {
+            provenance: crate::page_presentation::FrameProvenance {
+                document: (1, 1),
+                content: None,
+            },
+            viewport: crate::engine::Viewport {
+                width,
+                height,
+                scale: 1.0,
+            },
+            is_handling_interaction: false,
+            pixels: Arc::new(pixels),
+            recycler: None,
+        }
+    }
+
+    #[test]
+    fn stale_resize_surface_keeps_native_size_and_exposes_gutter() {
+        let frame = page_frame(2, 2, vec![1, 2, 3, 4]);
+        let placement = crate::page_presentation::DeviceRect::new(0, 0, 4, 2);
+        let viewport = crate::engine::Viewport {
+            width: 4,
+            height: 2,
+            scale: 1.0,
+        };
+        let mut pixels = vec![99; 8];
+        draw_page_surfaces(
+            &[(&frame, placement)],
+            &mut pixels,
+            4,
+            viewport,
+            PixelFormat::Bgra8888,
+        )
+        .unwrap();
+        assert_eq!(pixels, vec![1, 2, 0, 0, 3, 4, 0, 0]);
+    }
 
     #[test]
     fn offscreen_readback_excludes_toolbar_and_keeps_rgba_channels() {

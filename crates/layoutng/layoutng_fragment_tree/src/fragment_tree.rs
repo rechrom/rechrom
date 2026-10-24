@@ -765,9 +765,9 @@ pub struct PaintProperties {
     pub text_combine_inline_offset: f64,
     pub replaced_content: Option<ReplacedContentPaintData>,
     pub resources: Option<Arc<PaintResources>>,
-    pub glyph_runs: Vec<PaintGlyphRun>,
+    pub glyph_runs: Arc<Vec<PaintGlyphRun>>,
     /// Shaper caret stops, in this text fragment's local inline coordinates.
-    pub text_caret_positions: Vec<(u32, f64)>,
+    pub text_caret_positions: Arc<Vec<(u32, f64)>>,
     pub text_control_host: Option<u64>,
     pub text_control_inner_editor: bool,
     pub text_control_empty_caret: Option<FragmentPaintRect>,
@@ -867,8 +867,8 @@ impl Default for PaintProperties {
             text_combine_inline_offset: 0.0,
             replaced_content: None,
             resources: None,
-            glyph_runs: Vec::new(),
-            text_caret_positions: Vec::new(),
+            glyph_runs: Arc::new(Vec::new()),
+            text_caret_positions: Arc::new(Vec::new()),
             text_control_host: None,
             text_control_inner_editor: false,
             text_control_empty_caret: None,
@@ -924,6 +924,11 @@ pub struct InlineGeometry {
 pub struct FragmentNode {
     /// Native inline query geometry, independent of paint-backed fragments.
     pub inline_geometry: Vec<InlineGeometry>,
+    /// Scroll position at which the 4000px paint projection was exported.
+    /// Retained scroll updates leave this unchanged so the browser can apply
+    /// Chromium's CullRect::HasScrolledEnough hysteresis and request a fresh
+    /// projection before newly exposed content reaches the recorded edge.
+    pub paint_cull_scroll_offset: Option<Offset>,
     /// Certified layout-output input revision. Zero means unobserved input.
     pub pre_paint_revision: u64,
     /// Includes the exact ordered child input revisions and topology.
@@ -948,6 +953,7 @@ impl Default for FragmentNode {
     fn default() -> Self {
         Self {
             inline_geometry: Vec::new(),
+            paint_cull_scroll_offset: None,
             pre_paint_revision: 0,
             pre_paint_subtree_revision: 0,
             pre_paint_owner_retained: false,
@@ -963,5 +969,49 @@ impl Default for FragmentNode {
             paint: PaintProperties::default(),
             children: Vec::new(),
         }
+    }
+}
+
+impl FragmentNode {
+    /// Source: platform/graphics/paint/cull_rect.cc. Chromium refreshes an
+    /// expanded cull rect after 512 CSS pixels of cumulative scrolling.
+    #[allow(non_snake_case)]
+    pub fn PaintCullRectHasScrolledEnough(&self, id: u64, offset: Offset) -> bool {
+        const CHANGED_ENOUGH_DISTANCE: f64 = 512.0;
+        let changed = self.node_id == id
+            && self.paint_cull_scroll_offset.is_some_and(|origin| {
+                (offset.x - origin.x).abs() >= CHANGED_ENOUGH_DISTANCE
+                    || (offset.y - origin.y).abs() >= CHANGED_ENOUGH_DISTANCE
+            });
+        changed
+            || self
+                .children
+                .iter()
+                .any(|child| child.PaintCullRectHasScrolledEnough(id, offset))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cull_rect_scroll_threshold_is_cumulative_from_full_projection() {
+        let mut root = FragmentNode::default();
+        let mut scroller = FragmentNode {
+            node_id: 7,
+            paint_cull_scroll_offset: Some(Offset { x: 20.0, y: 100.0 }),
+            ..Default::default()
+        };
+        // A retained property update changes the live offset but deliberately
+        // keeps the last full projection's cull origin.
+        scroller.paint.scroll_offset = Offset { x: 20.0, y: 500.0 };
+        root.children.push(scroller);
+
+        let offset = |y| Offset { x: 20.0, y };
+        assert!(!root.PaintCullRectHasScrolledEnough(7, offset(611.0)));
+        assert!(root.PaintCullRectHasScrolledEnough(7, offset(612.0)));
+        assert!(root.PaintCullRectHasScrolledEnough(7, offset(-412.0)));
+        assert!(!root.PaintCullRectHasScrolledEnough(8, offset(1000.0)));
     }
 }

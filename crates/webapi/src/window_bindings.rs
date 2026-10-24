@@ -746,12 +746,7 @@ impl WindowJavaScriptBindings {
                 // does not acquire timer nesting or the 4 ms timer clamp.
                 self.EnqueueTaskWithRuntime(
                     Box::new(move |runtime, realm| {
-                        let _ = runtime.Call(
-                            realm,
-                            &callback,
-                            &HostValue::default(),
-                            &[],
-                        );
+                        let _ = runtime.Call(realm, &callback, &HostValue::default(), &[]);
                     }),
                     None,
                 );

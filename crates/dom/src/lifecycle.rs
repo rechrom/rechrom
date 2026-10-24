@@ -21,6 +21,14 @@ impl DOM {
         self.GetDocumentMut()
             .StyleStateMut()
             .layout_inputs_require_tree = true;
+        self.InvalidateLayoutGeometry();
+    }
+
+    /// Mark native geometry stale while retaining the resident LayoutObject
+    /// tree. ConstraintSpace changes invalidate the root LayoutResult by
+    /// themselves; rebuilding every DOM input is unnecessary when topology is
+    /// unchanged.
+    pub fn InvalidateLayoutGeometry(&mut self) {
         self.GetDocumentMut()
             .StyleStateMut()
             .impact

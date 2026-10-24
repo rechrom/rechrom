@@ -127,7 +127,7 @@ fn walk(node: &FragmentNode, parent: Offset, items: &mut Vec<DisplayItem>) {
             let line_top = y + line_offset;
             line_top.round() - line_top
         });
-        for run in &node.paint.glyph_runs {
+        for run in node.paint.glyph_runs.iter() {
             if run.glyphs.is_empty() {
                 continue;
             }

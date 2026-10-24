@@ -213,10 +213,10 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
                 synthetic_italic: input_run.synthetic_italic,
                 font_smoothing: input_run.font_smoothing,
                 writing_mode: input_run.writing_mode,
-                glyphs: input_run.glyphs.clone(),
+                glyphs: std::sync::Arc::new(input_run.glyphs.clone()),
                 ..Default::default()
             };
-            for glyph in &mut item.glyphs {
+            for glyph in std::sync::Arc::make_mut(&mut item.glyphs) {
                 glyph.offset.x += self.node.paint_offset.x + baseline_origin.x;
                 glyph.offset.y += self.node.paint_offset.y + baseline_origin.y;
             }

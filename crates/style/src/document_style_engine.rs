@@ -1868,22 +1868,29 @@ impl DocumentStyleEngine {
         };
         // Preserve old RuleSet identities across synchronization/pruning for
         // Blink's active-sheet comparison below.
-        let old_rule_sets = (!Arc::ptr_eq(&self.active_sheets, &active_sheets)).then(|| {
-            self.active_sheets
-                .iter()
-                .map(|(sheet, _)| {
-                    self.translated_rule_sets
-                        .get(&(sheet.Identity(), sheet.Revision()))
-                        .cloned()
-                })
-                .collect::<Vec<_>>()
-        });
+        let viewport_only_environment_change = self
+            .translated_rule_set_environment
+            .as_ref()
+            .is_some_and(|previous| MediaDiffersOnlyByViewport(previous, media));
+        let old_rule_sets = (!Arc::ptr_eq(&self.active_sheets, &active_sheets)
+            || viewport_only_environment_change)
+            .then(|| {
+                self.active_sheets
+                    .iter()
+                    .map(|(sheet, _)| {
+                        self.translated_rule_sets
+                            .get(&(sheet.Identity(), sheet.Revision()))
+                            .cloned()
+                    })
+                    .collect::<Vec<_>>()
+            });
         self.SynchronizeTypedSheets(document, &active_sheets);
         // Ordinary standards-mode author and UA-mode user-agent matching
         // consume these retained RuleSets below. Rebuild only when the sheet
         // revision or media environment changes; advanced recalc contexts
         // remain explicit compatibility-collector fallbacks.
-        self.SynchronizeTranslatedRuleSets(&active_sheets, media);
+        let retained_viewport_environment =
+            self.SynchronizeTranslatedRuleSets(&active_sheets, media);
         // DOM invalidations were recorded while the previous active RuleSets
         // still owned their feature data. Keep those owners through this
         // batch, just as mutation-time PendingInvalidations do in Blink; sheet
@@ -1941,12 +1948,15 @@ impl DocumentStyleEngine {
         let all_dirty = font_features_changed
             || registry_changed
             || document.StyleState().all_dirty
-            || environment_changed
+            || (environment_changed && !viewport_only_environment_change)
             || conservative_scope_invalidation;
         let sheet_changes = ChangedSheets(&self.active_sheets, &active_sheets);
+        let media_rule_sets_changed =
+            viewport_only_environment_change && !retained_viewport_environment;
+        let rule_sets_changed = !sheet_changes.is_empty() || media_rule_sets_changed;
         if font_features_changed
             || registry_changed
-            || self.environment.as_ref() != Some(&environment)
+            || (environment_changed && !viewport_only_environment_change)
             // cpp: StyleEngine::ApplyRuleSetChanges. MatchResult keys own
             // property-set identity, order and cascade metadata. Appending
             // ordinary document or shadow rules does not invalidate unrelated
@@ -1964,6 +1974,8 @@ impl DocumentStyleEngine {
             || resource_changed
         {
             self.matched_properties_cache.Clear();
+        } else if viewport_only_environment_change {
+            self.matched_properties_cache.ClearViewportDependent();
         }
         // cpp: matched_properties_cache.cc:392-431. Blink performs this from
         // the Oilpan weak callback; the retained Rust document owner reaches
@@ -1996,8 +2008,9 @@ impl DocumentStyleEngine {
                 !old.eq(new)
             })
             .collect::<HashSet<_>>();
-        let document_sheets_changed =
-            changed_tree_scopes.contains(&document.Root()) || !ua_unchanged;
+        let document_sheets_changed = changed_tree_scopes.contains(&document.Root())
+            || !ua_unchanged
+            || media_rule_sets_changed;
         if !sheet_changes.is_empty() && !document_sheets_changed {
             // This equality-only sidecar stores flattened rule positions.
             // Revoke its certificates after reindexing; existing native styles
@@ -2010,7 +2023,7 @@ impl DocumentStyleEngine {
             .as_ref()
             .is_none_or(|(_, mode)| *mode != environment.1);
         if quirks_changed
-            || !sheet_changes.is_empty()
+            || rule_sets_changed
             || self.active_sheet_scopes.as_slice() != active_sheet_scopes.as_slice()
         {
             self.rule_candidate_index = None;
@@ -2021,11 +2034,11 @@ impl DocumentStyleEngine {
         // ApplyRuleSetChanges is scoped to the changed RuleSets. An unrelated
         // shadow TreeScope does not make document RuleSet invalidation
         // inexact; only inputs shared by selector/cascade evaluation do.
-        let rule_set_invalidation_context_unchanged = self.environment.as_ref()
-            == Some(&environment)
-            && !font_features_changed
-            && !registry_changed
-            && environment_variables.is_none();
+        let rule_set_invalidation_context_unchanged =
+            (self.environment.as_ref() == Some(&environment) || viewport_only_environment_change)
+                && !font_features_changed
+                && !registry_changed
+                && environment_variables.is_none();
         let signature_non_rule_context_unchanged = self
             .active_sheet_scopes
             .iter()
@@ -2035,7 +2048,7 @@ impl DocumentStyleEngine {
             && rule_set_invalidation_context_unchanged;
         let signature_context_unchanged = signature_non_rule_context_unchanged
             && self.active_sheet_scopes.as_slice() == active_sheet_scopes.as_slice()
-            && sheet_changes.is_empty();
+            && !rule_sets_changed;
         let ordinary_signature_complete = environment_variables.is_none()
             && active_sheet_scopes
                 .iter()
@@ -2151,6 +2164,16 @@ impl DocumentStyleEngine {
         if all_dirty {
             AddSubtree(document, document.Root(), &mut dirty);
         } else {
+            if viewport_only_environment_change {
+                // LocalFrameView::ViewportSizeChanged marks only styles which
+                // consumed viewport units. Media queries whose truth value did
+                // not change keep their RuleSet and unrelated ComputedStyles.
+                // Layout still receives the new containing-block constraint.
+                dirty.extend(
+                    ConnectedElements(document)
+                        .filter(|&index| ResolvedStyleUsesViewportUnits(document, index)),
+                );
+            }
             let state = document.StyleState();
             let dom_invalidation =
                 browser_tracing::span("style", "StyleEngine.InvalidateDOMChanges");
@@ -2533,7 +2556,7 @@ impl DocumentStyleEngine {
             drop(dom_invalidation);
             // Rule-set invalidation checks both previously matched rules and
             // current matches. The former survives simultaneous DOM mutations.
-            if !sheet_changes.is_empty() && document_sheets_changed {
+            if rule_sets_changed && document_sheets_changed {
                 let mut changed_sheets_trace =
                     browser_tracing::span("style", "StyleEngine.InvalidateChangedSheets");
                 let precise_changes = old_rule_sets.as_ref().and_then(|old_rules| {
@@ -2566,6 +2589,7 @@ impl DocumentStyleEngine {
                         return None;
                     }
                     let mut rules = Vec::new();
+                    let mut media_diff_sheets = HashSet::new();
                     for (position, (sheet, _)) in self.active_sheets.iter().enumerate() {
                         if changed.contains(&(sheet.Identity(), sheet.Revision())) {
                             let typed = sheet.ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()?;
@@ -2583,14 +2607,27 @@ impl DocumentStyleEngine {
                                     }
                                 }
                             }
+                            let key = (sheet.Identity(), sheet.Revision());
+                            if media_rule_sets_changed {
+                                if let Some(current) = self.translated_rule_sets.get(&key) {
+                                    // cpp: RuleSetDiff::CreateDiffRuleset. A
+                                    // media change invalidates selectors that
+                                    // entered or left the active RuleSet, not
+                                    // every selector in the owning sheet.
+                                    rules.push(ProductionRuleSetDifference(old, current));
+                                    media_diff_sheets.insert(key);
+                                    continue;
+                                }
+                            }
                             rules.push(old.clone());
                         }
                     }
                     for (sheet, _) in active_sheets.iter() {
-                        if changed.contains(&(sheet.Identity(), sheet.Revision())) {
+                        let key = (sheet.Identity(), sheet.Revision());
+                        if changed.contains(&key) && !media_diff_sheets.contains(&key) {
                             let typed = sheet.ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()?;
                             if !typed.functions.is_empty() || !typed.mixins.is_empty() { return None; }
-                            let ruleset = self.translated_rule_sets.get(&(sheet.Identity(), sheet.Revision()))?;
+                            let ruleset = self.translated_rule_sets.get(&key)?;
                             if !rules.iter().any(|old| Rc::ptr_eq(old, ruleset)) { rules.push(ruleset.clone()); }
                         }
                     }
@@ -2604,6 +2641,10 @@ impl DocumentStyleEngine {
                     "native_rule_sets",
                     native_changed_rules.as_ref().map_or(0, Vec::len) as f64,
                 );
+                let dirty_before_changed_sheets = dirty.len();
+                let mut native_invalidated_count = 0usize;
+                let mut signature_invalidated_count = 0usize;
+                let mut missing_old_match_count = 0usize;
                 let mut elements = HashSet::new();
                 AddSubtree(document, document.Root(), &mut elements);
                 let native_invalidated = native_changed_rules.as_ref().and_then(|rules| {
@@ -2619,6 +2660,7 @@ impl DocumentStyleEngine {
                     )
                 });
                 if let Some(invalidated) = native_invalidated {
+                    native_invalidated_count = invalidated.len();
                     dirty.extend(invalidated);
                     // Numeric positions are only a projection of sheet-owned
                     // rules. Reindex unchanged sheets by retained identity and
@@ -2639,10 +2681,19 @@ impl DocumentStyleEngine {
                         let start = new_offsets
                             .get_mut(&(sheet.Identity(), sheet.Revision()))
                             .and_then(|offsets| offsets.pop_front());
-                        let changed = precise_changes
-                            .as_ref()
-                            .unwrap()
-                            .contains(&(sheet.Identity(), sheet.Revision()));
+                        // A media-query result rebuilds the active RuleSet, but
+                        // it does not reorder the CSSStyleSheet's source rules.
+                        // The diff RuleSet above already invalidated elements
+                        // matching rules which entered or left the active set.
+                        // Keep every other retained signature at the same
+                        // source position. Treating the whole owning sheet as
+                        // reindexed turns a single breakpoint rule into a full
+                        // document recalc on large pages.
+                        let changed = !media_rule_sets_changed
+                            && precise_changes
+                                .as_ref()
+                                .unwrap()
+                                .contains(&(sheet.Identity(), sheet.Revision()));
                         positions.extend((0..sheet.rules.len()).map(|local| {
                             (!changed)
                                 .then_some(start)
@@ -2656,7 +2707,7 @@ impl DocumentStyleEngine {
                             .iter()
                             .any(|(order, _, _)| positions.get(*order).copied().flatten().is_none())
                         {
-                            dirty.insert(*index);
+                            signature_invalidated_count += usize::from(dirty.insert(*index));
                             return false;
                         }
                         for (order, _, _) in &mut signature.values {
@@ -2682,8 +2733,20 @@ impl DocumentStyleEngine {
                             // tests the changed RuleSets on that element, but
                             // does not manufacture a recalc for missing style.
                             let old_style = document.ResolvedStyleFor(index);
-                            let missing_old_match =
-                                old_style.is_some() && !self.matches.contains_key(&index);
+                            // A pure viewport media change has no selector-state
+                            // mutation to preserve. The diff RuleSet above
+                            // tested both the entering and leaving rules against
+                            // every connected element, matching Blink's
+                            // ApplyRuleSetChanges path. A missing Rechrom
+                            // equality sidecar is therefore not evidence for a
+                            // recalc. Keep the conservative old-match fallback
+                            // only when DOM changes were batched with the rule
+                            // change and the current tree cannot prove the old
+                            // selector state by itself.
+                            let missing_old_match = (!media_rule_sets_changed
+                                || !document.StyleState().changes.is_empty())
+                                && old_style.is_some()
+                                && !self.matches.contains_key(&index);
                             let old_highlight = old_style
                                 .and_then(|style| unsafe { style.native_style.Get().as_ref() })
                                 .is_some_and(|style| {
@@ -2692,7 +2755,7 @@ impl DocumentStyleEngine {
                                         .any(|pseudo| style.HasPseudoElementStyle(*pseudo))
                                 });
                             if missing_old_match || old_highlight {
-                                dirty.insert(index);
+                                missing_old_match_count += usize::from(dirty.insert(index));
                             }
                         }
                     }
@@ -2710,6 +2773,32 @@ impl DocumentStyleEngine {
                     AddSubtree(document, document.Root(), &mut dirty);
                     self.matches.clear();
                 }
+                changed_sheets_trace.set(
+                    "dirty_before_changed_sheets",
+                    dirty_before_changed_sheets as f64,
+                );
+                changed_sheets_trace.set("native_invalidated", native_invalidated_count as f64);
+                changed_sheets_trace
+                    .set("signature_invalidated", signature_invalidated_count as f64);
+                changed_sheets_trace.set(
+                    "missing_old_match_invalidated",
+                    missing_old_match_count as f64,
+                );
+                changed_sheets_trace.set("dirty_after_changed_sheets", dirty.len() as f64);
+                browser_tracing::instant(
+                    "style",
+                    "StyleChangedSheetInvalidationOutcome",
+                    &[
+                        ("dirty_before", dirty_before_changed_sheets as f64),
+                        ("native_invalidated", native_invalidated_count as f64),
+                        ("signature_invalidated", signature_invalidated_count as f64),
+                        (
+                            "missing_old_match_invalidated",
+                            missing_old_match_count as f64,
+                        ),
+                        ("dirty_after", dirty.len() as f64),
+                    ],
+                );
                 // Rule order in the retained match signatures changed. Refresh
                 // signatures for candidates instead of comparing unlike revisions.
             }
@@ -3077,6 +3166,14 @@ impl DocumentStyleEngine {
                     .or_else(|| document.ParentOrShadowHostElement(index));
             }
         }
+        browser_tracing::instant(
+            "style",
+            "StyleInvalidationOutcome",
+            &[
+                ("dirty_elements", dirty.len() as f64),
+                ("visit_elements", visit.len() as f64),
+            ],
+        );
         if visit.is_empty() {
             self.invalidated_container_nodes.clear();
             self.interaction_changed_nodes.clear();
@@ -4639,11 +4736,91 @@ impl DocumentStyleEngine {
         &mut self,
         sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
         media: &MediaValuesCachedData,
-    ) {
-        if self.translated_rule_set_environment.as_ref() != Some(media) {
-            self.translated_rule_sets.clear();
-            self.translated_rule_routing.clear();
-            self.shared_rule_sets.clear();
+    ) -> bool {
+        let environment_changed = self.translated_rule_set_environment.as_ref() != Some(media);
+        let viewport_only_change = self
+            .translated_rule_set_environment
+            .as_ref()
+            .is_some_and(|previous| MediaDiffersOnlyByViewport(previous, media));
+        let evaluator =
+            crate::production_style_sheet::ProductionMediaQueryEvaluator::FromCachedData(media);
+        let forced_colors_evaluator =
+            crate::production_style_sheet::ProductionMediaQueryEvaluator::ForMediaType(
+                "ua-forced-colors",
+                media,
+            );
+        let owner_media_unchanged = viewport_only_change
+            && self
+                .translated_rule_set_environment
+                .as_ref()
+                .is_some_and(|previous| {
+                    let previous_evaluator = crate::production_style_sheet::
+                        ProductionMediaQueryEvaluator::FromCachedData(previous);
+                    sheets.iter().all(|(sheet, _)| {
+                        sheet.owner_media_conditions.iter().all(|condition| {
+                            let queries = self
+                                .media_query_cache
+                                .entry(condition.clone())
+                                .or_insert_with(|| Rc::new(ParseMediaQuerySet(condition)))
+                                .clone();
+                            previous_evaluator.EvalSet(queries.as_ref())
+                                == evaluator.EvalSet(queries.as_ref())
+                        })
+                    })
+                });
+        let retained_viewport_environment = viewport_only_change
+            && owner_media_unchanged
+            && sheets.iter().all(|(sheet, _)| {
+                let key = (sheet.Identity(), sheet.Revision());
+                let Some(rules) = self.translated_rule_sets.get(&key) else {
+                    return false;
+                };
+                let medium = if sheet.UserAgentStyleSheetRole()
+                    == Some(CSSUserAgentStyleSheetRole::kForcedColors)
+                {
+                    &forced_colors_evaluator
+                } else {
+                    &evaluator
+                };
+                !rules.DidMediaQueryResultsChange(medium)
+            });
+        if environment_changed && !retained_viewport_environment {
+            if viewport_only_change && owner_media_unchanged {
+                // cpp: StyleSheetContents::EnsureRuleSet. A viewport change
+                // rebuilds only RuleSets whose cached media-query result
+                // changed. Other sheets retain both RuleSet and routing
+                // identity, so ApplyRuleSetChanges can invalidate against the
+                // exact old/new pair instead of treating the document as new.
+                let changed = sheets
+                    .iter()
+                    .filter_map(|(sheet, _)| {
+                        let key = (sheet.Identity(), sheet.Revision());
+                        let rules = self.translated_rule_sets.get(&key)?;
+                        let medium = if sheet.UserAgentStyleSheetRole()
+                            == Some(CSSUserAgentStyleSheetRole::kForcedColors)
+                        {
+                            &forced_colors_evaluator
+                        } else {
+                            &evaluator
+                        };
+                        rules.DidMediaQueryResultsChange(medium).then_some(key)
+                    })
+                    .collect::<Vec<_>>();
+                for key in changed {
+                    self.translated_rule_sets.remove(&key);
+                    self.translated_rule_routing.remove(&key);
+                }
+                // Entries for the rebuilt sheets are environment-specific.
+                // Retained translated RuleSets above remain authoritative;
+                // lazily repopulate the shared lookup from this environment.
+                self.shared_rule_sets.clear();
+            } else {
+                self.translated_rule_sets.clear();
+                self.translated_rule_routing.clear();
+                self.shared_rule_sets.clear();
+            }
+        }
+        if environment_changed {
             self.translated_rule_set_environment = Some(media.clone());
         }
         let active_keys = sheets
@@ -4657,13 +4834,6 @@ impl DocumentStyleEngine {
             .retain(|key, _| active_keys.contains(key));
         self.shared_rule_sets
             .retain(|_, (contents, _, _)| contents.strong_count() != 0);
-        let evaluator =
-            crate::production_style_sheet::ProductionMediaQueryEvaluator::FromCachedData(media);
-        let forced_colors_evaluator =
-            crate::production_style_sheet::ProductionMediaQueryEvaluator::ForMediaType(
-                "ua-forced-colors",
-                media,
-            );
         for (sheet, _) in sheets {
             let key = (sheet.Identity(), sheet.Revision());
             if key.0 == 0 || self.translated_rule_sets.contains_key(&key) {
@@ -4703,6 +4873,7 @@ impl DocumentStyleEngine {
             self.translated_rule_routing.insert(key, routing);
             self.translated_rule_shadow_stats.rule_sets_built += 1;
         }
+        retained_viewport_environment
     }
 
     // cpp: ScopedStyleResolver::AddFontFeatureValuesRules, CSSFontSelector::
@@ -7421,6 +7592,16 @@ impl DocumentStyleEngine {
                     Ok(output) => {
                         *builder =
                             ComputedStyleBuilder::from_style(unsafe { &*output.style.Get() });
+                        // StyleResolverState records unit use while resolving
+                        // calc()/substitutions. Preserve those dependency bits
+                        // on the immutable style exactly as StyleResolver's
+                        // ApplyLengthConversionFlags does in Blink.
+                        if output.length_conversion_flags & ((1 << 3) | (1 << 4)) != 0 {
+                            builder.SetHasStaticViewportUnits();
+                        }
+                        if output.length_conversion_flags & (1 << 5) != 0 {
+                            builder.SetHasDynamicViewportUnits();
+                        }
                         translated_stats.translated_style_cascade_applied += 1;
                         if is_document_element {
                             translated_stats.translated_style_cascade_root_applied += 1;
@@ -8442,6 +8623,52 @@ fn AddSubtree(document: &Document, root: usize, targets: &mut HashSet<usize>) {
         }
     }
 }
+
+fn MediaDiffersOnlyByViewport(
+    previous: &MediaValuesCachedData,
+    current: &MediaValuesCachedData,
+) -> bool {
+    if previous == current {
+        return false;
+    }
+    let mut normalized = previous.clone();
+    normalized.viewport_width = current.viewport_width;
+    normalized.viewport_height = current.viewport_height;
+    normalized.small_viewport_width = current.small_viewport_width;
+    normalized.small_viewport_height = current.small_viewport_height;
+    normalized.large_viewport_width = current.large_viewport_width;
+    normalized.large_viewport_height = current.large_viewport_height;
+    normalized.dynamic_viewport_width = current.dynamic_viewport_width;
+    normalized.dynamic_viewport_height = current.dynamic_viewport_height;
+    normalized.device_width = current.device_width;
+    normalized.device_height = current.device_height;
+    normalized == *current
+}
+
+fn PseudoUsesViewportUnits(pseudo: &dom::persistent_document::PseudoElement) -> bool {
+    unsafe { pseudo.native_style.Get().as_ref() }.is_some_and(|style| style.HasViewportUnits())
+        || pseudo
+            .marker
+            .as_deref()
+            .is_some_and(PseudoUsesViewportUnits)
+}
+
+fn ResolvedStyleUsesViewportUnits(document: &Document, index: usize) -> bool {
+    let Some(style) = document.ResolvedStyleFor(index) else {
+        return false;
+    };
+    unsafe { style.native_style.Get().as_ref() }.is_some_and(|style| style.HasViewportUnits())
+        || [
+            style.before.as_ref(),
+            style.after.as_ref(),
+            style.first_letter.as_ref(),
+            style.placeholder.as_ref(),
+            style.marker.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(PseudoUsesViewportUnits)
+}
 // Immutable owner metadata used by the translated active-sheet comparison.
 struct SheetQueryMetadata {
     queries: bool,
@@ -8461,6 +8688,38 @@ impl crate::active_style_sheets::StyleSheetMediaQueries for SheetQueryMetadata {
     }
 }
 type RetainedRuleSet = Rc<crate::rule_set::RuleSet<crate::production_style_sheet::Backend>>;
+
+fn ProductionRuleSetDifference(old: &RetainedRuleSet, new: &RetainedRuleSet) -> RetainedRuleSet {
+    use crate::rule_set::{RuleSet, StyleRuleIdentitySet};
+
+    let old_identities = old
+        .AllRuleData()
+        .into_iter()
+        .map(|data| Rc::as_ptr(data.Rule()) as usize)
+        .collect::<HashSet<_>>();
+    let new_identities = new
+        .AllRuleData()
+        .into_iter()
+        .map(|data| Rc::as_ptr(data.Rule()) as usize)
+        .collect::<HashSet<_>>();
+    let old_only = old
+        .AllRuleData()
+        .into_iter()
+        .filter(|data| !new_identities.contains(&(Rc::as_ptr(data.Rule()) as usize)))
+        .map(|data| data.Rule().clone())
+        .collect::<StyleRuleIdentitySet<_>>();
+    let new_only = new
+        .AllRuleData()
+        .into_iter()
+        .filter(|data| !old_identities.contains(&(Rc::as_ptr(data.Rule()) as usize)))
+        .map(|data| data.Rule().clone())
+        .collect::<StyleRuleIdentitySet<_>>();
+    let mut difference = RuleSet::new();
+    difference.AddFilteredRulesFromOtherSet(old, &old_only);
+    difference.AddFilteredRulesFromOtherSet(new, &new_only);
+    Rc::new(difference)
+}
+
 // No CSSOM RuleSetDiff is published through this contract yet. An empty diff
 // list invokes Chromium's complete old/new RuleSet branch.
 enum NoRuleSetDiff {}

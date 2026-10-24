@@ -374,6 +374,7 @@ impl PaintTreeNode<'_> {
         // this node's resident children, not FragmentNode.children.
         let FragmentNode {
             inline_geometry: _,
+            paint_cull_scroll_offset: _,
             fragment_instance_id,
             fragmentainer_instance_id,
             node_id,
@@ -391,6 +392,7 @@ impl PaintTreeNode<'_> {
         } = source;
         self.fragment = Some(Arc::new(FragmentNode {
             inline_geometry: Vec::new(),
+            paint_cull_scroll_offset: None,
             fragment_instance_id: *fragment_instance_id,
             fragmentainer_instance_id: *fragmentainer_instance_id,
             node_id: *node_id,
@@ -659,7 +661,8 @@ pub(crate) fn ResolveFragmentGeometry(
         applies_transform: false,
         resets_paint_space: false,
     };
-    let style = fragment.paint.has_source.then_some(&*fragment.paint.style);
+    let style: Option<&PaintStyleData> =
+        fragment.paint.has_source.then_some(&*fragment.paint.style);
     let establishes = fragment.paint.establishes_paint_state;
     let position = if fragment.paint.has_source {
         fragment.paint.position
@@ -2949,7 +2952,8 @@ fn RebindLogicalEffectState(
         .fragment
         .as_deref()
         .expect("PrePaint node must own a fragment");
-    let style = fragment.paint.has_source.then_some(&*fragment.paint.style);
+    let style: Option<&PaintStyleData> =
+        fragment.paint.has_source.then_some(&*fragment.paint.style);
     let local_opacity = if fragment.paint.establishes_paint_state {
         style.map_or(1.0, MaskAdjustedOpacity)
     } else {
@@ -4037,10 +4041,20 @@ impl PrePaintTreeWalk {
         let environment_changed = viewport != self.viewport;
         if environment_changed || (viewport.is_some() && self.viewport_properties.clip_id == 0) {
             self.viewport = viewport;
+            // Blink updates the viewport-owned clip node in place. Its value
+            // changes as the window resizes, but the property slot remains the
+            // same node so descendants do not acquire a new clip ancestry on
+            // every native resize sample.
+            let retained_viewport_clip_id = self.viewport_properties.clip_id;
             self.viewport_properties = PropertyTreeState::default();
             if let Some(rect) = viewport {
-                let id = self.next_property_id;
-                self.next_property_id += 1;
+                let id = if retained_viewport_clip_id != 0 {
+                    retained_viewport_clip_id
+                } else {
+                    let id = self.next_property_id;
+                    self.next_property_id += 1;
+                    id
+                };
                 self.viewport_properties.clip_id = id;
                 self.viewport_properties.nodes.clip = Arc::new(
                     ClipPaintPropertyNode {
@@ -4086,8 +4100,10 @@ impl PrePaintTreeWalk {
             flex_or_grid_item: false,
         };
         let mut previous = self.retained_tree.take();
-        let force =
-            !self.retained_tree_valid || environment_changed || root.pre_paint_revision == 0;
+        // A viewport value change dirties the viewport clip and the LayoutView,
+        // not every descendant. UpdateNode still rebuilds nodes whose fragment
+        // revision or inherited geometry actually changed.
+        let force = !self.retained_tree_valid || root.pre_paint_revision == 0;
         let entirely_clean = !force
             && root.pre_paint_subtree_revision != 0
             && previous.as_ref().is_some_and(|node| {

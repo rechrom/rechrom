@@ -1050,6 +1050,33 @@ fn PixelsForStyle(
     media: &MediaValuesCachedData,
     context: PropertyConversionContext<'_>,
 ) -> std::result::Result<f64, LonghandApplicationError> {
+    match unit {
+        UnitType::kViewportWidth
+        | UnitType::kViewportHeight
+        | UnitType::kViewportInlineSize
+        | UnitType::kViewportBlockSize
+        | UnitType::kViewportMin
+        | UnitType::kViewportMax
+        | UnitType::kSmallViewportWidth
+        | UnitType::kSmallViewportHeight
+        | UnitType::kSmallViewportInlineSize
+        | UnitType::kSmallViewportBlockSize
+        | UnitType::kSmallViewportMin
+        | UnitType::kSmallViewportMax
+        | UnitType::kLargeViewportWidth
+        | UnitType::kLargeViewportHeight
+        | UnitType::kLargeViewportInlineSize
+        | UnitType::kLargeViewportBlockSize
+        | UnitType::kLargeViewportMin
+        | UnitType::kLargeViewportMax => builder.SetHasStaticViewportUnits(),
+        UnitType::kDynamicViewportWidth
+        | UnitType::kDynamicViewportHeight
+        | UnitType::kDynamicViewportInlineSize
+        | UnitType::kDynamicViewportBlockSize
+        | UnitType::kDynamicViewportMin
+        | UnitType::kDynamicViewportMax => builder.SetHasDynamicViewportUnits(),
+        _ => {}
+    }
     let glyph = |style: &ComputedStyle| {
         context
             .font_metrics
@@ -2053,6 +2080,44 @@ fn ApplyResolved(
     }
     if let CSSValuePayload::kMathFunctionClass(math) = v.Payload() {
         use crate::css_math_expression_node::CalculationResultCategory as C;
+        if [
+            UnitType::kViewportWidth,
+            UnitType::kViewportHeight,
+            UnitType::kViewportInlineSize,
+            UnitType::kViewportBlockSize,
+            UnitType::kViewportMin,
+            UnitType::kViewportMax,
+            UnitType::kSmallViewportWidth,
+            UnitType::kSmallViewportHeight,
+            UnitType::kSmallViewportInlineSize,
+            UnitType::kSmallViewportBlockSize,
+            UnitType::kSmallViewportMin,
+            UnitType::kSmallViewportMax,
+            UnitType::kLargeViewportWidth,
+            UnitType::kLargeViewportHeight,
+            UnitType::kLargeViewportInlineSize,
+            UnitType::kLargeViewportBlockSize,
+            UnitType::kLargeViewportMin,
+            UnitType::kLargeViewportMax,
+        ]
+        .into_iter()
+        .any(|unit| math.expression.UsesUnit(unit))
+        {
+            b.SetHasStaticViewportUnits();
+        }
+        if [
+            UnitType::kDynamicViewportWidth,
+            UnitType::kDynamicViewportHeight,
+            UnitType::kDynamicViewportInlineSize,
+            UnitType::kDynamicViewportBlockSize,
+            UnitType::kDynamicViewportMin,
+            UnitType::kDynamicViewportMax,
+        ]
+        .into_iter()
+        .any(|unit| math.expression.UsesUnit(unit))
+        {
+            b.SetHasDynamicViewportUnits();
+        }
         let font = if id == CSSPropertyID::kFontSize {
             parent.map_or(media.em_size, |p| p.GetFontDescription().SpecifiedSize())
         } else {

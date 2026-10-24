@@ -1029,6 +1029,17 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
         scroll_translation: &B::TransformNode,
     ) -> i32 {
         self.EnsureCompositorTransformNode(scroll_translation);
+
+        // Chromium updates every PaintArtifactCompositor on one Blink main
+        // thread, so another document cannot replace the process-wide Paint
+        // root's single (sequence, id) cache slot during this call. Rechrom
+        // runs Pages independently. As with the root transform above, use the
+        // root scroll node's structural id when another Page displaced its
+        // cached sequence after SetupRootScrollNode.
+        if scroll_translation.IsRoot() {
+            return kSecondaryRootPropertyNodeId;
+        }
+
         let id = B::ScrollNodeForTransform(scroll_translation)
             .expect("scroll translation must retain its Paint scroll node")
             .CcNodeId(self.new_sequence_number_);

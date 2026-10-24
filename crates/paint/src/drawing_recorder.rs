@@ -14,6 +14,36 @@ pub(crate) struct DrawingRecorder<'c, 'o> {
 }
 
 impl<'c, 'o> DrawingRecorder<'c, 'o> {
+    pub(crate) fn UseCachedDrawingIfPossible(
+        context: &'c RefCell<PaintContext<'o>>,
+        node: &PaintTreeNode<'_>,
+        item_type: DisplayItemIdType,
+    ) -> bool {
+        context
+            .borrow_mut()
+            .UseCachedDrawingIfPossible(node, item_type)
+    }
+
+    pub(crate) fn UseCachedDrawingWithClientIfPossible(
+        context: &'c RefCell<PaintContext<'o>>,
+        node: &PaintTreeNode<'_>,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+    ) -> bool {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
+        context.borrow_mut().UseCachedDrawingWithClient(
+            id,
+            client,
+            Some((
+                fragment.paint.display_item_client_owner_node_id,
+                fragment.paint.display_item_client_debug_name.clone(),
+            )),
+        )
+    }
+
     pub(crate) fn new(
         context: &'c RefCell<PaintContext<'o>>,
         node: &PaintTreeNode<'_>,

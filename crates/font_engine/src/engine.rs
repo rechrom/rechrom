@@ -100,6 +100,11 @@ pub struct FontEngine {
     resolved_faces: Option<FontFaceCatalog>,
     discover_system: bool,
     queries: Option<FontQueryCollector>,
+    /// cpp: FontCache / FontFallbackList. Style repeatedly requests metrics
+    /// for the same immutable FontDescription while cascading a large
+    /// inherited subtree. Cache the resolved primary metrics at the retained
+    /// font-engine boundary; every font mutation below revokes these entries.
+    metrics_cache: Vec<(FontDescription, FontMetrics)>,
 }
 
 /// Page-assembled handle to one retained font computation engine.
@@ -152,6 +157,7 @@ impl FontEngine {
             resolved_faces: None,
             discover_system: true,
             queries: Some(FontQueryCollector::default()),
+            metrics_cache: Vec::new(),
         }
     }
     /// Compatibility for hosts supplying an already resolved, immutable face
@@ -282,6 +288,7 @@ impl FontEngine {
                 self.resolved_faces = None;
             }
         }
+        self.metrics_cache.clear();
         Ok(())
     }
     fn Query(
@@ -553,6 +560,16 @@ impl FontEngine {
         description: &FontDescription,
         version: FontContextVersion,
     ) -> FontCompute<FontMetrics> {
+        if version != self.context_version {
+            return FontCompute::Error(FontError::StaleContext);
+        }
+        if let Some((_, metrics)) = self
+            .metrics_cache
+            .iter()
+            .find(|(cached, _)| cached == description)
+        {
+            return FontCompute::Ready(metrics.clone());
+        }
         match self.Prepare(description, version) {
             Err(error) => return FontCompute::Error(error),
             Ok(pending)
@@ -570,7 +587,10 @@ impl FontEngine {
         if primary.is_null() {
             return FontCompute::Error(FontError::NoUsableFont);
         }
-        FontCompute::Ready(unsafe { &*primary }.GetFontMetrics().clone())
+        let metrics = unsafe { &*primary }.GetFontMetrics().clone();
+        self.metrics_cache
+            .push((description.clone(), metrics.clone()));
+        FontCompute::Ready(metrics)
     }
     pub fn Shape(&mut self, request: &FontShapeRequest<'_>) -> FontCompute<RetainedShapeResult> {
         let _scope = foundation::LayoutHeapScope::new();
@@ -739,6 +759,28 @@ mod tests {
         let waiting = engine.Prepare(&description, version).unwrap();
         assert_eq!(waiting.resource_ids, vec![91]);
         assert!(waiting.system_queries.is_empty());
+    }
+
+    #[test]
+    fn repeated_metrics_reuse_the_retained_description_entry() {
+        let version = FontContextVersion(0);
+        let mut engine = FontEngine::FromFaces(&[face()], None);
+        let description = description();
+        assert!(matches!(
+            engine.GetMetrics(&description, version),
+            FontCompute::Ready(_)
+        ));
+        assert_eq!(engine.metrics_cache.len(), 1);
+        assert!(matches!(
+            engine.GetMetrics(&description, version),
+            FontCompute::Ready(_)
+        ));
+        assert_eq!(engine.metrics_cache.len(), 1);
+
+        engine
+            .ApplyMutation(FontMutation::SetFaces(vec![face()]))
+            .unwrap();
+        assert!(engine.metrics_cache.is_empty());
     }
 
     fn cjk_face(family: &str) -> FontFace {

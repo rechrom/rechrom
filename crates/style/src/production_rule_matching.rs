@@ -101,6 +101,19 @@ pub(crate) fn InvalidateProductionRuleSets(
         (rule_sets.len() - unique_rule_sets.len()) as f64,
     );
     trace.set("elements", elements.len() as f64);
+    // cpp: StyleEngine::ApplyRuleSetInvalidationForTreeScope uses
+    // kInvalidateAllScopes for ::part, then
+    // ApplyRuleSetInvalidationForSubtree conservatively invalidates every
+    // element carrying [part]. Resolving the exact exposed part across nested
+    // exportparts chains is deliberately left to the normal style pass.
+    let invalidates_parts = unique_rule_sets.iter().any(|rules| {
+        rules.AllRuleData().iter().any(|data| {
+            data.Selector()
+                .SimpleSelectors()
+                .any(|selector| selector.GetPseudoType() == PseudoType::kPseudoPart)
+        })
+    });
+    trace.set("invalidates_parts", f64::from(invalidates_parts));
     let unsupported = if document.GetCompatibilityMode()
         == dom::persistent_document::CompatibilityMode::kQuirks
     {
@@ -126,7 +139,6 @@ pub(crate) fn InvalidateProductionRuleSets(
                         selector.GetPseudoType(),
                         PseudoType::kPseudoHost
                             | PseudoType::kPseudoHostContext
-                            | PseudoType::kPseudoPart
                             | PseudoType::kPseudoSlotted
                     )
                 }) {
@@ -173,6 +185,14 @@ pub(crate) fn InvalidateProductionRuleSets(
     let session = selectors.StyleMatchSession(document);
     let runtime = ProductionElementRuleCollectorRuntime::new(&session);
     let mut invalidated = HashSet::new();
+    if invalidates_parts {
+        invalidated.extend(
+            elements
+                .iter()
+                .copied()
+                .filter(|&index| document.Node(index).FindAttribute("part").is_some()),
+        );
+    }
     for &index in elements {
         if !crosses_ua_shadow && document.TreeScopeRoot(index) != document.Root() {
             continue;
@@ -215,6 +235,7 @@ pub(crate) fn InvalidateProductionRuleSets(
             }
         }
     }
+    trace.set("invalidated", invalidated.len() as f64);
     Some(invalidated)
 }
 
@@ -1434,6 +1455,48 @@ mod tests {
             collection.report
         );
         assert_eq!(collection.report.transferred_property_sets, 1);
+    }
+
+    #[test]
+    fn part_rule_invalidation_is_bounded_to_part_elements() {
+        let sheet = parse(".user::part(label){color:red}");
+        let rule_set =
+            Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
+        let mut owner = dom::DOM::new();
+        let document = owner.GetDocumentMut();
+        let host = document.CreateElement(
+            DOMNamespace::kHTML,
+            "x-host".into(),
+            vec![DOMAttribute {
+                local_name: "class".into(),
+                value: "user".into(),
+                ..Default::default()
+            }],
+        );
+        document.AppendChild(document.Root(), host);
+        let shadow = document.AttachShadowRoot(host, DOMShadowRootMode::kOpen);
+        let part = document.CreateElement(
+            DOMNamespace::kHTML,
+            "span".into(),
+            vec![DOMAttribute {
+                local_name: "part".into(),
+                value: "label".into(),
+                ..Default::default()
+            }],
+        );
+        document.AppendChild(shadow, part);
+        let ordinary = document.CreateElementDefault(DOMNamespace::kHTML, "span".into());
+        document.AppendChild(shadow, ordinary);
+
+        let invalidated = InvalidateProductionRuleSets(
+            &[rule_set],
+            document,
+            &mut PersistentSelectorService::default(),
+            &[host, part, ordinary],
+        )
+        .expect("::part invalidation stays on the retained path");
+
+        assert_eq!(invalidated, HashSet::from([part]));
     }
 
     #[test]

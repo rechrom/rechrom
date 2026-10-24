@@ -3650,10 +3650,10 @@ mod tests {
                     text_blob_origin: command::Offset { x: 16., y: 88. },
                     // Roboto's capital A. Paint supplies glyph IDs directly; this
                     // test intentionally performs no text shaping in the backend.
-                    glyphs: vec![command::PaintGlyph {
+                    glyphs: std::sync::Arc::new(vec![command::PaintGlyph {
                         id: 37,
                         ..Default::default()
-                    }],
+                    }]),
                     ..Default::default()
                 },
                 &resources,

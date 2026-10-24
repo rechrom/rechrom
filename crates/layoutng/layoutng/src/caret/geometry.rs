@@ -192,7 +192,7 @@ pub fn TextControlOffsetForPoint(owner: &FragmentNode, point: Offset, empty: boo
                 let dy = (position.y - point.y)
                     .max(0.0)
                     .max(point.y - position.y - node.size.height);
-                for &(offset, x) in &node.paint.text_caret_positions {
+                for &(offset, x) in node.paint.text_caret_positions.iter() {
                     let score = (dy, (position.x + x - point.x).abs(), offset);
                     if best.is_none_or(|old| score < old) {
                         best = Some(score);

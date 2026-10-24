@@ -116,6 +116,9 @@ impl ProductionMediaQueryEvaluator {
             |media_type| MediaQueryEvaluator::ForMediaType(media_type.clone(), &self.values),
         )
     }
+    pub fn EvalSet(&self, queries: &QuerySet) -> bool {
+        self.evaluator().Eval(queries)
+    }
 }
 impl Default for ProductionMediaQueryEvaluator {
     fn default() -> Self {

@@ -378,7 +378,10 @@ pub struct DisplayItem {
     pub synthetic_italic: bool,
     pub font_smoothing: FontSmoothing,
     pub writing_mode: WritingMode,
-    pub glyphs: Vec<PaintGlyph>,
+    /// SkTextBlob-like immutable glyph payload. Cached DrawingDisplayItems
+    /// share it across paint artifacts instead of cloning every glyph during
+    /// PaintController commit.
+    pub glyphs: Arc<Vec<PaintGlyph>>,
 }
 
 impl Default for DisplayItem {
@@ -456,7 +459,7 @@ impl Default for DisplayItem {
             synthetic_italic: false,
             font_smoothing: FontSmoothing::kAuto,
             writing_mode: WritingMode::kHorizontalTb,
-            glyphs: Vec::new(),
+            glyphs: Arc::new(Vec::new()),
         }
     }
 }
@@ -1460,6 +1463,7 @@ pub fn PaintWithCaretAndCapacity(
         item_capacity,
         display_item_capacity,
         chunk_capacity,
+        None,
     )
 }
 
@@ -1471,6 +1475,7 @@ fn RecordPaint(
     item_capacity: usize,
     display_item_capacity: usize,
     chunk_capacity: usize,
+    previous: Option<Arc<PaintArtifact>>,
 ) -> PaintArtifact {
     let mut trace = browser_tracing::span("paint", "Paint.RecordPaint");
     ValidateReplayResources(fragments.paint.resources.as_deref());
@@ -1516,7 +1521,7 @@ fn RecordPaint(
             state.empty,
         )
     });
-    let mut paint_context = PaintContext::WithEditing(&mut output, editing);
+    let mut paint_context = PaintContext::WithEditingAndCache(&mut output, editing, previous);
     paint_context.caret_local_rect = caret_local_rect;
     let context = RefCell::new(paint_context);
     context
@@ -1527,6 +1532,10 @@ fn RecordPaint(
         PaintLayerPainter::new(&paint_tree, &context, Vec::new()).Paint();
     }
     context.borrow_mut().Finish();
+    trace.set(
+        "cached_display_items",
+        context.borrow().cached_display_items as f64,
+    );
     drop(context);
     output.recorded_properties = output
         .chunks
@@ -1598,7 +1607,8 @@ impl PaintEngine {
     /// as if it represented the new inputs.
     pub fn Paint(&mut self, layout_result: &FragmentNode, editing: EditingPaintState) {
         let _trace = browser_tracing::span("paint", "PaintEngine.Paint");
-        let capacities = self.paint_result.take().map_or((0, 0, 0), |old| {
+        let previous = self.paint_result.clone();
+        let capacities = previous.as_ref().map_or((0, 0, 0), |old| {
             (old.items.len(), old.display_items.len(), old.chunks.len())
         });
         self.pre_paint.SetRetainedNativeOwnerLifetimes(false);
@@ -1609,6 +1619,7 @@ impl PaintEngine {
             capacities.0,
             capacities.1,
             capacities.2,
+            previous,
         );
         self.paint_result = Some(Arc::new(result));
     }

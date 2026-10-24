@@ -177,6 +177,7 @@ impl Display {
         let viewport = scene.viewport;
         let mut placements = vec![];
         let mut is_handling_interaction = false;
+        let mut stale_surfaces = 0usize;
         let mut provenance = FrameProvenance {
             document: scene
                 .placements
@@ -196,12 +197,18 @@ impl Display {
             let page = &self.pages[&document];
             is_handling_interaction |= page.frame.is_handling_interaction;
             let local = page.frame.viewport;
-            // A resize waits for a matching producer frame; Viz never stretches
-            // an old Page into a different local viewport.
+            // Desktop Chromium gives top-level resizes a zero-frame surface
+            // deadline. Viz can therefore aggregate the previous child
+            // surface immediately, without stretching it, while the renderer
+            // produces the new LocalSurfaceId. The uncovered part of the new
+            // bounds is the fallback gutter. Requiring an exact size here
+            // instead caused the fast toolbar and slower document producers
+            // to continually overtake one another during a live resize, so
+            // almost no window frames could be submitted until the drag ended.
             if local.width != placement.destination.width
                 || local.height != placement.destination.height
             {
-                return Ok(());
+                stale_surfaces += 1;
             }
             placements.push((&page.frame, placement.destination));
             if placement.document.0 != 0 && placement.document.0 != u64::MAX {
@@ -258,6 +265,7 @@ impl Display {
                         .as_secs_f64()
                         * 1000.,
                 ),
+                ("stale_surfaces", stale_surfaces as f64),
             ],
         );
         Ok(())

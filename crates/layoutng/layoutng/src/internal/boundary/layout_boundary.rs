@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::layout_boundary_support::LayoutUpdateKind;
+use crate::layout_boundary_support::{LayoutBoundaryExportCache, LayoutUpdateKind};
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -844,6 +844,8 @@ struct SourceEntry {
 }
 type SourceMap = HashMap<*const LayoutObject, SourceEntry>;
 type StyleSourceMap = HashMap<*const NativeComputedStyle, *const ComputedStyle>;
+type ExportedStyleCache = HashMap<(usize, usize), PaintStyle>;
+type CaretPositionCache = HashMap<(usize, u32, u32, u32, u32, u64), Arc<Vec<(u32, f64)>>>;
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:735-830
 fn ExportPaintProperties(
@@ -860,6 +862,7 @@ fn ExportPaintProperties(
         effective_style,
         resources,
         LayoutUpdateKind::Paint,
+        None,
     )
 }
 
@@ -870,6 +873,7 @@ fn ExportProperties(
     effective_style: *const NativeComputedStyle,
     resources: &Arc<PaintResources>,
     purpose: LayoutUpdateKind,
+    mut exported_styles: Option<&mut ExportedStyleCache>,
 ) -> PaintProperties {
     let mut output = PaintProperties::default();
     output.resources = Some(Arc::clone(resources));
@@ -1041,6 +1045,7 @@ fn ExportProperties(
             paint_style = unsafe { &*effective_source };
         }
     }
+    let projected_style_identity = paint_style as *const ComputedStyle as usize;
     let zoomed_paint_style = crate::internal::css_zoom::ZoomedStyle(paint_style);
     let paint_style = zoomed_paint_style.as_ref();
     output.has_source = true;
@@ -1063,9 +1068,20 @@ fn ExportProperties(
     } else {
         unsafe { &*effective_style }
     };
+    let exported_style_key = (
+        native_paint_style as *const NativeComputedStyle as usize,
+        projected_style_identity,
+    );
+    let cached_style = exported_styles
+        .as_deref()
+        .and_then(|styles| styles.get(&exported_style_key))
+        .cloned();
+    let used_cached_style = cached_style.is_some();
     if purpose == LayoutUpdateKind::Layout {
         output.style =
             crate::internal::boundary::native_paint_style::ExportGeometryStyle(native_paint_style);
+    } else if let Some(style) = cached_style {
+        output.style = style;
     } else {
         output.style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
             native_paint_style,
@@ -1125,6 +1141,15 @@ fn ExportProperties(
                 layer.image_state = crate::internal::paint_input::PaintMaskImageState::kInvalid;
             }
         }
+        output.style.applied_text_decorations = ExportAppliedTextDecorations(native_paint_style);
+        // Layout-dependent transforms are resolved below per object. Every
+        // other style payload is immutable and can be shared by all physical
+        // and inline fragments that reference the same native/projected pair.
+        if !native_paint_style.HasOffset() {
+            if let Some(styles) = exported_styles.as_deref_mut() {
+                styles.insert(exported_style_key, output.style.clone());
+            }
+        }
     }
     if native_paint_style.HasOffset() && !layout_box.is_null() {
         let box_model = DynamicTo::<LayoutBoxModelObject>(object);
@@ -1135,7 +1160,7 @@ fn ExportProperties(
             );
         }
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if purpose == LayoutUpdateKind::Paint && !used_cached_style && native_paint_style.HasOffset() {
         output.style.applied_text_decorations = ExportAppliedTextDecorations(native_paint_style);
     }
     output.margin = paint_style.margin;
@@ -1673,7 +1698,7 @@ fn ExportGlyphRuns(item: &FragmentItem, paint: &mut PaintProperties) {
         optical_size,
         baseline,
         paint.writing_mode,
-        &mut paint.glyph_runs,
+        Arc::make_mut(&mut paint.glyph_runs),
     );
     let smoothing = match item.Style().GetFontDescription().FontSmoothing() {
         FontSmoothingMode::kNoSmoothing => FontSmoothing::kNone,
@@ -1681,7 +1706,7 @@ fn ExportGlyphRuns(item: &FragmentItem, paint: &mut PaintProperties) {
         FontSmoothingMode::kSubpixelAntialiased => FontSmoothing::kSubpixelAntialiased,
         FontSmoothingMode::kAutoSmoothing => FontSmoothing::kAuto,
     };
-    for run in &mut paint.glyph_runs {
+    for run in Arc::make_mut(&mut paint.glyph_runs) {
         run.font_smoothing = smoothing;
     }
 }
@@ -2778,11 +2803,129 @@ fn ExportCollapsedTablePaintData(
     paint.collapsed_table = Some(Arc::new(data));
 }
 
-// cpp: layoutng/internal/boundary/layout_boundary.cc:1704-1734
+#[derive(Clone, Copy)]
+struct PaintCullRect {
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+}
+
+impl PaintCullRect {
+    fn intersects_vertical_range(&self, top: f64, bottom: f64) -> bool {
+        top < self.bottom && self.top < bottom
+    }
+
+    fn intersects_horizontal_range(&self, left: f64, right: f64) -> bool {
+        left < self.right && self.left < right
+    }
+}
+
+fn AddPhysicalOffsets(a: PhysicalOffset, b: PhysicalOffset) -> PhysicalOffset {
+    PhysicalOffset {
+        left: a.left + b.left,
+        top: a.top + b.top,
+    }
+}
+
+fn SubtractScrollOffset(offset: PhysicalOffset, scroll: Offset) -> PhysicalOffset {
+    PhysicalOffset {
+        left: offset.left - LayoutUnit::from_f64(scroll.x),
+        top: offset.top - LayoutUnit::from_f64(scroll.y),
+    }
+}
+
+fn ShouldCullPhysicalFragment(
+    fragment: &PhysicalFragment,
+    absolute_offset: PhysicalOffset,
+    cull: PaintCullRect,
+    owners: &FragmentOwners,
+) -> bool {
+    if !fragment.IsBox() {
+        return false;
+    }
+    let object = fragment.GetLayoutObject();
+    if !object.is_null() && owners.uncullable_objects.contains(&object) {
+        return false;
+    }
+    let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
+    let box_fragment = unsafe { &*box_fragment };
+    let overflow = if box_fragment.IsInkOverflowComputed() {
+        box_fragment.InkOverflowRect()
+    } else {
+        box_fragment.ScrollableOverflow()
+    };
+    let left = Number(absolute_offset.left + overflow.offset.left);
+    let top = Number(absolute_offset.top + overflow.offset.top);
+    let right = left + Number(overflow.size.width);
+    let bottom = top + Number(overflow.size.height);
+    !(cull.intersects_horizontal_range(left, right) && cull.intersects_vertical_range(top, bottom))
+}
+
+fn BuildPaintCullRect(root: &mut LayoutObject, space: &ConstraintSpace) -> Option<PaintCullRect> {
+    if space.printing {
+        return None;
+    }
+    let viewport = space.viewport?;
+    let root_box = DynamicTo::<LayoutBox>(root as *mut LayoutObject);
+    if root_box.is_null() {
+        return None;
+    }
+    let area = unsafe { &*root_box }.GetScrollableArea();
+    let (scroll_x, scroll_y) = if area.is_null() {
+        (0.0, 0.0)
+    } else {
+        let offset = unsafe { &*area }.GetScrollOffset();
+        (offset.x() as f64, offset.y() as f64)
+    };
+    let zoom = space.layout_zoom_factor.max(f64::MIN_POSITIVE);
+    // Chromium expands the root scrolling cull rect by 4000 CSS pixels. The
+    // boundary tree is Rechrom's paint projection of the complete native
+    // LayoutNG result, so use the same interest distance here.
+    let outset = 4000.0 * zoom;
+    Some(PaintCullRect {
+        left: scroll_x - outset,
+        top: scroll_y - outset,
+        right: scroll_x + viewport.size.width as f64 * zoom + outset,
+        bottom: scroll_y + viewport.size.height as f64 * zoom + outset,
+    })
+}
+
+fn MarkUncullablePaintAncestors(objects: &[*mut LayoutObject]) -> HashSet<*const LayoutObject> {
+    let mut result = HashSet::new();
+    for &object in objects {
+        let current = unsafe { &*object };
+        let style = current.StyleRef();
+        let escapes_normal_flow = current.IsFixedPositioned()
+            || current.IsStickyPositioned()
+            || current.IsOutOfFlowPositioned()
+            || current.IsSVG()
+            || current.HasTransformRelatedProperty()
+            || current.HasPerspective()
+            || style.Filter().HasFilterThatMovesPixels()
+            || style.HasBackdropFilter();
+        if !escapes_normal_flow {
+            continue;
+        }
+        let mut ancestor = object;
+        while !ancestor.is_null() {
+            if !result.insert(ancestor as *const LayoutObject) {
+                break;
+            }
+            ancestor = unsafe { &*ancestor }.Parent();
+        }
+    }
+    result
+}
+
 #[derive(Default)]
 struct FragmentOwners {
     paint: HashSet<*const PhysicalBoxFragment>,
     instances: HashMap<*const PhysicalBoxFragment, u64>,
+    exported_styles: ExportedStyleCache,
+    cached_caret_positions: CaretPositionCache,
+    exported_caret_positions: CaretPositionCache,
+    uncullable_objects: HashSet<*const LayoutObject>,
 }
 impl FragmentOwners {
     fn insert(&mut self, native: *const PhysicalBoxFragment, instance: u64) -> bool {
@@ -2866,6 +3009,9 @@ fn AppendSVGChildren(
                 output.push(ExportFragment(
                     child_fragment,
                     child_offset,
+                    child_offset,
+                    None,
+                    false,
                     sources,
                     style_sources,
                     resources,
@@ -3033,6 +3179,8 @@ fn ExportInlineItem(
     item: &FragmentItem,
     fragment_items: &layoutng_fragment_tree::fragment_items::FragmentItems,
     parent_offset: PhysicalOffset,
+    container_absolute_offset: PhysicalOffset,
+    cull: Option<PaintCullRect>,
     containing_line_offset: Option<PhysicalOffset>,
     containing_line_height: Option<LayoutUnit>,
     sources: &SourceMap,
@@ -3062,6 +3210,7 @@ fn ExportInlineItem(
         effective_style,
         resources,
         purpose,
+        Some(&mut paint_state_owners.exported_styles),
     );
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
@@ -3129,24 +3278,55 @@ fn ExportInlineItem(
                 let text = item.Text(fragment_items);
                 let view = item.TextShapeResult();
                 let shape = (!view.is_null()).then(|| unsafe { &*view }.CreateShapeResult());
-                for offset in item.StartOffset()..=item.EndOffset() {
-                    let position = if let Some(shape) = shape {
-                        use font_engine::fonts::shaping::shape_result_types::AdjustMidCluster;
-                        LayoutUnit::FromFloatRound(
-                            unsafe { &*shape }.CaretPositionForOffset(
-                                offset - item.StartOffset(),
-                                &text,
-                                AdjustMidCluster::kToEnd,
-                            ) * item.GetTextFitScale(),
-                        )
-                    } else {
-                        item.CaretInlinePositionForOffset(text.clone(), offset)
-                    };
-                    output
-                        .paint
-                        .text_caret_positions
-                        .push((offset, Number(position)));
+                let mut text_hash = 0xcbf29ce484222325u64;
+                for &unit in text.Span16() {
+                    text_hash ^= u64::from(unit);
+                    text_hash = text_hash.wrapping_mul(0x100000001b3);
                 }
+                let text_fit_scale = item.GetTextFitScale();
+                let shape_width = if view.is_null() {
+                    0.0
+                } else {
+                    unsafe { &*view }.Width()
+                };
+                let caret_key = (
+                    object as usize,
+                    item.StartOffset(),
+                    item.EndOffset(),
+                    text_fit_scale.to_bits(),
+                    shape_width.to_bits(),
+                    text_hash,
+                );
+                let positions = if let Some(cached) = paint_state_owners
+                    .cached_caret_positions
+                    .get(&caret_key)
+                    .cloned()
+                {
+                    cached
+                } else {
+                    let mut positions =
+                        Vec::with_capacity((item.EndOffset() - item.StartOffset()) as usize + 1);
+                    for offset in item.StartOffset()..=item.EndOffset() {
+                        let position = if let Some(shape) = shape {
+                            use font_engine::fonts::shaping::shape_result_types::AdjustMidCluster;
+                            LayoutUnit::FromFloatRound(
+                                unsafe { &*shape }.CaretPositionForOffset(
+                                    offset - item.StartOffset(),
+                                    &text,
+                                    AdjustMidCluster::kToEnd,
+                                ) * text_fit_scale,
+                            )
+                        } else {
+                            item.CaretInlinePositionForOffset(text.clone(), offset)
+                        };
+                        positions.push((offset, Number(position)));
+                    }
+                    Arc::new(positions)
+                };
+                paint_state_owners
+                    .exported_caret_positions
+                    .insert(caret_key, Arc::clone(&positions));
+                output.paint.text_caret_positions = positions;
             }
         }
         ItemType::kLine => {
@@ -3159,6 +3339,12 @@ fn ExportInlineItem(
             if !box_fragment.is_null() {
                 let box_fragment = unsafe { &*box_fragment };
                 ExportBoxPaintGeometry(box_fragment, &mut output.paint);
+                if purpose == LayoutUpdateKind::Paint
+                    && cull.is_some()
+                    && output.paint.scroll_container.is_some()
+                {
+                    output.paint_cull_scroll_offset = Some(output.paint.scroll_offset);
+                }
                 if purpose == LayoutUpdateKind::Paint {
                     ExportOverflowClipMargin(box_fragment, &mut output.paint);
                 }
@@ -3200,6 +3386,8 @@ fn ExportInlineItem(
                     ExportColumnRulePaintData(box_fragment, &mut output.paint);
                 }
                 if item.DescendantsCount() <= 1 {
+                    let item_absolute_offset =
+                        AddPhysicalOffsets(container_absolute_offset, rect.offset);
                     let nested_items = box_fragment.Items();
                     for child in box_fragment.Children() {
                         if !child.is_present() || (!nested_items.is_null() && child.IsLineBox()) {
@@ -3208,6 +3396,15 @@ fn ExportInlineItem(
                         output.children.push(ExportFragment(
                             child,
                             child.Offset(),
+                            AddPhysicalOffsets(
+                                SubtractScrollOffset(
+                                    item_absolute_offset,
+                                    output.paint.scroll_offset,
+                                ),
+                                child.Offset(),
+                            ),
+                            cull,
+                            false,
                             sources,
                             style_sources,
                             resources,
@@ -3229,6 +3426,9 @@ fn ExportInlineItem(
                                 index,
                                 span.len(),
                                 PhysicalOffset::default(),
+                                item_absolute_offset,
+                                cull,
+                                false,
                                 None,
                                 None,
                                 &mut output.children,
@@ -3271,6 +3471,9 @@ fn AppendInlineItemTree(
     index: usize,
     limit: usize,
     parent_offset: PhysicalOffset,
+    container_absolute_offset: PhysicalOffset,
+    cull: Option<PaintCullRect>,
+    mut containing_line_culled: bool,
     mut containing_line_offset: Option<PhysicalOffset>,
     mut containing_line_height: Option<LayoutUnit>,
     output: &mut Vec<FragmentNode>,
@@ -3285,16 +3488,41 @@ fn AppendInlineItemTree(
 ) -> usize {
     assert!(index < limit);
     let item = &items[index];
+    let subtree_size = 1_usize.max(item.DescendantsCount() as usize);
+    let subtree_end = limit.min(index + subtree_size);
+    let starts_line = containing_line_offset.is_none() && item.Type() == ItemType::kLine;
+    if purpose == LayoutUpdateKind::Paint && starts_line {
+        if let Some(cull) = cull {
+            let rect = item.RectInContainerFragment();
+            let outside = if item.IsHorizontal() {
+                let top = Number(container_absolute_offset.top + rect.offset.top);
+                !cull.intersects_vertical_range(top, top + Number(rect.size.height))
+            } else {
+                let left = Number(container_absolute_offset.left + rect.offset.left);
+                !cull.intersects_horizontal_range(left, left + Number(rect.size.width))
+            };
+            let has_escaping_descendant = items[index..subtree_end].iter().any(|descendant| {
+                let object = descendant.GetLayoutObject();
+                !object.is_null() && paint_state_owners.uncullable_objects.contains(&object)
+            });
+            if outside && !has_escaping_descendant {
+                containing_line_culled = true;
+            }
+        }
+    }
+    if containing_line_culled && matches!(item.Type(), ItemType::kText | ItemType::kGeneratedText) {
+        return subtree_end;
+    }
     if containing_line_offset.is_none() && item.Type() == ItemType::kLine {
         containing_line_offset = Some(*item.OffsetInContainerFragment());
         containing_line_height = Some(item.Size().height);
     }
-    let subtree_size = 1_usize.max(item.DescendantsCount() as usize);
-    let subtree_end = limit.min(index + subtree_size);
     let mut node = ExportInlineItem(
         item,
         fragment_items,
         parent_offset,
+        container_absolute_offset,
+        cull,
         containing_line_offset,
         containing_line_height,
         sources,
@@ -3314,6 +3542,9 @@ fn AppendInlineItemTree(
             child_index,
             subtree_end,
             *item.OffsetInContainerFragment(),
+            container_absolute_offset,
+            cull,
+            containing_line_culled,
             containing_line_offset,
             containing_line_height,
             &mut node.children,
@@ -3335,6 +3566,9 @@ fn AppendInlineItemTree(
 fn ExportFragment(
     fragment: &PhysicalFragment,
     offset: PhysicalOffset,
+    absolute_offset: PhysicalOffset,
+    cull: Option<PaintCullRect>,
+    is_projection_root: bool,
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
@@ -3362,6 +3596,7 @@ fn ExportFragment(
         effective_style,
         resources,
         purpose,
+        Some(&mut paint_state_owners.exported_styles),
     );
     output.paint.display_item_fragment = display_item_fragment;
     output.paint.hidden =
@@ -3424,6 +3659,12 @@ fn ExportFragment(
     output.paint.display_item_fragment = display_item_fragment;
     output.fragmentainer_instance_id = fragmentainer_instance_id;
     ExportBoxPaintGeometry(box_fragment, &mut output.paint);
+    if purpose == LayoutUpdateKind::Paint
+        && cull.is_some()
+        && output.paint.scroll_container.is_some()
+    {
+        output.paint_cull_scroll_offset = Some(output.paint.scroll_offset);
+    }
     if purpose == LayoutUpdateKind::Paint {
         ExportOverflowClipMargin(box_fragment, &mut output.paint);
     }
@@ -3460,13 +3701,31 @@ fn ExportFragment(
     }
     output.children.reserve(box_fragment.Children().len());
     let items = box_fragment.Items();
+    // The top-level cull rect is expressed in the root scroller's contents
+    // coordinates, so retain that scroll there. Descendant scrollers map
+    // their contents back into the same coordinate space by subtracting the
+    // live local scroll translation before culling.
+    let contents_absolute_offset = if is_projection_root {
+        absolute_offset
+    } else {
+        SubtractScrollOffset(absolute_offset, output.paint.scroll_offset)
+    };
     for child in box_fragment.Children() {
         if !child.is_present() || (!items.is_null() && child.IsLineBox()) {
+            continue;
+        }
+        let child_absolute_offset = AddPhysicalOffsets(contents_absolute_offset, child.Offset());
+        if cull.is_some_and(|cull| {
+            ShouldCullPhysicalFragment(child, child_absolute_offset, cull, paint_state_owners)
+        }) {
             continue;
         }
         output.children.push(ExportFragment(
             child,
             child.Offset(),
+            child_absolute_offset,
+            cull,
+            false,
             sources,
             style_sources,
             resources,
@@ -3488,6 +3747,9 @@ fn ExportFragment(
                 index,
                 span.len(),
                 PhysicalOffset::default(),
+                contents_absolute_offset,
+                cull,
+                false,
                 None,
                 None,
                 &mut output.children,
@@ -4955,8 +5217,9 @@ pub fn ExportLayoutObjectTree(
     root: &mut LayoutObject,
     result: &LayoutResult,
     space: &ConstraintSpace,
+    cache: &mut LayoutBoundaryExportCache,
 ) -> FragmentNode {
-    ExportObjectTree(root, result, space, LayoutUpdateKind::Paint)
+    ExportObjectTree(root, result, space, LayoutUpdateKind::Paint, cache)
 }
 
 fn ExportObjectTree(
@@ -4964,6 +5227,7 @@ fn ExportObjectTree(
     result: &LayoutResult,
     space: &ConstraintSpace,
     purpose: LayoutUpdateKind,
+    cache: &mut LayoutBoundaryExportCache,
 ) -> FragmentNode {
     let mut sources = SourceMap::new();
     let mut style_sources = StyleSourceMap::new();
@@ -5017,12 +5281,23 @@ fn ExportObjectTree(
         paints_opaque_base_background: !space.printing,
         viewport: space.viewport,
     });
-    let mut paint_state_owners = FragmentOwners::default();
+    let mut paint_state_owners = FragmentOwners {
+        exported_styles: std::mem::take(&mut cache.styles),
+        cached_caret_positions: std::mem::take(&mut cache.caret_positions),
+        uncullable_objects: MarkUncullablePaintAncestors(&objects),
+        ..FragmentOwners::default()
+    };
     let mut next_fragment_instance_id = 1;
     let mut next_fragmentainer_instance_id = 1;
+    let paint_cull = (purpose == LayoutUpdateKind::Paint)
+        .then(|| BuildPaintCullRect(root, space))
+        .flatten();
     let mut output = ExportFragment(
         result.GetPhysicalFragment(),
         PhysicalOffset::default(),
+        PhysicalOffset::default(),
+        paint_cull,
+        true,
         &sources,
         &style_sources,
         &resources,
@@ -5037,10 +5312,17 @@ fn ExportObjectTree(
         ExportCanvasBackground(root, &objects, &mut output);
         ExportGlobalMainThreadScrollFacts(root, &objects, &mut output);
     }
-    output.inline_geometry = ExportInlineGeometry(&objects, &paint_state_owners);
+    // Screen CSSOM geometry is served from LayoutOutput's native fragment
+    // owners. Keeping this legacy paint-tree index would force every offscreen
+    // geometry container into the paint projection and defeat culling.
+    if paint_cull.is_none() {
+        output.inline_geometry = ExportInlineGeometry(&objects, &paint_state_owners);
+    }
     ResolveLogicalParentOccurrences(&mut output);
     if purpose == LayoutUpdateKind::Paint {
         ExportInlineStitchedDecorations(&mut output);
     }
+    cache.styles = paint_state_owners.exported_styles;
+    cache.caret_positions = paint_state_owners.exported_caret_positions;
     output
 }

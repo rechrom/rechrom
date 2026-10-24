@@ -966,6 +966,10 @@ impl ProductionMatchedPropertiesCache {
         self.0.borrow_mut().Clear();
     }
 
+    pub(crate) fn ClearViewportDependent(&self) {
+        self.0.borrow_mut().ClearViewportDependent();
+    }
+
     pub(crate) fn Clean(&self) {
         static PROFILE_RULES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let _trace = (*PROFILE_RULES.get_or_init(|| {

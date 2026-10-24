@@ -206,6 +206,10 @@ pub struct PageRenderPipeline {
     // Polls to reach ScheduledActionDraw. Keep those Polls runnable, then hold
     // later input work for the next physical interval once a frame is sent.
     input_frame_pump_pending: bool,
+    // A budget-limited Poll may leave already runnable typed impl tasks. This
+    // is narrower than `work_pending`, which input also uses to describe work
+    // that an executor or the next BeginFrame will wake independently.
+    owner_turn_pending: bool,
     // A main-frame input remains strongly identified until cc consumes it at
     // ScheduledActionCommit. Drawing and FrameSink submission are allowed to
     // follow asynchronously after this slot is released.
@@ -421,6 +425,7 @@ impl PageRenderPipeline {
                 work_pending: false,
                 input_frame_issued_since_physical: false,
                 input_frame_pump_pending: false,
+                owner_turn_pending: false,
                 pending: None,
                 presentable: None,
             },
@@ -798,13 +803,11 @@ impl PageRenderPipeline {
     }
 
     pub fn NeedsPump(&self) -> bool {
-        // Runnable executor callbacks wake the impl sequence through
-        // WakingExecutor. `work_pending` also includes scheduler work which is
-        // deliberately blocked on the next physical BeginFrame; treating that
-        // state as an immediate wake spins Pump continuously between display
-        // pulses and starves input/presentation. Only the synthetic input
-        // BeginFrame needs an explicit follow-up Poll here.
-        self.input_frame_pump_pending
+        // Keep posting owner turns only when an actual Poll exhausted its
+        // budget with runnable typed tasks left. Input's broader work bit can
+        // also mean that a task-runner callback or physical BeginFrame will
+        // wake us later, and must not create a busy Pump loop.
+        self.input_frame_pump_pending || self.owner_turn_pending
     }
 
     /// Notify cc that the Page needs a main-frame lifecycle before that
@@ -900,6 +903,7 @@ impl PageRenderPipeline {
         result.submitted = submitted;
         self.input_frame_issued_since_physical |= submitted;
         self.input_frame_pump_pending = input_frame_pump && !submitted && self.work_pending;
+        self.owner_turn_pending = self.work_pending;
         Ok(result)
     }
 
@@ -2466,7 +2470,7 @@ impl PageState {
                 // A changed initial containing block requires layout even
                 // when no viewport-dependent computed style changes.
                 if viewport_changed {
-                    self.document.borrow_mut().InvalidateLayout();
+                    self.document.borrow_mut().InvalidateLayoutGeometry();
                 }
                 self.InvalidateStyle();
             }

@@ -65,10 +65,13 @@ impl LayoutAssembly {
             .boundary
             .create_environment
             .expect("layout environment")(root, space);
-        let snapshot =
-            self.boundary
-                .export_tree
-                .expect("fragment snapshot exporter")(root, unsafe { &*result }, space);
+        let mut cache = crate::layout_boundary_support::LayoutBoundaryExportCache::default();
+        let snapshot = self
+            .boundary
+            .export_tree
+            .expect("fragment snapshot exporter")(
+            root, unsafe { &*result }, space, &mut cache
+        );
         environment.Commit(root);
         snapshot
     }
@@ -103,6 +106,7 @@ impl LayoutAssembly {
             self.boundary
                 .create_environment
                 .expect("layout environment")(unsafe { &mut *environment_root }, space);
+        let mut cache = crate::layout_boundary_support::LayoutBoundaryExportCache::default();
         let snapshot = self
             .boundary
             .export_tree
@@ -110,6 +114,7 @@ impl LayoutAssembly {
             unsafe { &mut *subtree_root },
             unsafe { &*result },
             space,
+            &mut cache,
         );
         environment.Commit(unsafe { &mut *environment_root });
         snapshot

@@ -213,6 +213,14 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     fragments: &mut FragmentNode,
     scroll_only: bool,
 ) -> Option<ScrollLayoutUpdate> {
+    // Source: platform/graphics/paint/cull_rect.cc. Chromium keeps the old
+    // expanded cull rect until the scroll delta reaches 512 CSS pixels, then
+    // CullRectUpdater refreshes it and forces repaint if the painted extent
+    // changes. Rechrom culls while projecting native fragments, so request a
+    // fresh projection from the unchanged LayoutResult at the same boundary.
+    let refresh_cull_rect = changes
+        .iter()
+        .any(|&(id, offset)| fragments.PaintCullRectHasScrolledEnough(id, offset));
     fn contains(node: &FragmentNode, id: u64) -> bool {
         node.node_id == id || node.children.iter().any(|child| contains(child, id))
     }
@@ -235,7 +243,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
             engine.ApplyMutation(mutation);
         });
     }
-    engine.UpdateScrollLayout(fragments, scroll_only)
+    engine.UpdateScrollLayout(fragments, scroll_only, refresh_cull_rect)
 }
 
 #[cfg(test)]
@@ -248,6 +256,7 @@ mod tests {
     };
     use layoutng_assembly::layout_engine::LayoutMutation;
     use std::collections::BTreeMap;
+
     fn resolve(owner: &mut DOM) {
         resolve_for(owner, 800, 600);
     }

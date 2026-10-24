@@ -446,6 +446,7 @@ pub struct LayoutEngine {
     algorithms_: LayoutAlgorithmSet,
     objects_: LayoutObjectFactorySet,
     boundary_: LayoutBoundarySupport,
+    boundary_export_cache_: crate::layout_boundary_support::LayoutBoundaryExportCache,
 }
 
 impl LayoutEngine {
@@ -465,6 +466,7 @@ impl LayoutEngine {
             algorithms_: assembly.algorithms,
             objects_: assembly.objects,
             boundary_: assembly.boundary,
+            boundary_export_cache_: Default::default(),
         }
     }
 
@@ -521,6 +523,17 @@ impl LayoutEngine {
             if same {
                 return true;
             }
+        }
+        if !matches!(
+            &mutation,
+            LayoutMutation::Constraints(_)
+                | LayoutMutation::RetainTree
+                | LayoutMutation::ScrollOffset { .. }
+                | LayoutMutation::Editing { .. }
+                | LayoutMutation::SelectionPaint { .. }
+                | LayoutMutation::EditingState(_)
+        ) {
+            self.boundary_export_cache_.Clear();
         }
         // Native topology, style, constraints and layout results may change at
         // all other mutation entries. Never keep borrowed native pointers or
@@ -830,9 +843,10 @@ impl LayoutEngine {
         // globally unique revisions instead of reusing a failed pass's basis.
         let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
         let exported = retained_fragments.is_none();
+        let constraints = self.constraints_.clone();
         let layout_result = self.RunLayout(
             unsafe { &mut *root },
-            &self.constraints_,
+            &constraints,
             purpose == LayoutUpdateKind::Paint && exported,
             purpose,
         );
@@ -1141,9 +1155,10 @@ impl LayoutEngine {
         // Retained scroll refresh is owned by the caller and can mutate inputs
         // without exporting. Its next ordinary layout must establish a basis.
         self.pre_paint_inputs_.invalidate();
+        let constraints = self.constraints_.clone();
         let _ = self.RunLayout(
             unsafe { &mut *root },
-            &self.constraints_,
+            &constraints,
             false,
             LayoutUpdateKind::Paint,
         );
@@ -1157,9 +1172,11 @@ impl LayoutEngine {
         &mut self,
         fragments: &mut FragmentNode,
         scroll_only: bool,
+        refresh_cull_rect: bool,
     ) -> Option<ScrollLayoutUpdate> {
         let mut trace = browser_tracing::span("layout", "LayoutEngine.UpdateScrollLayout");
         trace.set("offset_only", scroll_only as u8 as f64);
+        trace.set("refresh_cull_rect", refresh_cull_rect as u8 as f64);
         trace.set("pending_scrolls", self.pending_scroll_ids_.len() as f64);
         if self.tree_.is_none() {
             return None;
@@ -1180,6 +1197,24 @@ impl LayoutEngine {
             boundary: self.boundary_,
         };
         if scroll_only && !unsafe { &*root }.NeedsLayout() && !before.is_null() {
+            if refresh_cull_rect {
+                // Chromium's CullRectUpdater keeps native layout intact and
+                // invalidates Paint when a composited scroller crosses its
+                // hysteresis boundary. Re-export the boundary projection from
+                // that same LayoutResult so newly relevant subtrees enter
+                // PrePaint without a Style or Layout pass.
+                let mut exported =
+                    assembly.ExportFragments(unsafe { &mut *root }, &self.constraints_);
+                self.pre_paint_inputs_.update(&mut exported);
+                self.scroll_paint_index_ = Some({
+                    let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
+                    ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &exported)
+                });
+                *fragments = exported;
+                self.pending_scroll_ids_.clear();
+                trace.set("paint_projection_refreshed", 1.0);
+                return Some(ScrollLayoutUpdate::RefreshedLayout);
+            }
             let mut heap = LayoutHeapScope::new();
             let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
             let refreshed = self.scroll_paint_index_.as_ref().is_some_and(|index| {
@@ -1212,7 +1247,7 @@ impl LayoutEngine {
     // cpp: layoutng/layout_engine.h:24-25
     // cpp: layoutng/layout_engine.cc:20-73
     fn RunLayout(
-        &self,
+        &mut self,
         root: &mut LayoutObject,
         space: &ConstraintSpace,
         export: bool,
@@ -1371,7 +1406,12 @@ impl LayoutEngine {
         // pass as the native result, before committing the environment.
         let fragments = export_tree.map(|export_tree| {
             let _trace = browser_tracing::span("layout", "LayoutEngine.ExportFragments");
-            export_tree(root, unsafe { &*result }, space)
+            export_tree(
+                root,
+                unsafe { &*result },
+                space,
+                &mut self.boundary_export_cache_,
+            )
         });
         if purpose == LayoutUpdateKind::Layout {
             let mut objects = Vec::new();

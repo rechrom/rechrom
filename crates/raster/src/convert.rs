@@ -802,12 +802,12 @@ mod font_identity_tests {
             }],
             synthetic_bold: true,
             synthetic_italic: true,
-            glyphs: vec![PaintGlyph {
+            glyphs: std::sync::Arc::new(vec![PaintGlyph {
                 id: 513,
                 character_index: 4,
                 offset: Offset { x: 2.5, y: -1.0 },
                 ..Default::default()
-            }],
+            }]),
             ..Default::default()
         };
         let artifact = PaintArtifact {

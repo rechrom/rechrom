@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 
 use layoutng_assembly::internal::paint_input::PaintBlendMode;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::border_shape_utils::UniformCornerRadius;
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
@@ -202,6 +204,9 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
 // cpp: paint/paint_context.h:8-26
 pub struct PaintContext<'o> {
     output: &'o mut PaintArtifact,
+    previous: Option<Arc<PaintArtifact>>,
+    cached_items: HashMap<DisplayItemId, Vec<usize>>,
+    pub(crate) cached_display_items: usize,
     pub(crate) caret: Option<crate::paint_engine::CaretPosition>,
     pub(crate) document_selection: Option<layoutng_assembly::editing_state::DocumentSelection>,
     pub(crate) caret_local_rect: Option<layoutng_assembly::caret::geometry::LocalCaretRect>,
@@ -218,6 +223,7 @@ pub struct PaintContext<'o> {
         RasterEffectOutset,
         bool,
         Offset,
+        Option<usize>,
     )>,
     next_property_id: u64,
 }
@@ -230,6 +236,9 @@ impl<'o> PaintContext<'o> {
     pub fn new(output: &'o mut PaintArtifact) -> Self {
         Self {
             output,
+            previous: None,
+            cached_items: HashMap::new(),
+            cached_display_items: 0,
             caret: None,
             document_selection: None,
             caret_local_rect: None,
@@ -243,8 +252,33 @@ impl<'o> PaintContext<'o> {
         output: &'o mut PaintArtifact,
         editing: crate::paint_engine::EditingPaintState,
     ) -> Self {
+        Self::WithEditingAndCache(output, editing, None)
+    }
+
+    pub(crate) fn WithEditingAndCache(
+        output: &'o mut PaintArtifact,
+        editing: crate::paint_engine::EditingPaintState,
+        previous: Option<Arc<PaintArtifact>>,
+    ) -> Self {
+        let mut cached_items: HashMap<DisplayItemId, Vec<usize>> = HashMap::new();
+        if let Some(artifact) = &previous {
+            for (index, item) in artifact.display_items.iter().enumerate() {
+                if item.is_cacheable
+                    && !item.is_tombstone
+                    && item.kind == RecordedDisplayItemKind::Drawing
+                {
+                    cached_items.entry(item.id).or_default().push(index);
+                }
+            }
+            for indices in cached_items.values_mut() {
+                indices.reverse();
+            }
+        }
         Self {
             output,
+            previous,
+            cached_items,
+            cached_display_items: 0,
             caret: editing.caret,
             document_selection: editing.document_selection,
             caret_local_rect: None,
@@ -268,6 +302,100 @@ impl<'o> PaintContext<'o> {
     }
     pub(crate) fn SetCaretGeometry(&mut self, geometry: crate::paint_engine::CaretGeometry) {
         self.output.caret = Some(geometry);
+    }
+
+    // paint_controller.cc:UseCachedItemIfPossible. A valid cacheable client
+    // moves its old semantic DrawingDisplayItem into the new artifact while
+    // the current PrePaint property state is retained by the new PaintChunk.
+    pub(crate) fn UseCachedDrawingIfPossible(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        item_type: DisplayItemIdType,
+    ) -> bool {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
+        let id = DisplayItemId {
+            client_id: fragment.paint.display_item_client_id,
+            r#type: item_type,
+            fragment: fragment.paint.display_item_fragment,
+        };
+        self.UseCachedDrawingWithClient(
+            id,
+            DisplayItemClientInfo::from_fragment(fragment),
+            Some((
+                fragment.paint.display_item_client_owner_node_id,
+                fragment.paint.display_item_client_debug_name.clone(),
+            )),
+        )
+    }
+
+    pub(crate) fn UseCachedDrawingWithClient(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        debug: Option<(i32, Arc<str>)>,
+    ) -> bool {
+        if !client.is_cacheable
+            || client.is_just_created
+            || !matches!(
+                client.invalidation_reason,
+                Some(foundation::PaintInvalidationReason::kNone)
+            )
+        {
+            return false;
+        }
+        let Some(index) = self
+            .cached_items
+            .get_mut(&id)
+            .and_then(|indices| indices.pop())
+        else {
+            return false;
+        };
+        let Some(previous) = &self.previous else {
+            return false;
+        };
+        let old = &previous.display_items[index];
+        let old_record = &previous.items[old.record_begin..old.record_end];
+        let record_begin = self.output.items.len();
+        Arc::make_mut(&mut self.output.items).extend_from_slice(old_record);
+        let record_end = self.output.items.len();
+        if let Some((owner, name)) = debug {
+            self.output
+                .client_owner_node_ids
+                .insert(id.client_id as usize, owner);
+            self.output
+                .client_debug_names
+                .insert(id.client_id as usize, name);
+        }
+        self.chunker.increment_display_item(
+            &mut self.output.chunks,
+            id,
+            client,
+            old.visual_rect,
+            old.draws_content,
+            old.raster_effect_outset,
+            old.visual_rect_is_accurate,
+            CalculateRectKnownToBeOpaqueForRecord(old.visual_rect, old_record),
+        );
+        if old.draws_content {
+            self.chunker.UpdateDrawingDerivedData(
+                &mut self.output.chunks,
+                DrawingBackgroundColor(id, old.visual_rect, old_record),
+                old_record
+                    .iter()
+                    .any(|op| op.r#type == DisplayItemType::kDrawGlyphRun),
+                old.visual_rect,
+            );
+        }
+        let mut moved = old.clone();
+        moved.paint_invalidation_reason = Some(foundation::PaintInvalidationReason::kNone);
+        moved.record_begin = record_begin;
+        moved.record_end = record_end;
+        self.output.display_items.push(moved);
+        self.cached_display_items += 1;
+        true
     }
 
     // cpp: paint/paint_context.h:22
@@ -406,6 +534,7 @@ impl<'o> PaintContext<'o> {
             RasterEffectOutset::kNone,
             true,
             delta,
+            None,
         ));
     }
 
@@ -434,6 +563,7 @@ impl<'o> PaintContext<'o> {
             RasterEffectOutset::kNone,
             true,
             delta,
+            None,
         ));
     }
 
@@ -450,6 +580,7 @@ impl<'o> PaintContext<'o> {
             raster_effect_outset,
             visual_rect_is_accurate,
             delta,
+            _cached_item,
         ) = self
             .drawing_recorder
             .take()

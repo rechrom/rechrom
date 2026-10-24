@@ -40,6 +40,105 @@ fn display(owner: &dom::DOM, index: usize) -> EDisplay {
     unsafe { &*style.native_style.Get() }.Display()
 }
 
+#[test]
+fn viewport_resize_retains_unaffected_styles_until_media_result_changes() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style media=screen>\
+         #sized{width:10vw}\
+         #retained{height:17px}\
+         .unrelated::part(label){height:19px}\
+         @media(min-width:500px){#breakpoint{width:80px}}\
+         </style><div id=sized></div><div id=retained></div><div id=breakpoint></div>",
+    );
+    let sized = node(&owner, "sized");
+    let retained = node(&owner, "retained");
+    let breakpoint = node(&owner, "breakpoint");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(width(&owner, sized), 80.0);
+    assert!(unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(sized)
+            .unwrap()
+            .native_style
+            .Get()
+    }
+    .HasViewportUnits());
+    assert_eq!(width(&owner, breakpoint), 80.0);
+    let retained_style = owner.GetDocument().ResolvedStyleHandle(retained).unwrap();
+
+    engine.Update(&mut owner, &media(700.0), &[]).unwrap();
+    assert_eq!(width(&owner, sized), 70.0);
+    assert_eq!(width(&owner, breakpoint), 80.0);
+    assert!(std::sync::Arc::ptr_eq(
+        &retained_style,
+        &owner.GetDocument().ResolvedStyleHandle(retained).unwrap()
+    ));
+    assert!(owner.GetDocument().StyleState().stats.resolved_nodes < 3);
+
+    engine.Update(&mut owner, &media(400.0), &[]).unwrap();
+    assert_eq!(width(&owner, sized), 40.0);
+    assert!(unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(breakpoint)
+            .unwrap()
+            .native_style
+            .Get()
+    }
+    .Width()
+    .IsAuto());
+    assert!(std::sync::Arc::ptr_eq(
+        &retained_style,
+        &owner.GetDocument().ResolvedStyleHandle(retained).unwrap()
+    ));
+    let resolved = owner.GetDocument().StyleState().stats.resolved_nodes;
+    assert!(
+        resolved <= 3,
+        "resolved {resolved} nodes across one media-query change"
+    );
+}
+
+#[test]
+fn media_breakpoint_does_not_recalc_unrelated_matches_from_the_same_sheet() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut source = String::from(
+        "<!doctype html><style>.unrelated{height:17px}\
+         .bridge::part(label){padding:1px}\
+         @media(min-width:500px){#breakpoint{width:80px}}</style>\
+         <div id=breakpoint></div>",
+    );
+    for _ in 0..1_000 {
+        source.push_str("<div class=unrelated></div>");
+    }
+    let mut owner = html::html_parser::ParseHTML(&source);
+    let breakpoint = node(&owner, "breakpoint");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(width(&owner, breakpoint), 80.0);
+
+    engine.Update(&mut owner, &media(400.0), &[]).unwrap();
+    assert!(unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(breakpoint)
+            .unwrap()
+            .native_style
+            .Get()
+    }
+    .Width()
+    .IsAuto());
+    let resolved = owner.GetDocument().StyleState().stats.resolved_nodes;
+    assert!(
+        resolved <= 2,
+        "resolved {resolved} nodes for one breakpoint selector"
+    );
+}
+
 fn direction(owner: &dom::DOM, index: usize) -> TextDirection {
     let style = owner.GetDocument().ResolvedStyleFor(index).unwrap();
     unsafe { &*style.native_style.Get() }.Direction()

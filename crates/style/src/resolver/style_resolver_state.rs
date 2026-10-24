@@ -985,6 +985,10 @@ impl<'a, B: StyleResolverStateBackend> StyleResolverState<'a, B> {
         }
         self.length_conversion_flags_.replace(0)
     }
+    pub fn AddLengthConversionFlags(&self, flags: u32) {
+        self.length_conversion_flags_
+            .set(self.length_conversion_flags_.get() | flags);
+    }
     pub fn SubtractScrollbarsFromViewportUnits(&self, scrollbars: &gfx::Size) {
         self.MutableCssToLengthConversionData()
             .SubtractScrollbars(scrollbars);

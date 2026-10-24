@@ -3150,6 +3150,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // text_fragment_painter.cc:429-444: native SelfInkOverflowRect is
         // moved by the physical fragment offset, then enclosed to pixels.
         let in_drawing = self.context.borrow().InDrawingRecorder();
+        let drawing_type = DisplayItemIdType::PaintPhaseToDrawingType(phase);
+        if !in_drawing
+            && DrawingRecorder::UseCachedDrawingIfPossible(self.context, self.node, drawing_type)
+        {
+            return;
+        }
         let _drawing = (!in_drawing).then(|| {
             let mut visual_rect = FragmentVisualRect(self.node);
             // SkGlyphRunPainter's analytic/LCD coverage may touch the native
@@ -3168,12 +3174,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             visual_rect.y -= fringe;
             visual_rect.width += fringe * 2.0;
             visual_rect.height += fringe * 2.0;
-            DrawingRecorder::new(
-                self.context,
-                self.node,
-                DisplayItemIdType::PaintPhaseToDrawingType(phase),
-                visual_rect,
-            )
+            DrawingRecorder::new(self.context, self.node, drawing_type, visual_rect)
         });
         let apply_svg_transform = svg.is_some_and(|svg| svg.has_transform);
         if apply_svg_transform {
@@ -3317,7 +3318,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             );
         }
         let mut glyph_foregrounds = Vec::new();
-        for input_run in &fragment.paint.glyph_runs {
+        for input_run in fragment.paint.glyph_runs.iter() {
             let make_item = |color: Color,
                              shadow_offset: Offset,
                              blur_radius: f64,
@@ -3381,7 +3382,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     synthetic_italic: input_run.synthetic_italic,
                     font_smoothing: input_run.font_smoothing,
                     writing_mode: input_run.writing_mode,
-                    glyphs: input_run.glyphs.clone(),
+                    glyphs: Arc::new(input_run.glyphs.clone()),
                     ..Default::default()
                 };
                 if stroke_glyphs {
@@ -3979,7 +3980,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 synthetic_italic: run.synthetic_italic,
                 font_smoothing: run.font_smoothing,
                 writing_mode: run.writing_mode,
-                glyphs: run.glyphs.clone(),
+                glyphs: Arc::new(run.glyphs.clone()),
                 ..Default::default()
             };
             if fragment.paint.writing_mode != WritingMode::kHorizontalTb {
