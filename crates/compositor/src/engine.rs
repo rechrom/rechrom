@@ -198,6 +198,10 @@ pub struct CompositorOutput {
     pub frame: Option<NativeCompositorFrameSubmission>,
     pub main_thread_effects: Vec<CompositorMainThreadEffect>,
     pub needs_begin_frames: bool,
+    /// The current BeginFrame is holding its deadline open for late scroll
+    /// input. Embedders use this only to keep lower-priority owner-sequence
+    /// work behind the input task runner; it does not change cc's deadline.
+    pub waiting_for_scroll_deadline: bool,
     /// Typed impl tasks remain queued and require another owner-sequence turn.
     pub work_pending: bool,
     /// The accepted main commit has not yet reached Scheduler's COMMIT action.

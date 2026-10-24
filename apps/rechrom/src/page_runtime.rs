@@ -896,6 +896,23 @@ fn run_presenter(
 // The Page impl executor owns cc scheduling and input. Its move-only frame
 // output crosses the Page FrameSink queue to a Page-owned Viz/Renderer
 // sequence, so software drawing cannot stall impl-thread wheel dispatch.
+fn release_deferred_commit(
+    deferred: &mut Option<ImplCommand>,
+    queued: &mut VecDeque<ImplCommand>,
+    reason: f64,
+) {
+    if let Some(commit) = deferred.take() {
+        browser_tracing::instant(
+            "compositor",
+            "ImplCommitReleasedAfterLateInputWindow",
+            &[("reason", reason)],
+        );
+        // Put the older retained response before newly arrived commands. The
+        // regular compaction pass will then let a newer Commit supersede it.
+        queued.push_front(commit);
+    }
+}
+
 fn run_impl(
     receiver: mpsc::Receiver<ImplCommand>,
     self_sender: mpsc::Sender<ImplCommand>,
@@ -961,6 +978,13 @@ fn run_impl(
     // BeginFrame, later arrivals cannot overtake that frame. Chromium's
     // CompositorThreadEventQueue similarly closes a batch at BeginFrame.
     let mut tick_due_after_input = false;
+    // Chromium's compositor input task runner has priority over ordinary
+    // compositor work. Preserve that ordering while cc is explicitly holding
+    // the current BeginFrame open for late scroll input. The PaintArtifact is
+    // retained intact and still enters the same synchronous Commit path once
+    // input arrives or Scheduler's deadline task closes the window.
+    let mut waiting_for_late_scroll_input = false;
+    let mut deferred_commit = None;
     'commands: loop {
         if queued_commands.is_empty() {
             let Ok(command) = receiver.recv() else {
@@ -1072,6 +1096,15 @@ fn run_impl(
         let command = queued_commands
             .remove(urgent)
             .expect("selected queued impl command");
+        if matches!(&command, ImplCommand::Commit { .. }) && waiting_for_late_scroll_input {
+            let replaced = deferred_commit.replace(command).is_some();
+            browser_tracing::instant(
+                "compositor",
+                "ImplCommitDeferredForLateInput",
+                &[("replaced", replaced as u8 as f64)],
+            );
+            continue;
+        }
         if matches!(command, ImplCommand::Wheel { .. }) && pending_tick.is_some() {
             tick_due_after_input = true;
         } else if matches!(command, ImplCommand::Tick(_)) {
@@ -1092,6 +1125,7 @@ fn run_impl(
             }
             ImplCommand::Pump => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Pump");
+                let mut waiting_for_scroll_deadline = false;
                 // Keep the wake marked pending for the entire Poll. Otherwise
                 // every compositor/raster callback completed during Poll can
                 // enqueue another Pump ahead of input. Chromium coalesces
@@ -1126,12 +1160,17 @@ fn run_impl(
                             main_frame_epoch: epoch,
                         });
                     }
+                    waiting_for_scroll_deadline = result.waiting_for_scroll_deadline;
                     // AcceptOutput already moved any produced compositor frame
                     // into the Page FrameSink queue. A submitted impl frame is
                     // not a new PaintArtifact commit; publish() will drain it
                     // through flush_frames() while preserving an independently
                     // pending main-thread commit, if one exists.
                     let _ = presentation.publish()?;
+                }
+                if !waiting_for_scroll_deadline {
+                    waiting_for_late_scroll_input = false;
+                    release_deferred_commit(&mut deferred_commit, &mut queued_commands, 2.0);
                 }
                 pump_pending.store(false, Ordering::Release);
                 if pump_generation.load(Ordering::Acquire) != observed_generation
@@ -1172,9 +1211,11 @@ fn run_impl(
             }
             ImplCommand::Tick(frame) => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Tick");
+                let mut waiting_for_scroll_deadline = false;
                 if let Some(presentation) = presentation.as_mut() {
                     if presentation.pipeline.NeedsBeginFrames() {
                         let result = presentation.pipeline.BeginPhysicalFrame(frame.args)?;
+                        waiting_for_scroll_deadline = result.waiting_for_scroll_deadline;
                         if !result.effects.is_empty() {
                             presentation.observe_main_thread_effects(&result.effects);
                             let requested = result.effects.iter().any(|effect| {
@@ -1192,6 +1233,12 @@ fn run_impl(
                         }
                     }
                     let _ = presentation.publish()?;
+                }
+                if waiting_for_scroll_deadline {
+                    waiting_for_late_scroll_input = true;
+                } else {
+                    waiting_for_late_scroll_input = false;
+                    release_deferred_commit(&mut deferred_commit, &mut queued_commands, 3.0);
                 }
                 if requested.swap(false, Ordering::AcqRel) {
                     let _ = main.send(Command::Main(MainThreadEvent::BeginFrame { frame }));
@@ -1340,6 +1387,8 @@ fn run_impl(
                 // Source: content/renderer/input/input_handler_proxy.cc;
                 //         cc/trees/proxy_impl.cc ScheduledActionDraw.
                 let _ = presentation.flush_frames()?;
+                waiting_for_late_scroll_input = false;
+                release_deferred_commit(&mut deferred_commit, &mut queued_commands, 1.0);
             }
         }
         if let Some(presentation) = presentation.as_mut() {

@@ -431,3 +431,70 @@ Artifacts:
 /private/tmp/rechrom-resize-seconds-audit.sample.txt
 /private/tmp/rechrom-resize-memory-fix-trace.json
 ```
+
+## Continuation: 2026-10-24, late-scroll scheduling without commit shortcuts
+
+This iteration changes only owner-sequence scheduling. `Scheduler` exposes a
+read-only `IsWaitingForScrollDeadline()` state while its real
+`WAIT_FOR_SCROLL` deadline task is active. `run_impl` retains the newest raw
+`ImplCommand::Commit` behind that input window and releases it when an actual
+wheel command is handled or cc's own Pump/Tick reports that the window has
+closed. There is no application-side deadline, gesture-end throttle, skipped
+commit, or alternate paint path. The retained command still executes the
+original synchronous PaintArtifact submission, `CommitArtifactForMainFrame`,
+and `PrepareCommit` sequence.
+
+The measurements used the same visible MDN Grid Layout page, Release window,
+DPR 2 capture size, and 917-event native trackpad fixture. Three complete
+recordings per build used 3, 7, and 11 ms phase offsets (36 gesture starts per
+build). The trace buffers dropped no events and reported zero browser
+`FrameCycle.deadline_missed` events in all six recordings.
+
+Pooled complete-recording results:
+
+| Metric | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Impl input-queue maximum | 10.236 ms | 8.488 ms | -17.1% |
+| Impl input-queue events >= 8 ms | 6 | 1 | -83.3% |
+| Impl input-queue p50 | 0.037 ms | 0.041 ms | +0.004 ms |
+| Impl input-queue p95 | 2.060 ms | 2.484 ms | +0.424 ms |
+| Native first SCK-visible response p50 | 34.748 ms | 39.854 ms | +5.106 ms |
+| Native first SCK-visible response p95 | 63.303 ms | 59.005 ms | -6.8% |
+| Native first SCK-visible response maximum | 69.923 ms | 86.567 ms | +16.644 ms |
+| Missing optical presentation sequence IDs | 73 | 65 | -11.0% |
+
+There were 28 commit deferrals and 27 releases; replacement accounts for the
+difference. The improvement is therefore in the severe scheduling tail, not a
+uniform latency reduction. Medium input waits increased, and one after-run had
+a ScreenCaptureKit delivery outlier. The browser recorded no deadline miss for
+that outlier.
+
+Eight additional native replays of the first gesture used phase offsets from
+0 through 14 ms in 2 ms steps. Their first SCK-visible response improved from
+69.124 to 63.374 ms at p50, 74.157 to 72.027 ms at p95, and 74.768 to 72.500 ms
+at maximum. ScreenCaptureKit callback processing itself remained within one
+display interval: before p50/p95/max was 1.815/2.707/3.687 ms; after it was
+2.318/2.569/3.014 ms. SCK measures WindowServer-visible presentation rather
+than physical-panel illumination.
+
+`RUSTC_BOOTSTRAP=1 cargo check -p rechrom_app` and the Release application
+build passed. The Release `scroll_frame_lifecycle` run passed two tests and
+failed two existing semantic cases (`async default applied twice` and the
+root sticky/fixed pixel comparison). The first failure was reproduced with all
+changes stashed on exact baseline `5fed6a5`; the browser-only test harness does
+not execute this application `run_impl` scheduling change. No test expectation
+or PaintArtifact behavior was changed to hide those failures.
+
+Full artifacts:
+
+```text
+/private/tmp/rechrom-mdn-scheduler-before-full{,-r2,-r3}.{snapshot,trace,smooth,frames,inputs}.json*
+/private/tmp/rechrom-mdn-scheduler-after-full{,-r2,-r3}.{snapshot,trace,smooth,frames,inputs}.json*
+/private/tmp/rechrom-mdn-scheduler-before-native-{1..8}.{frames,inputs}.jsonl
+/private/tmp/rechrom-mdn-scheduler-after-native-{1..8}.{frames,inputs}.jsonl
+/private/tmp/rechrom-mdn-scheduler-before-capture-calibration.*
+/private/tmp/rechrom-mdn-scheduler-after-capture-calibration.*
+```
+
+The final Release browser is left open on the same MDN page as PID 78401 with
+the Performance endpoint on `127.0.0.1:9394` for interactive verification.
