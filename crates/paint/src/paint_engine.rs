@@ -467,7 +467,7 @@ impl Default for DisplayItem {
 // Public producer analysis also serves canonical PaintRecords downstream.
 pub use crate::paint_context::CalculateRectKnownToBeOpaqueForRecord;
 pub use image_resource::{
-    ContainerKey as DocumentImageContainerKey, PaintImageContent,
+    downcast_document_paint_record, ContainerKey as DocumentImageContainerKey, PaintImageContent,
     PaintImageId as NativePaintImageId, PaintImageMetadataUnavailable as ImageMetadataUnavailable,
 };
 pub use layoutng_assembly::internal::layout_input::PaintImage as NativePaintImage;
@@ -663,6 +663,9 @@ pub struct RecordedDisplayItem {
     pub is_cacheable: bool,
     pub is_tombstone: bool,
     pub paint_invalidation_reason: Option<foundation::PaintInvalidationReason>,
+    /// Revision of the LayoutNG fragment inputs that produced this record.
+    /// A drawing cache hit requires the same nonzero certified revision.
+    pub source_revision: u64,
     /// Immutable content versions of image resources sampled by this record.
     ///
     /// Blink normally carries an image client's invalidation through the next
@@ -1153,6 +1156,81 @@ impl PaintArtifact {
         }
         output
     }
+
+    /// Whether this immutable artifact carries the exact native document
+    /// record named by every display item. A newer Page catalog cannot certify
+    /// an older artifact snapshot.
+    pub fn HasExactDocumentImageContainerRecords(&self) -> bool {
+        let requirements = self.DocumentImageContainerRequirements();
+        let Some(resources) = self.resources.as_ref() else {
+            return requirements.is_empty();
+        };
+        requirements.iter().all(|(resource_id, container)| {
+            resources
+                .images
+                .iter()
+                .find(|image| image.id == *resource_id)
+                .is_some_and(|image| match &image.content {
+                    image_resource::PaintImageContent::Document(content) => content
+                        .exact_record_for(container)
+                        .and_then(|record| {
+                            downcast_document_paint_record::<DocumentPaintArtifactRecord>(record)
+                        })
+                        .is_some(),
+                    image_resource::PaintImageContent::Bitmap(_) => false,
+                })
+        })
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn document_image_container_proof_uses_the_artifacts_own_catalog() {
+    let mut requested = image_resource::ContainerKey::new(17, 17, 1.0, 2.0);
+    requested.preferred_color_scheme_is_explicit = true;
+    let initial = image_resource::ContainerKey::new(24, 24, 1.0, 2.0);
+    let record = |key: &image_resource::ContainerKey| {
+        Arc::new(DocumentPaintArtifactRecord {
+            artifact: Arc::new(PaintArtifact::default()),
+            intrinsic_size: image_resource::IntrinsicSize {
+                width: key.width,
+                height: key.height,
+            },
+            record_size: image_resource::IntrinsicSize {
+                width: key.width,
+                height: key.height,
+            },
+            container_key: key.clone(),
+        }) as Arc<dyn image_resource::DocumentPaintRecord>
+    };
+    let mut artifact = PaintArtifact {
+        items: vec![DisplayItem {
+            r#type: DisplayItemType::kDrawImageRect,
+            resource_id: 7,
+            document_image_container_key: Some(requested.clone()),
+            ..Default::default()
+        }]
+        .into(),
+        resources: Some(Arc::new(PaintResources {
+            images: vec![NativePaintImage {
+                id: 7,
+                document_container_key: Some(initial.clone()),
+                content: PaintImageContent::Document(Arc::new(
+                    image_resource::DocumentPaintContent::new(initial.clone(), record(&initial)),
+                )),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    assert!(!artifact.HasExactDocumentImageContainerRecords());
+
+    let resources = Arc::make_mut(artifact.resources.as_mut().unwrap());
+    resources.images[0].content = PaintImageContent::Document(Arc::new(
+        image_resource::DocumentPaintContent::new(requested.clone(), record(&requested)),
+    ));
+    assert!(artifact.HasExactDocumentImageContainerRecords());
 }
 
 #[cfg(test)]
@@ -1220,6 +1298,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         is_cacheable: true,
         is_tombstone: false,
         paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+        source_revision: 1,
         image_content_revisions: Vec::new(),
         scrollbar_needs_update_display: None,
         scrollbar: None,

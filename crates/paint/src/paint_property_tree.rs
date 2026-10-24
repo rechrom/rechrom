@@ -1922,6 +1922,7 @@ mod retained_scroll_update_tests {
         let effect = Arc::new(
             EffectPaintPropertyNode {
                 compositor: Default::default(),
+                backdrop_filter_bounds: None,
                 self_or_ancestor_participates_in_view_transition: false,
                 id: 5,
                 lifecycle: clean(),

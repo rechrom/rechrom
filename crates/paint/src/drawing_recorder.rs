@@ -18,10 +18,11 @@ impl<'c, 'o> DrawingRecorder<'c, 'o> {
         context: &'c RefCell<PaintContext<'o>>,
         node: &PaintTreeNode<'_>,
         item_type: DisplayItemIdType,
+        visual_rect: PaintRect,
     ) -> bool {
         context
             .borrow_mut()
-            .UseCachedDrawingIfPossible(node, item_type)
+            .UseCachedDrawingIfPossible(node, item_type, visual_rect)
     }
 
     pub(crate) fn UseCachedDrawingWithClientIfPossible(
@@ -37,6 +38,8 @@ impl<'c, 'o> DrawingRecorder<'c, 'o> {
         context.borrow_mut().UseCachedDrawingWithClient(
             id,
             client,
+            fragment.pre_paint_revision,
+            None,
             Some((
                 fragment.paint.display_item_client_owner_node_id,
                 fragment.paint.display_item_client_debug_name.clone(),
@@ -63,11 +66,16 @@ impl<'c, 'o> DrawingRecorder<'c, 'o> {
         client: DisplayItemClientInfo,
         visual_rect: PaintRect,
     ) -> Self {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
         context.borrow_mut().BeginDrawingRecorderWithClient(
             id,
             client,
             visual_rect,
             node.paint_snap_offset,
+            fragment.pre_paint_revision,
         );
         Self { context }
     }

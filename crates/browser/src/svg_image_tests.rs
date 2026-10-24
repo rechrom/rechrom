@@ -57,20 +57,17 @@ fn document_image_timeline_publishes_immutable_changed_records_only() {
             .expect("observable animation change publishes one frame");
         assert_eq!(next.revision, 2);
         assert!(!Arc::ptr_eq(&created.initial_frame.record, &next.record));
-        let old = created
-            .initial_frame
-            .record
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .unwrap();
+        let old = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&created.initial_frame.record)
+        .unwrap();
         let resources = old.artifact.resources.as_ref().unwrap();
         assert_eq!(resources.device_pixel_ratio, 2.0);
         assert_eq!(resources.layout_zoom_factor, 1.0);
-        let new = next
-            .record
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .unwrap();
+        let new = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&next.record)
+        .unwrap();
         assert!(!Arc::ptr_eq(&old.artifact, &new.artifact));
         assert_eq!(
             created.initial_frame.revision, 1,

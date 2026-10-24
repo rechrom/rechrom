@@ -1335,6 +1335,9 @@ pub struct PageFrame {
     pub compositor_scroll_sequence: u64,
     pub fragments: Rc<FragmentNode>,
     pub display_items: Arc<paint::paint_engine::PaintArtifact>,
+    /// Certified once when this immutable artifact enters the frame. Retained
+    /// scroll-property updates do not change display items or their catalog.
+    pub document_image_records_complete: bool,
 }
 
 /// Local document navigation request; tab/window policy belongs to the host.
@@ -2107,6 +2110,8 @@ impl PageState {
                         paint_output,
                         Some(&self.layout_editing.caret.borrow()),
                     );
+                frame.document_image_records_complete =
+                    frame.display_items.HasExactDocumentImageContainerRecords();
             } else {
                 frame.fragments = self
                     .layout_engine
@@ -3135,30 +3140,35 @@ impl Page {
                 &mut client,
             )?;
         }
-        if changed {
-            let constraints = self.state.constraints.borrow();
-            let resources = Arc::new(PaintResources {
-                fonts: constraints.fonts.clone(),
-                images: constraints.images.clone(),
-                device_pixel_ratio: constraints.device_pixel_ratio,
-                preferred_color_scheme: constraints.preferred_color_scheme,
-                layout_zoom_factor: constraints.layout_zoom_factor,
-                paints_opaque_base_background: !constraints.printing,
-                viewport: constraints.viewport,
-            });
-            fn install(node: &mut FragmentNode, resources: &Arc<PaintResources>) {
-                if node.paint.resources.as_deref() != Some(resources.as_ref()) {
-                    node.pre_paint_revision = 0;
-                    node.pre_paint_subtree_revision = 0;
-                }
-                node.paint.resources = Some(resources.clone());
-                for child in &mut node.children {
-                    install(child, resources);
-                }
+        let constraints = self.state.constraints.borrow();
+        let resources = Arc::new(PaintResources {
+            fonts: constraints.fonts.clone(),
+            images: constraints.images.clone(),
+            device_pixel_ratio: constraints.device_pixel_ratio,
+            preferred_color_scheme: constraints.preferred_color_scheme,
+            layout_zoom_factor: constraints.layout_zoom_factor,
+            paints_opaque_base_background: !constraints.printing,
+            viewport: constraints.viewport,
+        });
+        fn install(node: &mut FragmentNode, resources: &Arc<PaintResources>) -> bool {
+            let mut rebound = node.paint.resources.as_deref() != Some(resources.as_ref());
+            if rebound {
+                node.pre_paint_revision = 0;
+                node.pre_paint_subtree_revision = 0;
             }
-            install(Rc::make_mut(output.FragmentsMut()), &resources);
+            node.paint.resources = Some(resources.clone());
+            for child in &mut node.children {
+                rebound |= install(child, resources);
+            }
+            rebound
         }
-        Ok(changed)
+        // A retained paint-only fragment tree can still point at the catalog
+        // from before an earlier container mutation. Even when the requested
+        // variant is already present in Page's current catalog, bind that
+        // catalog and re-record once so the immutable artifact publishes the
+        // exact record named by its display items.
+        let rebound = install(Rc::make_mut(output.FragmentsMut()), &resources);
+        Ok(changed || rebound)
     }
 
     pub fn HasBlockingWheelListener(&self) -> bool {
@@ -4108,22 +4118,10 @@ impl Page {
         // PaintRecord. Do not take the resource-only fast path until every
         // recorded container has an exact producer-owned variant; the normal
         // Paint pass below will configure the missing variants and re-record.
-        let paint_resource_update_requires_repaint = self.frame.as_ref().is_some_and(|frame| {
-            let requirements = frame.display_items.DocumentImageContainerRequirements();
-            let constraints = self.state.constraints.borrow();
-            requirements.iter().any(|(resource_id, container)| {
-                constraints
-                    .images
-                    .iter()
-                    .find(|image| image.id == *resource_id)
-                    .is_some_and(|image| match &image.content {
-                        image_resource::PaintImageContent::Document(content) => {
-                            content.exact_record_for(container).is_none()
-                        }
-                        image_resource::PaintImageContent::Bitmap(_) => false,
-                    })
-            })
-        });
+        let paint_resource_update_requires_repaint = self
+            .frame
+            .as_ref()
+            .is_some_and(|frame| !frame.document_image_records_complete);
         trace.set(
             "paint_resource_update_requires_repaint",
             paint_resource_update_requires_repaint as u8 as f64,
@@ -4348,11 +4346,13 @@ impl Page {
                 layout_output_reused
             );
         }
+        let document_image_records_complete = display_items.HasExactDocumentImageContainerRecords();
         let frame = PageFrame {
             compositor_scroll_sequence: self.processed_compositor_scroll_sequence,
             sequence: self.frame.as_ref().map_or(1, |f| f.sequence + 1),
             fragments,
             display_items,
+            document_image_records_complete,
         };
         // Native geometry remains current after presentation. Bindings borrow
         // that output directly; no measurement holder retains the paint tree.

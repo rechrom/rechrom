@@ -259,9 +259,9 @@ fn ValidateArtifactGraph(
                 .as_ref()
                 .and_then(|key| content.exact_record_for(key))
                 .and_then(|record| {
-                    record
-                        .as_any()
-                        .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+                    paint::paint_engine::downcast_document_paint_record::<
+                        paint::paint_engine::DocumentPaintArtifactRecord,
+                    >(record)
                 })
                 .ok_or(PaintInputError::ImagePlayback {
                     resource_id,

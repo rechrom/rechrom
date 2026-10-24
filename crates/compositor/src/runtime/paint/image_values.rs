@@ -101,16 +101,15 @@ impl CpuPaintImage {
                 let key = container.or(image.document_container_key.as_ref()).ok_or(
                     CpuPaintImageInputError::DocumentColorSpaceNotPublished(resource),
                 )?;
-                let record = content
-                    .exact_record_for(key)
-                    .and_then(|record| {
-                        record
-                            .as_any()
-                            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-                    })
-                    .ok_or(CpuPaintImageInputError::DocumentColorSpaceNotPublished(
-                        resource,
-                    ))?;
+                let erased = content.exact_record_for(key).ok_or(
+                    CpuPaintImageInputError::DocumentColorSpaceNotPublished(resource),
+                )?;
+                let record = paint::paint_engine::downcast_document_paint_record::<
+                    paint::paint_engine::DocumentPaintArtifactRecord,
+                >(erased)
+                .ok_or(CpuPaintImageInputError::DocumentColorSpaceNotPublished(
+                    resource,
+                ))?;
                 Some(CpuPaintRecordImage {
                     record: PaintRecord::from_artifact(record.artifact.clone()),
                     intrinsic_size: crate::adapter::geometry::SizeF::new(

@@ -1274,6 +1274,7 @@ mod coverage_tests {
                 paint_offset: Offset::default(),
                 recorded_world: TransformMatrix::default(),
                 properties: PropertyTreeState::default(),
+                unrecorded_visual_rect: None,
                 controls: None,
                 revision: f.pre_paint_revision,
                 subtree_revision: f.pre_paint_subtree_revision,

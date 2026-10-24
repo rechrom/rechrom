@@ -113,11 +113,10 @@ fn render(page: &Page, label: &str) -> Vec<u32> {
         for image in artifact.resources.iter().flat_map(|r| &r.images) {
             if let image_resource::PaintImageContent::Document(content) = &image.content {
                 for (i, variant) in content.variants().iter().enumerate() {
-                    let record = variant
-                        .record
-                        .as_any()
-                        .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-                        .unwrap();
+                    let record = paint::paint_engine::downcast_document_paint_record::<
+                        paint::paint_engine::DocumentPaintArtifactRecord,
+                    >(&variant.record)
+                    .unwrap();
                     dump_artifact(
                         &record.artifact,
                         &dir.join(format!("{label}-document-{i}.txt")),

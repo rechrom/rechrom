@@ -181,6 +181,7 @@ fn changing_position_z_index_and_auto_recomputes_flags_without_changing_old_fram
             compositor_scroll_sequence: current.compositor_scroll_sequence,
             fragments: current.fragments.clone(),
             display_items: current.display_items.clone(),
+            document_image_records_complete: current.document_image_records_complete,
         };
         for (script, expected) in [
             (

@@ -445,11 +445,10 @@ fn fetched_svg_image_publishes_a_nested_viewport_record() {
         let record = content
             .exact_record_for(key)
             .expect("current SVG container record");
-        let record = record
-            .as_ref()
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .expect("SVG PaintArtifact record");
+        let record = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(record)
+        .expect("SVG PaintArtifact record");
         let shape = record
             .artifact
             .items

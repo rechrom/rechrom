@@ -216,6 +216,19 @@ impl<T: Any + Send + Sync> DocumentPaintRecord for T {
     }
 }
 
+/// Downcast the erased payload rather than the `Arc` wrapper. The blanket
+/// implementation above also applies to `Arc<dyn DocumentPaintRecord>`, so a
+/// direct `record.as_any()` observes the wrapper and cannot recover the
+/// producer's concrete record.
+pub fn downcast_document_paint_record<T: Any>(record: &Arc<dyn DocumentPaintRecord>) -> Option<&T> {
+    let payload = record.as_ref().as_any();
+    payload.downcast_ref::<T>().or_else(|| {
+        payload
+            .downcast_ref::<Arc<T>>()
+            .map(|record| record.as_ref())
+    })
+}
+
 #[derive(Clone)]
 pub struct DocumentPaintVariant {
     pub container_key: ContainerKey,
@@ -414,4 +427,18 @@ pub trait DocumentImageDecoder {
         mime_type: &str,
         container: &ContainerKey,
     ) -> io::Result<CreatedDocumentImage>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_record_downcast_reaches_the_erased_payload() {
+        struct Record;
+        let record: Arc<dyn DocumentPaintRecord> = Arc::new(Record);
+        assert!(downcast_document_paint_record::<Record>(&record).is_some());
+        let nested: Arc<dyn DocumentPaintRecord> = Arc::new(Arc::new(Record));
+        assert!(downcast_document_paint_record::<Record>(&nested).is_some());
+    }
 }

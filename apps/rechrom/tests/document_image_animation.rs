@@ -32,11 +32,10 @@ fn svg_presentation_transform_and_fill_reach_document_paint_record() {
             )
             .unwrap()
             .initial_frame;
-        let record = frame
-            .record
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .unwrap();
+        let record = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&frame.record)
+        .unwrap();
         let paths = record
             .artifact
             .items
@@ -102,17 +101,14 @@ fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
             })
             .unwrap();
         assert_eq!(next.revision, 2);
-        let old_record = created
-            .initial_frame
-            .record
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .unwrap();
-        let next_record = next
-            .record
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .unwrap();
+        let old_record = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&created.initial_frame.record)
+        .unwrap();
+        let next_record = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&next.record)
+        .unwrap();
         assert!(old_record.artifact.items != next_record.artifact.items);
         assert_eq!(created.initial_frame.revision, 1);
         assert!(!Arc::ptr_eq(&created.initial_frame.record, &next.record));
@@ -145,17 +141,14 @@ fn container_configuration_versions_the_record_cache_key() {
             .unwrap();
         assert_eq!(next.container_key, resized);
         assert_ne!(next.container_key, created.initial_frame.container_key);
-        let old_record = created
-            .initial_frame
-            .record
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .unwrap();
-        let next_record = next
-            .record
-            .as_any()
-            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            .unwrap();
+        let old_record = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&created.initial_frame.record)
+        .unwrap();
+        let next_record = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&next.record)
+        .unwrap();
         assert_eq!(old_record.record_size.width, 64);
         assert_eq!(next_record.record_size.width, 128);
         assert!(old_record.artifact.items != next_record.artifact.items);
@@ -186,11 +179,10 @@ fn svg_user_agent_rules_survive_repeated_isolated_document_lifecycles() {
                 .create(100, Arc::from(svg.as_slice()), "image/svg+xml", &container)
                 .unwrap();
             let check = |frame: &image_resource::DocumentImageFrame| {
-                let record = frame
-                    .record
-                    .as_any()
-                    .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-                    .unwrap();
+                let record = paint::paint_engine::downcast_document_paint_record::<
+                    paint::paint_engine::DocumentPaintArtifactRecord,
+                >(&frame.record)
+                .unwrap();
                 for (scale, x, y) in [(0.35, 10.0, 20.0), (2.0, 60.0, 40.0)] {
                     assert!(
                         record.artifact.items.iter().any(|item| {

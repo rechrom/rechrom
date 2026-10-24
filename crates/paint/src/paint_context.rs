@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use layoutng_assembly::internal::paint_input::PaintBlendMode;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::border_shape_utils::UniformCornerRadius;
@@ -206,6 +206,7 @@ pub struct PaintContext<'o> {
     output: &'o mut PaintArtifact,
     previous: Option<Arc<PaintArtifact>>,
     cached_items: HashMap<DisplayItemId, Vec<usize>>,
+    changed_drawings: HashSet<DisplayItemId>,
     pub(crate) cached_display_items: usize,
     pub(crate) caret: Option<crate::paint_engine::CaretPosition>,
     pub(crate) document_selection: Option<layoutng_assembly::editing_state::DocumentSelection>,
@@ -224,6 +225,7 @@ pub struct PaintContext<'o> {
         bool,
         Offset,
         Option<usize>,
+        u64,
     )>,
     next_property_id: u64,
 }
@@ -238,6 +240,7 @@ impl<'o> PaintContext<'o> {
             output,
             previous: None,
             cached_items: HashMap::new(),
+            changed_drawings: HashSet::new(),
             cached_display_items: 0,
             caret: None,
             document_selection: None,
@@ -278,6 +281,7 @@ impl<'o> PaintContext<'o> {
             output,
             previous,
             cached_items,
+            changed_drawings: HashSet::new(),
             cached_display_items: 0,
             caret: editing.caret,
             document_selection: editing.document_selection,
@@ -311,6 +315,7 @@ impl<'o> PaintContext<'o> {
         &mut self,
         node: &PaintTreeNode<'_>,
         item_type: DisplayItemIdType,
+        visual_rect: PaintRect,
     ) -> bool {
         let fragment = node
             .fragment
@@ -324,6 +329,8 @@ impl<'o> PaintContext<'o> {
         self.UseCachedDrawingWithClient(
             id,
             DisplayItemClientInfo::from_fragment(fragment),
+            fragment.pre_paint_revision,
+            Some(self.DrawingVisualRect(visual_rect, node.paint_snap_offset)),
             Some((
                 fragment.paint.display_item_client_owner_node_id,
                 fragment.paint.display_item_client_debug_name.clone(),
@@ -335,6 +342,8 @@ impl<'o> PaintContext<'o> {
         &mut self,
         id: DisplayItemId,
         client: DisplayItemClientInfo,
+        source_revision: u64,
+        expected_visual_rect: Option<PaintRect>,
         debug: Option<(i32, Arc<str>)>,
     ) -> bool {
         if !client.is_cacheable
@@ -357,6 +366,13 @@ impl<'o> PaintContext<'o> {
             return false;
         };
         let old = &previous.display_items[index];
+        if source_revision == 0
+            || old.source_revision != source_revision
+            || expected_visual_rect.is_some_and(|current| old.visual_rect != current)
+        {
+            self.changed_drawings.insert(id);
+            return false;
+        }
         let old_record = &previous.items[old.record_begin..old.record_end];
         let record_begin = self.output.items.len();
         Arc::make_mut(&mut self.output.items).extend_from_slice(old_record);
@@ -396,6 +412,19 @@ impl<'o> PaintContext<'o> {
         self.output.display_items.push(moved);
         self.cached_display_items += 1;
         true
+    }
+
+    fn DrawingVisualRect(&self, visual_rect: PaintRect, delta: Offset) -> PaintRect {
+        let mut visual_rect = EnclosingRectInPropertySpace(visual_rect, delta);
+        if let Some(filtered) = self
+            .chunk_properties()
+            .effect
+            .compositor
+            .filter_output_bounds
+        {
+            visual_rect.union(filtered);
+        }
+        visual_rect
     }
 
     // cpp: paint/paint_context.h:22
@@ -459,6 +488,7 @@ impl<'o> PaintContext<'o> {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
+            source_revision: fragment.pre_paint_revision,
             image_content_revisions: Vec::new(),
             scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             scrollbar: None,
@@ -506,6 +536,7 @@ impl<'o> PaintContext<'o> {
             DisplayItemClientInfo::from_fragment(fragment),
             visual_rect,
             node.paint_snap_offset,
+            fragment.pre_paint_revision,
         );
         if let Some(recorder) = &mut self.drawing_recorder {
             recorder.8 = fragment.paint.display_item_raster_effect_outset;
@@ -520,6 +551,7 @@ impl<'o> PaintContext<'o> {
         client: DisplayItemClientInfo,
         visual_rect: PaintRect,
         delta: Offset,
+        source_revision: u64,
     ) {
         assert!(!self.InDrawingRecorder(), "DrawingRecorders cannot nest");
         self.drawing_recorder = Some((
@@ -535,6 +567,7 @@ impl<'o> PaintContext<'o> {
             true,
             delta,
             None,
+            source_revision,
         ));
     }
 
@@ -564,13 +597,14 @@ impl<'o> PaintContext<'o> {
             true,
             delta,
             None,
+            0,
         ));
     }
 
     pub(crate) fn EndDrawingRecorder(&mut self) {
         let (
             id,
-            client,
+            mut client,
             properties,
             visual_rect,
             record_begin,
@@ -581,10 +615,16 @@ impl<'o> PaintContext<'o> {
             visual_rect_is_accurate,
             delta,
             _cached_item,
+            source_revision,
         ) = self
             .drawing_recorder
             .take()
             .expect("DrawingRecorder must be active");
+        if self.changed_drawings.remove(&id)
+            && client.invalidation_reason == Some(foundation::PaintInvalidationReason::kNone)
+        {
+            client.invalidation_reason = Some(foundation::PaintInvalidationReason::kLayout);
+        }
         let record_end = self.output.items.len();
         let (mut visual_rect, tightened) = if kind == RecordedDisplayItemKind::Drawing {
             TightenDrawingVisualRect(
@@ -647,6 +687,7 @@ impl<'o> PaintContext<'o> {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
+            source_revision,
             image_content_revisions: Vec::new(),
             scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             scrollbar,
@@ -1514,6 +1555,76 @@ mod opaque_record_tests {
     use layoutng_assembly::internal::paint_input::{
         PaintCornerRadii, PaintCornerRadius, PaintShader,
     };
+
+    #[test]
+    fn drawing_cache_requires_matching_certified_source_and_bounds() {
+        let id = DisplayItemId {
+            client_id: 9,
+            r#type: DisplayItemIdType::kBoxDecorationBackground,
+            fragment: 0,
+        };
+        let visual_rect = PaintRect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let mut previous = PaintArtifact::default();
+        previous.items = Arc::new(vec![DisplayItem {
+            r#type: DisplayItemType::kDrawRect,
+            rect: visual_rect,
+            ..Default::default()
+        }]);
+        previous.display_items.push(RecordedDisplayItem {
+            is_cacheable: true,
+            is_tombstone: false,
+            paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            source_revision: 7,
+            image_content_revisions: Vec::new(),
+            scrollbar_needs_update_display: None,
+            scrollbar: None,
+            kind: RecordedDisplayItemKind::Drawing,
+            id,
+            visual_rect,
+            visual_rect_is_accurate: true,
+            draws_content: true,
+            raster_effect_outset: RasterEffectOutset::kNone,
+            record_begin: 0,
+            record_end: 1,
+            scroll_translation: None,
+        });
+        let previous = Arc::new(previous);
+        let client = DisplayItemClientInfo {
+            invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            scrollbar_needs_update_display: None,
+            is_cacheable: true,
+            is_just_created: false,
+        };
+
+        let mut cached = PaintArtifact::default();
+        let mut context = PaintContext::WithEditingAndCache(
+            &mut cached,
+            Default::default(),
+            Some(previous.clone()),
+        );
+        assert!(context.UseCachedDrawingWithClient(id, client, 7, Some(visual_rect), None,));
+        drop(context);
+        assert_eq!(cached.display_items[0].source_revision, 7);
+        assert_eq!(cached.display_items[0].visual_rect, visual_rect);
+
+        let mut changed = PaintArtifact::default();
+        let mut context =
+            PaintContext::WithEditingAndCache(&mut changed, Default::default(), Some(previous));
+        assert!(!context.UseCachedDrawingWithClient(id, client, 8, Some(visual_rect), None,));
+        context.BeginDrawingRecorderWithClient(id, client, visual_rect, Offset::default(), 8);
+        context.EndDrawingRecorder();
+        drop(context);
+        assert_eq!(changed.display_items[0].source_revision, 8);
+        assert_eq!(
+            changed.display_items[0].paint_invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kLayout)
+        );
+    }
 
     #[test]
     fn bounded_opaque_record_proof_preserves_clips_rounding_and_uncovered_gaps() {

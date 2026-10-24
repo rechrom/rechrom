@@ -3531,6 +3531,47 @@ pub fn RasterizePaintArtifactTransparent(list: &PaintArtifact, width: u32, heigh
         .expect("translated transparent PaintArtifact rasterization failed")
 }
 
+fn PrepareRasterPlayback(
+    canvas: &mut TranslatedCanvas<'_, '_>,
+    content_rect: &compositor_core::adapter::geometry::Rect,
+    playback_rect: &compositor_core::adapter::geometry::Rect,
+    requires_clear: bool,
+) -> io::Result<()> {
+    let is_partial_raster = content_rect != playback_rect;
+    let clear = |canvas: &mut TranslatedCanvas<'_, '_>, message| {
+        canvas
+            .target
+            .draw_color(
+                &SkColor4f {
+                    fR: 0.,
+                    fG: 0.,
+                    fB: 0.,
+                    fA: 0.,
+                },
+                SkBlendMode::kSrc,
+            )
+            .map_err(|error| raster_error(message, error))
+    };
+    if requires_clear && !is_partial_raster {
+        clear(canvas, "translated target clear failed")?;
+    }
+    canvas.simple(CommandKind::kSave);
+    canvas
+        .target
+        .translate(-content_rect.x as f32, -content_rect.y as f32);
+    canvas
+        .target
+        .clip_rect(&cc_rect(*playback_rect), SkClipOp::kIntersect, false);
+    // Source: cc/raster/raster_source.cc:86-111. SkCanvas::clear
+    // respects the device clip but ignores the current transform. A partial
+    // transparent replay therefore clears only the playback rect after the
+    // tile translation and clip are installed.
+    if requires_clear && is_partial_raster {
+        clear(canvas, "translated playback clear failed")?;
+    }
+    Ok(())
+}
+
 impl RasterBackend for TranslatedSkiaBackend {
     fn Raster(
         &self,
@@ -3553,30 +3594,12 @@ impl RasterBackend for TranslatedSkiaBackend {
             let mut canvas = TranslatedCanvas::new(&mut target, false, 1.)
                 .with_typeface_cache(&self.typeface_cache);
             let source = request.source;
-            if source.requires_clear {
-                canvas
-                    .target
-                    .draw_color(
-                        &SkColor4f {
-                            fR: 0.,
-                            fG: 0.,
-                            fB: 0.,
-                            fA: 0.,
-                        },
-                        SkBlendMode::kSrc,
-                    )
-                    .map_err(|error| raster_error("translated target clear failed", error))?;
-            }
-            canvas.simple(CommandKind::kSave);
-            canvas.target.translate(
-                -request.content_rect.x as f32,
-                -request.content_rect.y as f32,
-            );
-            canvas.target.clip_rect(
-                &cc_rect(*request.invalid_content_rect),
-                SkClipOp::kIntersect,
-                false,
-            );
+            PrepareRasterPlayback(
+                &mut canvas,
+                request.content_rect,
+                request.invalid_content_rect,
+                source.requires_clear,
+            )?;
             let translation = request.raster_transform.translation();
             let scale = request.raster_transform.scale();
             canvas.target.translate(translation.x(), translation.y());
@@ -3611,6 +3634,30 @@ impl RasterBackend for TranslatedSkiaBackend {
 #[cfg(all(test, target_vendor = "apple"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_transparent_playback_preserves_clean_pixels() {
+        let mut pixels = vec![u8::MAX; 8 * 8 * 4];
+        let mut target = RasterTarget::new(&mut pixels, 8, 8, 8 * 4, PixelFormat::Rgba8888, None)
+            .expect("test raster target");
+        {
+            let mut canvas = TranslatedCanvas::new(&mut target, false, 1.);
+            let content = compositor_core::adapter::geometry::Rect::new(10, 20, 8, 8);
+            let dirty = compositor_core::adapter::geometry::Rect::new(12, 22, 2, 3);
+            PrepareRasterPlayback(&mut canvas, &content, &dirty, true)
+                .expect("prepare partial raster");
+            canvas.unwind_to_depth(0);
+            canvas.finish_replay().expect("finish partial raster");
+        }
+        target.finish().expect("finish translated target");
+        for y in 0..8 {
+            for x in 0..8 {
+                let alpha = pixels[(y * 8 + x) * 4 + 3];
+                let inside_dirty = (2..4).contains(&x) && (2..5).contains(&y);
+                assert_eq!(alpha, if inside_dirty { 0 } else { u8::MAX }, "{x},{y}");
+            }
+        }
+    }
 
     #[test]
     fn glyph_run_reaches_translated_canvas() {
@@ -3650,10 +3697,10 @@ mod tests {
                     text_blob_origin: command::Offset { x: 16., y: 88. },
                     // Roboto's capital A. Paint supplies glyph IDs directly; this
                     // test intentionally performs no text shaping in the backend.
-                    glyphs: std::sync::Arc::new(vec![command::PaintGlyph {
+                    glyphs: vec![command::PaintGlyph {
                         id: 37,
                         ..Default::default()
-                    }]),
+                    }],
                     ..Default::default()
                 },
                 &resources,

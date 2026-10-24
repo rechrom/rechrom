@@ -878,23 +878,25 @@ mod font_identity_tests {
         assert!(!shaped.glyphs.is_empty());
         assert!(shaped.glyphs.iter().all(|glyph| glyph.id != 0));
         let mut x = 0.0;
-        let glyphs = shaped
-            .glyphs
-            .iter()
-            .map(|glyph| {
-                let painted = PaintGlyph {
-                    id: glyph.id,
-                    character_index: glyph.cluster,
-                    offset: Offset {
-                        x: x + glyph.x_offset,
-                        y: -glyph.y_offset,
-                    },
-                    ..Default::default()
-                };
-                x += glyph.x_advance;
-                painted
-            })
-            .collect();
+        let glyphs = Arc::new(
+            shaped
+                .glyphs
+                .iter()
+                .map(|glyph| {
+                    let painted = PaintGlyph {
+                        id: glyph.id,
+                        character_index: glyph.cluster,
+                        offset: Offset {
+                            x: x + glyph.x_offset,
+                            y: -glyph.y_offset,
+                        },
+                        ..Default::default()
+                    };
+                    x += glyph.x_advance;
+                    painted
+                })
+                .collect(),
+        );
         let artifact = PaintArtifact {
             resources: Some(Arc::new(PaintResources {
                 fonts: vec![FontFace {

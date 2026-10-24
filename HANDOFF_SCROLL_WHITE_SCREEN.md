@@ -498,3 +498,79 @@ Full artifacts:
 
 The final Release browser is left open on the same MDN page as PID 78401 with
 the Performance endpoint on `127.0.0.1:9394` for interactive verification.
+
+## Continuation: 2026-10-24, resize correctness and final scheduling audit
+
+The resize corruption was three independent retained-content correctness
+problems rather than a reason to bypass PaintArtifact synchronization:
+
+1. A drawing cache hit now requires the same nonzero LayoutNG fragment
+   revision and the same current visual rect. A rejected entry is re-recorded
+   with layout invalidation scoped to that display-item id.
+2. Translated partial raster now installs the tile translation and dirty clip
+   before clearing transparent pixels. Full raster still clears the whole
+   target; partial raster preserves clean pixels outside the playback rect.
+3. A retained scroll fallback can produce a display item whose exact SVG
+   container record exists in Page's current resource catalog but is absent
+   from the artifact's older catalog. The retained-frame gate now certifies the
+   artifact's own catalog, rebinds paint-only fragments to the current catalog,
+   and re-records before publication. The proof is cached once on `PageFrame`,
+   so the scroll scheduling hot path does not rescan the display list. Type
+   erasure also downcasts the document record payload rather than its `Arc`
+   wrapper.
+
+None of these changes reorder artifact commit, exchange, validation, or
+compositor synchronization.
+
+The final Release build survived eight complete native replays of the same
+917-event fixture (7,336 delivered inputs) without a process failure. A final
+120-step, 16 ms live-resize cycle completed in 1.921575 seconds and the captured
+MDN content remained correct. The earlier full resize audit completed 12 such
+cycles with a 1.922710-second mean.
+
+The comparable zero-drop traces are the pre-scheduler baseline
+`/private/tmp/rechrom-scroll-trace-export.json` and final corrected build
+`/private/tmp/rechrom-mdn-final-cache-complete.trace.json`. The latter contains
+93,564 complete spans, 9,376 instants, zero dropped events, and zero incomplete
+spans.
+
+| Metric | Before | Final | Change |
+| --- | ---: | ---: | ---: |
+| Input owner queue p50 | 0.039 ms | 0.038 ms | -2.5% |
+| Input owner queue p95 | 2.737 ms | 0.991 ms | -63.8% |
+| Input queue p50 | 9.343 ms | 4.603 ms | -50.7% |
+| Input queue p95 | 56.915 ms | 65.101 ms | +14.4% |
+| Input dispatch p50 | 0.183 ms | 0.177 ms | -3.2% |
+| Input dispatch p95 | 0.500 ms | 0.390 ms | -22.0% |
+| Present return p50 | 0.091 ms | 0.099 ms | +8.1% |
+| Present return p95 | 0.157 ms | 0.160 ms | +2.2% |
+| Frame cycle p50 | 1.540 ms | 1.779 ms | +15.5% |
+| Frame cycle p95 | 2.451 ms | 2.456 ms | +0.2% |
+
+The intended owner-sequence scheduling wait improved materially, and the main
+input-queue median halved. The input-queue tail remains worse, so this is not a
+uniform latency win. Final scroll commit intervals were 16.676 ms p50,
+17.914 ms p95, and 44.115 ms maximum. The trace reports zero deadline misses,
+zero cancelled wheel updates, and zero presentation failures. It has no
+physical scanout feedback and no attributable input-to-commit samples, so
+those latencies remain unavailable rather than inferred.
+
+Focused tests for the artifact-catalog proof, drawing-cache certification,
+partial transparent raster, document-record downcast, and application-level
+SVG record playback passed. The Release `scroll_frame_lifecycle` result remains
+two passing and two known failing cases (`async default applied twice` and the
+root sticky/fixed pixel comparison), identical to the pre-change baseline.
+The unrelated `image_fill_layers` exact-container fixture also fails at
+baseline `fd42ad6` before these changes.
+
+Final artifacts:
+
+```text
+/private/tmp/rechrom-mdn-final-cache-complete.trace.json
+/private/tmp/rechrom-final-cache-native-{1..8}.*.{frames,inputs}.jsonl
+/private/tmp/rechrom-final-cache-screenshot.png
+/private/tmp/rechrom-final-scroll-lifecycle.log
+```
+
+The final Release browser is left open on the MDN page as PID 97869 with the
+Performance endpoint on `127.0.0.1:9406` for interactive verification.

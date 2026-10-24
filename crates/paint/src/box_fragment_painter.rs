@@ -3151,12 +3151,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // moved by the physical fragment offset, then enclosed to pixels.
         let in_drawing = self.context.borrow().InDrawingRecorder();
         let drawing_type = DisplayItemIdType::PaintPhaseToDrawingType(phase);
-        if !in_drawing
-            && DrawingRecorder::UseCachedDrawingIfPossible(self.context, self.node, drawing_type)
-        {
-            return;
-        }
-        let _drawing = (!in_drawing).then(|| {
+        let visual_rect = (!in_drawing).then(|| {
             let mut visual_rect = FragmentVisualRect(self.node);
             // SkGlyphRunPainter's analytic/LCD coverage may touch the native
             // pixel immediately outside the geometric glyph bounds. Blink's
@@ -3174,6 +3169,19 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             visual_rect.y -= fringe;
             visual_rect.width += fringe * 2.0;
             visual_rect.height += fringe * 2.0;
+            visual_rect
+        });
+        if visual_rect.is_some_and(|visual_rect| {
+            DrawingRecorder::UseCachedDrawingIfPossible(
+                self.context,
+                self.node,
+                drawing_type,
+                visual_rect,
+            )
+        }) {
+            return;
+        }
+        let _drawing = visual_rect.map(|visual_rect| {
             DrawingRecorder::new(self.context, self.node, drawing_type, visual_rect)
         });
         let apply_svg_transform = svg.is_some_and(|svg| svg.has_transform);
