@@ -442,6 +442,7 @@ impl NativeNodeMetadataRelations {
         }
 
         for &node in &nodes {
+            unsafe { &mut *node }.set_global_input_owner(root as *mut Node);
             unsafe { &mut *node }.seal_input_tree();
         }
         Ok(())

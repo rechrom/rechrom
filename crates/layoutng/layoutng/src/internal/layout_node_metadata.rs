@@ -144,6 +144,7 @@ pub struct Node {
     has_first_line_styles_: bool,
     first_line_style_: Member<NativeComputedStyle>,
     input_data_: Box<StandaloneNodeData>,
+    global_input_owner_: Member<Node>,
     control_host_: Member<Element>,
     implicit_anchor_: Member<Element>,
     viewport_defining_element_: Member<Element>,
@@ -180,6 +181,7 @@ impl Node {
             has_first_line_styles_: false,
             first_line_style_: Member::default(),
             input_data_: input_data,
+            global_input_owner_: Member::default(),
             control_host_: Member::default(),
             implicit_anchor_: Member::default(),
             viewport_defining_element_: Member::default(),
@@ -213,7 +215,7 @@ impl Node {
         self.input_tree_sealed_
     }
     pub fn InputHasFirstLineStyles(&self) -> bool {
-        self.has_first_line_styles_
+        self.GlobalInputOwner().has_first_line_styles_
     }
     pub fn InputFirstLineStyle(&self) -> *const NativeComputedStyle {
         self.first_line_style_.Get()
@@ -256,40 +258,41 @@ impl Node {
 
     // cpp: layoutng/internal/layout_node_metadata.cc:95-147
     pub fn InputCompatibilityMode(&self) -> CompatibilityMode {
-        self.input_data_.compatibility_mode
+        self.GlobalInputData().compatibility_mode
     }
     pub fn InputLineHeightQuirksMode(&self) -> bool {
         self.InputCompatibilityMode() != CompatibilityMode::kStandards
     }
     pub fn InputPrinting(&self) -> bool {
-        self.input_data_.printing
+        self.GlobalInputData().printing
     }
     pub fn InputPaginated(&self) -> bool {
-        self.input_data_.paginated
+        self.GlobalInputData().paginated
     }
     pub fn InputFragmentainerBlockSize(&self) -> Option<f64> {
-        self.input_data_.fragmentainer_block_size
+        self.GlobalInputData().fragmentainer_block_size
     }
     pub fn InputVerticalScrollEnforced(&self) -> bool {
-        self.input_data_.vertical_scroll_enforced
+        self.GlobalInputData().vertical_scroll_enforced
     }
     pub fn InputDevicePixelRatio(&self) -> f64 {
-        self.input_data_.device_pixel_ratio
+        self.GlobalInputData().device_pixel_ratio
     }
     pub fn InputCanvasDrawElementEnabled(&self) -> bool {
-        self.input_data_.canvas_draw_element_enabled
+        self.GlobalInputData().canvas_draw_element_enabled
     }
     pub fn InputPreferNonCompositedScrollingEnabled(&self) -> bool {
-        self.input_data_.prefer_non_composited_scrolling_enabled
+        self.GlobalInputData()
+            .prefer_non_composited_scrolling_enabled
     }
     pub fn InputViewport(&self) -> &Option<ViewportGeometry> {
-        &self.input_data_.viewport
+        &self.GlobalInputData().viewport
     }
     pub fn InputMinimumFontPhysicalSize(&self) -> Option<f32> {
-        self.input_data_.minimum_font_physical_size
+        self.GlobalInputData().minimum_font_physical_size
     }
     pub fn InputScrollbarTheme(&self) -> &Option<ScrollbarThemeMetrics> {
-        &self.input_data_.scrollbar_theme
+        &self.GlobalInputData().scrollbar_theme
     }
     pub fn InputDocumentRole(&self) -> DocumentRole {
         self.input_data_.document_role
@@ -313,12 +316,12 @@ impl Node {
         &self.input_data_.debug_name
     }
     pub fn InputControlTheme(&self) -> &ControlThemeMetrics {
-        &self.input_data_.control_theme
+        &self.GlobalInputData().control_theme
     }
 
     // cpp: layoutng/internal/layout_node_metadata.h:105-105
     pub fn InputViewportDefiningElement(&self) -> *mut Element {
-        self.viewport_defining_element_.Get()
+        self.GlobalInputOwner().viewport_defining_element_.Get()
     }
 
     // cpp: layoutng/internal/layout_node_metadata.h:115-126
@@ -483,8 +486,24 @@ impl Node {
     pub(crate) fn set_viewport_defining_element(&mut self, element: *mut Element) {
         self.viewport_defining_element_ = Member::from_ptr(element);
     }
+    pub(crate) fn set_global_input_owner(&mut self, owner: *mut Node) {
+        self.global_input_owner_ = Member::from_ptr(owner);
+    }
     pub(crate) fn seal_input_tree(&mut self) {
         self.input_tree_sealed_ = true;
+    }
+
+    fn GlobalInputOwner(&self) -> &Node {
+        let owner = self.global_input_owner_.Get();
+        if owner.is_null() {
+            self
+        } else {
+            unsafe { &*owner }
+        }
+    }
+
+    fn GlobalInputData(&self) -> &StandaloneNodeData {
+        &self.GlobalInputOwner().input_data_
     }
 
     // cpp: layoutng/internal/layout_node_metadata.cc:81-83
@@ -515,6 +534,7 @@ impl Node {
         visitor.Trace(&self.control_host_);
         visitor.Trace(&self.implicit_anchor_);
         visitor.Trace(&self.viewport_defining_element_);
+        visitor.Trace(&self.global_input_owner_);
         visitor.Trace(&self.style_);
         visitor.Trace(&self.first_line_style_);
         visitor.Trace(&self.input_data_.bound_font);

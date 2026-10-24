@@ -1435,9 +1435,11 @@ struct DocumentQueue {
     token: u64,
     task_queued: bool,
     collection_queued: bool,
+    collection_token: Option<event_loop::TaskToken>,
     javascript_collection_queued: bool,
     resize_queued: bool,
     pending_resize: Option<Viewport>,
+    last_resize_at: Option<Instant>,
 }
 struct SelectedCommand(Option<Command>);
 impl event_loop::EventLoopExecutor<Command, MainThreadEvent> for SelectedCommand {
@@ -1467,9 +1469,11 @@ impl DocumentQueue {
             token: 0,
             task_queued: false,
             collection_queued: false,
+            collection_token: None,
             javascript_collection_queued: false,
             resize_queued: false,
             pending_resize: None,
+            last_resize_at: None,
         };
         queue.ordinary();
         queue
@@ -1482,8 +1486,7 @@ impl DocumentQueue {
     }
     fn collection(&mut self) {
         if !self.collection_queued && foundation::IsLayoutHeapCollectionRequested() {
-            self.collection_queued = true;
-            self.post(Command::CollectLayoutHeap);
+            self.schedule_collection(Instant::now());
         }
     }
     fn javascript_collection(&mut self, requested: bool) {
@@ -1496,6 +1499,12 @@ impl DocumentQueue {
         use event_loop::*;
         let now = Instant::now();
         let command = if let Command::Resize(viewport) = command {
+            self.last_resize_at = Some(now);
+            if let Some(token) = self.collection_token.take() {
+                self.engine.Apply(EventLoopMutation::CancelTask(token), now);
+                self.collection_queued = false;
+                self.schedule_collection(now);
+            }
             self.pending_resize = Some(viewport);
             if self.resize_queued {
                 return;
@@ -1515,25 +1524,55 @@ impl DocumentQueue {
             );
         } else {
             let priority = match &command {
-                Command::CollectJavaScriptHeap => TaskPriority::Background,
-                Command::Task
-                | Command::Wake
-                | Command::Evaluate { .. }
-                | Command::CollectLayoutHeap => TaskPriority::Normal,
+                Command::CollectLayoutHeap | Command::CollectJavaScriptHeap => {
+                    TaskPriority::Background
+                }
+                Command::Task | Command::Wake | Command::Evaluate { .. } => TaskPriority::Normal,
                 _ => TaskPriority::UserBlocking,
             };
-            self.token += 1;
-            self.engine.Apply(
-                EventLoopMutation::PostTask(ScheduledTask {
-                    token: TaskToken(self.token),
-                    context: ExecutionContextId(1),
-                    priority,
-                    ready_at: None,
-                    payload: command,
-                }),
-                now,
-            );
+            self.post_task(command, priority, None, now);
         }
+    }
+    fn post_task(
+        &mut self,
+        command: Command,
+        priority: event_loop::TaskPriority,
+        ready_at: Option<Instant>,
+        now: Instant,
+    ) -> event_loop::TaskToken {
+        use event_loop::*;
+        self.token += 1;
+        let token = TaskToken(self.token);
+        self.engine.Apply(
+            EventLoopMutation::PostTask(ScheduledTask {
+                token,
+                context: ExecutionContextId(1),
+                priority,
+                ready_at,
+                payload: command,
+            }),
+            now,
+        );
+        token
+    }
+    fn schedule_collection(&mut self, now: Instant) {
+        // Chromium keeps continuous-input work priority-escalated for
+        // UserModel::kGestureEstimationLimit (100 ms) and services GC from
+        // idle/best-effort queues. This single owner has no idle deadline;
+        // apply the same horizon only to its background collector.
+        const RESIZE_QUIET_PERIOD: Duration = Duration::from_millis(100);
+        let ready_at = self
+            .last_resize_at
+            .map(|last| last + RESIZE_QUIET_PERIOD)
+            .filter(|ready| *ready > now);
+        let token = self.post_task(
+            Command::CollectLayoutHeap,
+            event_loop::TaskPriority::Background,
+            ready_at,
+            now,
+        );
+        self.collection_queued = true;
+        self.collection_token = Some(token);
     }
     fn next(
         &mut self,
@@ -1587,6 +1626,7 @@ impl DocumentQueue {
                     self.task_queued = false;
                 } else if matches!(command, Command::CollectLayoutHeap) {
                     self.collection_queued = false;
+                    self.collection_token = None;
                 } else if matches!(command, Command::CollectJavaScriptHeap) {
                     self.javascript_collection_queued = false;
                 } else if matches!(command, Command::ResizeTask) {

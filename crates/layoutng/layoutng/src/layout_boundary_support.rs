@@ -71,6 +71,7 @@ pub struct LayoutBoundaryExportCache {
     pub(crate) styles: LayoutBoundaryHashMap<(usize, usize), PaintStyle>,
     pub(crate) caret_positions:
         LayoutBoundaryHashMap<(usize, u32, u32, u32, u32, u64), Arc<Vec<(u32, f64)>>>,
+    pub(crate) debug_names: LayoutBoundaryHashMap<*const LayoutObject, Arc<str>>,
     pub(crate) objects: Vec<*mut LayoutObject>,
     pub(crate) source_objects: Arc<Vec<*mut LayoutObject>>,
     pub(crate) sticky_objects: Arc<Vec<*mut LayoutObject>>,
@@ -84,6 +85,7 @@ impl LayoutBoundaryExportCache {
     pub fn Clear(&mut self) {
         self.styles.clear();
         self.caret_positions.clear();
+        self.debug_names.clear();
         self.objects.clear();
         self.source_objects = Arc::default();
         self.sticky_objects = Arc::default();
@@ -100,7 +102,16 @@ pub struct LayoutBoundarySupport {
         Option<fn(&mut LayoutObject, &ConstraintSpace) -> Box<dyn LayoutBoundaryEnvironment>>,
     pub prepare_constraints:
         Option<fn(&ComputedStyle, &ConstraintSpace, bool) -> NativeConstraintSpace>,
-    pub prepare_tree: Option<fn(&mut LayoutObject, &ConstraintSpace, &NativeConstraintSpace, bool)>,
+    pub prepare_tree: Option<
+        fn(
+            &mut LayoutObject,
+            &ConstraintSpace,
+            &NativeConstraintSpace,
+            bool,
+            bool,
+            Option<&[*mut LayoutObject]>,
+        ),
+    >,
     pub export_tree: Option<
         fn(
             &mut LayoutObject,

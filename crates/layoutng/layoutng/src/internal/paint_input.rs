@@ -2,7 +2,7 @@
 
 pub use foundation::style_constants::ECursor;
 pub use foundation::InterpolationQuality;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::layout_input::{
     BorderLineStyle, Edges, ObjectFit, Offset, PaintImage, PaintPathCommand, PaintShadow,
@@ -1585,8 +1585,9 @@ impl PartialEq for PaintStyle {
 
 impl Default for PaintStyle {
     fn default() -> Self {
+        static DEFAULT_DATA: OnceLock<Arc<PaintStyleData>> = OnceLock::new();
         Self {
-            data: Arc::new(PaintStyleData::default()),
+            data: Arc::clone(DEFAULT_DATA.get_or_init(|| Arc::new(PaintStyleData::default()))),
         }
     }
 }

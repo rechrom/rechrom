@@ -90,6 +90,7 @@ use crate::internal::layout_invalidation_reason::{kFontsChanged, kStyleChange};
 use crate::internal::layout_node_metadata::{Element, NativeNodeMetadataRelations, Node};
 use crate::internal::layout_object::ApplyStyleChanges;
 use crate::internal::layout_object::LayoutObject;
+use crate::internal::layout_object_builder::NodeInputUpdate;
 use crate::internal::layout_object_factory_set::{LayoutObjectFactory, LayoutObjectFactorySet};
 use crate::internal::layout_pass_scope::LayoutPassScope;
 use crate::internal::layout_replaced::LayoutReplaced;
@@ -847,6 +848,7 @@ type StyleSourceMap = LayoutBoundaryHashMap<*const NativeComputedStyle, *const C
 type ExportedStyleCache = LayoutBoundaryHashMap<(usize, usize), PaintStyle>;
 type CaretPositionCache =
     LayoutBoundaryHashMap<(usize, u32, u32, u32, u32, u64), Arc<Vec<(u32, f64)>>>;
+type DebugNameCache = LayoutBoundaryHashMap<*const LayoutObject, Arc<str>>;
 
 fn TraceInlineExport() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -869,6 +871,7 @@ fn ExportPaintProperties(
         resources,
         LayoutUpdateKind::Paint,
         None,
+        None,
     )
 }
 
@@ -880,6 +883,7 @@ fn ExportProperties(
     resources: &Arc<PaintResources>,
     purpose: LayoutUpdateKind,
     mut exported_styles: Option<&mut ExportedStyleCache>,
+    mut debug_names: Option<&mut DebugNameCache>,
 ) -> PaintProperties {
     let mut output = PaintProperties::default();
     output.resources = Some(Arc::clone(resources));
@@ -917,7 +921,15 @@ fn ExportProperties(
         output.display_item_client_id = client.Id() as u64;
         output.display_item_client_owner_node_id = unsafe { &*object }.OwnerNodeIdDefault();
         output.display_item_client_invalidation_reason = Some(client.GetPaintInvalidationReason());
-        output.display_item_client_debug_name = Arc::from(unsafe { &*object }.DebugName().Utf8());
+        output.display_item_client_debug_name = if let Some(cache) = debug_names.as_deref_mut() {
+            Arc::clone(
+                cache
+                    .entry(object)
+                    .or_insert_with(|| Arc::from(unsafe { &*object }.DebugName().Utf8())),
+            )
+        } else {
+            Arc::from(unsafe { &*object }.DebugName().Utf8())
+        };
         output.display_item_client_is_cacheable = client.IsCacheable();
         output.display_item_client_is_just_created = client.IsJustCreated();
         output.display_item_raster_effect_outset = client.VisualRectOutsetForRasterEffects();
@@ -2933,6 +2945,7 @@ struct FragmentOwners {
     exported_styles: ExportedStyleCache,
     cached_caret_positions: CaretPositionCache,
     exported_caret_positions: CaretPositionCache,
+    debug_names: DebugNameCache,
     uncullable_objects: Arc<LayoutBoundaryHashSet<*const LayoutObject>>,
 }
 impl FragmentOwners {
@@ -3219,6 +3232,7 @@ fn ExportInlineItem(
         resources,
         purpose,
         Some(&mut paint_state_owners.exported_styles),
+        Some(&mut paint_state_owners.debug_names),
     );
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
@@ -3605,6 +3619,7 @@ fn ExportFragment(
         resources,
         purpose,
         Some(&mut paint_state_owners.exported_styles),
+        Some(&mut paint_state_owners.debug_names),
     );
     output.paint.display_item_fragment = display_item_fragment;
     output.paint.hidden =
@@ -4720,6 +4735,59 @@ fn RebindFont(
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:2607-2647
 // cpp: layoutng/internal/boundary/layout_boundary.cc:2710-2752
+fn RebindTargetedFont(object: *mut LayoutObject) -> bool {
+    let current = unsafe { &mut *object };
+    let node = current.GetNode();
+    debug_assert!(!node.is_null());
+    let previous_font = unsafe { &*node }.InputBoundFont();
+    if unsafe { &*node }.IsTextNode() {
+        let mut logical_parent = unsafe { &*node }.parentNode() as *mut Node;
+        while !logical_parent.is_null() && unsafe { &*logical_parent }.GetLayoutObject().is_null() {
+            logical_parent = unsafe { &*logical_parent }.parentNode() as *mut Node;
+        }
+        if !logical_parent.is_null() {
+            let layout_parent = unsafe { &mut *unsafe { &*logical_parent }.GetLayoutObject() };
+            let style = if layout_parent.IsInitialLetterBox() {
+                InitialLetterTextStyle(layout_parent)
+            } else {
+                layout_parent.StyleRef() as *const NativeComputedStyle
+            };
+            unsafe { &mut *node }.SetComputedStyle(style);
+            current.SetStyleWithChanges(style, ApplyStyleChanges::kNo);
+            let text = unsafe { &mut *To::<LayoutText>(object) };
+            text.InvalidateInlineItems();
+            text.SetNeedsCollectInlines();
+            text.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+                &raw const kFontsChanged,
+            );
+        }
+    } else {
+        let style = RebindFont(
+            unsafe { &*node }.InputStyle(),
+            current.StyleRef(),
+            current.Parent(),
+        );
+        unsafe { &mut *node }.SetComputedStyle(style);
+        current.SetStyleWithChanges(style, ApplyStyleChanges::kNo);
+        let first_line_style = unsafe { &*node }.InputFirstLineStyle();
+        if !first_line_style.is_null() {
+            if let Some(first_line_input) = unsafe { &*node }.InputFirstLineStyleData() {
+                let rebound = RebindFont(
+                    first_line_input,
+                    unsafe { &*first_line_style },
+                    current.Parent(),
+                );
+                unsafe { &mut *node }.SetInputFirstLineStyle(rebound);
+            }
+        }
+        current.SetNeedsLayoutAndIntrinsicWidthsRecalc(&raw const kFontsChanged);
+    }
+    let resolved_font = current.StyleRef().GetFont() as *mut font_engine::fonts::font::Font;
+    unsafe { &mut *node }.SetInputBoundFont(resolved_font);
+    unsafe { &mut *node }.ClearInputFontBinding();
+    resolved_font != previous_font
+}
+
 fn RebindFontsFromConstraintSpace(root: &mut LayoutObject, only_dirty: bool) {
     let mut rebound = std::collections::HashSet::new();
     let root_ptr: *mut LayoutObject = root;
@@ -4931,6 +4999,8 @@ pub fn PrepareLayoutObjectTree(
     space: &ConstraintSpace,
     native_space: &NativeConstraintSpace,
     reuse_prepared_fonts: bool,
+    relations_dirty: bool,
+    targeted_font_objects: Option<&[*mut LayoutObject]>,
 ) {
     if !root.Parent().is_null() {
         panic!("Layout input must reference the tree root");
@@ -4939,8 +5009,10 @@ pub fn PrepareLayoutObjectTree(
     if root_node.is_null() {
         panic!("Layout root requires standalone metadata");
     }
-    NativeNodeMetadataRelations::FinalizeTreeRelations(unsafe { &mut *root_node })
-        .unwrap_or_else(|error| panic!("{error:?}"));
+    if relations_dirty {
+        NativeNodeMetadataRelations::FinalizeTreeRelations(unsafe { &mut *root_node })
+            .unwrap_or_else(|error| panic!("{error:?}"));
+    }
 
     if space.printing {
         let view = DynamicTo::<LayoutView>(root as *mut LayoutObject);
@@ -4952,83 +5024,107 @@ pub fn PrepareLayoutObjectTree(
             native_space.GetWritingMode(),
         ));
     }
-    RebindFontsFromConstraintSpace(root, reuse_prepared_fonts);
+    {
+        if reuse_prepared_fonts {
+            if let Some(objects) = targeted_font_objects {
+                let font_changed = objects.iter().copied().any(RebindTargetedFont);
+                if font_changed {
+                    // A changed inherited binding can affect descendants and
+                    // anonymous owners outside the targeted style update. The
+                    // rare font-changing path takes the complete Chromium
+                    // invalidation walk; ordinary geometry styles stay local.
+                    RebindFontsFromConstraintSpace(root, false);
+                }
+            } else {
+                RebindFontsFromConstraintSpace(root, true);
+            }
+        } else {
+            RebindFontsFromConstraintSpace(root, false);
+        }
+    }
 
     let root_ptr: *mut LayoutObject = root;
     let viewport_defining_element = unsafe { &*root_node }.InputViewportDefiningElement();
-    let mut has_first_line_styles = false;
-    let mut object = root_ptr;
-    while !object.is_null() {
-        let current = unsafe { &*object };
-        let node = current.GetNode();
-        if !node.is_null() {
-            has_first_line_styles |= !unsafe { &*node }.InputFirstLineStyle().is_null();
-        }
-        object = current.NextInPreOrder(root_ptr);
-    }
-    object = root_ptr;
-    while !object.is_null() {
-        let current = unsafe { &*object };
-        let box_ptr = DynamicTo::<LayoutBox>(object);
-        if !box_ptr.is_null() {
-            let shape = ShapeOutsideInfo::Info(unsafe { &*box_ptr });
-            if !shape.is_null() {
-                unsafe { &mut *shape }.MarkShapeAsDirty();
-                // A shape can depend on mutable host image pixels, which are
-                // deliberately absent from the font cache.
-                unsafe { &mut *box_ptr }
-                    .SetNeedsLayoutAndIntrinsicWidthsRecalc(&raw const kStyleChange);
+    let has_first_line_styles = if relations_dirty {
+        let mut has_first_line_styles = false;
+        let mut object = root_ptr;
+        while !object.is_null() {
+            let current = unsafe { &*object };
+            let node = current.GetNode();
+            if !node.is_null() {
+                has_first_line_styles |= !unsafe { &*node }.InputFirstLineStyle().is_null();
             }
+            object = current.NextInPreOrder(root_ptr);
         }
-        let node = current.GetNode();
-        let next = current.NextInPreOrder(root_ptr);
-        if current.IsSVGRoot() {
-            let size = space
-                .document_image_container
-                .filter(|container| {
-                    !node.is_null() && unsafe { &*node }.InputId() == container.root_node_id
-                })
-                .map_or(PhysicalSize::default(), |container| {
-                    PhysicalSize::new(
-                        LayoutUnit::from_f64(container.size.width),
-                        LayoutUnit::from_f64(container.size.height),
-                    )
-                });
-            let algorithms = LayoutPassScope::Algorithms();
-            let set_container = unsafe { &*algorithms }
-                .svg_support
-                .set_root_container_size
-                .expect("SVG layout module has a root container setter");
-            set_container(unsafe { &mut *object }, size);
-        }
-        if !node.is_null() {
-            unsafe { &mut *node }.PrepareStandaloneLayout(
-                space,
-                viewport_defining_element,
-                has_first_line_styles,
-            );
-        }
-        object = next;
-    }
-    object = root_ptr;
-    while !object.is_null() {
-        let current = unsafe { &*object };
-        let layout_inline = DynamicTo::<LayoutInline>(object);
-        let node = current.GetNode();
-        if !layout_inline.is_null() && !node.is_null() {
-            let node = unsafe { &*node };
-            let style = current.StyleRef();
-            let first_line_style = current.FirstLineStyleRef();
-            let needs_fragment = NativeStyleRequiresPaintBackedInlineFragment(style)
-                || (!std::ptr::eq(style, first_line_style)
-                    && NativeStyleRequiresPaintBackedInlineFragment(first_line_style));
-            if needs_fragment {
-                let layout_inline = unsafe { &mut *layout_inline };
-                layout_inline.SetIsInLayoutNGInlineFormattingContext(true);
-                layout_inline.SetShouldCreateBoxFragmentDefault();
+        has_first_line_styles
+    } else {
+        unsafe { &*root_node }.InputHasFirstLineStyles()
+    };
+    {
+        let mut object = root_ptr;
+        while !object.is_null() {
+            let current = unsafe { &*object };
+            let box_ptr = DynamicTo::<LayoutBox>(object);
+            if !box_ptr.is_null() {
+                let shape = ShapeOutsideInfo::Info(unsafe { &*box_ptr });
+                if !shape.is_null() {
+                    unsafe { &mut *shape }.MarkShapeAsDirty();
+                    // A shape can depend on mutable host image pixels, which are
+                    // deliberately absent from the font cache.
+                    unsafe { &mut *box_ptr }
+                        .SetNeedsLayoutAndIntrinsicWidthsRecalc(&raw const kStyleChange);
+                }
             }
+            let node = current.GetNode();
+            let next = current.NextInPreOrder(root_ptr);
+            if current.IsSVGRoot() {
+                let size = space
+                    .document_image_container
+                    .filter(|container| {
+                        !node.is_null() && unsafe { &*node }.InputId() == container.root_node_id
+                    })
+                    .map_or(PhysicalSize::default(), |container| {
+                        PhysicalSize::new(
+                            LayoutUnit::from_f64(container.size.width),
+                            LayoutUnit::from_f64(container.size.height),
+                        )
+                    });
+                let algorithms = LayoutPassScope::Algorithms();
+                let set_container = unsafe { &*algorithms }
+                    .svg_support
+                    .set_root_container_size
+                    .expect("SVG layout module has a root container setter");
+                set_container(unsafe { &mut *object }, size);
+            }
+            object = next;
         }
-        object = current.NextInPreOrder(root_ptr);
+        unsafe { &mut *root_node }.PrepareStandaloneLayout(
+            space,
+            viewport_defining_element,
+            has_first_line_styles,
+        );
+    }
+    if relations_dirty {
+        let mut object = root_ptr;
+        while !object.is_null() {
+            let current = unsafe { &*object };
+            let layout_inline = DynamicTo::<LayoutInline>(object);
+            let node = current.GetNode();
+            if !layout_inline.is_null() && !node.is_null() {
+                let node = unsafe { &*node };
+                let style = current.StyleRef();
+                let first_line_style = current.FirstLineStyleRef();
+                let needs_fragment = NativeStyleRequiresPaintBackedInlineFragment(style)
+                    || (!std::ptr::eq(style, first_line_style)
+                        && NativeStyleRequiresPaintBackedInlineFragment(first_line_style));
+                if needs_fragment {
+                    let layout_inline = unsafe { &mut *layout_inline };
+                    layout_inline.SetIsInLayoutNGInlineFormattingContext(true);
+                    layout_inline.SetShouldCreateBoxFragmentDefault();
+                }
+            }
+            object = current.NextInPreOrder(root_ptr);
+        }
     }
 }
 
@@ -5037,7 +5133,7 @@ pub fn PrepareLayoutObjectTreeDefault(
     space: &ConstraintSpace,
     native_space: &NativeConstraintSpace,
 ) {
-    PrepareLayoutObjectTree(root, space, native_space, false)
+    PrepareLayoutObjectTree(root, space, native_space, false, true, None)
 }
 
 /// Refresh local paint inputs from existing native objects, retaining layout
@@ -5230,6 +5326,78 @@ pub fn ExportLayoutObjectTree(
     ExportObjectTree(root, result, space, LayoutUpdateKind::Paint, cache)
 }
 
+/// A compatible Element::RecalcOwnStyle update preserves LayoutObject and
+/// metadata identities. Keep the topology-dependent export indices resident,
+/// while dropping only style/caret values that were derived from the changed
+/// objects. Blink keeps these identities in one object graph across SetStyle;
+/// this is the boundary equivalent for Rechrom's immutable paint projection.
+pub(crate) fn RefreshCompatibleNodeInputCache(
+    cache: &mut LayoutBoundaryExportCache,
+    update: &NodeInputUpdate,
+) {
+    if cache.objects.is_empty() || update.objects.is_empty() {
+        return;
+    }
+
+    let mut changed_objects = LayoutBoundaryHashSet::default();
+    let mut changed_projected_styles = LayoutBoundaryHashSet::default();
+    for change in &update.objects {
+        changed_objects.insert(change.object as *const LayoutObject);
+        changed_projected_styles.insert(change.previous_projected_style as usize);
+        let node = unsafe { &*change.object }.GetNode();
+        if !node.is_null() {
+            changed_projected_styles.insert(unsafe { &*node }.InputStyle() as *const _ as usize);
+        }
+    }
+
+    cache
+        .styles
+        .retain(|(_, projected), _| !changed_projected_styles.contains(projected));
+    cache
+        .caret_positions
+        .retain(|(object, ..), _| !changed_objects.contains(&(*object as *const LayoutObject)));
+
+    // A native ComputedStyle can be shared by several source nodes. Rebuild
+    // this small pointer index in document order so removing one changed source
+    // cannot orphan another source which still owns the old native style.
+    cache.style_sources.clear();
+    for &object in cache.source_objects.iter() {
+        let current = unsafe { &*object };
+        let node = current.GetNode();
+        if node.is_null() {
+            continue;
+        }
+        let input_node = unsafe { &*node };
+        cache
+            .style_sources
+            .entry(current.StyleRef())
+            .or_insert(input_node.InputStyle());
+        let first_line_style = input_node.InputFirstLineStyle();
+        if !first_line_style.is_null() {
+            if let Some(first_line_data) = input_node.InputFirstLineStyleData() {
+                cache
+                    .style_sources
+                    .entry(first_line_style)
+                    .or_insert(first_line_data);
+            }
+        }
+    }
+
+    cache.sticky_objects = Arc::new(
+        cache
+            .objects
+            .iter()
+            .copied()
+            .filter(|object| {
+                unsafe { &**object }
+                    .StyleRef()
+                    .HasStickyConstrainedPosition()
+            })
+            .collect(),
+    );
+    cache.uncullable_objects = Arc::new(MarkUncullablePaintAncestors(&cache.objects));
+}
+
 fn ExportObjectTree(
     root: &mut LayoutObject,
     result: &LayoutResult,
@@ -5305,6 +5473,7 @@ fn ExportObjectTree(
     let mut paint_state_owners = FragmentOwners {
         exported_styles: std::mem::take(&mut cache.styles),
         cached_caret_positions: std::mem::take(&mut cache.caret_positions),
+        debug_names: std::mem::take(&mut cache.debug_names),
         uncullable_objects: Arc::clone(&cache.uncullable_objects),
         ..FragmentOwners::default()
     };
@@ -5345,5 +5514,6 @@ fn ExportObjectTree(
     }
     cache.styles = paint_state_owners.exported_styles;
     cache.caret_positions = paint_state_owners.exported_caret_positions;
+    cache.debug_names = paint_state_owners.debug_names;
     output
 }

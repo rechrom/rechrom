@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[path = "pre_paint_revision.rs"]
 pub mod pre_paint_revision;
@@ -792,12 +792,17 @@ pub struct PaintProperties {
 
 impl Default for PaintProperties {
     fn default() -> Self {
+        static EMPTY_DEBUG_NAME: OnceLock<Arc<str>> = OnceLock::new();
+        static EMPTY_GLYPH_RUNS: OnceLock<Arc<Vec<PaintGlyphRun>>> = OnceLock::new();
+        static EMPTY_CARET_POSITIONS: OnceLock<Arc<Vec<(u32, f64)>>> = OnceLock::new();
         Self {
             property_fragment_unique_id: 0,
             is_layout_view: false,
             requires_main_thread_scrolling_for_background_attachment_fixed: None,
             display_item_client_invalidation_reason: None,
-            display_item_client_debug_name: std::sync::Arc::from(""),
+            display_item_client_debug_name: Arc::clone(
+                EMPTY_DEBUG_NAME.get_or_init(|| Arc::from("")),
+            ),
             paint_layer_client_invalidation_reason: None,
             self_ink_overflow: None,
             contents_ink_overflow: None,
@@ -867,8 +872,10 @@ impl Default for PaintProperties {
             text_combine_inline_offset: 0.0,
             replaced_content: None,
             resources: None,
-            glyph_runs: Arc::new(Vec::new()),
-            text_caret_positions: Arc::new(Vec::new()),
+            glyph_runs: Arc::clone(EMPTY_GLYPH_RUNS.get_or_init(|| Arc::new(Vec::new()))),
+            text_caret_positions: Arc::clone(
+                EMPTY_CARET_POSITIONS.get_or_init(|| Arc::new(Vec::new())),
+            ),
             text_control_host: None,
             text_control_inner_editor: false,
             text_control_empty_caret: None,

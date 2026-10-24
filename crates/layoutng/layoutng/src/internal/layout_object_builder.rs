@@ -11,7 +11,7 @@ use super::constraint_space::FragmentationType;
 use super::layout_font_resolver::NativeFontResolver;
 use super::layout_inline::LayoutInline;
 use super::layout_input::{
-    ComputedStyle, ConstraintSpace, ElementData, NativeNodeConstructionData, NodeKind,
+    ComputedStyle, ConstraintSpace, DocumentRole, ElementData, NativeNodeConstructionData, NodeKind,
 };
 use super::layout_node_metadata::{
     ContainerNode, NativeNodeMetadataRelations, Node, Text as TextNode,
@@ -27,7 +27,7 @@ use foundation::{
 use layoutng_style::style::computed_style::{
     ComputedStyle as NativeComputedStyle, ComputedStyleBuilder,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 // Native theme state and scroll translations affect paint, not box geometry.
 // Keep their new values in live metadata, excluding them only from comparison.
@@ -129,10 +129,11 @@ pub struct LayoutTreeUpdateStats {
     pub reused: usize,
     pub updated: usize,
     pub removed: usize,
+    pub moved: usize,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct InputKey(u64, i32, bool, String, usize);
+struct InputKey(u64, i32, bool, Arc<str>, usize);
 
 struct ManagedObject {
     object: *mut LayoutObject,
@@ -178,6 +179,16 @@ pub struct PaintStyleBinding {
 pub struct PaintInputUpdate {
     pub sources: Vec<u64>,
     pub inline_ink_changes: Vec<u64>,
+}
+
+pub(crate) struct NodeInputObjectUpdate {
+    pub(crate) object: *mut LayoutObject,
+    pub(crate) previous_projected_style: *const ComputedStyle,
+}
+
+pub(crate) struct NodeInputUpdate {
+    pub(crate) objects: Vec<NodeInputObjectUpdate>,
+    pub(crate) relations_changed: bool,
 }
 
 // cpp: layoutng/internal/layout_object_builder.h:75-77
@@ -231,7 +242,7 @@ pub struct LayoutObjectTreeStorage {
     partial_index: Option<ManagedInputIndex>,
     attached_keys: Vec<InputKey>,
     pending: HashMap<InputKey, Box<ManagedObject>>,
-    occurrences: HashMap<(u64, i32, bool, String), usize>,
+    occurrences: HashMap<(u64, i32, bool, Arc<str>), usize>,
     last_child: HashMap<*mut LayoutObject, *mut Node>,
     updating: bool,
     reattach: std::collections::HashSet<u64>,
@@ -403,6 +414,7 @@ impl LayoutObjectTreeStorage {
             || linked.previousSibling() != previous
             || unsafe { &*object }.Parent().is_null()
         {
+            self.stats.moved += 1;
             // Reused objects also dispatch RemoveChild/AddChild when reordered.
             // Their fast path deliberately skips construction scopes; install
             // this tree's virtual factories for the attachment operation itself.
@@ -453,7 +465,10 @@ impl LayoutObjectTreeStorage {
         first_line_style: *const ComputedStyle,
         existing_key: Option<InputKey>,
     ) -> *mut LayoutObject {
-        let _heap_scope = LayoutHeapScope::new();
+        // CompleteUpdate installs these scopes once for the complete
+        // attachment transaction. Compatible NodeInput updates are local and
+        // retain standalone scopes here.
+        let _heap_scope = (!self.updating).then(LayoutHeapScope::new);
         if existing_key.is_none() {
             self.input_index.take();
         }
@@ -481,7 +496,12 @@ impl LayoutObjectTreeStorage {
         let targeted_style_update = existing_key.is_some();
         let place = existing_key.is_none();
         let key = existing_key.unwrap_or_else(|| {
-            let base = (id, kind as i32, style_generated, debug_name);
+            let base = (
+                id,
+                kind as i32,
+                style_generated,
+                Arc::<str>::from(debug_name),
+            );
             let occurrence = self.occurrences.entry(base.clone()).or_default();
             let key = InputKey(base.0, base.1, base.2, base.3, *occurrence);
             *occurrence += 1;
@@ -502,7 +522,7 @@ impl LayoutObjectTreeStorage {
                 && old.input.style == *source
                 && old.input.text == text
                 && old.input.element == element
-                && old.input.debug_name == key.3
+                && old.input.debug_name == key.3.as_ref()
                 && old.input.first_line_style.as_ref() == first_line
                 && old.effective_style == *effective
             {
@@ -522,15 +542,17 @@ impl LayoutObjectTreeStorage {
         let fonts: *mut dyn NativeFontResolver = &mut *self.fonts;
         // SAFETY: `fonts` is boxed in this Storage and outlives the scope;
         // the scope only installs its pointer in the thread-local slot.
-        let _font_scope = unsafe { NativeFontResolverScope::new_from_raw(fonts) };
-        let _factory_scope = LayoutObjectFactoryScope::new(&self.factories);
+        let _font_scope =
+            (!self.updating).then(|| unsafe { NativeFontResolverScope::new_from_raw(fonts) });
+        let _factory_scope =
+            (!self.updating).then(|| LayoutObjectFactoryScope::new(&self.factories));
         let mut input = NativeNodeConstructionData {
             id,
             kind,
             style_generated,
             style: style.clone(),
             element,
-            debug_name: key.3.clone(),
+            debug_name: key.3.to_string(),
             text,
             first_line_style: None,
         };
@@ -960,6 +982,11 @@ impl LayoutObjectTree {
         }
         collect_trace.set("objects", affected.len() as f64);
         drop(collect_trace);
+        let stable_nodes = affected
+            .iter()
+            .map(|key| storage.managed[key].node)
+            .collect::<Vec<_>>();
+        let parent_node = unsafe { &*parent }.GetNode();
         let mut index = storage.input_index.take().unwrap();
         assert!(storage.pending.is_empty());
         storage.updating = true;
@@ -981,10 +1008,33 @@ impl LayoutObjectTree {
         drop(prepare_trace);
         storage.partial_index = Some(index);
         self.CompleteUpdate(|tree| build(tree, unsafe { &mut *parent }));
+        let stats = self.UpdateStats();
+        if stats.created == 0 && stats.updated == 0 && stats.removed == 0 && stats.moved == 0 {
+            // The partial transaction temporarily opens metadata so reused
+            // descendants can reattach their local control relations. When
+            // every projected input and link is unchanged, those incremental
+            // relations are complete and the global document relations remain
+            // valid; restore the sealed invariant without a full-tree walk.
+            if !parent_node.is_null() {
+                unsafe { &mut *parent_node }.seal_input_tree();
+            }
+            for node in stable_nodes {
+                unsafe { &mut *node }.seal_input_tree();
+            }
+        }
         true
     }
 
     fn CompleteUpdate<T>(&mut self, build: impl FnOnce(&mut Self) -> T) -> T {
+        let storage = unsafe { &mut *self.storage_ };
+        let fonts: *mut dyn NativeFontResolver = &mut *storage.fonts;
+        let factories = storage.factories;
+        let _heap = LayoutHeapScope::new();
+        // One RebuildLayoutTree transaction owns the native construction
+        // environment. Per-object TLS/heap scopes add no lifetime protection
+        // and are especially costly when a responsive subtree is reattached.
+        let _font_scope = unsafe { NativeFontResolverScope::new_from_raw(fonts) };
+        let _factory_scope = LayoutObjectFactoryScope::new(&factories);
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(self))) {
             Ok(value) => {
                 self.FinishUpdate();
@@ -1508,15 +1558,16 @@ impl LayoutObjectTree {
         id: u64,
         style: &ComputedStyle,
         element: Option<ElementData>,
-    ) -> bool {
+    ) -> Option<NodeInputUpdate> {
         let _heap = LayoutHeapScope::new();
         let storage = unsafe { &mut *self.storage_ };
         assert!(!storage.updating);
         let keys = storage.InputKeys(id).to_vec();
         if keys.is_empty() {
-            return false;
+            return None;
         }
         let mut inputs = Vec::new();
+        let mut relations_changed = false;
         for key in &keys {
             let record = &storage.managed[key];
             if record.input.style_generated
@@ -1530,7 +1581,7 @@ impl LayoutObjectTree {
                     .as_ref()
                     .is_some_and(|e| e.form_control_type.is_some())
             {
-                return false;
+                return None;
             }
             let mut input = record.input.clone();
             input.style = style.clone();
@@ -1549,9 +1600,27 @@ impl LayoutObjectTree {
                 &input,
                 &input.style,
             ) {
-                return false;
+                return None;
             }
-            inputs.push((key.clone(), record.parent, input));
+            relations_changed |= record.input.element != input.element
+                || record
+                    .input
+                    .element
+                    .as_ref()
+                    .is_some_and(|data| data.document_role != DocumentRole::kNone)
+                || input
+                    .element
+                    .as_ref()
+                    .is_some_and(|data| data.document_role != DocumentRole::kNone);
+            inputs.push((
+                key.clone(),
+                record.parent,
+                input,
+                NodeInputObjectUpdate {
+                    object: record.object,
+                    previous_projected_style: unsafe { &*record.node }.InputStyle(),
+                },
+            ));
         }
         // Propagate the canonical parent style to existing inherited text,
         // matching Create's effective text style and Blink's anonymous children.
@@ -1571,17 +1640,27 @@ impl LayoutObjectTree {
                     && record.effective_style.native_style == native
                 {
                     if record.input.style_generated || record.input.first_line_style.is_some() {
-                        return false;
+                        return None;
                     }
                     let mut input = record.input.clone();
                     input.style = style.clone();
-                    inputs.push((key.clone(), record.parent, input));
+                    inputs.push((
+                        key.clone(),
+                        record.parent,
+                        input,
+                        NodeInputObjectUpdate {
+                            object: record.object,
+                            previous_projected_style: unsafe { &*record.node }.InputStyle(),
+                        },
+                    ));
                 }
             }
         }
         // Input comparisons and validation finish before any mutation. No
         // sibling topology or partial document transaction is exposed here.
-        for (key, parent, input) in inputs {
+        let mut objects = Vec::with_capacity(inputs.len());
+        for (key, parent, input, object) in inputs {
+            objects.push(object);
             let record = storage.managed.remove(&key).unwrap();
             unsafe { &mut *record.node }.UnsealForTreeUpdate();
             storage.pending.insert(key.clone(), record);
@@ -1605,7 +1684,18 @@ impl LayoutObjectTree {
                 Some(key),
             );
         }
-        true
+        if !relations_changed {
+            for change in &objects {
+                let node = unsafe { &*change.object }.GetNode();
+                if !node.is_null() {
+                    unsafe { &mut *node }.seal_input_tree();
+                }
+            }
+        }
+        Some(NodeInputUpdate {
+            objects,
+            relations_changed,
+        })
     }
 
     /// Element::RecalcOwnStyle installs local style/theme inputs on existing

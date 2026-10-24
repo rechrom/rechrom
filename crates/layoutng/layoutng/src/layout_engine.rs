@@ -18,7 +18,7 @@ use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 
 use crate::internal::block_node::BlockNode;
 use crate::internal::boundary::layout_boundary::{
-    ResolveLogicalParentOccurrences, ScrollPaintPropertyIndex,
+    RefreshCompatibleNodeInputCache, ResolveLogicalParentOccurrences, ScrollPaintPropertyIndex,
 };
 use crate::internal::layout_algorithm_set::LayoutAlgorithmSet;
 use crate::internal::layout_box::LayoutBox;
@@ -456,6 +456,8 @@ pub struct LayoutEngine {
     boundary_: LayoutBoundarySupport,
     boundary_export_cache_: crate::layout_boundary_support::LayoutBoundaryExportCache,
     tree_facts_: Option<LayoutTreeFacts>,
+    tree_relations_dirty_: bool,
+    targeted_font_objects_: Option<Vec<*mut LayoutObject>>,
 }
 
 impl LayoutEngine {
@@ -488,6 +490,8 @@ impl LayoutEngine {
             boundary_: assembly.boundary,
             boundary_export_cache_: Default::default(),
             tree_facts_: None,
+            tree_relations_dirty_: true,
+            targeted_font_objects_: None,
         }
     }
 
@@ -545,21 +549,9 @@ impl LayoutEngine {
                 return true;
             }
         }
-        if !matches!(
-            &mutation,
-            LayoutMutation::Constraints(_)
-                | LayoutMutation::RetainTree
-                | LayoutMutation::ScrollOffset { .. }
-                | LayoutMutation::Editing { .. }
-                | LayoutMutation::SelectionPaint { .. }
-                | LayoutMutation::EditingState(_)
-        ) {
-            self.boundary_export_cache_.Clear();
-            self.tree_facts_ = None;
-        }
-        // Native topology, style, constraints and layout results may change at
-        // all other mutation entries. Never keep borrowed native pointers or
-        // exported paths across them, even if the mutation later proves a noop.
+        // Invalidation follows the mutation result below. Compatible SetStyle
+        // updates keep native object identities, and rejected/no-op attachment
+        // transactions must not discard their retained export state.
         if !matches!(&mutation, LayoutMutation::PaintInput { .. }) {
             self.pending_paint_ids_.clear();
             self.pending_inline_ink_ids_.clear();
@@ -608,6 +600,11 @@ impl LayoutEngine {
                 trace.set("reused", stats.reused as f64);
                 trace.set("updated", stats.updated as f64);
                 trace.set("removed", stats.removed as f64);
+                trace.set("moved", stats.moved as f64);
+                self.boundary_export_cache_.Clear();
+                self.tree_facts_ = None;
+                self.tree_relations_dirty_ = true;
+                self.targeted_font_objects_ = None;
                 true
             }
             LayoutMutation::RetainTree => {
@@ -644,6 +641,17 @@ impl LayoutEngine {
                     trace.set("reused", stats.reused as f64);
                     trace.set("updated", stats.updated as f64);
                     trace.set("removed", stats.removed as f64);
+                    trace.set("moved", stats.moved as f64);
+                    if stats.created != 0
+                        || stats.updated != 0
+                        || stats.removed != 0
+                        || stats.moved != 0
+                    {
+                        self.boundary_export_cache_.Clear();
+                        self.tree_facts_ = None;
+                        self.tree_relations_dirty_ = true;
+                        self.targeted_font_objects_ = None;
+                    }
                 }
                 trace.set(
                     "pending_export",
@@ -659,13 +667,24 @@ impl LayoutEngine {
             } => {
                 let mut trace = browser_tracing::span("layout", "LayoutEngine.NodeInput");
                 trace.set("node_id", node_id as f64);
-                let applied = self
+                let update = self
                     .tree_
                     .as_mut()
-                    .is_some_and(|tree| tree.UpdateNodeInput(node_id, style, element));
-                if applied {
+                    .and_then(|tree| tree.UpdateNodeInput(node_id, style, element));
+                if let Some(update) = update.as_ref() {
+                    RefreshCompatibleNodeInputCache(&mut self.boundary_export_cache_, update);
+                    self.tree_facts_ = None;
                     self.fragments = None;
+                    self.tree_relations_dirty_ |= update.relations_changed;
+                    if let Some(targeted) = &mut self.targeted_font_objects_ {
+                        for change in &update.objects {
+                            if !targeted.contains(&change.object) {
+                                targeted.push(change.object);
+                            }
+                        }
+                    }
                 }
+                let applied = update.is_some();
                 trace.set("applied", applied as u8 as f64);
                 applied
             }
@@ -680,6 +699,8 @@ impl LayoutEngine {
                     .as_mut()
                     .and_then(|tree| tree.UpdatePaintStyle(node_id, style, clip_resource_version));
                 if let Some(binding) = binding.as_ref() {
+                    self.boundary_export_cache_.Clear();
+                    self.tree_facts_ = None;
                     if let Some(fragments) = &mut self.fragments {
                         let mut found = false;
                         let paint_style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
@@ -715,6 +736,8 @@ impl LayoutEngine {
                     .as_mut()
                     .and_then(|tree| tree.UpdatePaintInput(node_id, style, element));
                 if let Some(update) = update {
+                    self.boundary_export_cache_.Clear();
+                    self.tree_facts_ = None;
                     self.pending_paint_ids_.extend(update.sources);
                     self.pending_inline_ink_ids_
                         .extend(update.inline_ink_changes);
@@ -724,9 +747,13 @@ impl LayoutEngine {
                 }
             }
             LayoutMutation::ReplaceTree(tree) => {
+                self.boundary_export_cache_.Clear();
+                self.tree_facts_ = None;
                 self.fragments = None;
                 self.pre_paint_inputs_.invalidate();
                 self.tree_ = Some(tree);
+                self.tree_relations_dirty_ = true;
+                self.targeted_font_objects_ = None;
                 true
             }
             LayoutMutation::ScrollOffset { node_id, offset } => {
@@ -1394,7 +1421,20 @@ impl LayoutEngine {
         let _layout_pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
         let reuses_prepared_fonts = environment.ReusesPreparedFonts();
         trace.set("reuses_prepared_fonts", reuses_prepared_fonts as u8 as f64);
-        prepare_tree(root, space, &constraints, reuses_prepared_fonts);
+        trace.set(
+            "tree_relations_dirty",
+            self.tree_relations_dirty_ as u8 as f64,
+        );
+        prepare_tree(
+            root,
+            space,
+            &constraints,
+            reuses_prepared_fonts,
+            self.tree_relations_dirty_,
+            self.targeted_font_objects_.as_deref(),
+        );
+        self.tree_relations_dirty_ = false;
+        self.targeted_font_objects_ = Some(Vec::new());
         let native_root = BlockNode::new(root_box);
         trace.set(
             "root_cached_results",

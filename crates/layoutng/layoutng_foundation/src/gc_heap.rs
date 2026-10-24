@@ -821,14 +821,26 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
         .max(1);
     let layout = Layout::from_size_align(size, std::mem::align_of::<T>())
         .expect("invalid layout allocation");
-    let pointer = HEAP.with(|heap| {
-        let mut heap = heap.borrow_mut();
+    HEAP.with(|heap| {
+        let heap = heap.borrow();
         assert!(
             heap.scopes > 0 && !heap.collecting,
             "layout allocation requires LayoutHeapScope"
         );
-        let address = unsafe { alloc_zeroed(layout) };
-        let address = NonNull::new(address).unwrap_or_else(|| handle_alloc_error(layout));
+    });
+    let address = unsafe { alloc_zeroed(layout) };
+    let address = NonNull::new(address).unwrap_or_else(|| handle_alloc_error(layout));
+    let pointer = address.as_ptr() as *mut T;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| init(pointer)));
+    if let Err(error) = result {
+        unsafe { dealloc(address.as_ptr(), layout) };
+        std::panic::resume_unwind(error);
+    }
+    HEAP.with(|heap| {
+        let mut heap = heap.borrow_mut();
+        // Registration follows complete initialization. Collection cannot run
+        // inside LayoutHeapScope, so no trace can observe the object between
+        // placement construction and this insertion.
         heap.activity_since_collection = true;
         heap.allocated_bytes_since_collection = heap
             .allocated_bytes_since_collection
@@ -847,30 +859,13 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
             Allocation {
                 address,
                 layout,
-                trace: None,
-                destroy: None,
+                trace: Some(trace_object::<T>),
+                destroy: Some(destroy_object::<T>),
                 marked: false,
                 strongly_marked: false,
             },
         );
         heap.heap_bytes = heap.heap_bytes.saturating_add(layout.size());
-        address.as_ptr() as *mut T
-    });
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| init(pointer)));
-    if let Err(error) = result {
-        HEAP.with(|heap| {
-            let mut heap = heap.borrow_mut();
-            if let Some(object) = heap.objects.remove(&(pointer as usize)) {
-                heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
-            }
-        });
-        std::panic::resume_unwind(error);
-    }
-    HEAP.with(|heap| {
-        let mut heap = heap.borrow_mut();
-        let object = heap.objects.get_mut(&(pointer as usize)).unwrap();
-        object.trace = Some(trace_object::<T>);
-        object.destroy = Some(destroy_object::<T>);
     });
     pointer
 }
