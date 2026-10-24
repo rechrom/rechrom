@@ -398,3 +398,36 @@ Trace artifacts:
 /private/tmp/rechrom-mdn-native-latency.frames.jsonl
 /private/tmp/rechrom-mdn-native-latency.inputs.jsonl
 ```
+
+## Continuation: 2026-10-24, live-resize seconds-scale stall
+
+The remaining seconds-scale degradation was memory pressure, not a long
+Layout task. `run_presenter` retained every returned full-window software
+target whose exact pixel count did not match the next resize. A Retina live
+resize produces a different 11--14 MB target for almost every width, so the
+`recycled: Vec<Vec<u32>>` pool grew without a bound.
+
+The failing process reached 532 `MALLOC_LARGE` regions, 7.3 GB of allocated
+heap, and 4.9 GB swapped out after repeated resize probes. That paging explains
+why later interactions degraded to seconds even though an individual traced
+main frame was below one second.
+
+`apps/rechrom/src/page_runtime.rs` now retains only the most recently returned
+target and resizes it for the next full-root-damage frame. This follows the
+bounded lifetime of Chromium's returned software resources; a new viewport
+does not create a permanent pool entry for its dimensions.
+
+Release validation on a fresh visible MDN process completed 12 consecutive
+native resize probes (1,632 size assignments). The fixed process kept
+4 large targets / 55.1 MB of `MALLOC_LARGE`, with a 239 MB physical footprint
+and 337 MB peak, rather than growing with the number of sizes. A subsequent
+zero-drop light trace submitted 119 window frames in 2.21 seconds; the longest
+native-submit gap was 191 ms at the MDN responsive breakpoint, with no
+seconds-scale gap or process failure.
+
+Artifacts:
+
+```text
+/private/tmp/rechrom-resize-seconds-audit.sample.txt
+/private/tmp/rechrom-resize-memory-fix-trace.json
+```

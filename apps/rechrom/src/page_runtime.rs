@@ -711,7 +711,13 @@ fn run_presenter(
 ) -> io::Result<()> {
     let mut pixels = Arc::new(Vec::<u32>::new());
     let (recycle_sender, recycle_receiver) = mpsc::channel::<Arc<Vec<u32>>>();
-    let mut recycled = Vec::<Vec<u32>>::new();
+    // A returned software target is useful for the next frame even when a
+    // top-level resize changed its exact pixel count.  Keeping one buffer for
+    // every observed size makes a live-resize gesture retain hundreds of
+    // full-window allocations (several gigabytes on a Retina display).
+    // Chromium's resource pool releases incompatible backings; this
+    // single-page presenter only needs the most recently returned target.
+    let mut recycled = None::<Vec<u32>>;
     let mut retained_target: Option<(u32, u32)> = None;
     let mut presentation_sequence = 0u64;
     while let Ok(first) = receiver.recv() {
@@ -811,7 +817,7 @@ fn run_presenter(
         }
         for returned in recycle_receiver.try_iter() {
             if let Ok(returned) = Arc::try_unwrap(returned) {
-                recycled.push(returned);
+                recycled = Some(returned);
             }
         }
         if full_root_damage {
@@ -819,13 +825,11 @@ fn run_presenter(
             // complete immutable frame into the host target. Full root damage
             // overwrites every pixel, so a returned allocation can become the
             // next target without cloning or clearing a full-screen buffer.
-            pixels = Arc::new(
-                recycled
-                    .iter()
-                    .position(|buffer| buffer.len() == pixel_count)
-                    .map(|index| recycled.swap_remove(index))
-                    .unwrap_or_else(|| vec![0; pixel_count]),
-            );
+            let mut target = recycled
+                .take()
+                .unwrap_or_else(|| Vec::with_capacity(pixel_count));
+            target.resize(pixel_count, 0);
+            pixels = Arc::new(target);
         }
         // Partial damage requires the exact retained predecessor. A recycled
         // full-damage target may be older, so publish the complete root into it
