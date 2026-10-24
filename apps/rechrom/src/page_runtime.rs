@@ -204,10 +204,17 @@ enum PresenterCommand {
 }
 #[derive(Clone, Copy)]
 pub(crate) enum MainThreadEvent {
-    BeginFrame { frame: NativeBeginFrame },
+    BeginFrame {
+        frame: NativeBeginFrame,
+        /// The compositor transaction dispatched with this BeginMainFrame.
+        /// Keep it on the rendering opportunity itself: the document event
+        /// loop is allowed to prioritize rendering over already-posted tasks.
+        main_frame_epoch: u64,
+    },
 }
 struct FrameDemand {
     requested: Arc<AtomicBool>,
+    active_artifact: Arc<AtomicBool>,
     native: Arc<dyn BeginFrameSource>,
     compositor: mpsc::Sender<ImplCommand>,
     external_compositor: bool,
@@ -222,11 +229,21 @@ impl FrameDemand {
 }
 impl BeginFrameSource for FrameDemand {
     fn request_begin_frame(&self) {
-        let newly_requested = !self.requested.swap(true, Ordering::AcqRel);
-        if newly_requested && self.external_compositor {
-            // Chromium's Page/LayerTreeHost tells ProxyImpl about commit
-            // demand before BeginMainFrame runs and produces DataForCommit.
-            let _ = self.compositor.send(ImplCommand::RequestMainFrame);
+        if self.external_compositor && self.active_artifact.load(Ordering::Acquire) {
+            // LayerTreeHost requests a commit; ProxyImpl's scheduler opens the
+            // matching rendering opportunity through
+            // request_compositor_main_frame(). A forwarded compositor request
+            // already owns that callback.
+            if !self.requested.load(Ordering::Acquire) {
+                let _ = self.compositor.send(ImplCommand::RequestMainFrame);
+            }
+        } else {
+            // Bootstrap has no active cc tree to schedule against. Preserve
+            // direct delivery until the first PaintArtifact is admitted.
+            let newly_requested = !self.requested.swap(true, Ordering::AcqRel);
+            if newly_requested && self.external_compositor {
+                let _ = self.compositor.send(ImplCommand::RequestMainFrame);
+            }
         }
         self.native.request_begin_frame();
     }
@@ -340,8 +357,10 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let (doc_sender, doc_receiver) = mpsc::channel();
     let (impl_sender, impl_receiver) = mpsc::channel();
     let requested = Arc::new(AtomicBool::new(false));
+    let active_artifact = Arc::new(AtomicBool::new(false));
     let source = Arc::new(FrameDemand {
         requested: requested.clone(),
+        active_artifact: active_artifact.clone(),
         native: params.source.clone(),
         compositor: impl_sender.clone(),
         external_compositor: !params.controls,
@@ -390,6 +409,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     impl_self,
                     main_sender,
                     requested,
+                    active_artifact,
                     document,
                     impl_viewport,
                     impl_external_compositor,
@@ -702,6 +722,13 @@ impl ImplPresentation {
     }
 }
 
+fn only_requests_main_frame(effects: &[CompositorMainThreadEffect]) -> bool {
+    !effects.is_empty()
+        && effects
+            .iter()
+            .all(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame))
+}
+
 fn run_presenter(
     receiver: mpsc::Receiver<PresenterCommand>,
     mut presenter: PageFramePresenter,
@@ -901,6 +928,7 @@ fn run_impl(
     self_sender: mpsc::Sender<ImplCommand>,
     main: mpsc::Sender<Command>,
     requested: Arc<AtomicBool>,
+    active_artifact: Arc<AtomicBool>,
     document: Document,
     viewport: Viewport,
     external_compositor: bool,
@@ -1146,19 +1174,28 @@ fn run_impl(
                 if let Some(presentation) = presentation.as_mut() {
                     let result = presentation.pipeline.RequestMainFrame()?;
                     if !result.effects.is_empty() {
+                        let direct_main_frame = only_requests_main_frame(&result.effects);
                         presentation.observe_main_thread_effects(&result.effects);
-                        let requested = result.effects.iter().any(|effect| {
+                        let requested_main_frame = result.effects.iter().any(|effect| {
                             matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
                         });
-                        let epoch = requested.then(|| {
+                        let epoch = requested_main_frame.then(|| {
                             main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
                             presentation.require_main_frame(main_frame_epoch);
                             main_frame_epoch
                         });
-                        let _ = main.send(Command::CompositorEffects {
-                            effects: result.effects,
-                            main_frame_epoch: epoch,
-                        });
+                        if direct_main_frame {
+                            // ProxyImpl posts a pure BeginMainFrame directly;
+                            // there are no compositor deltas for Page to apply
+                            // in a preceding task.
+                            requested.store(true, Ordering::Release);
+                            source.request_begin_frame();
+                        } else {
+                            let _ = main.send(Command::CompositorEffects {
+                                effects: result.effects,
+                                main_frame_epoch: epoch,
+                            });
+                        }
                     }
                     let _ = presentation.publish()?;
                 }
@@ -1176,25 +1213,36 @@ fn run_impl(
                     if presentation.pipeline.NeedsBeginFrames() {
                         let result = presentation.pipeline.BeginPhysicalFrame(frame.args)?;
                         if !result.effects.is_empty() {
+                            let direct_main_frame = only_requests_main_frame(&result.effects);
                             presentation.observe_main_thread_effects(&result.effects);
-                            let requested = result.effects.iter().any(|effect| {
+                            let requested_main_frame = result.effects.iter().any(|effect| {
                                 matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
                             });
-                            let epoch = requested.then(|| {
+                            let epoch = requested_main_frame.then(|| {
                                 main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
                                 presentation.require_main_frame(main_frame_epoch);
                                 main_frame_epoch
                             });
-                            let _ = main.send(Command::CompositorEffects {
-                                effects: result.effects,
-                                main_frame_epoch: epoch,
-                            });
+                            if direct_main_frame {
+                                requested.store(true, Ordering::Release);
+                            } else {
+                                let _ = main.send(Command::CompositorEffects {
+                                    effects: result.effects,
+                                    main_frame_epoch: epoch,
+                                });
+                            }
                         }
                     }
                     let _ = presentation.publish()?;
                 }
                 if requested.swap(false, Ordering::AcqRel) {
-                    let _ = main.send(Command::Main(MainThreadEvent::BeginFrame { frame }));
+                    let main_frame_epoch = presentation
+                        .as_ref()
+                        .map_or(0, |presentation| presentation.required_main_frame_epoch);
+                    let _ = main.send(Command::Main(MainThreadEvent::BeginFrame {
+                        frame,
+                        main_frame_epoch,
+                    }));
                 }
             }
             ImplCommand::Commit {
@@ -1250,6 +1298,9 @@ fn run_impl(
                     if !unsolicited {
                         let accepted = presentation.commit(artifact, content, viewport);
                         impl_trace.set("accepted", accepted as u8 as f64);
+                        if accepted {
+                            active_artifact.store(true, Ordering::Release);
+                        }
                     }
                     let _ = presentation.publish()?;
                 }
@@ -1732,7 +1783,6 @@ fn run_document(
     page.OpenRequest(&params.request, 16384, 4096)?;
     let mut patches = VecDeque::new();
     let mut published = None;
-    let mut pending_main_frame_epoch = 0u64;
     let mut completed_main_frame_epoch = 0u64;
     let mut status = None;
     let mut feedback = None;
@@ -1776,7 +1826,10 @@ fn run_document(
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 unreachable!("document queue resolves deadlines")
             }
-            Ok(Command::Main(MainThreadEvent::BeginFrame { frame, .. })) => {
+            Ok(Command::Main(MainThreadEvent::BeginFrame {
+                frame,
+                main_frame_epoch,
+            })) => {
                 let started = Instant::now();
                 if std::mem::take(&mut resize_event_pending) && params.scripting {
                     let _ = page.Evaluate(
@@ -1788,13 +1841,20 @@ fn run_document(
                 if let Err(error) = result {
                     return Err(error);
                 }
-                completed_main_frame_epoch = pending_main_frame_epoch;
+                // Chromium carries BeginMainFrameAndCommitState in the posted
+                // BeginMainFrame task. Do not infer that ownership from a
+                // separate compositor-effects task: rendering opportunities
+                // outrank tasks and may legally overtake it in DocumentQueue.
+                completed_main_frame_epoch = completed_main_frame_epoch.max(main_frame_epoch);
                 browser_tracing::interval(
                     "frame",
                     "MainFrameCycle",
                     started,
                     Instant::now(),
-                    &[("view_id", params.document.0 as f64)],
+                    &[
+                        ("view_id", params.document.0 as f64),
+                        ("main_frame_epoch", main_frame_epoch as f64),
+                    ],
                 );
             }
             Ok(Command::Input {
@@ -1931,9 +1991,6 @@ fn run_document(
             }) => {
                 let requests_main = main_frame_epoch.is_some();
                 page.ApplyCompositorWheelEffects(effects)?;
-                if let Some(epoch) = main_frame_epoch {
-                    pending_main_frame_epoch = pending_main_frame_epoch.max(epoch);
-                }
                 if requests_main {
                     // Mark the compositor-issued main frame before Page queues
                     // the wheel. QueueFrameInput requests the same physical
@@ -1949,9 +2006,6 @@ fn run_document(
             }) => {
                 let requests_main = main_frame_epoch.is_some();
                 page.ApplyCompositorWheelEffects(effects)?;
-                if let Some(epoch) = main_frame_epoch {
-                    pending_main_frame_epoch = pending_main_frame_epoch.max(epoch);
-                }
                 if requests_main {
                     source.request_compositor_main_frame();
                 }
@@ -2006,11 +2060,16 @@ fn run_document(
             );
         }
         if let Some(frame) = page.CurrentFrame() {
+            // A host resize invalidates Page and requests BeginMainFrame, but it
+            // does not turn the active PaintArtifact into output for the new
+            // viewport. Chromium keeps the old LocalSurfaceId visible until
+            // the renderer submits a CompositorFrame with the new surface
+            // parameters. Publish again only after Page produces new content
+            // or consumes a new main-frame/scroll transaction.
             let identity = (
                 frame.sequence,
                 frame.compositor_scroll_sequence,
                 completed_main_frame_epoch,
-                viewport,
             );
             if published != Some(identity) {
                 if !params.controls {
@@ -2218,6 +2277,18 @@ fn drag_regions(page: &Page, viewport: Viewport) -> Vec<crate::chrome::DragRegio
 #[cfg(test)]
 mod queue_tests {
     use super::*;
+
+    #[test]
+    fn direct_main_frame_delivery_requires_a_pure_request() {
+        assert!(!only_requests_main_frame(&[]));
+        assert!(only_requests_main_frame(&[
+            CompositorMainThreadEffect::RequestMainFrame,
+        ]));
+        assert!(!only_requests_main_frame(&[
+            CompositorMainThreadEffect::RequestMainFrame,
+            CompositorMainThreadEffect::BeginFrameSourcePaused { paused: false },
+        ]));
+    }
 
     #[test]
     fn queued_input_precedes_gc_even_behind_transport_wakes() {

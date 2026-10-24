@@ -634,3 +634,92 @@ is PID 99236 on DevTools port 9406. Replay artifacts are:
 /private/tmp/rechrom-chromium-audit-native-1.frames.jsonl
 /private/tmp/rechrom-chromium-audit-native-1.inputs.jsonl
 ```
+
+## Continuation: 2026-10-24, Chromium-aligned live-resize main-frame dispatch
+
+The resize scheduler no longer republishes an existing PaintArtifact merely
+because the host viewport changed. A viewport resize invalidates Page and asks
+cc for a commit; the old surface remains visible until Page completes the
+corresponding BeginMainFrame and supplies new content for the new viewport.
+This fixes the incorrect resized content seen when the viewport was included in
+the publication identity.
+
+The main-frame transaction now travels on `MainThreadEvent::BeginFrame`, like
+Chromium's `BeginMainFrameAndCommitState`. Page no longer infers transaction
+ownership from a separately queued compositor-effects task, which a rendering
+opportunity may legally overtake. After the first artifact is active, Page
+commit demand goes through the compositor scheduler. A pure
+`RequestMainFrame` result is posted directly to Page, matching
+`ProxyImpl::ScheduledActionSendBeginMainFrame`; any result that also carries
+scroll or other compositor effects retains the existing ordered effect path.
+Bootstrap remains direct until the first artifact is accepted.
+
+The source audit used local Chromium revision `6c1d401fcca5`, principally:
+
+```text
+cc/trees/layer_tree_host.cc:1477-1531
+cc/trees/proxy_main.cc:741-754
+cc/trees/proxy_impl.cc:801-845
+cc/scheduler/scheduler_state_machine.cc:544-636
+```
+
+The same visible MDN page, Release build, 120-step native resize sequence at
+16 ms spacing, and one-second trace tail produced these zero-drop results:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Trace duration | 2.981 s | 2.960 s |
+| VSync opportunities in resize window | 160 | 161 |
+| MainFrameCycle count | 50 | 30 |
+| MainFrameCycle p50 | 35.664 ms | 32.960 ms |
+| Total commits | 49 | 30 |
+| Accepted commits | 27 | 30 |
+| Unsolicited commits | 22 | 0 |
+| Accepted-commit interval p50 | 71.816 ms | 52.450 ms |
+| Accepted-commit rate from p50 | 13.92 fps | 19.07 fps |
+| Accepted-commit interval p95 | 294.364 ms | 267.644 ms |
+
+The scheduling bubble and duplicate lifecycle work are gone, but the page is
+not yet a 60 fps live resize. The final Page main-frame median is still
+32.960 ms. In the same local Chromium checkout and MDN workload,
+`ProxyMain::BeginMainFrame` measured 3.15 ms p50 and
+`WebFrameWidgetImpl::UpdateLifecycle` measured 2.81 ms p50. The remaining gap
+is Page lifecycle throughput, not VSync delivery or an application-side
+throttle. A pointer-hasher experiment reduced fragment-export time by only
+0.14--0.32 ms in two runs and was reverted.
+
+The valid canonical native replay first made PID 5960 frontmost through System
+Events, then translated the recorded cursor coordinates into that window. The
+917-event fixture produced 902 coalesced `CompositorWheel` callbacks, all
+compositor-owned. `InputOwnerQueue` was 0.041/2.997/9.469 ms at
+p50/p95/maximum; `CompositorWheel` was 0.015/0.070/0.493 ms; `FrameCycle` was
+1.669/2.946/4.289 ms. ScreenCaptureKit returned 837 frames with 755 unique
+hashes and different first/final hashes. The trace dropped no events, contains
+no incomplete spans, and the browser survived. Earlier replay attempts that
+used the fixture's absolute screen coordinates hit another window and are not
+validation evidence.
+
+Validation:
+
+- `RUSTC_BOOTSTRAP=1 cargo build --release -p rechrom_app`: passed.
+- Release application `queue_tests`: 3 passed, including the pure-request
+  direct-delivery boundary.
+- Release `scroll_frame_lifecycle`: 2 passed and the same 2 baseline failures
+  (`async default applied twice` and root sticky/fixed pixel comparison).
+- Canonical native replay: 917 inputs delivered; PID survived.
+
+Artifacts:
+
+```text
+/private/tmp/rechrom-resize-artifact-fix.json
+/private/tmp/rechrom-resize-final-aligned-full.json
+/private/tmp/chrome-mdn-native-resize.json
+/private/tmp/rechrom-resize-final-native-valid.trace.json
+/private/tmp/rechrom-resize-final-native-valid.frames.jsonl
+/private/tmp/rechrom-resize-final-native-valid.inputs.jsonl
+/private/tmp/rechrom-resize-scroll-lifecycle.log
+/private/tmp/rechrom-queue-tests-release.log
+```
+
+The final Release browser is open on the MDN page as PID 5960 with the
+Performance endpoint on `127.0.0.1:9406`.
