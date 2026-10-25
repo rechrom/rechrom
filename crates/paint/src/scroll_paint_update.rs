@@ -1221,11 +1221,12 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
             .cloned()
             .collect();
     }
-    prepaint.property_node_store = updated_store;
+    let retained_fragment_count = retained.fragments.len();
+    prepaint.CommitDirectScrollPropertySnapshots(updated_store, &mut trees);
     drop(publish_trace);
     if let Some(started) = started {
         eprintln!("scroll-prepaint-direct ms={:.3} checked_fragments={} rebuilt_prepaint_nodes=0 updated_chunks={} updated_scrollbar_records={}",
-            started.elapsed().as_secs_f64() * 1000.0, retained.fragments.len(),
+            started.elapsed().as_secs_f64() * 1000.0, retained_fragment_count,
             result.updated_chunks, result.updated_scrollbar_records);
     }
     Ok(result)
