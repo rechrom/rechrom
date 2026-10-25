@@ -12,3 +12,4 @@ browser_tracing = { path = "../../tracing" }
 # Keep translated primitives independent of the higher-level interfaces here.
 foundation_base = { package = "foundation", path = "base" }
 icu_bidi = { path = "../../icu_bidi" }
+smallvec = { version = "1.16.2", features = ["const_generics"] }

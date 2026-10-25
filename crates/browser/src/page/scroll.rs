@@ -287,16 +287,26 @@ impl Page {
     ) -> io::Result<()> {
         // User scrolling interrupts ProgrammaticScrollAnimator in Chromium.
         self.state.programmatic_scroll_animation.borrow_mut().take();
+        let active_phase = matches!(wheel.phase, WheelPhase::kBegan | WheelPhase::kChanged);
+        let ending_phase = matches!(wheel.phase, WheelPhase::kEnded | WheelPhase::kCancelled);
+        if active_phase {
+            self.state.defer_scroll_cull_refresh.set(true);
+        } else if ending_phase || wheel.phase == WheelPhase::kNone {
+            self.state.defer_scroll_cull_refresh.set(false);
+        }
         if wheel.compositor_owned {
             // InputHandler already moved the impl tree. Main receives its
             // actual (clamped) delta at BeginMainFrame, including corrections.
-            if matches!(wheel.phase, WheelPhase::kEnded | WheelPhase::kCancelled) {
+            if ending_phase {
                 self.CommitCompositorScrollOffsets();
                 if std::mem::take(&mut self.wheel_scroll_active) {
                     self.hover_state_dirty = self.cursor_position.is_some();
                 }
             } else if wheel.delta.x != 0.0 || wheel.delta.y != 0.0 {
                 self.wheel_scroll_active = true;
+            }
+            if ending_phase && self.state.ScheduleDeferredScrollCullRefresh() {
+                self.RequestBeginFrameIfNeeded();
             }
             return Ok(());
         }
@@ -339,15 +349,43 @@ impl Page {
         if scrolled {
             self.wheel_scroll_active = true;
         }
-        if matches!(wheel.phase, WheelPhase::kEnded | WheelPhase::kCancelled)
-            && std::mem::take(&mut self.wheel_scroll_active)
-        {
-            self.CommitCompositorScrollOffsets();
-            // ScrollableArea::OnScrollFinished(false) does this in Blink.
-            // Resolve it at the next BeginFrame, after the final scroll
-            // geometry has committed, rather than during wheel dispatch.
-            self.hover_state_dirty = self.cursor_position.is_some();
+        if ending_phase {
+            if std::mem::take(&mut self.wheel_scroll_active) {
+                self.CommitCompositorScrollOffsets();
+                // ScrollableArea::OnScrollFinished(false) does this in Blink.
+                // Resolve it at the next BeginFrame, after the final scroll
+                // geometry has committed, rather than during wheel dispatch.
+                self.hover_state_dirty = self.cursor_position.is_some();
+            }
+            if self.state.ScheduleDeferredScrollCullRefresh() {
+                self.RequestBeginFrameIfNeeded();
+            }
         }
         Ok(())
+    }
+}
+
+impl PageState {
+    fn ScheduleDeferredScrollCullRefresh(&self) -> bool {
+        let deferred = std::mem::take(&mut *self.deferred_scroll_cull_updates.borrow_mut());
+        if deferred.is_empty() {
+            return false;
+        }
+        let mut updates = self.scroll_updates.borrow_mut();
+        for (id, offset) in deferred {
+            if updates.iter().any(|(target, _)| *target == id) {
+                // A final compositor/main-thread delta in this same input
+                // frame is newer than the remembered cull-refresh offset.
+            } else {
+                updates.push((id, offset));
+            }
+        }
+        drop(updates);
+        self.InvalidateLayoutOutput();
+        if !self.dirty.get() {
+            self.scroll_only.set(true);
+        }
+        self.dirty.set(true);
+        true
     }
 }

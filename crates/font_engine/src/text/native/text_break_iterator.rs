@@ -50,26 +50,6 @@ pub enum BreakSpaceType {
     kAfterEverySpace,
 }
 
-// cpp: font_engine/text/native/text_break_iterator.cc:132-147
-fn IsRuleBoundary(
-    text: &String,
-    position: u32,
-    limit: u32,
-    start: u32,
-    strictness: LineBreakStrictness,
-) -> bool {
-    if position <= start {
-        return false;
-    }
-    let mut boundary = start;
-    while boundary < position {
-        let next = NextLineBreakRuleBoundary(text, boundary, limit, strictness);
-        assert!(next > boundary);
-        boundary = next;
-    }
-    boundary == position
-}
-
 // cpp: font_engine/text/native/text_break_iterator.cc:149-155
 fn LineBreakProperty(code_point: u32) -> i32 {
     if code_point == u32::from(b'+') {
@@ -146,6 +126,7 @@ pub struct LazyLineBreakIterator {
     string_: String,
     locale_: *const LayoutLocale,
     character_iterator_: RefCell<Option<CharacterBreakIterator>>,
+    rule_boundaries_: RefCell<Vec<u32>>,
     start_offset_: u32,
     break_type_: LineBreakType,
     break_space_: BreakSpaceType,
@@ -160,6 +141,7 @@ impl LazyLineBreakIterator {
             string_: string.clone(),
             locale_: locale,
             character_iterator_: RefCell::new(None),
+            rule_boundaries_: RefCell::new(vec![0]),
             start_offset_: 0,
             break_type_: break_type,
             break_space_: BreakSpaceType::kAfterSpaceRun,
@@ -186,6 +168,7 @@ impl LazyLineBreakIterator {
         self.start_offset_ = 0;
         self.SetLocale(locale);
         self.character_iterator_.replace(None);
+        self.rule_boundaries_.replace(vec![0]);
     }
 
     pub fn StartOffset(&self) -> u32 {
@@ -196,6 +179,7 @@ impl LazyLineBreakIterator {
         assert!(offset <= self.string_.length());
         self.start_offset_ = offset;
         self.character_iterator_.replace(None);
+        self.rule_boundaries_.replace(vec![offset]);
     }
 
     pub fn Locale(&self) -> *const LayoutLocale {
@@ -236,6 +220,7 @@ impl LazyLineBreakIterator {
         if self.strictness_ != strictness {
             self.strictness_ = strictness;
             self.character_iterator_.replace(None);
+            self.rule_boundaries_.replace(vec![self.start_offset_]);
         }
     }
 
@@ -299,6 +284,7 @@ impl LazyLineBreakIterator {
                 len,
             );
         }
+        let mut rule_boundaries = self.rule_boundaries_.borrow_mut();
         for i in pos..=len {
             if i == len {
                 return len;
@@ -331,13 +317,26 @@ impl LazyLineBreakIterator {
                     return current_end;
                 }
             }
-            let mut is_break = IsRuleBoundary(
-                &self.string_,
-                i,
-                self.string_.length(),
-                self.start_offset_,
-                self.strictness_,
-            );
+            while rule_boundaries
+                .last()
+                .copied()
+                .unwrap_or(self.start_offset_)
+                < i
+            {
+                let boundary = rule_boundaries
+                    .last()
+                    .copied()
+                    .unwrap_or(self.start_offset_);
+                let next = NextLineBreakRuleBoundary(
+                    &self.string_,
+                    boundary,
+                    self.string_.length(),
+                    self.strictness_,
+                );
+                assert!(next > boundary);
+                rule_boundaries.push(next);
+            }
+            let mut is_break = rule_boundaries.binary_search(&i).is_ok();
             if self.break_type_ == LineBreakType::kBreakAll {
                 let mut previous_class = LineBreakProperty(previous);
                 let mut scan = previous_begin;

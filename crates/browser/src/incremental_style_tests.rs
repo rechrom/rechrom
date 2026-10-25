@@ -738,6 +738,12 @@ fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
                 content: image_resource::PaintImageContent::Bitmap(vec![255; 128 * 64 * 4].into()),
             },
         );
+        assert!(!owner.GetDocument().StyleState().layout_inputs_require_tree);
+        assert!(owner
+            .GetDocument()
+            .StyleState()
+            .geometry_input_nodes
+            .contains(&id));
         update(&mut owner);
         assert!(owner.GetDocument().StyleState().impact.layout);
         assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 0);

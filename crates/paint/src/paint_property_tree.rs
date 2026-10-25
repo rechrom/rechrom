@@ -1709,6 +1709,22 @@ impl PropertyNodeUpdater<'_> {
         if let Some(node) = self.transforms.get(&input.id) {
             return node.clone();
         }
+        // A retained clean subtree can still reference the preceding raw
+        // snapshot of an ancestor whose value was rebuilt earlier in this
+        // pass (most commonly ScrollTranslation during CullRectUpdater). The
+        // native owner/role is the property slot identity. Once that slot has
+        // been updated, every stale raw reference must bind to the new
+        // canonical snapshot instead of replaying the old value over it.
+        if let Some(key) = self.keys.get(&input.id).copied() {
+            if self.seen.contains(&key) {
+                return self
+                    .store
+                    .transforms
+                    .get(&key)
+                    .expect("seen transform property has a canonical snapshot")
+                    .clone();
+            }
+        }
         let mut node = (**input).clone();
         node.parent = node.parent.as_ref().map(|p| self.transform(p));
         node.scroll = node.scroll.as_ref().map(|s| self.scroll(s));
@@ -1727,6 +1743,16 @@ impl PropertyNodeUpdater<'_> {
         if let Some(node) = self.clips.get(&input.id) {
             return node.clone();
         }
+        if let Some(key) = self.keys.get(&input.id).copied() {
+            if self.seen.contains(&key) {
+                return self
+                    .store
+                    .clips
+                    .get(&key)
+                    .expect("seen clip property has a canonical snapshot")
+                    .clone();
+            }
+        }
         let mut node = (**input).clone();
         node.parent = node.parent.as_ref().map(|p| self.clip(p));
         node.local_transform_space = self.transform(&node.local_transform_space);
@@ -1741,6 +1767,16 @@ impl PropertyNodeUpdater<'_> {
         }
         if let Some(node) = self.effects.get(&input.id) {
             return node.clone();
+        }
+        if let Some(key) = self.keys.get(&input.id).copied() {
+            if self.seen.contains(&key) {
+                return self
+                    .store
+                    .effects
+                    .get(&key)
+                    .expect("seen effect property has a canonical snapshot")
+                    .clone();
+            }
         }
         // A physical clip expander may still hold a pre-rebind effect snapshot.
         // Resolve its real node entity to the final logical effect ancestry.
@@ -1759,6 +1795,16 @@ impl PropertyNodeUpdater<'_> {
         }
         if let Some(node) = self.scrolls.get(&input.id) {
             return node.clone();
+        }
+        if let Some(key) = self.keys.get(&input.id).copied() {
+            if self.seen.contains(&key) {
+                return self
+                    .store
+                    .scrolls
+                    .get(&key)
+                    .expect("seen scroll property has a canonical snapshot")
+                    .clone();
+            }
         }
         let mut node = (**input).clone();
         node.parent = node.parent.as_ref().map(|p| self.scroll(p));

@@ -1,9 +1,11 @@
 // C++: foundation/blink_base/heap/collection_support/heap_vector.h:24-182.
-// A Rust Vec owns its backing allocation. A traced BasicHeapVector therefore
-// visits its live elements directly; its backing is released when its owner is
-// dropped rather than being registered as a separate layout-heap object.
+// SmallVec preserves WTF::Vector's inline-capacity contract. A traced
+// BasicHeapVector visits its live elements directly; spilled backing storage is
+// released when its owner is dropped rather than registered as a separate
+// layout-heap object.
 use crate::gc_heap::{Traceable, Visitor};
 use crate::wtf_size_t::WtfSizeT;
+use smallvec::SmallVec;
 use std::fmt;
 use std::iter::FromIterator;
 use std::ops::{Deref, DerefMut};
@@ -11,7 +13,7 @@ use std::ops::{Deref, DerefMut};
 // cpp: foundation/blink_base/heap/collection_support/heap_vector.h:23-165
 #[repr(transparent)]
 pub struct BasicHeapVector<T, const INLINE_CAPACITY: usize, const GCED: bool> {
-    elements: Vec<T>,
+    elements: SmallVec<[T; INLINE_CAPACITY]>,
 }
 
 // cpp: foundation/blink_base/heap/collection_support/heap_vector.h:166-181
@@ -23,7 +25,7 @@ pub type GCedHeapVector<T, const INLINE_CAPACITY: usize = 0> =
 impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
     pub fn new() -> Self {
         Self {
-            elements: Vec::with_capacity(N),
+            elements: SmallVec::new(),
         }
     }
 
@@ -40,9 +42,9 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
     where
         T: Clone,
     {
-        Self {
-            elements: vec![value; size as usize],
-        }
+        let mut vector = Self::new();
+        vector.elements.resize(size as usize, value);
+        vector
     }
 
     pub fn size(&self) -> WtfSizeT {
@@ -93,6 +95,24 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
         self.elements.last_mut().expect("just appended an element")
     }
 
+    pub fn extend_from_slice(&mut self, values: &[T])
+    where
+        T: Clone,
+    {
+        self.elements.extend(values.iter().cloned());
+    }
+
+    pub fn splice<I>(&mut self, range: std::ops::Range<usize>, replace_with: I)
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let position = range.start;
+        self.elements.drain(range);
+        for (offset, value) in replace_with.into_iter().enumerate() {
+            self.elements.insert(position + offset, value);
+        }
+    }
+
     pub fn AppendVector<const OTHER_N: usize, const OTHER_GCED: bool>(
         &mut self,
         other: &BasicHeapVector<T, OTHER_N, OTHER_GCED>,
@@ -108,7 +128,7 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
             new_size <= WtfSizeT::MAX as usize,
             "WTF vector size exceeds 32 bits"
         );
-        self.elements.extend_from_slice(&other.elements);
+        self.elements.extend(other.elements.iter().cloned());
     }
 
     // cpp: foundation/blink_base/wtf/vector.h:1746-1765,2655-2661
@@ -130,8 +150,10 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
             new_size <= WtfSizeT::MAX as usize,
             "WTF vector size exceeds 32 bits"
         );
-        self.elements
-            .splice(position..position, other.elements.iter().cloned());
+        self.elements.reserve(other.elements.len());
+        for (offset, value) in other.elements.iter().cloned().enumerate() {
+            self.elements.insert(position + offset, value);
+        }
     }
 }
 
@@ -164,7 +186,7 @@ impl<T: PartialEq, const N: usize, const GCED: bool> PartialEq for BasicHeapVect
 impl<T: Eq, const N: usize, const GCED: bool> Eq for BasicHeapVector<T, N, GCED> {}
 
 impl<T, const N: usize, const GCED: bool> Deref for BasicHeapVector<T, N, GCED> {
-    type Target = Vec<T>;
+    type Target = SmallVec<[T; N]>;
     fn deref(&self) -> &Self::Target {
         &self.elements
     }
@@ -182,25 +204,29 @@ impl<T, const N: usize, const GCED: bool> From<Vec<T>> for BasicHeapVector<T, N,
             elements.len() <= WtfSizeT::MAX as usize,
             "WTF vector size exceeds 32 bits"
         );
-        Self { elements }
+        Self {
+            elements: SmallVec::from_vec(elements),
+        }
     }
 }
 
 impl<T, const N: usize, const GCED: bool> From<BasicHeapVector<T, N, GCED>> for Vec<T> {
     fn from(vector: BasicHeapVector<T, N, GCED>) -> Self {
-        vector.elements
+        vector.elements.into_vec()
     }
 }
 
 impl<T, const N: usize, const GCED: bool> FromIterator<T> for BasicHeapVector<T, N, GCED> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        Self::from(iter.into_iter().collect::<Vec<_>>())
+        Self {
+            elements: iter.into_iter().collect(),
+        }
     }
 }
 
 impl<T, const N: usize, const GCED: bool> IntoIterator for BasicHeapVector<T, N, GCED> {
     type Item = T;
-    type IntoIter = std::vec::IntoIter<T>;
+    type IntoIter = smallvec::IntoIter<[T; N]>;
     fn into_iter(self) -> Self::IntoIter {
         self.elements.into_iter()
     }

@@ -18,7 +18,8 @@ use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 
 use crate::internal::block_node::BlockNode;
 use crate::internal::boundary::layout_boundary::{
-    RefreshCompatibleNodeInputCache, ResolveLogicalParentOccurrences, ScrollPaintPropertyIndex,
+    RefreshCompatibleNodeInputCache, RefreshCompatiblePaintCache, ResolveLogicalParentOccurrences,
+    ScrollPaintPropertyIndex,
 };
 use crate::internal::layout_algorithm_set::LayoutAlgorithmSet;
 use crate::internal::layout_box::LayoutBox;
@@ -694,12 +695,17 @@ impl LayoutEngine {
                 projected,
                 clip_resource_version,
             } => {
+                let mut trace = browser_tracing::span("layout", "LayoutEngine.PaintStyle");
+                trace.set(
+                    "cached_objects_before",
+                    self.boundary_export_cache_.objects.len() as f64,
+                );
                 let binding = self
                     .tree_
                     .as_mut()
                     .and_then(|tree| tree.UpdatePaintStyle(node_id, style, clip_resource_version));
                 if let Some(binding) = binding.as_ref() {
-                    self.boundary_export_cache_.Clear();
+                    RefreshCompatiblePaintCache(&mut self.boundary_export_cache_);
                     self.tree_facts_ = None;
                     if let Some(fragments) = &mut self.fragments {
                         let mut found = false;
@@ -721,6 +727,10 @@ impl LayoutEngine {
                         }
                     }
                 }
+                trace.set(
+                    "cached_objects_after",
+                    self.boundary_export_cache_.objects.len() as f64,
+                );
                 binding.is_some()
             }
             LayoutMutation::PaintInput {
@@ -728,6 +738,11 @@ impl LayoutEngine {
                 style,
                 element,
             } => {
+                let mut trace = browser_tracing::span("layout", "LayoutEngine.PaintInput");
+                trace.set(
+                    "cached_objects_before",
+                    self.boundary_export_cache_.objects.len() as f64,
+                );
                 if self.fragments.is_none() {
                     return false;
                 }
@@ -736,11 +751,15 @@ impl LayoutEngine {
                     .as_mut()
                     .and_then(|tree| tree.UpdatePaintInput(node_id, style, element));
                 if let Some(update) = update {
-                    self.boundary_export_cache_.Clear();
+                    RefreshCompatiblePaintCache(&mut self.boundary_export_cache_);
                     self.tree_facts_ = None;
                     self.pending_paint_ids_.extend(update.sources);
                     self.pending_inline_ink_ids_
                         .extend(update.inline_ink_changes);
+                    trace.set(
+                        "cached_objects_after",
+                        self.boundary_export_cache_.objects.len() as f64,
+                    );
                     true
                 } else {
                     false
@@ -914,7 +933,11 @@ impl LayoutEngine {
                         objects: self.objects_,
                         boundary: self.boundary_,
                     };
-                    Some(assembly.ExportFragments(unsafe { &mut *root }, &self.constraints_))
+                    Some(assembly.ExportFragments(
+                        unsafe { &mut *root },
+                        &self.constraints_,
+                        &mut self.boundary_export_cache_,
+                    ))
                 }
             })
         } else {
@@ -996,6 +1019,10 @@ impl LayoutEngine {
             // so retained and replacement nodes refer to instance ids in the
             // same complete snapshot.
             ResolveLogicalParentOccurrences(retained);
+            assembly.RebuildBoundaryObjectIndex(
+                unsafe { &mut *document_root },
+                &mut self.boundary_export_cache_,
+            );
         }
         replaced
     }
@@ -1029,7 +1056,11 @@ impl LayoutEngine {
             objects: self.objects_,
             boundary: self.boundary_,
         };
-        let mut fragments = assembly.ExportFragments(unsafe { &mut *root }, &self.constraints_);
+        let mut fragments = assembly.ExportFragments(
+            unsafe { &mut *root },
+            &self.constraints_,
+            &mut self.boundary_export_cache_,
+        );
         let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
         {
             let _trace = browser_tracing::span("prepaint", "LayoutEngine.CertifyPaintInputs");
@@ -1255,24 +1286,9 @@ impl LayoutEngine {
         };
         if scroll_only && !unsafe { &*root }.NeedsLayout() && !before.is_null() {
             if refresh_cull_rect {
-                // Chromium's CullRectUpdater keeps native layout intact and
-                // invalidates Paint when a composited scroller crosses its
-                // hysteresis boundary. Re-export the boundary projection from
-                // that same LayoutResult so newly relevant subtrees enter
-                // PrePaint without a Style or Layout pass.
-                let mut exported =
-                    assembly.ExportFragments(unsafe { &mut *root }, &self.constraints_);
-                self.pre_paint_inputs_.update(&mut exported);
-                self.scroll_paint_index_ = Some({
-                    let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-                    ScrollPaintPropertyIndex::new(
-                        unsafe { &mut *root },
-                        &exported,
-                        self.CachedScrollIndexObjects(),
-                    )
-                });
-                *fragments = exported;
-                self.pending_scroll_ids_.clear();
+                if !self.RefreshScrollCullProjection(fragments) {
+                    return None;
+                }
                 trace.set("paint_projection_refreshed", 1.0);
                 return Some(ScrollLayoutUpdate::RefreshedLayout);
             }
@@ -1299,11 +1315,76 @@ impl LayoutEngine {
         let after = unsafe { &*box_ptr }.GetLayoutResult(0);
         trace.set("layout_result_changed", (before != after) as u8 as f64);
         if before != after {
-            *fragments = assembly.ExportFragments(unsafe { &mut *root }, &self.constraints_);
+            *fragments = assembly.ExportFragments(
+                unsafe { &mut *root },
+                &self.constraints_,
+                &mut self.boundary_export_cache_,
+            );
         } else {
             assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, false);
         }
         Some(ScrollLayoutUpdate::RefreshedLayout)
+    }
+
+    /// Run Blink's main-thread CullRectUpdater equivalent without changing
+    /// native layout geometry. Page uses this both at a phased wheel boundary
+    /// and as the correctness fallback when retained Paint coverage is spent.
+    #[doc(hidden)]
+    pub fn RefreshScrollCullProjection(&mut self, fragments: &mut FragmentNode) -> bool {
+        let mut trace = browser_tracing::span("layout", "LayoutEngine.RefreshScrollCullProjection");
+        let Some(tree) = self.tree_.as_ref() else {
+            return false;
+        };
+        if !tree.HasRoot() {
+            return false;
+        }
+        let root = self.RootPointer();
+        let assembly = LayoutAssembly {
+            algorithms: self.algorithms_,
+            objects: self.objects_,
+            boundary: self.boundary_,
+        };
+        let indexed = {
+            let mut heap = LayoutHeapScope::new();
+            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
+            // A coverage fallback can follow the ordinary indexed property
+            // update in the same frame. In that case there are deliberately no
+            // pending IDs left: the native and projected scroll properties are
+            // already current and only the cull projection needs refreshing.
+            let refreshed = self.pending_scroll_ids_.is_empty()
+                || self.scroll_paint_index_.as_ref().is_some_and(|index| {
+                    index.refresh(unsafe { &mut *root }, fragments, &self.pending_scroll_ids_)
+                });
+            heap.DeferCollection();
+            refreshed
+        };
+        trace.set("indexed_refresh", indexed as u8 as f64);
+        if !indexed {
+            assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
+        }
+        let retained = std::mem::take(fragments);
+        let mut exported = assembly.RefreshFragmentProjection(
+            unsafe { &mut *root },
+            &self.constraints_,
+            &mut self.boundary_export_cache_,
+            retained,
+        );
+        {
+            let _phase = browser_tracing::span("layout", "LayoutEngine.UpdatePrePaintInputs");
+            self.pre_paint_inputs_.update(&mut exported);
+        }
+        self.scroll_paint_index_ = Some({
+            let _phase = browser_tracing::span("layout", "LayoutEngine.BuildScrollPaintIndex");
+            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
+            ScrollPaintPropertyIndex::new(
+                unsafe { &mut *root },
+                &exported,
+                self.CachedScrollIndexObjects(),
+            )
+        });
+        *fragments = exported;
+        self.pending_scroll_ids_.clear();
+        true
     }
 
     // cpp: layoutng/layout_engine.h:24-25

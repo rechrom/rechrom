@@ -981,14 +981,22 @@ impl Default for FragmentNode {
 
 impl FragmentNode {
     /// Source: platform/graphics/paint/cull_rect.cc. Chromium refreshes an
-    /// expanded cull rect after 512 CSS pixels of cumulative scrolling.
+    /// expanded cull rect after the changed-enough distance, scaled by the
+    /// CullRectUpdater expansion ratio (the document DPR by default).
     #[allow(non_snake_case)]
     pub fn PaintCullRectHasScrolledEnough(&self, id: u64, offset: Offset) -> bool {
         const CHANGED_ENOUGH_DISTANCE: f64 = 512.0;
+        let expansion_ratio = self
+            .paint
+            .resources
+            .as_ref()
+            .map_or(1.0, |resources| resources.device_pixel_ratio)
+            .max(f64::MIN_POSITIVE);
+        let changed_enough_distance = CHANGED_ENOUGH_DISTANCE * expansion_ratio;
         let changed = self.node_id == id
             && self.paint_cull_scroll_offset.is_some_and(|origin| {
-                (offset.x - origin.x).abs() >= CHANGED_ENOUGH_DISTANCE
-                    || (offset.y - origin.y).abs() >= CHANGED_ENOUGH_DISTANCE
+                (offset.x - origin.x).abs() >= changed_enough_distance
+                    || (offset.y - origin.y).abs() >= changed_enough_distance
             });
         changed
             || self
@@ -1010,15 +1018,19 @@ mod tests {
             paint_cull_scroll_offset: Some(Offset { x: 20.0, y: 100.0 }),
             ..Default::default()
         };
+        scroller.paint.resources = Some(Arc::new(PaintResources {
+            device_pixel_ratio: 2.0,
+            ..PaintResources::default()
+        }));
         // A retained property update changes the live offset but deliberately
         // keeps the last full projection's cull origin.
         scroller.paint.scroll_offset = Offset { x: 20.0, y: 500.0 };
         root.children.push(scroller);
 
         let offset = |y| Offset { x: 20.0, y };
-        assert!(!root.PaintCullRectHasScrolledEnough(7, offset(611.0)));
-        assert!(root.PaintCullRectHasScrolledEnough(7, offset(612.0)));
-        assert!(root.PaintCullRectHasScrolledEnough(7, offset(-412.0)));
+        assert!(!root.PaintCullRectHasScrolledEnough(7, offset(1123.0)));
+        assert!(root.PaintCullRectHasScrolledEnough(7, offset(1124.0)));
+        assert!(root.PaintCullRectHasScrolledEnough(7, offset(-924.0)));
         assert!(!root.PaintCullRectHasScrolledEnough(8, offset(1000.0)));
     }
 }

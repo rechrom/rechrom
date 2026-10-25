@@ -144,6 +144,8 @@ class HTMLLabelElement extends HTMLElement {
   constructor() { return constructHTMLElement(new.target, HTMLLabelElement, 'label'); }}
 class HTMLDetailsElement extends HTMLElement {
   constructor() { return constructHTMLElement(new.target, HTMLDetailsElement, 'details'); }}
+class HTMLPreElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLPreElement, 'pre'); }}
 class HTMLDialogElement extends HTMLElement {
   constructor() { return constructHTMLElement(new.target, HTMLDialogElement, 'dialog'); }}
 class HTMLScriptElement extends HTMLElement {
@@ -263,6 +265,84 @@ class ElementInternals {
 class CharacterData extends Node {}
 class Text extends CharacterData {}
 class Comment extends CharacterData {}
+const domTokenListState = new WeakMap(), domTokenLists = new WeakMap();
+class DOMTokenList {
+  constructor() { throw new TypeError('Illegal constructor'); }
+  get length() { return domTokenListTokens(this).length; }
+  item(index) { return domTokenListTokens(this)[Number(index)] ?? null; }
+  contains(token) { return domTokenListTokens(this).includes(domTokenListToken(token)); }
+  add(...tokens) {
+    tokens = tokens.map(domTokenListToken);
+    const current = domTokenListTokens(this);
+    for (const token of tokens) if (!current.includes(token)) current.push(token);
+    domTokenListSave(this, current);
+  }
+  remove(...tokens) {
+    tokens = tokens.map(domTokenListToken);
+    domTokenListSave(this, domTokenListTokens(this).filter(token => !tokens.includes(token)));
+  }
+  toggle(token, force) {
+    token = domTokenListToken(token);
+    const current = domTokenListTokens(this), present = current.includes(token);
+    if (force !== undefined ? !!force : !present) {
+      if (!present) { current.push(token); domTokenListSave(this, current); }
+      return true;
+    }
+    if (present) domTokenListSave(this, current.filter(value => value !== token));
+    return false;
+  }
+  replace(token, replacement) {
+    token = domTokenListToken(token); replacement = domTokenListToken(replacement);
+    const current = domTokenListTokens(this), index = current.indexOf(token);
+    if (index < 0) return false;
+    if (token !== replacement) {
+      const existing = current.indexOf(replacement);
+      if (existing >= 0) current.splice(existing, 1);
+      current[current.indexOf(token)] = replacement;
+      domTokenListSave(this, current);
+    }
+    return true;
+  }
+  supports() { throw new TypeError('DOMTokenList has no supported tokens'); }
+  get value() { const {element, attribute} = domTokenListStateFor(this); return element.getAttribute(attribute) || ''; }
+  set value(value) { const {element, attribute} = domTokenListStateFor(this); element.setAttribute(attribute, String(value)); }
+  toString() { return this.value; }
+  entries() { return domTokenListTokens(this).entries(); }
+  keys() { return domTokenListTokens(this).keys(); }
+  values() { return domTokenListTokens(this).values(); }
+  forEach(callback, thisArg) { let index=0; for (const token of this) callback.call(thisArg, token, index++, this); }
+  [Symbol.iterator]() { return this.values(); }
+}
+function domTokenListStateFor(list) {
+  const state = domTokenListState.get(list);
+  if (!state) throw new TypeError('Illegal invocation');
+  return state;
+}
+function domTokenListTokens(list) {
+  const {element, attribute} = domTokenListStateFor(list);
+  return [...new Set((element.getAttribute(attribute) || '').split(/[\t\n\f\r ]+/).filter(Boolean))];
+}
+function domTokenListToken(value) {
+  const token = String(value);
+  if (!token) throw new DOMException('The token provided must not be empty.', 'SyntaxError');
+  if (/[\t\n\f\r ]/.test(token))
+    throw new DOMException('The token provided contains HTML space characters.', 'InvalidCharacterError');
+  return token;
+}
+function domTokenListSave(list, tokens) {
+  const {element, attribute} = domTokenListStateFor(list);
+  element.setAttribute(attribute, tokens.join(' '));
+}
+function domTokenList(element, attribute) {
+  let lists = domTokenLists.get(element);
+  if (!lists) domTokenLists.set(element, lists = new Map());
+  if (!lists.has(attribute)) {
+    const list = Object.create(DOMTokenList.prototype);
+    domTokenListState.set(list, {element, attribute});
+    lists.set(attribute, list);
+  }
+  return lists.get(attribute);
+}
 class NodeList { constructor() { throw new TypeError('Illegal constructor'); } }
 class HTMLCollection { constructor() { throw new TypeError('Illegal constructor'); } }
 class HTMLOptionsCollection extends HTMLCollection {}
@@ -278,11 +358,11 @@ for (const [name, value] of Object.entries({ELEMENT_NODE:1, ATTRIBUTE_NODE:2, TE
 for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElement, SVGElement,
     SVGGeometryElement, SVGPathElement, MathMLElement,
     HTMLInputElement, HTMLTextAreaElement, HTMLButtonElement, HTMLFormElement,
-    HTMLSelectElement, HTMLOptionElement, HTMLLabelElement, HTMLDetailsElement,
+    HTMLSelectElement, HTMLOptionElement, HTMLLabelElement, HTMLDetailsElement, HTMLPreElement,
     HTMLDialogElement, HTMLScriptElement, HTMLStyleElement, HTMLLinkElement,
     HTMLMetaElement, HTMLIFrameElement, HTMLImageElement, HTMLCanvasElement, HTMLTemplateElement, HTMLSlotElement,
     HTMLHeadingElement, HTMLAnchorElement, HTMLMediaElement, HTMLVideoElement, HTMLAudioElement,
-    Document, DocumentFragment, ShadowRoot, ElementInternals, CharacterData, Text, Comment, NodeList, HTMLCollection, HTMLOptionsCollection})) {
+    Document, DocumentFragment, ShadowRoot, ElementInternals, CharacterData, Text, Comment, DOMTokenList, NodeList, HTMLCollection, HTMLOptionsCollection})) {
   Object.defineProperty(globalThis, name, {value:cls, writable:true, configurable:true});
   Object.defineProperty(cls.prototype, Symbol.toStringTag, {value:name, configurable:true});
   install(name, cls.prototype);
@@ -501,8 +581,16 @@ Document.prototype.writeln = function(...text) { invoke(this, 'write', text.map(
 // cross the JavaScript/host boundary once per ancestor.
 Node.prototype.contains = function(other) { return invoke(this, 'contains', other); };
 Node.prototype.hasChildNodes = function() { return this.firstChild !== null; };
-Node.prototype.getRootNode = function() { let n = this; while (n.parentNode) n = n.parentNode; return n; };
-Object.defineProperty(Node.prototype, 'isConnected', {get() { return this.getRootNode().nodeType === 9; }});
+Node.prototype.getRootNode = function(options = {}) {
+  if (options !== null && typeof options !== 'object' && typeof options !== 'function')
+    throw new TypeError('GetRootNodeOptions must be an object');
+  let n = this;
+  while (n.parentNode) n = n.parentNode;
+  if (options?.composed && n instanceof ShadowRoot)
+    return n.host.getRootNode(options);
+  return n;
+};
+Object.defineProperty(Node.prototype, 'isConnected', {get() { return this.getRootNode({composed:true}).nodeType === 9; }});
 for (const [name, reverse, elements] of [['nextSibling',false,false],['previousSibling',true,false],
     ['nextElementSibling',false,true],['previousElementSibling',true,true]])
   Object.defineProperty(Node.prototype, name, {get() {
@@ -719,7 +807,7 @@ Object.defineProperty(HTMLElement.prototype,'sheet',{get(){
   if(!['STYLE','LINK'].includes(this.tagName))return undefined;
   return [...this.ownerDocument.styleSheets].find(sheet=>sheet.ownerNode===this)||null;
 }});
-const datasets = new WeakMap(), styles = new WeakMap(), classes = new WeakMap();
+const datasets = new WeakMap(), styles = new WeakMap();
 const dataName = key => 'data-' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
 const datasetDescriptor = {get() {
   if (!datasets.has(this)) { const node = this; datasets.set(this, new Proxy({}, {
@@ -765,19 +853,14 @@ for (const [prototype,property,attribute] of [[HTMLFormElement.prototype,'noVali
   Object.defineProperty(prototype,property,{get(){return this.hasAttribute(attribute);},set(value){if(value)this.setAttribute(attribute,'');else this.removeAttribute(attribute);}});
 for (const property of ['hidden','disabled','multiple','required','autofocus'])
   Object.defineProperty(HTMLElement.prototype, property, {get() { return this.hasAttribute(property); }, set(value) { if (value) this.setAttribute(property, ''); else this.removeAttribute(property); }});
-Object.defineProperty(Element.prototype, 'classList', {get() {
-  if (!classes.has(this)) { const node = this;
-    const tokens = () => (node.getAttribute('class') || '').split(/\s+/).filter(Boolean);
-    const save = list => node.setAttribute('class', [...new Set(list)].join(' '));
-    classes.set(this, {contains(token) { return tokens().includes(String(token)); },
-      add(...items) { save([...tokens(), ...items.map(String)]); },
-      remove(...items) { save(tokens().filter(t => !items.map(String).includes(t))); },
-      toggle(token, force) { const present = this.contains(token); const add = force === undefined ? !present : !!force;
-        if (add) this.add(token); else this.remove(token); return add; },
-      get value() { return node.className; }, set value(v) { node.className = String(v); },
-      [Symbol.iterator]() { return tokens()[Symbol.iterator](); }
-    }); } return classes.get(this);
-}});
+Object.defineProperty(Element.prototype, 'classList', {
+  get() { return domTokenList(this, 'class'); },
+  set(value) { domTokenList(this, 'class').value = value; }
+});
+Object.defineProperty(HTMLIFrameElement.prototype, 'sandbox', {
+  get() { return domTokenList(this, 'sandbox'); },
+  set(value) { domTokenList(this, 'sandbox').value = value; }
+});
 const observers = new Set(), observerIds = new WeakMap(), mutationRecordLists = new WeakMap();
 let mutationDeliveryQueued=false;
 function observerId(observer) {

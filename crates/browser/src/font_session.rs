@@ -149,7 +149,10 @@ pub(crate) fn LayoutWithSystemFontsAtStage(
             break;
         }
         layout.ReleaseLayoutResult();
-        document.InvalidateLayout();
+        // Chromium's font invalidation dirties text layout while retaining the
+        // attached LayoutObject tree. The provider/catalog changed underneath
+        // the same typed style inputs, so only geometry needs another pass.
+        document.InvalidateLayoutGeometry();
     }
 }
 

@@ -113,6 +113,57 @@ fn pixels(page: &mut Page) -> Vec<u32> {
     pixels
 }
 
+fn root_scroll_state(
+    node: &layoutng_assembly::fragment_tree::FragmentNode,
+) -> Option<(
+    layoutng_assembly::internal::layout_input::Offset,
+    Option<layoutng_assembly::internal::layout_input::Offset>,
+)> {
+    if node.paint.scroll_size.height > node.size.height && node.paint_cull_scroll_offset.is_some() {
+        return Some((node.paint.scroll_offset, node.paint_cull_scroll_offset));
+    }
+    node.children.iter().find_map(root_scroll_state)
+}
+
+#[test]
+fn phased_wheel_refreshes_cull_projection_after_end() {
+    native_test_thread::run(|| {
+        use interaction::input_event::{WheelEvent, WheelPhase};
+        use layoutng_assembly::internal::layout_input::Offset;
+
+        let mut page = fixture("body{height:3000px}", "<div></div>", true);
+        let initial = root_scroll_state(&page.CurrentFrame().unwrap().fragments)
+            .expect("root scroll fragment");
+        page.ScrollWheelDefault(&WheelEvent {
+            phase: WheelPhase::kBegan,
+            delta: Offset { x: 0.0, y: 700.0 },
+            position: Offset { x: 40.0, y: 40.0 },
+            ..Default::default()
+        })
+        .unwrap();
+        let active = root_scroll_state(&page.CurrentFrame().unwrap().fragments).unwrap();
+        assert!(active.0.y >= 700.0);
+        assert_eq!(
+            active.1, initial.1,
+            "active wheel frames retain the old expanded paint interest rect"
+        );
+
+        page.ScrollWheelDefault(&WheelEvent {
+            phase: WheelPhase::kEnded,
+            position: Offset { x: 40.0, y: 40.0 },
+            ..Default::default()
+        })
+        .unwrap();
+        let ended = root_scroll_state(&page.CurrentFrame().unwrap().fragments).unwrap();
+        assert_eq!(ended.0, active.0);
+        assert_eq!(
+            ended.1,
+            Some(ended.0),
+            "wheel end runs one deferred CullRectUpdater projection"
+        );
+    });
+}
+
 #[test]
 fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
     native_test_thread::run(|| {

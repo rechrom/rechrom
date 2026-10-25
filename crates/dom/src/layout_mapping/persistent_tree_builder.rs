@@ -547,6 +547,33 @@ pub(super) fn AttachmentChildren(
     document: &Document,
     index: usize,
 ) -> std::borrow::Cow<'_, [usize]> {
+    // cpp: html_details_element.cc:80-147. Blink's manually assigned UA
+    // shadow slots render the first <summary> before the details-content slot.
+    // A closed content slot is display-locked, so its assigned descendants do
+    // not enter layout. Keep that attachment behavior at this boundary until
+    // the UA slot nodes themselves are projected by the DOM owner.
+    if document.Node(index).IsHTMLElement("details") {
+        let children = document.FlatTreeChildren(index);
+        if let Some((summary_position, summary)) = children
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, child)| document.Node(*child).IsHTMLElement("summary"))
+        {
+            if document.Node(index).FindAttribute("open").is_none() {
+                return std::borrow::Cow::Owned(vec![summary]);
+            }
+            if summary_position != 0 {
+                let mut assigned = Vec::with_capacity(children.len());
+                assigned.push(summary);
+                assigned.extend(children.iter().copied().enumerate().filter_map(
+                    |(position, child)| (position != summary_position).then_some(child),
+                ));
+                return std::borrow::Cow::Owned(assigned);
+            }
+            return children;
+        }
+    }
     if !document.Node(index).IsElement("use", DOMNamespace::kSVG)
         && document.ShadowRoot(index).is_some_and(|root| {
             document.ShadowRootMode(root) == Some(DOMShadowRootMode::kUserAgent)
@@ -2137,6 +2164,31 @@ mod tests {
         fn number(self) -> f64 {
             self as i32 as f64
         }
+    }
+
+    #[test]
+    fn details_attachment_matches_manual_summary_and_content_slots() {
+        let mut owner = crate::test_html::html_parser::ParseHTML(
+            "<details id='closed'><p id='before'></p><summary id='closed-summary'></summary><p id='closed-content'></p></details><details id='open' open><p id='open-before'></p><summary id='open-summary'></summary><p id='open-content'></p></details>",
+        );
+        let document = owner.GetDocumentMut();
+        let ids: BTreeMap<_, _> = (0..document.NodeCount())
+            .filter_map(|index| {
+                document
+                    .Node(index)
+                    .FindAttribute("id")
+                    .map(|attribute| (attribute.value.clone(), index))
+            })
+            .collect();
+
+        assert_eq!(
+            AttachmentChildren(document, ids["closed"]).as_ref(),
+            &[ids["closed-summary"]]
+        );
+        assert_eq!(
+            AttachmentChildren(document, ids["open"]).as_ref(),
+            &[ids["open-summary"], ids["open-before"], ids["open-content"]]
+        );
     }
     fn dump(
         document: &Document,

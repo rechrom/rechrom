@@ -2897,10 +2897,12 @@ fn BuildPaintCullRect(root: &mut LayoutObject, space: &ConstraintSpace) -> Optio
         (offset.x() as f64, offset.y() as f64)
     };
     let zoom = space.layout_zoom_factor.max(f64::MIN_POSITIVE);
-    // Chromium expands the root scrolling cull rect by 4000 CSS pixels. The
-    // boundary tree is Rechrom's paint projection of the complete native
-    // LayoutNG result, so use the same interest distance here.
-    let outset = 4000.0 * zoom;
+    // CullRectUpdater::ExpansionRatio is the document DPR with Chromium's
+    // default dpr_coef=1. GeometryMapper additionally carries page zoom into
+    // the local-space expansion. Keep the boundary projection's interest
+    // range in that same local coordinate system.
+    let expansion_ratio = space.device_pixel_ratio.max(f64::MIN_POSITIVE);
+    let outset = 4000.0 * expansion_ratio * zoom;
     Some(PaintCullRect {
         left: scroll_x - outset,
         top: scroll_y - outset,
@@ -2947,11 +2949,52 @@ struct FragmentOwners {
     exported_caret_positions: CaretPositionCache,
     debug_names: DebugNameCache,
     uncullable_objects: Arc<LayoutBoundaryHashSet<*const LayoutObject>>,
+    fragment_instance_ids: LayoutBoundaryHashMap<(u8, usize), u64>,
+    // CullRectUpdater retains FragmentData and changes only the projected
+    // membership/cull values.  Move the already-owned Rust boundary payloads
+    // by their native fragment identity so overlapping content is not
+    // serialized again when the sliding cull window advances.
+    retained_nodes: LayoutBoundaryHashMap<u64, FragmentNode>,
+    retained_reuses: usize,
 }
 impl FragmentOwners {
     fn insert(&mut self, native: *const PhysicalBoxFragment, instance: u64) -> bool {
         self.instances.entry(native).or_insert(instance);
         self.paint.insert(native)
+    }
+
+    fn fragment_instance(
+        &mut self,
+        kind: u8,
+        native: usize,
+        next_fragment_instance_id: &mut u64,
+    ) -> u64 {
+        *self
+            .fragment_instance_ids
+            .entry((kind, native))
+            .or_insert_with(|| {
+                let instance = *next_fragment_instance_id;
+                *next_fragment_instance_id += 1;
+                instance
+            })
+    }
+}
+
+fn CollectRetainedProjection(
+    mut node: FragmentNode,
+    output: &mut LayoutBoundaryHashMap<u64, FragmentNode>,
+) {
+    let children = std::mem::take(&mut node.children);
+    let instance = node.fragment_instance_id;
+    if instance != 0 {
+        let replaced = output.insert(instance, node);
+        debug_assert!(
+            replaced.is_none(),
+            "FragmentTree contains duplicate fragment_instance_id values"
+        );
+    }
+    for child in children {
+        CollectRetainedProjection(child, output);
     }
 }
 
@@ -3213,9 +3256,21 @@ fn ExportInlineItem(
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
 ) -> FragmentNode {
-    let mut output = FragmentNode::default();
-    output.fragment_instance_id = *next_fragment_instance_id;
-    *next_fragment_instance_id += 1;
+    let fragment_instance_id = paint_state_owners.fragment_instance(
+        1,
+        item as *const FragmentItem as usize,
+        next_fragment_instance_id,
+    );
+    let mut output = paint_state_owners
+        .retained_nodes
+        .remove(&fragment_instance_id)
+        .unwrap_or_default();
+    let retained = output.fragment_instance_id == fragment_instance_id;
+    if retained {
+        paint_state_owners.retained_reuses += 1;
+    }
+    output.children.clear();
+    output.fragment_instance_id = fragment_instance_id;
     output.fragmentainer_instance_id = fragmentainer_instance_id;
     let object = item.GetLayoutObject();
     output.node_id = InputId(object);
@@ -3224,16 +3279,18 @@ fn ExportInlineItem(
     } else {
         std::ptr::null()
     };
-    output.paint = ExportProperties(
-        object,
-        sources,
-        style_sources,
-        effective_style,
-        resources,
-        purpose,
-        Some(&mut paint_state_owners.exported_styles),
-        Some(&mut paint_state_owners.debug_names),
-    );
+    if !retained {
+        output.paint = ExportProperties(
+            object,
+            sources,
+            style_sources,
+            effective_style,
+            resources,
+            purpose,
+            Some(&mut paint_state_owners.exported_styles),
+            Some(&mut paint_state_owners.debug_names),
+        );
+    }
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
     output.paint.display_item_fragment = item.FragmentId();
@@ -3248,8 +3305,14 @@ fn ExportInlineItem(
         width: Number(rect.size.width),
         height: Number(rect.size.height),
     };
-    output.content_size = output.size;
-    if purpose == LayoutUpdateKind::Paint && item.Type() == ItemType::kBox && !object.is_null() {
+    if !retained {
+        output.content_size = output.size;
+    }
+    if !retained
+        && purpose == LayoutUpdateKind::Paint
+        && item.Type() == ItemType::kBox
+        && !object.is_null()
+    {
         let native_style = if effective_style.is_null() {
             unsafe { &*object }.StyleRef()
         } else {
@@ -3257,10 +3320,12 @@ fn ExportInlineItem(
         };
         ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportInlineInkOverflow(item, &mut output.paint);
     }
-    ExportSvgTextPaintData(item, rect, &mut output.paint);
+    if !retained {
+        ExportSvgTextPaintData(item, rect, &mut output.paint);
+    }
     match item.Type() {
         ItemType::kText | ItemType::kGeneratedText => {
             output.kind = if item.Type() == ItemType::kText {
@@ -3288,7 +3353,7 @@ fn ExportInlineItem(
             output.paint.text_line_height = containing_line_height.map(Number);
             output.text_start = Some(item.StartOffset());
             output.text_end = Some(item.EndOffset());
-            if purpose == LayoutUpdateKind::Paint {
+            if !retained && purpose == LayoutUpdateKind::Paint {
                 ExportListMarkerSymbol(item, &mut output.paint);
                 ExportGlyphRuns(item, &mut output.paint);
             }
@@ -3296,7 +3361,7 @@ fn ExportInlineItem(
             // boundaries. Export them for ordinary document text as well as
             // text controls so Interaction can hit-test a range and Paint can
             // highlight it without reaching back into LayoutObject.
-            if purpose == LayoutUpdateKind::Paint {
+            if !retained && purpose == LayoutUpdateKind::Paint {
                 let text = item.Text(fragment_items);
                 let view = item.TextShapeResult();
                 let mut text_hash = 0xcbf29ce484222325u64;
@@ -3360,20 +3425,22 @@ fn ExportInlineItem(
             let box_fragment = item.BoxFragment();
             if !box_fragment.is_null() {
                 let box_fragment = unsafe { &*box_fragment };
-                ExportBoxPaintGeometry(box_fragment, &mut output.paint);
+                if !retained {
+                    ExportBoxPaintGeometry(box_fragment, &mut output.paint);
+                }
                 if purpose == LayoutUpdateKind::Paint
                     && cull.is_some()
                     && output.paint.scroll_container.is_some()
                 {
                     output.paint_cull_scroll_offset = Some(output.paint.scroll_offset);
                 }
-                if purpose == LayoutUpdateKind::Paint {
+                if !retained && purpose == LayoutUpdateKind::Paint {
                     ExportOverflowClipMargin(box_fragment, &mut output.paint);
                 }
-                if purpose == LayoutUpdateKind::Paint {
+                if !retained && purpose == LayoutUpdateKind::Paint {
                     ExportScrollbarPaintData(box_fragment, &mut output.paint);
                 }
-                if purpose == LayoutUpdateKind::Paint {
+                if !retained && purpose == LayoutUpdateKind::Paint {
                     ExportTablePaintData(box_fragment, sources, &mut output.paint);
                 }
                 if box_fragment.IsTableCell() {
@@ -3394,17 +3461,19 @@ fn ExportInlineItem(
                     .instances
                     .entry(box_fragment as *const PhysicalBoxFragment)
                     .or_insert(output.fragment_instance_id);
-                output.content_size = ExportContentSize(box_fragment);
-                if purpose == LayoutUpdateKind::Paint {
+                if !retained {
+                    output.content_size = ExportContentSize(box_fragment);
+                }
+                if !retained && purpose == LayoutUpdateKind::Paint {
                     ExportMathMLPaintData(box_fragment, &mut output.paint);
                 }
-                if purpose == LayoutUpdateKind::Paint {
+                if !retained && purpose == LayoutUpdateKind::Paint {
                     ExportFrameSetPaintData(box_fragment, &mut output.paint);
                 }
-                if purpose == LayoutUpdateKind::Paint {
+                if !retained && purpose == LayoutUpdateKind::Paint {
                     ExportFieldsetPaintData(box_fragment, &mut output.paint);
                 }
-                if purpose == LayoutUpdateKind::Paint {
+                if !retained && purpose == LayoutUpdateKind::Paint {
                     ExportColumnRulePaintData(box_fragment, &mut output.paint);
                 }
                 if item.DescendantsCount() <= 1 {
@@ -3601,9 +3670,21 @@ fn ExportFragment(
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
 ) -> FragmentNode {
-    let mut output = FragmentNode::default();
-    output.fragment_instance_id = *next_fragment_instance_id;
-    *next_fragment_instance_id += 1;
+    let fragment_instance_id = paint_state_owners.fragment_instance(
+        0,
+        fragment as *const PhysicalFragment as usize,
+        next_fragment_instance_id,
+    );
+    let mut output = paint_state_owners
+        .retained_nodes
+        .remove(&fragment_instance_id)
+        .unwrap_or_default();
+    let retained = output.fragment_instance_id == fragment_instance_id;
+    if retained {
+        paint_state_owners.retained_reuses += 1;
+    }
+    output.children.clear();
+    output.fragment_instance_id = fragment_instance_id;
     let object = fragment.GetLayoutObject();
     output.node_id = InputId(object);
     let effective_style = if fragment.UsesFirstLineStyle() {
@@ -3611,16 +3692,18 @@ fn ExportFragment(
     } else {
         std::ptr::null()
     };
-    output.paint = ExportProperties(
-        object,
-        sources,
-        style_sources,
-        effective_style,
-        resources,
-        purpose,
-        Some(&mut paint_state_owners.exported_styles),
-        Some(&mut paint_state_owners.debug_names),
-    );
+    if !retained {
+        output.paint = ExportProperties(
+            object,
+            sources,
+            style_sources,
+            effective_style,
+            resources,
+            purpose,
+            Some(&mut paint_state_owners.exported_styles),
+            Some(&mut paint_state_owners.debug_names),
+        );
+    }
     output.paint.display_item_fragment = display_item_fragment;
     output.paint.hidden =
         fragment.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
@@ -3637,14 +3720,18 @@ fn ExportFragment(
         width: Number(fragment.Size().width),
         height: Number(fragment.Size().height),
     };
-    output.content_size = output.size;
-    output.fragmentainer_instance_id = fragmentainer_instance_id;
+    if !retained {
+        output.content_size = output.size;
+    }
+    if !retained {
+        output.fragmentainer_instance_id = fragmentainer_instance_id;
+    }
     if !fragment.IsBox() {
         return output;
     }
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
-    if purpose == LayoutUpdateKind::Paint && !object.is_null() {
+    if !retained && purpose == LayoutUpdateKind::Paint && !object.is_null() {
         let native_style = if effective_style.is_null() {
             unsafe { &*object }.StyleRef()
         } else {
@@ -3652,12 +3739,16 @@ fn ExportFragment(
         };
         ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportBoxInkOverflow(box_fragment, &mut output.paint);
     }
     if box_fragment.IsFragmentainerBox() {
-        fragmentainer_instance_id = *next_fragmentainer_instance_id;
-        *next_fragmentainer_instance_id += 1;
+        if retained && output.fragmentainer_instance_id != 0 {
+            fragmentainer_instance_id = output.fragmentainer_instance_id;
+        } else {
+            fragmentainer_instance_id = *next_fragmentainer_instance_id;
+            *next_fragmentainer_instance_id += 1;
+        }
         // cpp: core/paint/box_fragment_painter.cc:398-403,1211-1212
         let token = box_fragment.GetBreakToken();
         display_item_fragment = if token.is_null() {
@@ -3681,20 +3772,22 @@ fn ExportFragment(
     }
     output.paint.display_item_fragment = display_item_fragment;
     output.fragmentainer_instance_id = fragmentainer_instance_id;
-    ExportBoxPaintGeometry(box_fragment, &mut output.paint);
+    if !retained {
+        ExportBoxPaintGeometry(box_fragment, &mut output.paint);
+    }
     if purpose == LayoutUpdateKind::Paint
         && cull.is_some()
         && output.paint.scroll_container.is_some()
     {
         output.paint_cull_scroll_offset = Some(output.paint.scroll_offset);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportOverflowClipMargin(box_fragment, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportScrollbarPaintData(box_fragment, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportTablePaintData(box_fragment, sources, &mut output.paint);
     }
     if box_fragment.IsTableCell() {
@@ -3706,20 +3799,22 @@ fn ExportFragment(
         box_fragment as *const PhysicalBoxFragment,
         output.fragment_instance_id,
     );
-    output.content_size = ExportContentSize(box_fragment);
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained {
+        output.content_size = ExportContentSize(box_fragment);
+    }
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportMathMLPaintData(box_fragment, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportFrameSetPaintData(box_fragment, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportFieldsetPaintData(box_fragment, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportColumnRulePaintData(box_fragment, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint {
+    if !retained && purpose == LayoutUpdateKind::Paint {
         ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint);
     }
     output.children.reserve(box_fragment.Children().len());
@@ -5323,7 +5418,24 @@ pub fn ExportLayoutObjectTree(
     space: &ConstraintSpace,
     cache: &mut LayoutBoundaryExportCache,
 ) -> FragmentNode {
-    ExportObjectTree(root, result, space, LayoutUpdateKind::Paint, cache)
+    ExportObjectTree(root, result, space, LayoutUpdateKind::Paint, cache, None)
+}
+
+pub fn RefreshLayoutObjectTreeProjection(
+    root: &mut LayoutObject,
+    result: &LayoutResult,
+    space: &ConstraintSpace,
+    cache: &mut LayoutBoundaryExportCache,
+    retained: FragmentNode,
+) -> FragmentNode {
+    ExportObjectTree(
+        root,
+        result,
+        space,
+        LayoutUpdateKind::Paint,
+        cache,
+        Some(retained),
+    )
 }
 
 /// A compatible Element::RecalcOwnStyle update preserves LayoutObject and
@@ -5340,22 +5452,27 @@ pub(crate) fn RefreshCompatibleNodeInputCache(
     }
 
     let mut changed_objects = LayoutBoundaryHashSet::default();
-    let mut changed_projected_styles = LayoutBoundaryHashSet::default();
     for change in &update.objects {
         changed_objects.insert(change.object as *const LayoutObject);
-        changed_projected_styles.insert(change.previous_projected_style as usize);
-        let node = unsafe { &*change.object }.GetNode();
-        if !node.is_null() {
-            changed_projected_styles.insert(unsafe { &*node }.InputStyle() as *const _ as usize);
-        }
     }
 
     cache
-        .styles
-        .retain(|(_, projected), _| !changed_projected_styles.contains(projected));
-    cache
         .caret_positions
         .retain(|(object, ..), _| !changed_objects.contains(&(*object as *const LayoutObject)));
+
+    RefreshCompatiblePaintCache(cache);
+}
+
+/// A paint-only SetStyle keeps LayoutObject and Node identities resident.
+/// Discard values keyed by the old style pointers, then rebuild the small
+/// style-derived indices without throwing away the document-order object
+/// index used by scroll paint-property and cull-projection updates.
+pub(crate) fn RefreshCompatiblePaintCache(cache: &mut LayoutBoundaryExportCache) {
+    if cache.objects.is_empty() {
+        return;
+    }
+
+    cache.styles.clear();
 
     // A native ComputedStyle can be shared by several source nodes. Rebuild
     // this small pointer index in document order so removing one changed source
@@ -5398,107 +5515,157 @@ pub(crate) fn RefreshCompatibleNodeInputCache(
     cache.uncullable_objects = Arc::new(MarkUncullablePaintAncestors(&cache.objects));
 }
 
+/// Rebuild the stable document-order indices which Chromium gets directly
+/// from its resident LayoutObject graph. A targeted subtree export uses a
+/// temporary projection cache for the replacement itself; after a topology
+/// mutation this restores the document-wide boundary indices before a later
+/// scroll cull projection needs them.
+pub(crate) fn EnsureLayoutBoundaryObjectIndex(
+    root: &mut LayoutObject,
+    cache: &mut LayoutBoundaryExportCache,
+) {
+    if !cache.objects.is_empty() {
+        return;
+    }
+
+    let mut logical_order = 0;
+    let mut source_objects = Vec::new();
+    let mut sticky_objects = Vec::new();
+    let root_ptr: *mut LayoutObject = root;
+    let mut object = root_ptr;
+    while !object.is_null() {
+        // This runs inside LayoutHeapScope; the resident tree owns the objects.
+        // Topology mutations clear every cached pointer before rebuilding.
+        cache.objects.push(object);
+        let current = unsafe { &*object };
+        let node = current.GetNode();
+        if !node.is_null() {
+            source_objects.push(object);
+            let input_node = unsafe { &*node };
+            logical_order += 1;
+            cache.sources.entry(object).or_insert(SourceEntry {
+                node,
+                logical_tree_order: logical_order,
+            });
+            cache
+                .style_sources
+                .entry(current.StyleRef())
+                .or_insert(input_node.InputStyle());
+            let first_line_style = input_node.InputFirstLineStyle();
+            if !first_line_style.is_null() {
+                if let Some(first_line_data) = input_node.InputFirstLineStyleData() {
+                    cache
+                        .style_sources
+                        .entry(first_line_style)
+                        .or_insert(first_line_data);
+                }
+            }
+        }
+        if current.StyleRef().HasStickyConstrainedPosition() {
+            sticky_objects.push(object);
+        }
+        object = current.NextInPreOrder(root_ptr);
+    }
+    cache.source_objects = Arc::new(source_objects);
+    cache.sticky_objects = Arc::new(sticky_objects);
+    cache.uncullable_objects = Arc::new(MarkUncullablePaintAncestors(&cache.objects));
+}
+
 fn ExportObjectTree(
     root: &mut LayoutObject,
     result: &LayoutResult,
     space: &ConstraintSpace,
     purpose: LayoutUpdateKind,
     cache: &mut LayoutBoundaryExportCache,
+    retained: Option<FragmentNode>,
 ) -> FragmentNode {
+    let mut trace = browser_tracing::span("layout", "LayoutBoundary.ExportObjectTree");
+    trace.set("cache_warm", (!cache.objects.is_empty()) as u8 as f64);
+    let result_identity = result as *const LayoutResult as usize;
+    if cache.fragment_identity_result != result_identity {
+        cache.fragment_identity_result = result_identity;
+        cache.fragment_instance_ids.clear();
+        cache.next_fragment_instance_id = 1;
+    }
     if cache.objects.is_empty() {
-        let mut logical_order = 0;
-        let mut source_objects = Vec::new();
-        let mut sticky_objects = Vec::new();
-        let root_ptr: *mut LayoutObject = root;
-        let mut object = root_ptr;
-        while !object.is_null() {
-            // Export runs inside LayoutHeapScope; the resident tree already
-            // owns these objects. The mutation boundary clears all cached
-            // pointers before topology or style ownership can change.
-            cache.objects.push(object);
-            let current = unsafe { &*object };
-            let node = current.GetNode();
-            if !node.is_null() {
-                source_objects.push(object);
-                let input_node = unsafe { &*node };
-                logical_order += 1;
-                cache.sources.entry(object).or_insert(SourceEntry {
-                    node,
-                    logical_tree_order: logical_order,
-                });
-                cache
-                    .style_sources
-                    .entry(current.StyleRef())
-                    .or_insert(input_node.InputStyle());
-                let first_line_style = input_node.InputFirstLineStyle();
-                if !first_line_style.is_null() {
-                    if let Some(first_line_data) = input_node.InputFirstLineStyleData() {
-                        cache
-                            .style_sources
-                            .entry(first_line_style)
-                            .or_insert(first_line_data);
-                    }
-                }
-            }
-            if current.StyleRef().HasStickyConstrainedPosition() {
-                sticky_objects.push(object);
-            }
-            object = current.NextInPreOrder(root_ptr);
-        }
-        cache.source_objects = Arc::new(source_objects);
-        cache.sticky_objects = Arc::new(sticky_objects);
-        cache.uncullable_objects = Arc::new(MarkUncullablePaintAncestors(&cache.objects));
+        let _phase = browser_tracing::span("layout", "LayoutBoundary.IndexObjects");
+        EnsureLayoutBoundaryObjectIndex(root, cache);
     }
     let objects = &cache.objects;
     let sources = &cache.sources;
     let style_sources = &cache.style_sources;
-    UpdateStickyOffsets(objects.iter().copied(), false);
-    let resources = Arc::new(PaintResources {
-        fonts: if purpose == LayoutUpdateKind::Paint {
-            space.fonts.clone()
-        } else {
-            Vec::new().into()
-        },
-        images: if purpose == LayoutUpdateKind::Paint {
-            space.images.clone()
-        } else {
-            Vec::new()
-        },
-        device_pixel_ratio: space.device_pixel_ratio,
-        preferred_color_scheme: space.preferred_color_scheme,
-        layout_zoom_factor: space.layout_zoom_factor,
-        paints_opaque_base_background: !space.printing,
-        viewport: space.viewport,
+    trace.set("objects", objects.len() as f64);
+    trace.set("sources", sources.len() as f64);
+    {
+        let _phase = browser_tracing::span("layout", "LayoutBoundary.UpdateStickyOffsets");
+        UpdateStickyOffsets(objects.iter().copied(), false);
+    }
+    let retained_resources = retained
+        .as_ref()
+        .and_then(|node| node.paint.resources.clone());
+    let resources = retained_resources.unwrap_or_else(|| {
+        Arc::new(PaintResources {
+            fonts: if purpose == LayoutUpdateKind::Paint {
+                space.fonts.clone()
+            } else {
+                Vec::new().into()
+            },
+            images: if purpose == LayoutUpdateKind::Paint {
+                space.images.clone()
+            } else {
+                Vec::new()
+            },
+            device_pixel_ratio: space.device_pixel_ratio,
+            preferred_color_scheme: space.preferred_color_scheme,
+            layout_zoom_factor: space.layout_zoom_factor,
+            paints_opaque_base_background: !space.printing,
+            viewport: space.viewport,
+        })
     });
+    let mut retained_nodes = LayoutBoundaryHashMap::default();
+    if let Some(retained) = retained {
+        CollectRetainedProjection(retained, &mut retained_nodes);
+    }
+    trace.set("retained_candidates", retained_nodes.len() as f64);
     let mut paint_state_owners = FragmentOwners {
         exported_styles: std::mem::take(&mut cache.styles),
         cached_caret_positions: std::mem::take(&mut cache.caret_positions),
         debug_names: std::mem::take(&mut cache.debug_names),
         uncullable_objects: Arc::clone(&cache.uncullable_objects),
+        fragment_instance_ids: std::mem::take(&mut cache.fragment_instance_ids),
+        retained_nodes,
         ..FragmentOwners::default()
     };
-    let mut next_fragment_instance_id = 1;
+    let mut next_fragment_instance_id = cache.next_fragment_instance_id.max(1);
     let mut next_fragmentainer_instance_id = 1;
-    let paint_cull = (purpose == LayoutUpdateKind::Paint)
-        .then(|| BuildPaintCullRect(root, space))
-        .flatten();
-    let mut output = ExportFragment(
-        result.GetPhysicalFragment(),
-        PhysicalOffset::default(),
-        PhysicalOffset::default(),
-        paint_cull,
-        true,
-        sources,
-        style_sources,
-        &resources,
-        purpose,
-        &mut paint_state_owners,
-        0,
-        0,
-        &mut next_fragment_instance_id,
-        &mut next_fragmentainer_instance_id,
-    );
+    let paint_cull = {
+        let _phase = browser_tracing::span("layout", "LayoutBoundary.BuildPaintCullRect");
+        (purpose == LayoutUpdateKind::Paint)
+            .then(|| BuildPaintCullRect(root, space))
+            .flatten()
+    };
+    trace.set("culled", paint_cull.is_some() as u8 as f64);
+    let mut output = {
+        let _phase = browser_tracing::span("layout", "LayoutBoundary.ExportFragment");
+        ExportFragment(
+            result.GetPhysicalFragment(),
+            PhysicalOffset::default(),
+            PhysicalOffset::default(),
+            paint_cull,
+            true,
+            sources,
+            style_sources,
+            &resources,
+            purpose,
+            &mut paint_state_owners,
+            0,
+            0,
+            &mut next_fragment_instance_id,
+            &mut next_fragmentainer_instance_id,
+        )
+    };
     if purpose == LayoutUpdateKind::Paint {
+        let _phase = browser_tracing::span("layout", "LayoutBoundary.ExportGlobalPaintFacts");
         ExportCanvasBackground(root, objects, &mut output);
         ExportGlobalMainThreadScrollFacts(root, objects, &mut output);
     }
@@ -5508,12 +5675,23 @@ fn ExportObjectTree(
     if paint_cull.is_none() {
         output.inline_geometry = ExportInlineGeometry(objects, &paint_state_owners);
     }
-    ResolveLogicalParentOccurrences(&mut output);
+    {
+        let _phase = browser_tracing::span("layout", "LayoutBoundary.ResolveLogicalParents");
+        ResolveLogicalParentOccurrences(&mut output);
+    }
     if purpose == LayoutUpdateKind::Paint {
+        let _phase = browser_tracing::span("layout", "LayoutBoundary.ExportDecorations");
         ExportInlineStitchedDecorations(&mut output);
     }
     cache.styles = paint_state_owners.exported_styles;
     cache.caret_positions = paint_state_owners.exported_caret_positions;
     cache.debug_names = paint_state_owners.debug_names;
+    cache.fragment_instance_ids = paint_state_owners.fragment_instance_ids;
+    cache.next_fragment_instance_id = next_fragment_instance_id;
+    trace.set("retained_reuses", paint_state_owners.retained_reuses as f64);
+    trace.set(
+        "retained_evictions",
+        paint_state_owners.retained_nodes.len() as f64,
+    );
     output
 }

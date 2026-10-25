@@ -26,8 +26,14 @@ pub struct FrameAlignedInputQueue {
 }
 impl FrameAlignedInputQueue {
     pub fn IsFrameAligned(input: &InputEvent) -> bool {
-        matches!(input, InputEvent::Wheel(event)
-            if matches!(event.phase, WheelPhase::kNone | WheelPhase::kChanged))
+        // Blink's MainThreadEventQueue classifies every WebMouseWheelEvent as
+        // rAF-aligned, including phase boundaries.  Began/Ended still remain
+        // ordering barriers below; they just wait for the same rendering
+        // opportunity as the surrounding continuous samples instead of
+        // forcing lifecycle work from the input callback.
+        // Source: third_party/blink/renderer/platform/widget/input/
+        //         main_thread_event_queue.cc:IsRafAlignedEvent.
+        matches!(input, InputEvent::Wheel(_))
             || matches!(input, InputEvent::Mouse(event) if event.r#type == MouseEventType::kMove)
     }
     pub fn IsEmpty(&self) -> bool {
@@ -104,7 +110,7 @@ impl FrameAlignedInputQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input_event::{EventModifiers, WheelEvent};
+    use crate::input_event::{EventModifiers, WheelEvent, WheelPhase};
     use layoutng_assembly::internal::layout_input::Offset;
     #[test]
     fn begin_frame_wheel_coalescing_preserves_units_phase_and_modifiers() {
@@ -121,6 +127,17 @@ mod tests {
                 ..Default::default()
             })
         };
+        for phase in [
+            WheelPhase::kNone,
+            WheelPhase::kBegan,
+            WheelPhase::kChanged,
+            WheelPhase::kEnded,
+            WheelPhase::kCancelled,
+        ] {
+            assert!(FrameAlignedInputQueue::IsFrameAligned(&wheel(
+                0.0, phase, false
+            )));
+        }
         queue.Push(wheel(10.0, WheelPhase::kChanged, false), time, 1);
         queue.Push(wheel(20.0, WheelPhase::kChanged, false), time, 2);
         queue.Push(wheel(-5.0, WheelPhase::kChanged, false), time, 1);

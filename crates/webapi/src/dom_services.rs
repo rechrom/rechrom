@@ -1002,10 +1002,10 @@ impl DOMJavaScriptBindings {
                     "block ruby",
                     "ruby-text",
                 ];
-                if !resolved.generates_box {
-                    "none"
-                } else if resolved.display_contents {
+                if resolved.display_contents {
                     "contents"
+                } else if !resolved.generates_box {
+                    "none"
                 } else {
                     NAMES[s.display as usize]
                 }

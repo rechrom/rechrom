@@ -20,6 +20,25 @@ unsafe extern "Rust" {
 }
 
 impl LayoutAssembly {
+    /// Restore the document-wide boundary indices after a targeted subtree
+    /// replacement. Chromium keeps the same live LayoutObject graph here; the
+    /// extracted immutable boundary mirrors that identity in this cache.
+    pub fn RebuildBoundaryObjectIndex(
+        &self,
+        root: &mut crate::internal::layout_object::LayoutObject,
+        cache: &mut crate::layout_boundary_support::LayoutBoundaryExportCache,
+    ) {
+        let mut trace =
+            browser_tracing::span("layout", "LayoutAssembly.RebuildBoundaryObjectIndex");
+        let _heap = foundation::LayoutHeapScope::new();
+        let _pass = crate::internal::layout_pass_scope::LayoutPassScope::new(
+            &self.algorithms,
+            &self.objects,
+        );
+        crate::internal::boundary::layout_boundary::EnsureLayoutBoundaryObjectIndex(root, cache);
+        trace.set("cached_objects", cache.objects.len() as f64);
+    }
+
     /// Refresh scroll-dependent paint properties after Layout retained its result.
     /// The caller must fall back to ExportFragments if geometry or styles changed.
     /// Reusing sticky constraints additionally requires the offset-only Page proof.
@@ -39,9 +58,11 @@ impl LayoutAssembly {
             fragments,
             reuse_sticky_constraints,
         );
-        // Ordinary scroll updates allocate no managed objects. Sticky constraint
-        // allocation still forces collection through the heap activity check.
-        heap.AllowUnchangedReuse();
+        // cppgc schedules collection from allocation pressure instead of
+        // stopping a scroll update to collect at the Blink API boundary. The
+        // document owner services the pending request in bounded foreground
+        // collection tasks after latency-sensitive frame work.
+        heap.DeferCollection();
     }
 
     /// Derive an owned snapshot for paint/diagnostics from the result already
@@ -50,8 +71,12 @@ impl LayoutAssembly {
         &self,
         root: &mut crate::internal::layout_object::LayoutObject,
         space: &crate::internal::layout_input::ConstraintSpace,
+        cache: &mut crate::layout_boundary_support::LayoutBoundaryExportCache,
     ) -> layoutng_fragment_tree::fragment_tree::FragmentNode {
         use crate::internal::{layout_box::LayoutBox, layout_pass_scope::LayoutPassScope};
+        let mut trace = browser_tracing::span("layout", "LayoutAssembly.ExportFragments");
+        trace.set("cached_objects", cache.objects.len() as f64);
+        trace.set("cached_styles", cache.styles.len() as f64);
         let _heap = foundation::LayoutHeapScope::new();
         let _pass = LayoutPassScope::new(&self.algorithms, &self.objects);
         let root_box = foundation::DynamicTo::<LayoutBox>(root as *mut _);
@@ -61,18 +86,69 @@ impl LayoutAssembly {
             !result.is_null(),
             "layout must finish before exporting fragments"
         );
+        let mut environment = {
+            let _phase = browser_tracing::span("layout", "LayoutAssembly.CreateEnvironment");
+            self.boundary
+                .create_environment
+                .expect("layout environment")(root, space)
+        };
+        let snapshot = {
+            let _phase = browser_tracing::span("layout", "LayoutAssembly.ExportTree");
+            self.boundary
+                .export_tree
+                .expect("fragment snapshot exporter")(
+                root, unsafe { &*result }, space, cache
+            )
+        };
+        {
+            let _phase = browser_tracing::span("layout", "LayoutAssembly.CommitEnvironment");
+            environment.Commit(root);
+        }
+        snapshot
+    }
+
+    /// Advance the expanded paint cull projection over an unchanged native
+    /// LayoutResult. Chromium retains FragmentData and serializes no second
+    /// tree here; this boundary moves overlapping owned nodes and exports only
+    /// fragments which newly enter the cull window.
+    pub fn RefreshFragmentProjection(
+        &self,
+        root: &mut crate::internal::layout_object::LayoutObject,
+        space: &crate::internal::layout_input::ConstraintSpace,
+        cache: &mut crate::layout_boundary_support::LayoutBoundaryExportCache,
+        retained: layoutng_fragment_tree::fragment_tree::FragmentNode,
+    ) -> layoutng_fragment_tree::fragment_tree::FragmentNode {
+        use crate::internal::{layout_box::LayoutBox, layout_pass_scope::LayoutPassScope};
+        let mut trace = browser_tracing::span("layout", "LayoutAssembly.RefreshFragmentProjection");
+        trace.set("cached_objects", cache.objects.len() as f64);
+        let mut heap = foundation::LayoutHeapScope::new();
+        let _pass = LayoutPassScope::new(&self.algorithms, &self.objects);
+        let root_box = foundation::DynamicTo::<LayoutBox>(root as *mut _);
+        assert!(!root_box.is_null(), "snapshot root must be a LayoutBox");
+        let result = unsafe { &*root_box }.GetLayoutResult(0);
+        assert!(
+            !result.is_null(),
+            "layout must finish before refreshing fragment projection"
+        );
         let mut environment = self
             .boundary
             .create_environment
             .expect("layout environment")(root, space);
-        let mut cache = crate::layout_boundary_support::LayoutBoundaryExportCache::default();
         let snapshot = self
             .boundary
-            .export_tree
-            .expect("fragment snapshot exporter")(
-            root, unsafe { &*result }, space, &mut cache
+            .refresh_tree_projection
+            .expect("fragment projection refresher")(
+            root,
+            unsafe { &*result },
+            space,
+            cache,
+            retained,
         );
         environment.Commit(root);
+        // Advancing the paint interest window is part of the active scroll
+        // frame. Match cppgc's allocation-driven scheduling and leave any
+        // requested collection to the document owner's bounded GC task.
+        heap.DeferCollection();
         snapshot
     }
 

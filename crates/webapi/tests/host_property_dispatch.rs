@@ -137,6 +137,49 @@ fn run_steps(scripts: &[&str]) {
 }
 
 #[test]
+fn preformatted_elements_use_html_pre_element_interface() {
+    run(r#"
+        check(typeof HTMLPreElement === 'function', 'HTMLPreElement global');
+        for (const name of ['pre', 'listing', 'xmp']) {
+            const element = document.createElement(name);
+            check(element instanceof HTMLPreElement, name + ' prototype');
+            check(element instanceof HTMLElement, name + ' HTML prototype');
+            equal(Object.prototype.toString.call(element), '[object HTMLPreElement]', name + ' interface name');
+        }
+        check(!(document.createElement('div') instanceof HTMLPreElement), 'div is not preformatted interface');
+        check(!(document.createElementNS('http://www.w3.org/2000/svg', 'pre') instanceof HTMLPreElement), 'namespace brand');
+        throwsTypeError(() => new HTMLPreElement(), 'illegal direct constructor');
+    "#);
+}
+
+#[test]
+fn token_lists_are_live_same_object_and_iframe_sandbox_stringifies() {
+    run(r#"
+        const element = document.createElement('div'), classes = element.classList;
+        check(classes instanceof DOMTokenList, 'classList interface');
+        equal(classes, element.classList, 'classList SameObject');
+        classes.add('one', 'two', 'one');
+        equal(element.className, 'one two', 'add unique tokens');
+        element.className = 'three four';
+        equal(classes.toString(), 'three four', 'live attribute value');
+        check(classes.contains('three') && [...classes].join(',') === 'three,four', 'contains and iterator');
+        check(classes.replace('three', 'four'), 'replace existing token');
+        equal(classes.value, 'four', 'replace removes duplicate');
+        classes.toggle('five', true); classes.remove('four');
+        equal(classes.item(0), 'five', 'toggle remove and item');
+        throwsTypeError(() => new DOMTokenList(), 'illegal DOMTokenList constructor');
+
+        const frame = document.createElement('iframe'), sandbox = frame.sandbox;
+        check(sandbox instanceof DOMTokenList, 'sandbox interface');
+        equal(sandbox, frame.sandbox, 'sandbox SameObject');
+        frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+        equal(sandbox.toString(), 'allow-scripts allow-same-origin', 'sandbox string value');
+        frame.sandbox = 'allow-forms';
+        equal(frame.getAttribute('sandbox'), 'allow-forms', 'sandbox PutForwards value');
+    "#);
+}
+
+#[test]
 fn autonomous_element_constructor_uses_author_checked_accessor() {
     run(r#"
         const state = Symbol('checked'), calls = [], initial = {author: 'checked'};

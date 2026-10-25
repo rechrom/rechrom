@@ -73,6 +73,53 @@ impl<'a> DefaultEventHandler<'a> {
     fn Element(&self, id: u64, name: &str) -> bool {
         ReadNode(&self.context.document, id, |_, n, _| IsElement(n, name)).unwrap_or(false)
     }
+    // cpp: html_summary_element.cc:145-166. Only the first direct summary is
+    // the details element's main summary and owns its activation behavior.
+    fn MainDetailsForSummary(&self, id: u64) -> Option<(u64, bool)> {
+        ReadNode(&self.context.document, id, |document, node, index| {
+            if !IsElement(node, "summary") {
+                return None;
+            }
+            let details = node.Parent()?;
+            if !document.Node(details).IsHTMLElement("details")
+                || document
+                    .Node(details)
+                    .Children()
+                    .iter()
+                    .copied()
+                    .find(|child| document.Node(*child).IsHTMLElement("summary"))
+                    != Some(index)
+            {
+                return None;
+            }
+            Some((
+                document.Node(details).Id(),
+                document.Node(details).FindAttribute("open").is_some(),
+            ))
+        })
+        .flatten()
+    }
+    fn ClickTargetIsControlInsideSummary(&self, target: u64, summary: u64) -> bool {
+        ReadNode(&self.context.document, target, |document, _, mut index| {
+            loop {
+                let node = document.Node(index);
+                if node.Id() == summary {
+                    return false;
+                }
+                if ["a", "button", "input", "select", "textarea"]
+                    .iter()
+                    .any(|name| IsElement(node, name))
+                {
+                    return true;
+                }
+                let Some(parent) = node.Parent() else {
+                    return false;
+                };
+                index = parent;
+            }
+        })
+        .unwrap_or(false)
+    }
     fn SearchCancelButtonHost(&self, id: u64) -> Option<u64> {
         ReadNode(&self.context.document, id, |document, _, index| {
             document
@@ -89,6 +136,9 @@ impl<'a> DefaultEventHandler<'a> {
         if self.Element(node, "label") {
             return self.LabelControl(node).is_some();
         }
+        if self.MainDetailsForSummary(node).is_some() {
+            return true;
+        }
         self.TypeFor(node).HasActivationBehavior()
     }
     // cpp: interaction/default_event_handler.cc:81-90
@@ -99,6 +149,9 @@ impl<'a> DefaultEventHandler<'a> {
     ) -> Option<DefaultActivationState<'a>> {
         if self.Element(node, "label") {
             return None;
+        }
+        if self.MainDetailsForSummary(node).is_some() {
+            return Some(DefaultActivationState::default());
         }
         let input_type = self.TypeFor(node);
         let input_state = input_type.LegacyPreActivationBehavior(event);
@@ -114,6 +167,26 @@ impl<'a> DefaultEventHandler<'a> {
         event: &mut Event,
         state: Option<&DefaultActivationState<'a>>,
     ) {
+        if let Some((details, open)) = self.MainDetailsForSummary(node) {
+            if event.r#type == EventType::kClick
+                && event.button == MouseButton::kPrimary
+                && !event.default_prevented
+                && !self.ClickTargetIsControlInsideSummary(event.target_node_id, node)
+            {
+                (self.context.emit_mutation)(&DOMMutation {
+                    mutation_type: if open {
+                        DOMMutationType::kRemoveAttribute
+                    } else {
+                        DOMMutationType::kSetAttribute
+                    },
+                    target_node_id: details,
+                    name: "open".into(),
+                    ..Default::default()
+                });
+                event.default_handled = true;
+            }
+            return;
+        }
         if self.Element(node, "label") {
             return;
         }

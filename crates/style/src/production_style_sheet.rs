@@ -582,6 +582,11 @@ impl Drop for MediaEdges {
 fn ConsumeOriginalComponentValue<T: TokenStreamTokenizer>(
     stream: &mut CSSParserTokenStream<'_, T>,
 ) -> String {
+    // CSSParserImpl::ParseValue creates a fresh stream and enters the
+    // property backend without peeking first. The source-range adapter needs
+    // the same initialized look-ahead state that Chromium's property parser
+    // establishes before reading the component value.
+    stream.EnsureLookAhead();
     let start = stream.LookAheadOffset();
     stream.SkipUntilPeekedTypeIs(&[]);
     let end = stream.LookAheadOffset();

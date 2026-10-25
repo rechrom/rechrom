@@ -215,6 +215,16 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
             page_mutation::FontResourceReady { font },
         ));
         assert!(state.layout_revision.get().is_none());
+        assert!(state.document.borrow().GetStyleImpact().layout);
+        assert!(
+            !state
+                .document
+                .borrow()
+                .GetDocument()
+                .StyleState()
+                .layout_inputs_require_tree,
+            "font completion invalidates text geometry without rebuilding the resident tree"
+        );
         let _ = geometry(&state, node);
         state.ApplyResourceMutation(ResourceMutation::ImageResourceReady(
             page_mutation::ImageResourceReady {

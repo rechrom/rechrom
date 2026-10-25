@@ -79,6 +79,13 @@ pub struct LayoutBoundaryExportCache {
     pub(crate) style_sources:
         LayoutBoundaryHashMap<*const NativeComputedStyle, *const ComputedStyle>,
     pub(crate) uncullable_objects: Arc<LayoutBoundaryHashSet<*const LayoutObject>>,
+    // Native fragment/item identities remain stable while a LayoutResult is
+    // retained. Chromium keeps the corresponding FragmentData identity across
+    // cull-rect updates; preserve the same identity in the owned projection so
+    // PrePaint does not mistake a shifted culled child index for a new object.
+    pub(crate) fragment_identity_result: usize,
+    pub(crate) fragment_instance_ids: LayoutBoundaryHashMap<(u8, usize), u64>,
+    pub(crate) next_fragment_instance_id: u64,
 }
 
 impl LayoutBoundaryExportCache {
@@ -92,6 +99,9 @@ impl LayoutBoundaryExportCache {
         self.sources.clear();
         self.style_sources.clear();
         self.uncullable_objects = Arc::default();
+        self.fragment_identity_result = 0;
+        self.fragment_instance_ids.clear();
+        self.next_fragment_instance_id = 0;
     }
 }
 
@@ -118,6 +128,15 @@ pub struct LayoutBoundarySupport {
             &LayoutResult,
             &ConstraintSpace,
             &mut LayoutBoundaryExportCache,
+        ) -> FragmentNode,
+    >,
+    pub refresh_tree_projection: Option<
+        fn(
+            &mut LayoutObject,
+            &LayoutResult,
+            &ConstraintSpace,
+            &mut LayoutBoundaryExportCache,
+            FragmentNode,
         ) -> FragmentNode,
     >,
 }

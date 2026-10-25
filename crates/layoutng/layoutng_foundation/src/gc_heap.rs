@@ -4,7 +4,8 @@
 use crate::{kMemberDeletedValue, Member, UntracedMember, WeakMember};
 use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
@@ -154,6 +155,35 @@ struct Allocation {
     strongly_marked: bool,
 }
 
+// Managed addresses are allocator-produced, aligned, process-local values.
+// Hashing all of their bytes with RandomState on every traced edge is wasted
+// work; cppgc likewise resolves a heap address directly through page metadata.
+// Keep an ordered size index only for the uncommon interior-pointer lookup.
+#[derive(Default)]
+struct AddressHasher(u64);
+
+impl Hasher for AddressHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut value = 0u64;
+        for (shift, byte) in bytes.iter().take(8).enumerate() {
+            value |= u64::from(*byte) << (shift * 8);
+        }
+        self.0 = value;
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        // Drop guaranteed allocation-alignment bits while retaining all
+        // entropy that distinguishes registered objects.
+        self.0 = (value >> 4) as u64;
+    }
+}
+
+type AddressMap<V> = HashMap<usize, V, BuildHasherDefault<AddressHasher>>;
+
 impl Drop for Allocation {
     fn drop(&mut self) {
         unsafe { dealloc(self.address.as_ptr(), self.layout) };
@@ -272,7 +302,8 @@ struct HeapState {
     // Revisited shared edges need not be among the four most recent intervals.
     // Exact-address hits are valid only within this collection; collisions miss.
     strong_marked_addresses: [usize; 1024],
-    objects: BTreeMap<usize, Allocation>,
+    objects: AddressMap<Allocation>,
+    object_ranges: BTreeMap<usize, usize>,
     roots: PersistentRegion,
     worklist: Vec<TraceWorkItem>,
     weak_slots: Vec<WeakSlot>,
@@ -301,7 +332,8 @@ impl HeapState {
             strong_marked_ranges: [(0, 0); 4],
             next_strong_marked_range: 0,
             strong_marked_addresses: [0; 1024],
-            objects: BTreeMap::new(),
+            objects: AddressMap::default(),
+            object_ranges: BTreeMap::new(),
             roots: PersistentRegion::default(),
             worklist: Vec::new(),
             weak_slots: Vec::new(),
@@ -314,8 +346,22 @@ impl HeapState {
 
     fn find(&self, pointer: *const u8) -> Option<usize> {
         let address = pointer as usize;
-        let (&start, object) = self.objects.range(..=address).next_back()?;
-        (address.wrapping_sub(start) < object.layout.size()).then_some(start)
+        if self.objects.contains_key(&address) {
+            return Some(address);
+        }
+        let (&start, &size) = self.object_ranges.range(..=address).next_back()?;
+        (address.wrapping_sub(start) < size).then_some(start)
+    }
+
+    fn insert_object(&mut self, start: usize, object: Allocation) {
+        let previous_range = self.object_ranges.insert(start, object.layout.size());
+        let previous_object = self.objects.insert(start, object);
+        assert!(previous_range.is_none() && previous_object.is_none());
+    }
+
+    fn remove_object(&mut self, start: usize) -> Option<Allocation> {
+        self.object_ranges.remove(&start);
+        self.objects.remove(&start)
     }
 
     fn alive(&self, pointer: *const u8) -> bool {
@@ -325,15 +371,10 @@ impl HeapState {
         if self.collecting && self.is_cached_strong_mark(pointer as usize) {
             return true;
         }
-        self.objects
-            .range(..=pointer as usize)
-            .next_back()
-            .filter(|(&start, object)| {
-                (pointer as usize).wrapping_sub(start) < object.layout.size()
-            })
-            .expect("liveness query reached another heap")
-            .1
-            .marked
+        let start = self
+            .find(pointer)
+            .expect("liveness query reached another heap");
+        self.objects[&start].marked
     }
 
     fn strong_mark_address_slot(address: usize) -> usize {
@@ -370,14 +411,10 @@ impl HeapState {
         // Keep the interval lookup's Allocation instead of searching the same
         // BTree again by its base address. Interior pointers still mark the
         // whole allocation, and pointers beyond its end remain invalid.
-        let (_, object) = self
-            .objects
-            .range_mut(..=pointer as usize)
-            .next_back()
-            .filter(|(&start, object)| {
-                (pointer as usize).wrapping_sub(start) < object.layout.size()
-            })
+        let start = self
+            .find(pointer)
             .expect("Trace reached an object outside the layout heap");
+        let object = self.objects.get_mut(&start).unwrap();
         assert!(
             object.trace.is_some() && object.destroy.is_some(),
             "Trace reached an unfinished allocation"
@@ -603,7 +640,7 @@ fn sweep_until(deadline: Option<std::time::Instant>) {
                 let mut heap = heap.borrow_mut();
                 while state.released < state.dead.len() && has_time() {
                     let address = state.dead[state.released];
-                    let object = heap.objects.remove(&address).unwrap();
+                    let object = heap.remove_object(address).unwrap();
                     heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
                     drop(object);
                     state.released += 1;
@@ -854,7 +891,7 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
         if heap.allocated_bytes_since_collection >= budget {
             heap.collection_requested = true;
         }
-        heap.objects.insert(
+        heap.insert_object(
             address.as_ptr() as usize,
             Allocation {
                 address,
@@ -921,14 +958,16 @@ impl<T: 'static, const WEAK: bool> BasicPersistent<T, WEAK> {
         );
     }
     pub fn Get(&self) -> *mut T {
-        self.check_thread();
+        debug_assert_eq!(
+            self.slot.owner,
+            std::thread::current().id(),
+            "Persistent belongs to another thread"
+        );
         let pointer = self.slot.pointer.load(Ordering::Relaxed);
-        if !pointer.is_null() {
-            assert!(
-                IsManagedLayoutAddress(pointer),
-                "Persistent refers to a reclaimed object"
-            );
-        }
+        debug_assert!(
+            pointer.is_null() || IsManagedLayoutAddress(pointer),
+            "Persistent refers to a reclaimed object"
+        );
         pointer
     }
     pub fn Assign(&mut self, pointer: *mut T) {
@@ -1047,7 +1086,7 @@ pub fn FreeLayoutBacking<T: ?Sized>(pointer: *mut T) {
     }
     HEAP.with(|heap| {
         let mut heap = heap.borrow_mut();
-        if let Some(object) = heap.objects.remove(&(pointer as *mut u8 as usize)) {
+        if let Some(object) = heap.remove_object(pointer as *mut u8 as usize) {
             heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
         }
     });
@@ -1098,7 +1137,7 @@ mod interval_lookup_tests {
         let layout = Layout::from_size_align(size, 8).unwrap();
         let address = NonNull::new(unsafe { alloc_zeroed(layout) }).unwrap();
         let start = address.as_ptr() as usize;
-        heap.objects.insert(
+        heap.insert_object(
             start,
             Allocation {
                 address,

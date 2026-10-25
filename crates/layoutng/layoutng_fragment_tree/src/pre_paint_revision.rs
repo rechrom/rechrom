@@ -42,10 +42,20 @@ pub fn MarkScrollPropertyChange(node: &mut FragmentNode, own_changed: bool) {
 #[derive(Default)]
 pub struct PrePaintRevisionTracker {
     // Move stable observation handles between passes, not complete fragments.
-    inputs: HashMap<Vec<usize>, Box<Input>>,
-    spare_inputs: HashMap<Vec<usize>, Box<Input>>,
+    inputs: HashMap<InputKey, Box<Input>>,
+    spare_inputs: HashMap<InputKey, Box<Input>>,
     owners: HashMap<u64, LiveOwner>,
     spare_owners: HashMap<u64, LiveOwner>,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+enum InputKey {
+    // Production exports preserve the native FragmentData-equivalent identity
+    // across cull projections. Child indices may shift as an offscreen sibling
+    // enters or leaves the projection, so they are not object identity.
+    Instance(u64),
+    // Hand-built external/test fragments may not carry a boundary identity.
+    Path(Vec<usize>),
 }
 
 struct LiveOwner {
@@ -184,8 +194,8 @@ impl PrePaintRevisionTracker {
         node: &mut FragmentNode,
         path: &mut Vec<usize>,
         generation: u64,
-        previous: &mut HashMap<Vec<usize>, Box<Input>>,
-        next: &mut HashMap<Vec<usize>, Box<Input>>,
+        previous: &mut HashMap<InputKey, Box<Input>>,
+        next: &mut HashMap<InputKey, Box<Input>>,
         resource_matches: &mut HashMap<(usize, usize, bool), bool>,
         previous_owners: &mut HashMap<u64, LiveOwner>,
         next_owners: &mut HashMap<u64, LiveOwner>,
@@ -204,9 +214,14 @@ impl PrePaintRevisionTracker {
             );
             path.pop();
         }
-        let (key, old) = match previous.remove_entry(path) {
+        let lookup_key = if node.fragment_instance_id == 0 {
+            InputKey::Path(path.clone())
+        } else {
+            InputKey::Instance(node.fragment_instance_id)
+        };
+        let (key, old) = match previous.remove_entry(&lookup_key) {
             Some((key, old)) => (key, Some(old)),
-            None => (path.clone(), None),
+            None => (lookup_key, None),
         };
         let owners_live = retain_owners(&node.paint, previous_owners, next_owners);
         node.pre_paint_owner_retained = owners_live

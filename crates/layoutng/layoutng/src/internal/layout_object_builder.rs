@@ -183,7 +183,6 @@ pub struct PaintInputUpdate {
 
 pub(crate) struct NodeInputObjectUpdate {
     pub(crate) object: *mut LayoutObject,
-    pub(crate) previous_projected_style: *const ComputedStyle,
 }
 
 pub(crate) struct NodeInputUpdate {
@@ -1585,8 +1584,10 @@ impl LayoutObjectTree {
             }
             let mut input = record.input.clone();
             input.style = style.clone();
-            // Resource bindings remain with their owner; this path changes no
-            // resource catalog. DOM's resource mutations require tree input.
+            // Resource bindings remain with their owner. A resource completion
+            // may refresh the projected image id and replaced metadata on this
+            // exact input, matching ImageResourceContent's observer callback;
+            // SVG graph ownership still comes from the resident binding.
             input.style.paint.svg_filter_graphs =
                 record.effective_style.paint.svg_filter_graphs.clone();
             input.element = if input.kind == NodeKind::kText {
@@ -1618,7 +1619,6 @@ impl LayoutObjectTree {
                 input,
                 NodeInputObjectUpdate {
                     object: record.object,
-                    previous_projected_style: unsafe { &*record.node }.InputStyle(),
                 },
             ));
         }
@@ -1650,7 +1650,6 @@ impl LayoutObjectTree {
                         input,
                         NodeInputObjectUpdate {
                             object: record.object,
-                            previous_projected_style: unsafe { &*record.node }.InputStyle(),
                         },
                     ));
                 }

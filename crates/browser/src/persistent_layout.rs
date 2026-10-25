@@ -201,6 +201,7 @@ pub(crate) fn LayoutPersistentScrollDocument(
         changes,
         fragments,
         scroll_only,
+        false,
     )
     .is_some()
 }
@@ -212,15 +213,21 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     changes: &[(u64, layoutng_assembly::internal::layout_input::Offset)],
     fragments: &mut FragmentNode,
     scroll_only: bool,
+    defer_cull_rect_refresh: bool,
 ) -> Option<ScrollLayoutUpdate> {
     // Source: platform/graphics/paint/cull_rect.cc. Chromium keeps the old
     // expanded cull rect until the scroll delta reaches 512 CSS pixels, then
     // CullRectUpdater refreshes it and forces repaint if the painted extent
     // changes. Rechrom culls while projecting native fragments, so request a
     // fresh projection from the unchanged LayoutResult at the same boundary.
-    let refresh_cull_rect = changes
+    let cull_rect_changed_enough = changes
         .iter()
         .any(|&(id, offset)| fragments.PaintCullRectHasScrolledEnough(id, offset));
+    // Page defers main-thread cull projection while a phased gesture is active.
+    // Retained Paint covers that interval; the boundary update runs once when
+    // the gesture ends, matching Chromium's separation between compositor
+    // scrolling and main-thread paint-property work.
+    let refresh_cull_rect = cull_rect_changed_enough && !(scroll_only && defer_cull_rect_refresh);
     fn contains(node: &FragmentNode, id: u64) -> bool {
         node.node_id == id || node.children.iter().any(|child| contains(child, id))
     }
@@ -229,6 +236,13 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     {
         return None;
     }
+    // Chromium's CullRectUpdater may rebuild paint properties while scrolling,
+    // but cppgc does not synchronously collect when that API call returns.
+    // Keep this frame-aligned path inside the Page's scheduled-GC boundary;
+    // allocation pressure is serviced by the document queue after input goes
+    // quiet instead of pausing the gesture at each cull-rect refresh.
+    let mut heap_scope = foundation::LayoutHeapScope::new();
+    heap_scope.DeferCollection();
     for &(id, offset) in changes {
         let mut applied = false;
         if !owner.EmitScrollOffset(id, offset, |mutation| {
@@ -301,6 +315,70 @@ mod tests {
         }
         find(root, id).expect("fragment for DOM node")
     }
+
+    #[test]
+    fn phased_scroll_defers_cull_projection_until_gesture_boundary() {
+        crate::native_test_thread::run(|| {
+            use layoutng_assembly::internal::layout_input::Offset;
+
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut owner = html::html_parser::ParseHTML(
+                "<html><body><div id=s style='height:100px;overflow:scroll'><div style='height:3000px;background:red'></div></div></body></html>",
+            );
+            resolve(&mut owner);
+            let cs = crate::CreateBrowserConstraints(320, 200);
+            let mut fragments = LayoutPersistentDocument(
+                &mut engine,
+                &mut owner,
+                &UserInteractionState::default(),
+                &cs,
+            );
+            owner.GetDocumentMut().StyleStateMut().impact = Default::default();
+            let index = dom_id(&owner, "s");
+            let id = owner.GetDocument().Node(index).Id();
+            let origin = fragment(&fragments, id).paint_cull_scroll_offset;
+            let offset = Offset { x: 0.0, y: 700.0 };
+            owner.GetDocumentMut().SetScrollOffset(index, offset);
+
+            assert!(matches!(
+                LayoutPersistentScrollDocumentWithMode(
+                    &mut engine,
+                    &mut owner,
+                    &cs,
+                    &[(id, offset)],
+                    &mut fragments,
+                    true,
+                    true,
+                ),
+                Some(ScrollLayoutUpdate::RetainedGeometry)
+            ));
+            assert_eq!(fragment(&fragments, id).paint.scroll_offset, offset);
+            assert_eq!(
+                fragment(&fragments, id).paint_cull_scroll_offset,
+                origin,
+                "active scrolling retains the previously painted interest rect"
+            );
+
+            assert!(matches!(
+                LayoutPersistentScrollDocumentWithMode(
+                    &mut engine,
+                    &mut owner,
+                    &cs,
+                    &[(id, offset)],
+                    &mut fragments,
+                    true,
+                    false,
+                ),
+                Some(ScrollLayoutUpdate::RefreshedLayout)
+            ));
+            assert_eq!(
+                fragment(&fragments, id).paint_cull_scroll_offset,
+                Some(offset),
+                "gesture completion runs one main-thread cull projection"
+            );
+        });
+    }
+
     #[test]
     fn engine_owns_tree_after_document_release() {
         crate::native_test_thread::run(|| {

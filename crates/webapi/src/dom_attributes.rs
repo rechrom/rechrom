@@ -89,6 +89,9 @@ impl DOMJavaScriptBindings {
             "HTMLOptionElement" => node.IsHTMLElement("option"),
             "HTMLImageElement" => node.IsHTMLElement("img"),
             "HTMLTemplateElement" => node.IsHTMLElement("template"),
+            "HTMLPreElement" => {
+                matches!(node.Name(), "pre" | "listing" | "xmp") && node.IsHTMLElement(node.Name())
+            }
             _ => false,
         }
     }

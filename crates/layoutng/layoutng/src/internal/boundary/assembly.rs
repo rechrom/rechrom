@@ -6,6 +6,7 @@ use crate::layout_boundary_support::LayoutBoundaryEnvironment;
 
 use super::layout_boundary::{
     ExportLayoutObjectTree, NativeLayoutEnvironment, PrepareLayoutObjectTree,
+    RefreshLayoutObjectTreeProjection,
 };
 use super::native_input::PrepareNativeConstraints;
 
@@ -20,4 +21,5 @@ pub fn InstallLayoutBoundary(assembly: &mut LayoutAssembly) {
     assembly.boundary.prepare_constraints = Some(PrepareNativeConstraints);
     assembly.boundary.prepare_tree = Some(PrepareLayoutObjectTree);
     assembly.boundary.export_tree = Some(ExportLayoutObjectTree);
+    assembly.boundary.refresh_tree_projection = Some(RefreshLayoutObjectTreeProjection);
 }

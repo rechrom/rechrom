@@ -233,10 +233,10 @@ impl InlineItemResult {
     }
 }
 
-// The source's 32-item inline capacity is a storage hint. HeapVector retains
-// the traced-element and sequence semantics without fixing that capacity.
+// Preserve the source's 32-item inline capacity. Most lines fit without a
+// backing allocation, which is particularly important during grid measuring.
 // cpp: layoutng/internal/inline_item_result.h:204-204
-pub type InlineItemResults = HeapVector<InlineItemResult>;
+pub type InlineItemResults = HeapVector<InlineItemResult, 32>;
 
 // cpp: layoutng/internal/inline_item_result.h:215-217
 pub fn FindTextScaleInternal(

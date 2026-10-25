@@ -903,6 +903,10 @@ pub struct PersistentDocument {
     // StyleFetchedImage::ApplyImageResolution without depending on Decode.
     document_image_resource_ids: HashSet<u64>,
     responsive_image_selections: HashMap<usize, ResponsiveImageSelection>,
+    // HTMLImageLoader/ImageResourceContent client relation. Attribute and
+    // responsive candidate changes retain the exact <img> consumers so
+    // completion does not rediscover them by scanning the DOM.
+    replaced_image_consumers: HashMap<String, BTreeSet<usize>>,
     // HTMLImageElement::last_auto_sizes_width_. Kept on the DOM/image-loader
     // owner because it survives source reselection but is reset by removal.
     responsive_image_auto_sizes: HashMap<usize, f64>,
@@ -1009,6 +1013,7 @@ impl PersistentDocument {
             image_resources: HashMap::new(),
             document_image_resource_ids: HashSet::new(),
             responsive_image_selections: HashMap::new(),
+            replaced_image_consumers: HashMap::new(),
             responsive_image_auto_sizes: HashMap::new(),
             scroll_offsets: HashMap::new(),
             resolved_styles: HashMap::new(),
@@ -4103,6 +4108,11 @@ impl PersistentDocument {
         if !changed {
             return;
         }
+        let old_replaced_image_source = (attribute.namespace_uri.is_empty()
+            && attribute.local_name == "src"
+            && self.arena[element].IsHTMLElement("img"))
+        .then(|| self.CurrentImageSource(element).map(str::to_owned))
+        .flatten();
         self.RecordAttributeSelectorKeys(
             element,
             &attribute.local_name,
@@ -4178,6 +4188,7 @@ impl PersistentDocument {
         } else {
             self.arena[element].attributes.push(attribute);
         }
+        self.SyncReplacedImageConsumer(element, old_replaced_image_source.as_deref());
         if self.arena[element].IsElement("option", DOMNamespace::kHTML) {
             self.RecordSelectContentGeometryChange(element);
             self.RefreshSelectSuggestedValues();
@@ -4271,6 +4282,11 @@ impl PersistentDocument {
         if namespace_uri.is_empty() && local_name == "style" {
             self.arena[element].inline_style.get_mut().take();
         }
+        let old_replaced_image_source = (namespace_uri.is_empty()
+            && local_name == "src"
+            && self.arena[element].IsHTMLElement("img"))
+        .then(|| self.CurrentImageSource(element).map(str::to_owned))
+        .flatten();
         self.RecordAttributeSelectorKeys(element, local_name, namespace_uri, None);
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
@@ -4337,6 +4353,7 @@ impl PersistentDocument {
         self.arena[element].attributes.retain(|attribute| {
             attribute.local_name != local_name || attribute.namespace_uri != namespace_uri
         });
+        self.SyncReplacedImageConsumer(element, old_replaced_image_source.as_deref());
         // Removal restores the same owner defaults as HTMLStyleElement's
         // ParseAttribute with a null new value.
         if namespace_uri.is_empty()
@@ -5748,21 +5765,63 @@ impl PersistentDocument {
             .unwrap_or_else(|| EMPTY.get_or_init(BTreeMap::new))
     }
 
+    fn SyncReplacedImageConsumer(&mut self, node: usize, old_source: Option<&str>) {
+        if !self.arena[node].IsHTMLElement("img") {
+            return;
+        }
+        let new_source = self.CurrentImageSource(node).map(str::to_owned);
+        if old_source == new_source.as_deref() {
+            return;
+        }
+        if let Some(old_source) = old_source {
+            if let Some(consumers) = self.replaced_image_consumers.get_mut(old_source) {
+                consumers.remove(&node);
+                if consumers.is_empty() {
+                    self.replaced_image_consumers.remove(old_source);
+                }
+            }
+        }
+        if let Some(new_source) = new_source {
+            self.replaced_image_consumers
+                .entry(new_source)
+                .or_default()
+                .insert(node);
+        }
+    }
+
     fn InvalidateImageResourceConsumers(&mut self, source: &str) {
         // Completion changes resource state and intrinsic geometry, not
         // selector matching across the entire document. Immutable style-image
         // snapshots must be refreshed only for their actual consumers;
         // replaced-image metadata is synchronized by the layout tree builder.
-        if let Some(consumers) = self.style_image_consumers.get(source) {
-            let consumers: Vec<_> = consumers.iter().copied().collect();
-            for index in consumers {
-                self.RecordStyleChange(crate::style_state::StyleChange::Resource(index));
+        let style_consumers = self
+            .style_image_consumers
+            .get(source)
+            .map(|consumers| consumers.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for index in style_consumers {
+            self.RecordStyleChange(crate::style_state::StyleChange::Resource(index));
+        }
+        // ImageResourceContent notifies only the LayoutObjects which observe
+        // that resource. Carry the same ownership fact across the DOM ->
+        // Layout boundary: a loaded <img> refreshes its existing Node input,
+        // including natural size, candidate density and paint resource id.
+        // It does not rebuild every LayoutObject in the document.
+        let replaced_consumers = self
+            .replaced_image_consumers
+            .get(source)
+            .map(|consumers| consumers.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for index in replaced_consumers {
+            if self.IsConnectedToDocument(index)
+                && self.CurrentImageSource(index) == Some(source)
+                && self.RecordLayoutGeometryChange(index)
+            {
+                self.style_state
+                    .geometry_input_nodes
+                    .insert(self.arena[index].id);
             }
         }
-        self.style_state.layout_inputs_require_tree = true;
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
     }
     // cpp: dom/document.cc:366-378
     pub fn SetImageResource(&mut self, source: String, metadata: ImageResourceMetadata) {
@@ -5861,17 +5920,20 @@ impl PersistentDocument {
         if !changed {
             return false;
         }
+        let old_source = self.CurrentImageSource(node).map(str::to_owned);
         if let Some(selection) = selection {
             self.responsive_image_selections.insert(node, selection);
         } else {
             self.responsive_image_selections.remove(&node);
         }
+        self.SyncReplacedImageConsumer(node, old_source.as_deref());
         // Candidate changes alter the replaced resource id, intrinsic size
         // and image_device_pixel_ratio without changing selector matching.
-        self.style_state.layout_inputs_require_tree = true;
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        if self.RecordLayoutGeometryChange(node) {
+            self.style_state
+                .geometry_input_nodes
+                .insert(self.arena[node].id);
+        }
         true
     }
     pub fn UpdateImageResourceIntrinsicSize(

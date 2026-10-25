@@ -218,6 +218,12 @@ fn author_checked_and_value_accessors_deliver_shadow_style_and_native_control_st
             near(rect.height, 40, 'fallback style button height');
             check(getComputedStyle(button).width === '120px' && getComputedStyle(button).height === '40px',
                   'fallback style reaches production computed style');
+            var contents = document.createElement('main');
+            contents.id = 'computed-contents';
+            contents.style.display = 'contents';
+            document.body.appendChild(contents);
+            check(getComputedStyle(contents).display === 'contents',
+                  'display:contents computed value is preserved without an own box');
         "#,
         );
         let control_id = id(&page, "native-control");

@@ -369,11 +369,12 @@ impl Page {
             dispatched += 1;
             trace.set("dispatched_inputs", dispatched as f64);
             result?;
-            // Entries left after coalescing have an event boundary. Resolve
-            // prior mutations before the next hit test/default scroll route.
-            if self.HasPendingFrameInput() {
-                self.UpdateFrameIfNeeded()?;
-            }
+            // MainThreadEventQueue::DispatchRafAlignedInput dispatches the
+            // queue snapshot without a lifecycle update between events.  A
+            // wheel phase boundary prevents coalescing, but it does not make
+            // style/layout/paint run between Ended and a following Began.
+            // UpdateRendering resolves the complete batch below, after input
+            // dispatch and before rAF observes the resulting state.
         }
         Ok(())
     }

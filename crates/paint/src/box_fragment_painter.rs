@@ -16,6 +16,7 @@ use layoutng_assembly::internal::paint_input::{
     BackgroundAttachment, BackgroundBox, BackgroundImageLayer, BackgroundRepeat,
     BackgroundRepeatRule, PaintBlendMode, PaintCornerRadii, PaintStyleData, SvgPaintComponent,
 };
+use layoutng_style::style::appearance::AppearanceValue;
 
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
 use crate::border_shape_utils::{
@@ -198,18 +199,39 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // BoxFragmentPainter::PaintBoxDecorationBackgroundWithDecorationData
             // records all decoration commands together (official .cc:1539).
             // Column rules have a separate recorder (.cc:1623).
-            let background_recorder = HasSupportedBoxDecoration(self.node).then(|| {
+            let has_box_decoration = HasSupportedBoxDecoration(self.node);
+            let decoration_visual_rect = DecorationVisualRect(self.node);
+            let cached_box_decoration = has_box_decoration
+                && DrawingRecorder::UseCachedDrawingIfPossible(
+                    self.context,
+                    self.node,
+                    DisplayItemIdType::kBoxDecorationBackground,
+                    decoration_visual_rect,
+                );
+            let background_recorder = (has_box_decoration && !cached_box_decoration).then(|| {
                 DrawingRecorder::new(
                     self.context,
                     self.node,
                     DisplayItemIdType::kBoxDecorationBackground,
-                    DecorationVisualRect(self.node),
+                    decoration_visual_rect,
                 )
             });
-            self.PaintBoxShadows(phase, false);
+            // Native theme ownership is a property of the control appearance,
+            // independent of whether PaintController moved the previous
+            // BoxDecorationBackground record into this artifact.
             let theme_owns_decoration =
-                ThemePainter::new(self.node, self.context).Paint(paint_info);
-            if !theme_owns_decoration {
+                fragment.paint.form_control.as_ref().is_some_and(|control| {
+                    !matches!(
+                        control.appearance,
+                        AppearanceValue::kNone | AppearanceValue::kAuto
+                    )
+                });
+            if !cached_box_decoration {
+                self.PaintBoxShadows(phase, false);
+                let painted_by_theme = ThemePainter::new(self.node, self.context).Paint(paint_info);
+                debug_assert_eq!(painted_by_theme, theme_owns_decoration);
+            }
+            if !cached_box_decoration && !theme_owns_decoration {
                 let style = &*fragment.paint.style;
                 let border_radii = BackgroundRadii(self.node, BackgroundBox::kBorderBox);
                 let has_background = !fragment.paint.background_transfers_to_view
@@ -299,11 +321,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     );
                 }
             }
-            self.PaintBoxShadows(phase, true);
+            if !cached_box_decoration {
+                self.PaintBoxShadows(phase, true);
+            }
             // Official TablePainter::PaintBoxDecorationBackground (.cc:421)
             // paints all column backgrounds inside the table's surrounding
             // BoxDecorationBackground recorder, not a record per column/cell.
-            if fragment.paint.table.is_some() {
+            if !cached_box_decoration && fragment.paint.table.is_some() {
                 TablePainter::new(self.node, self.context).PaintColumnBackgrounds(paint_info);
             }
             drop(background_recorder);
@@ -6116,7 +6140,7 @@ mod background_attachment_tests {
             ..PaintResources::default()
         }));
         let mut fixed = PaintTreeNode::default();
-        fixed.fragment = Some(Arc::new(fixed_fragment));
+        fixed.SetFragment(&fixed_fragment);
         fixed.scroll_offset = Offset { x: 7.0, y: 11.0 };
         fixed.transforms.push(TranslationTransform(5.0, 9.0));
         let viewport = FixedBackgroundPositioningArea(&fixed).unwrap();
@@ -6154,7 +6178,7 @@ mod background_attachment_tests {
             user_scrollable_vertical: true,
         });
         let mut local = PaintTreeNode::default();
-        local.fragment = Some(Arc::new(local_fragment));
+        local.SetFragment(&local_fragment);
         local.paint_offset = Offset { x: 50.0, y: 40.0 };
         let contents = LocalBackgroundBorderRect(&local);
         assert_eq!((contents.x, contents.y), (37.0, 23.0));

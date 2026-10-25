@@ -1963,6 +1963,7 @@ dependencies = [
  "browser_tracing",
  "foundation",
  "icu_bidi",
+ "smallvec",
 ]
 
 [[package]]

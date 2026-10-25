@@ -173,6 +173,8 @@ fn registration_finalizes_inherited_styles_before_connected_shadow_rendering() {
             var button = host.shadowRoot.querySelector('button');
             check(deliveredStyle instanceof HTMLStyleElement && button instanceof HTMLButtonElement,
                   'native HTML elements retain their brands');
+            check(button.isConnected && button.getRootNode({composed:true}) === document,
+                  'shadow descendants use the shadow-including document root');
             check(deliveredStyle.namespaceURI === 'http://www.w3.org/1999/xhtml' && button.namespaceURI === 'http://www.w3.org/1999/xhtml',
                   'style and button use the HTML namespace');
             check(deliveredStyle.textContent === FinalizedStyles.styles, 'finalized CSS reaches shadow style node');

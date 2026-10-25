@@ -1439,7 +1439,7 @@ struct DocumentQueue {
     javascript_collection_queued: bool,
     resize_queued: bool,
     pending_resize: Option<Viewport>,
-    last_resize_at: Option<Instant>,
+    last_latency_sensitive_at: Option<Instant>,
 }
 struct SelectedCommand(Option<Command>);
 impl event_loop::EventLoopExecutor<Command, MainThreadEvent> for SelectedCommand {
@@ -1473,7 +1473,7 @@ impl DocumentQueue {
             javascript_collection_queued: false,
             resize_queued: false,
             pending_resize: None,
-            last_resize_at: None,
+            last_latency_sensitive_at: None,
         };
         queue.ordinary();
         queue
@@ -1498,13 +1498,13 @@ impl DocumentQueue {
     fn post(&mut self, command: Command) {
         use event_loop::*;
         let now = Instant::now();
+        if matches!(
+            &command,
+            Command::Input { .. } | Command::ExternalWheel { .. } | Command::Resize(_)
+        ) {
+            self.note_latency_sensitive_activity(now);
+        }
         let command = if let Command::Resize(viewport) = command {
-            self.last_resize_at = Some(now);
-            if let Some(token) = self.collection_token.take() {
-                self.engine.Apply(EventLoopMutation::CancelTask(token), now);
-                self.collection_queued = false;
-                self.schedule_collection(now);
-            }
             self.pending_resize = Some(viewport);
             if self.resize_queued {
                 return;
@@ -1531,6 +1531,15 @@ impl DocumentQueue {
                 _ => TaskPriority::UserBlocking,
             };
             self.post_task(command, priority, None, now);
+        }
+    }
+    fn note_latency_sensitive_activity(&mut self, now: Instant) {
+        self.last_latency_sensitive_at = Some(now);
+        if let Some(token) = self.collection_token.take() {
+            self.engine
+                .Apply(event_loop::EventLoopMutation::CancelTask(token), now);
+            self.collection_queued = false;
+            self.schedule_collection(now);
         }
     }
     fn post_task(
@@ -1560,10 +1569,10 @@ impl DocumentQueue {
         // UserModel::kGestureEstimationLimit (100 ms) and services GC from
         // idle/best-effort queues. This single owner has no idle deadline;
         // apply the same horizon only to its background collector.
-        const RESIZE_QUIET_PERIOD: Duration = Duration::from_millis(100);
+        const INPUT_QUIET_PERIOD: Duration = Duration::from_millis(100);
         let ready_at = self
-            .last_resize_at
-            .map(|last| last + RESIZE_QUIET_PERIOD)
+            .last_latency_sensitive_at
+            .map(|last| last + INPUT_QUIET_PERIOD)
             .filter(|ready| *ready > now);
         let token = self.post_task(
             Command::CollectLayoutHeap,

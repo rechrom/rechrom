@@ -2632,6 +2632,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     "option" => "HTMLOptionElement",
                     "label" => "HTMLLabelElement",
                     "details" => "HTMLDetailsElement",
+                    "pre" | "listing" | "xmp" => "HTMLPreElement",
                     "dialog" => "HTMLDialogElement",
                     "script" => "HTMLScriptElement",
                     "style" => "HTMLStyleElement",
