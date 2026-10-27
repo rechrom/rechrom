@@ -340,7 +340,7 @@ fn retained_directionality_drives_presentational_hints_and_flat_tree_auto() {
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 }
@@ -425,7 +425,7 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
         .clone();
     let translated = engine.TranslatedRuleShadowStats();
     assert!(translated.translated_style_resolver_applied >= 4);
-    assert_eq!(translated.translated_style_resolver_fallbacks, 0);
+    assert_eq!(translated.translated_style_resolver_failures, 0);
 
     assert_eq!(width(&owner, host), 101.0);
     assert_eq!(height(&owner, light), 102.0);
@@ -807,8 +807,7 @@ fn internal_input_suggested_rules_use_the_retained_ua_shadow_owner() {
     };
     assert_eq!(native.GetFontDescription().SpecifiedSize(), 47.0);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     owner.GetDocumentMut().SetSuggestedValue(control, None);
     engine.Update(&mut owner, &media(800.0), &[ua]).unwrap();
@@ -906,8 +905,7 @@ fn meter_ua_shadow_tree_routes_custom_pseudo_rules_to_retained_nodes() {
     };
     assert_eq!(value_style.Opacity(), 0.37);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     owner.GetDocumentMut().SetAttribute(
         meter,
@@ -1010,8 +1008,7 @@ fn progress_ua_shadow_tree_tracks_indeterminate_value_and_max() {
     };
     assert_eq!(value_style.Opacity(), 0.41);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     owner.GetDocumentMut().SetAttribute(
         progress,
@@ -1130,8 +1127,7 @@ fn search_cancel_button_is_a_retained_typed_ua_shadow_owner() {
     };
     assert_eq!(cancel_style.Opacity(), 0.61);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     owner
         .GetDocumentMut()
@@ -1234,8 +1230,7 @@ fn color_input_swatch_is_a_retained_value_owned_ua_shadow_tree() {
     };
     assert_eq!(swatch_style.Opacity(), 0.64);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     owner
         .GetDocumentMut()
@@ -1326,8 +1321,7 @@ fn file_input_button_and_status_are_retained_ua_shadow_owners() {
     };
     assert_eq!(button_style.Opacity(), 0.58);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     owner.GetDocumentMut().SetAttribute(
         file,
@@ -1423,7 +1417,7 @@ fn update_discovers_constructed_sheet_adopted_by_shadow_scope() {
         "{translated:?}"
     );
     assert_eq!(
-        translated.translated_style_resolver_fallbacks, 0,
+        translated.translated_style_resolver_failures, 0,
         "{translated:?}"
     );
 
@@ -1512,7 +1506,7 @@ fn translated_resolver_retains_unvisited_link_state_for_link_and_descendants() {
         "{translated:?}"
     );
     assert_eq!(
-        translated.translated_style_resolver_fallbacks, 0,
+        translated.translated_style_resolver_failures, 0,
         "{translated:?}"
     );
     assert_eq!(width(&owner, link), 31.0);
@@ -1586,7 +1580,7 @@ fn retained_pipeline_covers_selector_lists_media_and_layers() {
     assert_eq!(wide.rule_sets_built, 1, "{wide:?}");
     assert!(wide.selector_matches >= 2, "{wide:?}");
     assert!(wide.typed_declarations_used >= 2, "{wide:?}");
-    assert_eq!(wide.legacy_declaration_fallbacks, 0, "{wide:?}");
+    assert_eq!(wide.untransferred_declarations, 0, "{wide:?}");
 
     engine.Update(&mut owner, &media(640.0), &[]).unwrap();
     assert_eq!(width(&owner, target), 11.0);
@@ -1595,7 +1589,7 @@ fn retained_pipeline_covers_selector_lists_media_and_layers() {
     assert_eq!(narrow.rule_sets_built, 1, "{narrow:?}");
     assert!(narrow.selector_matches >= 1, "{narrow:?}");
     assert!(narrow.typed_declarations_used >= 1, "{narrow:?}");
-    assert_eq!(narrow.legacy_declaration_fallbacks, 0, "{narrow:?}");
+    assert_eq!(narrow.untransferred_declarations, 0, "{narrow:?}");
 }
 
 #[test]
@@ -1615,7 +1609,7 @@ fn translated_cascade_expands_all_through_cascade_expansion() {
     assert_eq!(height(&owner, target), 13.0);
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.typed_declarations_used, 2, "{stats:?}");
-    assert_eq!(stats.legacy_declaration_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.untransferred_declarations, 0, "{stats:?}");
 }
 
 #[test]
@@ -1650,7 +1644,7 @@ fn owner_replacement_transfers_a_new_typed_revision_without_reparse() {
     assert_eq!(stats.rule_sets_built, 1, "{stats:?}");
     assert!(stats.selector_matches >= 1, "{stats:?}");
     assert!(stats.typed_declarations_used >= 1, "{stats:?}");
-    assert_eq!(stats.legacy_declaration_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.untransferred_declarations, 0, "{stats:?}");
 }
 
 #[test]
@@ -1671,7 +1665,7 @@ fn typed_repeat_declaration_stays_on_the_production_rule_boundary() {
     assert_eq!(stats.rule_sets_built, 1, "{stats:?}");
     assert!(stats.selector_matches >= 1, "{stats:?}");
     assert!(stats.typed_declarations_used >= 1, "{stats:?}");
-    assert_eq!(stats.legacy_declaration_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.untransferred_declarations, 0, "{stats:?}");
 }
 
 #[test]
@@ -1689,14 +1683,13 @@ fn user_agent_mode_typed_owner_feeds_the_ua_cascade() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.rule_sets_built, 1, "{stats:?}");
     assert!(stats.rule_sets_consulted >= 1, "{stats:?}");
-    assert!(stats.authoritative_rules >= 1, "{stats:?}");
     assert!(stats.selector_matches >= 1, "{stats:?}");
     assert!(stats.typed_declarations_used >= 1, "{stats:?}");
-    assert_eq!(stats.legacy_declaration_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.untransferred_declarations, 0, "{stats:?}");
 }
 
 #[test]
-fn author_mode_owner_passed_as_ua_uses_the_mode_mismatch_fallback() {
+fn author_mode_owner_passed_as_ua_is_reparsed_at_the_origin_boundary() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner =
         html::html_parser::ParseHTML("<!doctype html><x-control id=target></x-control>");
@@ -1710,11 +1703,10 @@ fn author_mode_owner_passed_as_ua_uses_the_mode_mismatch_fallback() {
     assert_eq!(display(&owner, target), EDisplay::kBlock);
     assert_eq!(width(&owner, target), 19.0);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.rule_sets_consulted, 0, "{stats:?}");
-    assert_eq!(stats.authoritative_rules, 0, "{stats:?}");
-    assert_eq!(stats.selector_matches, 0, "{stats:?}");
-    assert_eq!(stats.typed_declarations_used, 0, "{stats:?}");
-    assert_eq!(stats.legacy_declaration_fallbacks, 1, "{stats:?}");
+    assert!(stats.rule_sets_consulted >= 1, "{stats:?}");
+    assert!(stats.selector_matches >= 1, "{stats:?}");
+    assert!(stats.typed_declarations_used >= 1, "{stats:?}");
+    assert_eq!(stats.untransferred_declarations, 0, "{stats:?}");
 }
 
 #[test]
@@ -1737,8 +1729,7 @@ fn user_agent_pseudo_rules_use_translated_context_aware_collector() {
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.rule_sets_consulted >= 1, "{stats:?}");
     assert!(stats.selector_matches >= 1, "{stats:?}");
-    assert_eq!(stats.skipped_pseudo, 0, "{stats:?}");
-    assert_eq!(stats.legacy_declaration_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.untransferred_declarations, 0, "{stats:?}");
     assert_eq!(
         stats.translated_style_cascade_pseudo_attempts, 1,
         "{stats:?}"
@@ -1748,7 +1739,7 @@ fn user_agent_pseudo_rules_use_translated_context_aware_collector() {
         "{stats:?}"
     );
     assert_eq!(
-        stats.translated_style_cascade_pseudo_fallbacks, 0,
+        stats.translated_style_cascade_pseudo_failures, 0,
         "{stats:?}"
     );
 }
@@ -1775,7 +1766,7 @@ fn retained_nested_declarations_keep_ua_and_author_cascade_owners() {
     assert_eq!(native.Height().Pixels(), 44.0);
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 3, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 }
 
 #[test]

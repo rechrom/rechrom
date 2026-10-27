@@ -589,7 +589,7 @@ impl StyleColor {
     /// resolved numeric color. Chromium's `ResolveSystemColor` reads the
     /// private `color_keyword_` member directly for this re-resolution case.
     pub fn GetSystemColorKeywordForResolution(&self) -> CSSValueID {
-        debug_assert!(self.IsSystemColorIncludingDeprecated());
+        debug_assert!(self.IsSystemColorIncludingDeprecated() || self.IsSystemColor());
         self.color_keyword_
     }
     pub fn HasColorKeyword(&self) -> bool {

@@ -12,7 +12,7 @@ use layoutng_style::style::{
     computed_grid_template_areas::ComputedGridTemplateAreas,
     computed_grid_track_list::ComputedGridTrackList,
     computed_style_constants::GridAutoFlow,
-    grid_track_list::{AutoRepeatType, GridTrackList},
+    grid_track_list::{AutoRepeatType, GridAxisType, GridTrackList, GridTrackRepeatType},
     grid_track_size::GridTrackSize,
     ordered_named_grid_lines::NamedGridLine,
 };
@@ -163,9 +163,8 @@ fn Track(
 }
 
 // cpp: style_builder_converter.cc:1682-1833 ConvertGridTrackList, plain-track
-// branch plus bracketed line names and the shared integer-repeat converter.
-// Auto-repeat/subgrid retain explicit unsupported collaborators, rather
-// than reconstructing names from CSS text.
+// branch plus subgrid, bracketed line names and the shared integer-repeat
+// converter. Auto-repeat retains its explicit unsupported collaborator.
 fn TemplateTracks(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -176,7 +175,72 @@ fn TemplateTracks(
     let mut result =
         ComputedGridTrackList::new(&GridTrackList::default(), AutoRepeatType::kNoAutoRepeat);
     let mut line = 0u32;
-    for value in List(id, v)? {
+    let values = List(id, v)?;
+    let subgrid = matches!(
+        values.first().map(|value| value.Payload()),
+        Some(CSSValuePayload::kIdentifierClass(keyword)) if keyword.0 == CSSValueID::kSubgrid
+    );
+    let start = usize::from(subgrid);
+    if subgrid {
+        result.SetGridAxisType(GridAxisType::kSubgriddedAxis);
+        result
+            .GetMutableTrackList()
+            .SetAxisType(GridAxisType::kSubgriddedAxis);
+    }
+    for value in &values[start..] {
+        if let CSSValuePayload::kGridAutoRepeatClass(repeat) = value.Payload() {
+            let (auto_type, repeat_type) = if repeat.kind == CSSValueID::kAutoFill {
+                (AutoRepeatType::kAutoFill, GridTrackRepeatType::kAutoFill)
+            } else if repeat.kind == CSSValueID::kAutoFit && !subgrid {
+                (AutoRepeatType::kAutoFit, GridTrackRepeatType::kAutoFit)
+            } else {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            };
+            let mut sizes = Vec::new();
+            let mut auto_line = 0u32;
+            for entry in &repeat.list.values {
+                if let CSSValuePayload::kGridLineNamesClass(names) = entry.Payload() {
+                    for name in &names.list.values {
+                        let CSSValuePayload::kCustomIdentClass(name) = name.Payload() else {
+                            return Err(LonghandApplicationError::InvalidValue(id));
+                        };
+                        let text = foundation::String::from_utf16(
+                            name.name.utf16_units().unwrap_or_default(),
+                        );
+                        result
+                            .GetMutableAutoRepeatNamedGridLines()
+                            .entry(text)
+                            .or_default()
+                            .push(auto_line);
+                        result
+                            .GetMutableOrderedAutoRepeatNamedGridLines()
+                            .entry(auto_line as usize)
+                            .or_default()
+                            .push(NamedGridLine::with_default_flags(&name.name));
+                    }
+                    if subgrid {
+                        auto_line += 1;
+                    }
+                } else {
+                    if subgrid {
+                        return Err(LonghandApplicationError::InvalidValue(id));
+                    }
+                    sizes.push(Track(id, b, entry, root, media)?);
+                    auto_line += 1;
+                }
+            }
+            if auto_line == 0
+                || !result
+                    .GetMutableTrackList()
+                    .AddRepeater(&sizes, repeat_type, 1, auto_line)
+            {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            }
+            result.SetAutoRepeatType(auto_type);
+            result.SetAutoRepeatInsertionPoint(line);
+            line += 1;
+            continue;
+        }
         if let CSSValuePayload::kGridIntegerRepeatClass(repeat) = value.Payload() {
             let count =
                 typography_application::Scalar(id, b, &repeat.repetitions, root, media, false)?;
@@ -225,7 +289,17 @@ fn TemplateTracks(
                     .or_default()
                     .push(NamedGridLine::with_default_flags(&name.name));
             }
+            if subgrid {
+                line += 1;
+                result
+                    .GetMutableTrackList()
+                    .IncrementNonAutoRepeatLineCount();
+                result.GetMutableTrackList().AddRepeaterDefault(&vec![]);
+            }
             continue;
+        }
+        if subgrid {
+            return Err(LonghandApplicationError::InvalidValue(id));
         }
         let size = Track(id, b, value, root, media)?;
         result.GetMutableTrackList().AddRepeaterDefault(&vec![size]);
@@ -680,11 +754,6 @@ mod tests {
             (
                 CSSPropertyID::kGridTemplate,
                 "repeat(2,1fr) / 1fr",
-                PropertyParseErrorKind::Unsupported,
-            ),
-            (
-                CSSPropertyID::kGridTemplate,
-                "subgrid / 1fr",
                 PropertyParseErrorKind::Unsupported,
             ),
         ] {

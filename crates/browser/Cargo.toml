@@ -53,7 +53,5 @@ viz = { path = "../viz" }
 layoutng_style = { path = "../layoutng/layoutng_style" }
 
 [features]
-default = ["inline_layout", "production_raster"]
+default = ["inline_layout"]
 inline_layout = ["layoutng_assembly/translation_in_progress", "layout_algo_block/inline_extension", "dep:layout_algo_out_of_flow"]
-source_paint = ["paint/translation_in_progress"]
-production_raster = ["source_paint"]

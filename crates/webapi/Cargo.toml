@@ -17,7 +17,7 @@ xhr_transport = { path = "../xhr_transport" }
 url = "2.5.8"
 percent-encoding = "2.3.2"
 getrandom = "0.4"
-paint = { path = "../paint", features = ["translation_in_progress"] }
+paint = { path = "../paint" }
 skia = { path = "../skia" }
 
 [dev-dependencies]

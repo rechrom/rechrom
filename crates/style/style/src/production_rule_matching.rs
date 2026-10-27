@@ -3,14 +3,14 @@
 //! Production bridge from the translated RuleSet buckets to the retained
 //! SelectorChecker used by PersistentDocument.
 //!
-//! Ordinary element and supported generated-pseudo rules use this bridge as
-//! their production candidate and selector-matching path. Rules needing recalc
-//! context that is not yet carried here remain explicit compatibility fallbacks.
+//! Ordinary element and generated-pseudo rules use this bridge as their
+//! production candidate and selector-matching path. Unsupported selectors
+//! remain unsupported by the parser and matcher.
 #![allow(non_snake_case)]
 
 use crate::active_style_sheets::ActiveStyleSheet;
 use crate::cascade_layer_map::CascadeLayerMap;
-use crate::css_selector::{CSSSelector, GetPseudoId, MatchType, PseudoType, RelationType};
+use crate::css_selector::{CSSSelector, PseudoType};
 use crate::element_rule_collector::{
     AddRuleSetToRuleSetGroupList, ElementRuleCollector, MatchRequest,
 };
@@ -19,8 +19,8 @@ use crate::production_element_rule_collector::{
     ProductionElementResolveContext, ProductionElementRuleCollectorRuntime,
     ProductionStyleRecalcContext, ProductionTreeScope,
 };
-use crate::production_rule_context::{CanMatchProductionScopeChain, ProductionPseudoRequest};
-use crate::production_style_sheet::{Backend, ProductionStyleSheet};
+use crate::production_rule_context::ProductionPseudoRequest;
+use crate::production_style_sheet::Backend;
 use crate::resolver::{
     cascade_origin::CascadeOrigin,
     match_result::{MatchResult, MatchedProperties},
@@ -32,7 +32,7 @@ use dom::Document;
 use foundation::{AtomicString, EInsideLink};
 use layoutng_style::style::computed_style_constants::PseudoId;
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
@@ -45,10 +45,9 @@ pub(crate) struct ProductionTransferredRule {
     pub matched: MatchedProperties,
 }
 
-pub(crate) struct ProductionRuleSetInput<'a> {
+pub(crate) struct ProductionRuleSetInput {
     pub sheet_index: usize,
     pub rule_set: Rc<RuleSet<Backend>>,
-    pub routing: &'a ProductionRuleRouting,
     /// Parent element of the CSSStyleSheet owner (or adopted-sheet shadow
     /// host), matching ScopedStyleResolver::ImplicitScopeTrigger.
     pub implicit_scope_trigger: Option<usize>,
@@ -59,11 +58,6 @@ pub(crate) struct ProductionRuleMatchReport {
     pub collector_invocations: usize,
     pub transferred_property_sets: usize,
     pub candidates_considered: usize,
-    pub skipped_starting_style: usize,
-    pub skipped_pseudo: usize,
-    pub skipped_unsupported_selector: usize,
-    pub skipped_scope: usize,
-    pub skipped_container_query: usize,
     pub selector_matches: usize,
 }
 
@@ -117,51 +111,43 @@ pub(crate) fn InvalidateProductionRuleSets(
         })
     });
     trace.set("invalidates_parts", f64::from(invalidates_parts));
-    let unsupported = if document.GetCompatibilityMode()
-        == dom::persistent_document::CompatibilityMode::kQuirks
-    {
-        Some(("quirks", String::new()))
-    } else {
-        unique_rule_sets.iter().find_map(|rules| {
-            rules.AllRuleData().iter().find_map(|data| {
-                // CheckIfAnyRuleMatches returns before cascade/pseudo output
-                // materialization (ElementRuleCollector's STOP branch). Only the
-                // selector checker's capabilities constrain invalidation here;
-                // HasSupportedPseudoTarget belongs to rule-output routing below.
-                let reason = if rules.ScopeForRule(data).is_some() {
-                    Some("scope")
-                } else if ProductionUnsupportedParsedFeature(
-                    &data.Rule().Selectors().CopySelectors(),
-                )
+    let unsupported = unique_rule_sets.iter().find_map(|rules| {
+        rules.AllRuleData().iter().find_map(|data| {
+            // CheckIfAnyRuleMatches returns before cascade/pseudo output
+            // materialization (ElementRuleCollector's STOP branch). Only the
+            // selector checker's capabilities constrain invalidation here;
+            // HasSupportedPseudoTarget belongs to rule-output routing below.
+            let reason = if rules.ScopeForRule(data).is_some() {
+                Some("scope")
+            } else if ProductionUnsupportedParsedFeature(&data.Rule().Selectors().CopySelectors())
                 .is_some()
-                    && !IsUnretainedScrollbarPseudoTarget(data)
-                {
-                    Some("selector")
-                } else if data.Selector().SimpleSelectors().any(|selector| {
-                    matches!(
-                        selector.GetPseudoType(),
-                        PseudoType::kPseudoHost
-                            | PseudoType::kPseudoHostContext
-                            | PseudoType::kPseudoSlotted
-                    )
-                }) {
-                    Some("tree_scope")
-                } else {
-                    None
-                };
-                reason.map(|reason| {
-                    (
-                        reason,
-                        if browser_tracing::enabled() {
-                            data.Selector().SelectorText().Utf8()
-                        } else {
-                            String::new()
-                        },
-                    )
-                })
+                && !IsUnretainedScrollbarPseudoTarget(data)
+            {
+                Some("selector")
+            } else if data.Selector().SimpleSelectors().any(|selector| {
+                matches!(
+                    selector.GetPseudoType(),
+                    PseudoType::kPseudoHost
+                        | PseudoType::kPseudoHostContext
+                        | PseudoType::kPseudoSlotted
+                )
+            }) {
+                Some("tree_scope")
+            } else {
+                None
+            };
+            reason.map(|reason| {
+                (
+                    reason,
+                    if browser_tracing::enabled() {
+                        data.Selector().SelectorText().Utf8()
+                    } else {
+                        String::new()
+                    },
+                )
             })
         })
-    };
+    });
     if let Some((reason, selector)) = unsupported {
         if browser_tracing::enabled() {
             browser_tracing::instant_with_text(
@@ -402,66 +388,6 @@ pub(crate) fn ProductionPartRuleScopes(
     result
 }
 
-fn RuleIdentity(data: &RuleData<Backend>) -> usize {
-    Rc::as_ptr(data.Rule()) as usize
-}
-
-fn AppendRuleIdentities(bucket: &[RuleData<Backend>], identities: &mut HashSet<usize>) {
-    identities.extend(bucket.iter().map(RuleIdentity));
-}
-
-fn HasSupportedPseudoTarget(data: &RuleData<Backend>) -> bool {
-    let mut saw_pseudo = false;
-    for selector in data.Selector().SimpleSelectors() {
-        if selector.Match() == MatchType::kPseudoElement {
-            // A ProductionPseudoRequest represents one pseudo on an element.
-            // Nested ::before::marker/::after::marker needs the generated
-            // pseudo's style as its originating style and therefore remains
-            // on DocumentStyleEngine's explicit nested request path.
-            if saw_pseudo {
-                return false;
-            }
-            saw_pseudo = true;
-            // cpp: selector_checker.cc:3239-3250,3324-3350 and
-            // element_rule_collector.cc:826-834. UA-shadow implementation
-            // elements are real retained elements. Their typed custom pseudo
-            // selector is matched against Element::ShadowPseudoId(), and the
-            // kUAShadow relation then crosses to the originating host. Keep
-            // both source custom-element categories on that path; the DOM
-            // owner decides whether a concrete implementation element exists.
-            if matches!(
-                selector.GetPseudoType(),
-                PseudoType::kPseudoWebKitCustomElement | PseudoType::kPseudoBlinkInternalElement
-            ) {
-                return true;
-            }
-            if !matches!(
-                selector.GetPseudoType(),
-                crate::css_selector::PseudoType::kPseudoSlotted
-                    | crate::css_selector::PseudoType::kPseudoPart
-            ) && !matches!(
-                GetPseudoId(selector.GetPseudoType()),
-                PseudoId::kPseudoIdBefore
-                    | PseudoId::kPseudoIdAfter
-                    | PseudoId::kPseudoIdFirstLetter
-                    | PseudoId::kPseudoIdPlaceholder
-                    | PseudoId::kPseudoIdSelection
-                    | PseudoId::kPseudoIdSearchText
-                    | PseudoId::kPseudoIdTargetText
-                    | PseudoId::kPseudoIdHighlight
-                    | PseudoId::kPseudoIdSpellingError
-                    | PseudoId::kPseudoIdGrammarError
-            ) {
-                return false;
-            }
-        }
-        if selector.Relation() != RelationType::kSubSelector {
-            break;
-        }
-    }
-    true
-}
-
 fn IsUnretainedScrollbarPseudoTarget(data: &RuleData<Backend>) -> bool {
     data.Selector().SimpleSelectors().any(|selector| {
         matches!(
@@ -476,205 +402,13 @@ fn IsUnretainedScrollbarPseudoTarget(data: &RuleData<Backend>) -> bool {
     })
 }
 
-/// Revision-scoped routing plan built beside the cached RuleSet. Element hot
-/// paths only query this identity map after selecting candidates from buckets.
-pub(crate) struct ProductionRuleRouting {
-    authoritative: HashMap<usize, Option<usize>>,
-    projected_by_identity: HashMap<usize, usize>,
-    authoritative_rule_indices: HashSet<usize>,
-    compatibility: HashSet<usize>,
-    // Immutable classification from this revision/media-owned RuleSet. Dynamic
-    // collector, matching and transfer statistics are still gathered per query.
-    fallback_report: ProductionRuleMatchReport,
-    ordinary_signature_complete: bool,
-}
-
-impl ProductionRuleRouting {
-    pub(crate) fn Build(rule_set: &RuleSet<Backend>, sheet: &ProductionStyleSheet) -> Self {
-        let mut special_rules = HashSet::new();
-        for bucket in [
-            rule_set.CuePseudoRules(),
-            rule_set.ScrollbarRules(),
-            rule_set.ActiveViewTransitionRules(),
-            rule_set.UnboundedPseudoClassRules(),
-        ] {
-            AppendRuleIdentities(bucket, &mut special_rules);
-        }
-        #[derive(Default)]
-        struct Route {
-            projected: Option<usize>,
-            expected: usize,
-            selectors: BTreeSet<u32>,
-            fallback: bool,
-        }
-        let mut routes = HashMap::<usize, Route>::new();
-        for data in rule_set.AllRuleData() {
-            let identity = RuleIdentity(data);
-            let projected = sheet.ProjectedRuleIndexForRetainedStyleRule(data.Rule());
-            if projected.is_none() && data.Rule().GetMixinParameterBindings().is_none() {
-                continue;
-            }
-            let route = routes.entry(identity).or_insert_with(|| Route {
-                projected,
-                expected: data.Rule().Selectors().ComplexSelectors().count(),
-                ..Default::default()
-            });
-            route.selectors.insert(data.SelectorIndex());
-            let unsupported_scope = rule_set
-                .ScopeForRule(data)
-                .is_some_and(|scope| !CanMatchProductionScopeChain(&scope));
-            route.fallback |= !HasSupportedPseudoTarget(data)
-                || special_rules.contains(&identity)
-                || projected.is_some_and(|projected| {
-                    sheet
-                        .RetainedDeclarationsForProjectedRule(projected)
-                        .is_none()
-                })
-                || unsupported_scope
-                || ProductionUnsupportedParsedFeature(&data.Rule().Selectors().CopySelectors())
-                    .is_some();
-        }
-        let projected_by_identity = routes
-            .iter()
-            .filter_map(|(&identity, route)| route.projected.map(|projected| (identity, projected)))
-            .collect::<HashMap<_, _>>();
-        let authoritative = routes
-            .iter()
-            .filter_map(|(&identity, route)| {
-                (!route.fallback && route.selectors.len() == route.expected)
-                    .then_some((identity, route.projected))
-            })
-            .collect::<HashMap<_, _>>();
-        let authoritative_rule_indices =
-            authoritative.values().filter_map(|value| *value).collect();
-        let compatibility = routes
-            .keys()
-            .filter(|identity| !authoritative.contains_key(identity))
-            .copied()
-            .collect();
-        let mut routing = Self {
-            authoritative,
-            projected_by_identity,
-            authoritative_rule_indices,
-            compatibility,
-            fallback_report: ProductionRuleMatchReport::default(),
-            ordinary_signature_complete: false,
-        };
-        routing.fallback_report = routing.StaticFallbackReport(rule_set);
-        // The ordinary compatibility probe does not encode highlight names,
-        // starting-style recalc state, or cross-tree/scope contexts. Keep all
-        // those cases conservative, even when the special rule is unmatched.
-        // An empty signature may survive a rule revision only when both versions
-        // exclude global sheet inputs (for example @function in inline values).
-        // RuleAt includes pre-import layers, imports and namespaces as well as
-        // child rules; inactive groups and all non-style variants are rejected.
-        let flat_ordinary_sheet = sheet.diagnostics.is_empty()
-            && (0..sheet.contents.RuleCount()).all(|index| {
-                sheet.contents.RuleAt(index).AsStyle().is_some_and(|rule| {
-                    rule.ChildRules().is_none_or(|children| children.is_empty())
-                })
-            });
-        routing.ordinary_signature_complete = flat_ordinary_sheet
-            && rule_set.AllRuleData().iter().all(|data| {
-                let identity = RuleIdentity(data);
-                routing.authoritative.contains_key(&identity)
-                    && routing.ProjectedRuleIndex(identity) == Some(data.GetPosition() as usize)
-                    && data.Rule().Selectors().ComplexSelectors().count() == 1
-                    && !data.IsStartingStyle()
-                    && rule_set.ScopeForRule(data).is_none()
-                    && rule_set.ContainerQueriesForRule(data).is_none()
-                    && data.Rule().GetMixinParameterBindings().is_none()
-                    && !special_rules.contains(&identity)
-                    && data.Selector().SimpleSelectors().all(|selector| {
-                        selector.Match() != MatchType::kPseudoElement
-                            && selector.SelectorList().is_none()
-                            && !matches!(
-                                selector.GetPseudoType(),
-                                PseudoType::kPseudoHost | PseudoType::kPseudoHostContext
-                            )
-                    })
-            });
-        routing
-    }
-
-    fn StaticFallbackReport(&self, rule_set: &RuleSet<Backend>) -> ProductionRuleMatchReport {
-        let mut report = ProductionRuleMatchReport::default();
-        let mut reported_fallback_rules = HashSet::new();
-        let mut reported_scopes = HashSet::new();
-        let mut reported_container_sets = HashSet::new();
-        for data in rule_set.AllRuleData() {
-            let identity = RuleIdentity(data);
-            let report_key = self
-                .ProjectedRuleIndex(identity)
-                .map_or((false, identity), |projected| (true, projected));
-            if self.authoritative.contains_key(&identity)
-                || !reported_fallback_rules.insert(report_key)
-            {
-                continue;
-            }
-            if !HasSupportedPseudoTarget(data) {
-                report.skipped_pseudo += 1;
-            } else if ProductionUnsupportedParsedFeature(&data.Rule().Selectors().CopySelectors())
-                .is_some()
-            {
-                report.skipped_unsupported_selector += 1;
-            } else if let Some(scope) = rule_set
-                .ScopeForRule(data)
-                .filter(|scope| !CanMatchProductionScopeChain(scope))
-            {
-                if reported_scopes.insert(Rc::as_ptr(&scope) as usize) {
-                    report.skipped_scope += 1;
-                }
-            } else if let Some(queries) = rule_set.ContainerQueriesForRule(data) {
-                if reported_container_sets.insert(Rc::as_ptr(&queries) as usize) {
-                    report.skipped_container_query += 1;
-                }
-            }
-        }
-        report
-    }
-
-    pub(crate) fn OrdinarySignatureComplete(&self) -> bool {
-        self.ordinary_signature_complete
-    }
-
-    pub(crate) fn IsAuthoritativeProjectedRule(&self, rule_index: usize) -> bool {
-        self.authoritative_rule_indices.contains(&rule_index)
-    }
-
-    pub(crate) fn AuthoritativeRuleCount(&self) -> usize {
-        self.authoritative.len()
-    }
-
-    pub(crate) fn IsAuthoritativeRetainedRule(
-        &self,
-        rule: &Rc<crate::style_rule::StyleRule<Backend>>,
-    ) -> bool {
-        self.authoritative
-            .contains_key(&(Rc::as_ptr(rule) as usize))
-    }
-
-    pub(crate) fn RequiresCompatibilityFallback(
-        &self,
-        rule: &Rc<crate::style_rule::StyleRule<Backend>>,
-    ) -> bool {
-        self.compatibility.contains(&(Rc::as_ptr(rule) as usize))
-    }
-
-    fn ProjectedRuleIndex(&self, identity: usize) -> Option<usize> {
-        self.projected_by_identity.get(&identity).copied()
-    }
-}
-
 /// Runs the production element through translated RuleSet buckets and writes
 /// the collector's transferred property sets directly into `cascade_result`.
 ///
-/// Inputs are one cascade origin in active-sheet order. Rules whose recalc
-/// context is not represented by the element or supported pseudo request are removed
-/// before SortAndTransferMatchedRules and remain owned by the caller's
-/// explicit compatibility route.
+/// Inputs are one cascade origin in active-sheet order. The collector owns
+/// candidate selection, selector matching, sorting, and transfer.
 pub(crate) fn CollectProductionRuleMatchesInto<'d>(
-    inputs: &[ProductionRuleSetInput<'_>],
+    inputs: &[ProductionRuleSetInput],
     document: &'d Document,
     element_index: usize,
     selectors: &mut PersistentSelectorService,
@@ -712,13 +446,6 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
     };
 
     let mut report = ProductionRuleMatchReport::default();
-    for input in inputs {
-        let cached = &input.routing.fallback_report;
-        report.skipped_pseudo += cached.skipped_pseudo;
-        report.skipped_unsupported_selector += cached.skipped_unsupported_selector;
-        report.skipped_scope += cached.skipped_scope;
-        report.skipped_container_query += cached.skipped_container_query;
-    }
 
     let mut groups = Vec::new();
     for input in inputs {
@@ -787,11 +514,6 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
     }
     report.candidates_considered = collector.CandidatesConsidered();
     report.selector_matches = collector.MatchedRulesForTest().len();
-    collector.RetainMatchedRules(|matched| {
-        inputs
-            .get(matched.StyleSheetIndex())
-            .is_some_and(|input| input.routing.IsAuthoritativeRetainedRule(matched.Rule()))
-    });
     collector.SortAndTransferMatchedRules(origin, false, None);
     report.transferred_property_sets =
         collector.MatchedResult().GetMatchedProperties().len() - first_result;
@@ -820,7 +542,7 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
 /// `::part`. Selecting the relevant scoped resolver remains the StyleResolver
 /// owner's job, as it does in Blink.
 pub(crate) fn CollectProductionShadowRuleMatchesInto(
-    inputs: &[ProductionRuleSetInput<'_>],
+    inputs: &[ProductionRuleSetInput],
     document: &Document,
     element_index: usize,
     selectors: &mut PersistentSelectorService,
@@ -880,7 +602,7 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
     );
     // StyleResolver::MatchElementScopeRules selects the corresponding source
     // RuleSets but begins the transfer/matching scope on the instance itself.
-    // Conflating these scopes silently drops SVG use rules in fallback recalc.
+    // Conflating these scopes silently drops SVG use rules in conservative recalc.
     let matching_scope = if matches!(pass, ProductionShadowRulePass::ElementScope(_)) {
         document.TreeScopeRoot(element_index)
     } else {
@@ -910,11 +632,6 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
         selector_matches: collector.MatchedRulesForTest().len(),
         ..Default::default()
     };
-    collector.RetainMatchedRules(|matched| {
-        inputs
-            .get(matched.StyleSheetIndex())
-            .is_some_and(|input| input.routing.IsAuthoritativeRetainedRule(matched.Rule()))
-    });
     collector.SortAndTransferMatchedRules(CascadeOrigin::kAuthor, false, None);
     report.transferred_property_sets =
         collector.MatchedResult().GetMatchedProperties().len() - first_result;
@@ -998,13 +715,11 @@ mod tests {
         document.AppendChild(parent, element);
 
         let mut selectors = PersistentSelectorService::default();
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut result = MatchResult::default();
         let collection = CollectProductionRuleMatchesInto(
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set: rule_set.clone(),
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1016,62 +731,12 @@ mod tests {
             &mut result,
         );
         let report = &collection.report;
-
-        assert_eq!(report.skipped_starting_style, 0);
-        assert_eq!(report.skipped_scope, 0);
-        assert_eq!(report.skipped_container_query, 0);
         assert_eq!(report.collector_invocations, 1, "{report:?}");
         assert_eq!(report.transferred_property_sets, 3, "{report:?}");
         assert_eq!(report.selector_matches, 3, "{report:?}");
         assert!(report.candidates_considered > report.selector_matches);
         assert_eq!(collection.rules.len(), 3);
         assert_eq!(result.GetMatchedProperties().len(), 3);
-        assert_eq!(
-            routing.fallback_report,
-            routing.StaticFallbackReport(&rule_set)
-        );
-        // Static diagnostics preserve multiplicity for repeated collection,
-        // including fallback rules that never enter the translated cascade.
-        let fallback_sheet = parse(".hit::cue{color:red}.hit::-webkit-scrollbar{width:7px}");
-        let fallback_set = Rc::new(fallback_sheet.BuildRuleSet(&medium));
-        let fallback = ProductionRuleRouting::Build(&fallback_set, &fallback_sheet);
-        assert!(fallback.fallback_report.skipped_pseudo > 0);
-        assert_eq!(
-            fallback.fallback_report,
-            fallback.StaticFallbackReport(&fallback_set)
-        );
-        for _ in 0..3 {
-            let mut output = MatchResult::default();
-            let actual = CollectProductionRuleMatchesInto(
-                &[ProductionRuleSetInput {
-                    sheet_index: 0,
-                    rule_set: fallback_set.clone(),
-                    routing: &fallback,
-                    implicit_scope_trigger: None,
-                }],
-                document,
-                element,
-                &mut selectors,
-                CascadeOrigin::kAuthor,
-                &ProductionPseudoRequest::Element(),
-                None,
-                &mut output,
-            )
-            .report;
-            assert_eq!(
-                actual.skipped_pseudo,
-                fallback.fallback_report.skipped_pseudo
-            );
-            assert_eq!(
-                actual.skipped_unsupported_selector,
-                fallback.fallback_report.skipped_unsupported_selector
-            );
-            assert_eq!(actual.skipped_scope, fallback.fallback_report.skipped_scope);
-            assert_eq!(
-                actual.skipped_container_query,
-                fallback.fallback_report.skipped_container_query
-            );
-        }
 
         for (transferred, matched) in collection.rules.iter().zip(result.GetMatchedProperties()) {
             assert!(Rc::ptr_eq(
@@ -1090,7 +755,6 @@ mod tests {
         );
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
         let element = document.CreateElement(
@@ -1109,7 +773,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set: rule_set.clone(),
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1119,11 +782,6 @@ mod tests {
             &ProductionPseudoRequest::Pseudo(PseudoId::kPseudoIdBefore, None),
             None,
             &mut result,
-        );
-        assert_eq!(
-            collection.report.skipped_pseudo, 0,
-            "{:?}",
-            collection.report
         );
         assert_eq!(
             collection.report.selector_matches, 1,
@@ -1139,7 +797,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set: rule_set.clone(),
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1149,11 +806,6 @@ mod tests {
             &ProductionPseudoRequest::Pseudo(PseudoId::kPseudoIdFirstLetter, None),
             None,
             &mut result,
-        );
-        assert_eq!(
-            collection.report.skipped_pseudo, 0,
-            "{:?}",
-            collection.report
         );
         assert_eq!(
             collection.report.selector_matches, 1,
@@ -1183,7 +835,7 @@ mod tests {
                 &mut PersistentSelectorService::default(),
                 &elements,
             )
-            .expect("translated pseudo selector must not require full-rule fallback");
+            .expect("translated pseudo selector must remain on the typed route");
             assert_eq!(invalidated, HashSet::from([elements[0]]), "{pseudo}");
         }
     }
@@ -1197,7 +849,6 @@ mod tests {
         );
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
         let input = document.CreateElement(
@@ -1223,7 +874,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set,
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1233,12 +883,6 @@ mod tests {
             &ProductionPseudoRequest::Pseudo(PseudoId::kPseudoIdPlaceholder, None),
             None,
             &mut result,
-        );
-
-        assert_eq!(
-            collection.report.skipped_pseudo, 0,
-            "{:?}",
-            collection.report
         );
         assert_eq!(
             collection.report.selector_matches, 1,
@@ -1282,7 +926,6 @@ mod tests {
         let sheet = parse("@starting-style{.hit{font-size:31px}}.hit{width:7px}");
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
         let element = document.CreateElement(
@@ -1299,7 +942,6 @@ mod tests {
         let input = [ProductionRuleSetInput {
             sheet_index: 0,
             rule_set,
-            routing: &routing,
             implicit_scope_trigger: None,
         }];
         let mut selectors = PersistentSelectorService::default();
@@ -1315,7 +957,6 @@ mod tests {
             &mut initial,
         )
         .report;
-        assert_eq!(report.skipped_starting_style, 0);
         assert_eq!(report.selector_matches, 2, "{report:?}");
         assert!(initial.HasFlag(crate::resolver::match_flags::MatchFlag::kAffectedByStartingStyle));
 
@@ -1332,7 +973,6 @@ mod tests {
             &mut subsequent,
         )
         .report;
-        assert_eq!(report.skipped_starting_style, 0);
         assert_eq!(report.selector_matches, 1, "{report:?}");
         assert!(
             !subsequent.HasFlag(crate::resolver::match_flags::MatchFlag::kAffectedByStartingStyle)
@@ -1348,7 +988,6 @@ mod tests {
         );
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
         let outer = document.CreateElement(
@@ -1378,7 +1017,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set,
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1403,7 +1041,6 @@ mod tests {
         let sheet = parse("::slotted(.chosen){width:21px}::slotted(.absent){display:none}");
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
         let host = document.CreateElementDefault(DOMNamespace::kHTML, "x-host".into());
@@ -1442,7 +1079,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set,
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1513,7 +1149,6 @@ mod tests {
         );
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
         let host = document.CreateElementDefault(DOMNamespace::kHTML, "x-host".into());
@@ -1527,7 +1162,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set,
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1613,7 +1247,6 @@ mod tests {
         );
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut selectors = PersistentSelectorService::default();
         for (scope, names) in &scopes {
             let mut result = MatchResult::default();
@@ -1621,7 +1254,6 @@ mod tests {
                 &[ProductionRuleSetInput {
                     sheet_index: 0,
                     rule_set: rule_set.clone(),
-                    routing: &routing,
                     implicit_scope_trigger: None,
                 }],
                 document,
@@ -1685,7 +1317,6 @@ mod tests {
         );
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
 
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
@@ -1753,7 +1384,6 @@ mod tests {
         let input = [ProductionRuleSetInput {
             sheet_index: 0,
             rule_set,
-            routing: &routing,
             implicit_scope_trigger: None,
         }];
         let mut selectors = PersistentSelectorService::default();
@@ -1767,11 +1397,6 @@ mod tests {
             &ProductionPseudoRequest::Element(),
             None,
             &mut result,
-        );
-        assert_eq!(
-            collection.report.skipped_scope, 0,
-            "{:?}",
-            collection.report
         );
         assert_eq!(
             collection.report.selector_matches, 2,
@@ -1815,7 +1440,6 @@ mod tests {
         );
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = dom::DOM::new();
         let document = owner.GetDocumentMut();
         let container = document.CreateElementDefault(DOMNamespace::kHTML, "section".into());
@@ -1865,7 +1489,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set: rule_set.clone(),
-                routing: &routing,
                 implicit_scope_trigger: Some(container),
             }],
             document,
@@ -1875,16 +1498,6 @@ mod tests {
             &ProductionPseudoRequest::Element(),
             Some(&runtime),
             &mut result,
-        );
-        assert_eq!(
-            collection.report.skipped_scope, 0,
-            "{:?}",
-            collection.report
-        );
-        assert_eq!(
-            collection.report.skipped_container_query, 0,
-            "{:?}",
-            collection.report
         );
         assert_eq!(
             collection.report.selector_matches, 2,
@@ -1902,7 +1515,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set: rule_set.clone(),
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,
@@ -1933,7 +1545,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set: rule_set.clone(),
-                routing: &routing,
                 implicit_scope_trigger: Some(container),
             }],
             document,
@@ -1954,7 +1565,6 @@ mod tests {
             parse(".shape{fill:blue} #source-parent .shape{fill:red} use .shape{fill:green}");
         let rule_set =
             Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
-        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = html::html_parser::ParseHTML(
             r##"<svg><defs id="source-parent"><rect id="box" class="shape" width="10" height="10"/></defs><use href="#box"/></svg>"##,
         );
@@ -1970,7 +1580,6 @@ mod tests {
             &[ProductionRuleSetInput {
                 sheet_index: 0,
                 rule_set,
-                routing: &routing,
                 implicit_scope_trigger: None,
             }],
             document,

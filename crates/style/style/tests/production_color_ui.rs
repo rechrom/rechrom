@@ -216,18 +216,24 @@ fn invalid_stable_ui_grammar_and_unavailable_color_contexts_remain_typed() {
         P::kInternalVisitedOutlineColor,
         P::kInternalVisitedBorderTopColor,
     ] {
-        assert_eq!(
-            ParseProperty(
-                id,
-                &String::from("color(display-p3 1 0 0)"),
-                false,
-                Mode::kHTMLStandardMode
-            )
-            .err()
-            .unwrap()
-            .kind,
-            PropertyParseErrorKind::Unsupported
-        );
+        let wide = ParseProperty(
+            id,
+            &String::from("color(display-p3 1 0 0)"),
+            false,
+            Mode::kHTMLStandardMode,
+        )
+        .unwrap();
+        let mut wide_builder =
+            layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+        style::resolver::production_style_builder::Apply(
+            id,
+            &mut wide_builder,
+            None,
+            wide[0].Value(),
+            16.0,
+            &MediaValuesCachedData::default(),
+        )
+        .unwrap();
         let value = ParseProperty(
             id,
             &String::from("CanvasText"),

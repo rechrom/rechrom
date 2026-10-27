@@ -20,14 +20,10 @@ pub(crate) struct StyleFontMetricsResolver {
 
 impl StyleFontMetricsResolver {
     fn Engine(constraints: &ConstraintSpace) -> font_engine::FontEngineHandle {
-        constraints.font_engine.clone().unwrap_or_else(|| {
-            let mut engine = font_engine::FontEngine::FromFaces(
-                &constraints.fonts,
-                constraints.font_backend_factory.clone(),
-            );
-            engine.SetQueryCollector(constraints.font_queries.clone());
-            font_engine::FontEngineHandle::new(engine)
-        })
+        constraints
+            .font_engine
+            .clone()
+            .expect("Page must install its document FontEngine before Style")
     }
 
     pub(crate) fn new(constraints: &ConstraintSpace) -> Self {

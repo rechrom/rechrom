@@ -111,7 +111,7 @@ fn svg_hints_survive_production_inheritance_cascade_and_mutation() {
     );
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 8, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     let group = node(&owner, "group");
     owner.GetDocumentMut().SetAttribute(

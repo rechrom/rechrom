@@ -118,8 +118,8 @@ pub trait InputBindingHost<B: InputHandlerTypes> {
 
 pub trait InputHost<B: InputHandlerTypes> {
     // This is the consumed callback subset of the canonical source interface.
-    // A split facade does not expose GetImplDeprecated or a mutable whole-tree
-    // reference; the complete interface remains implemented by HostImpl itself.
+    // A split facade does not expose a mutable whole-tree reference; the
+    // complete interface remains implemented by HostImpl itself.
     // Source callback: cc/input/compositor_input_interfaces.h:135.
     fn ScrollAnimationAbort(&mut self, element_id: ElementId);
     // Source callback: cc/input/compositor_input_interfaces.h:136.

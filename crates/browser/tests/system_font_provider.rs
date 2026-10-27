@@ -130,12 +130,8 @@ fn contextual_fallback_roundtrips_exact_ttc_faces() {
         }
     }
 }
-
-#[cfg(feature = "source_paint")]
 #[path = "../src/native_test_thread.rs"]
 mod native_test_thread;
-
-#[cfg(feature = "source_paint")]
 #[test]
 fn page_settles_system_font_requests_before_publishing_glyphs() {
     native_test_thread::run(|| {

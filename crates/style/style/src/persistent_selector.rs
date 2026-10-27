@@ -549,10 +549,15 @@ impl<'d> PersistentSelectorBackend<'d> {
             .unwrap_or("")
             .split_ascii_whitespace()
             .peekable();
+        let quirks = self.InQuirksMode(&index);
         let classes: Rc<[AtomicString]> = if names.peek().is_none() {
             self.filters.borrow().empty_classes.clone()
         } else {
-            names.map(AtomicString::from_str).collect::<Vec<_>>().into()
+            names
+                .map(AtomicString::from_str)
+                .map(|name| if quirks { name.ToAsciiLower() } else { name })
+                .collect::<Vec<_>>()
+                .into()
         };
         self.filters
             .borrow_mut()
@@ -2409,6 +2414,7 @@ impl<'d> PersistentSelectorMatchSession<'d> {
         scope: Option<&crate::style_scope::StyleScope>,
         implicit_scope_root: Option<usize>,
         pseudo_id: layoutng_style::style::computed_style_constants::PseudoId,
+        originating_pseudo_id: layoutng_style::style::computed_style_constants::PseudoId,
         pseudo_argument: Option<&AtomicString>,
         pseudo_ident_list: &[AtomicString],
     ) -> Option<ScopedSelectorMatch> {
@@ -2416,12 +2422,13 @@ impl<'d> PersistentSelectorMatchSession<'d> {
             return None;
         }
         let backend = &self.backend;
-        let checker = SelectorChecker::ForPseudoRequest(
+        let mut checker = SelectorChecker::ForPseudoRequest(
             backend.clone(),
             Mode::kResolvingStyle,
             pseudo_argument.cloned().unwrap_or_default(),
             pseudo_ident_list.to_vec(),
         );
+        checker.SetOriginatingPseudoId(originating_pseudo_id);
         let mut context = SelectorCheckingContext::new(backend.handle(index));
         context.selector = Some(selector);
         context.tree_scope = Some(backend.ElementTreeScope(&index));

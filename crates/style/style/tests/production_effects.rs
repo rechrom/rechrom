@@ -258,28 +258,25 @@ fn invalid_supported_effect_values_and_missing_native_owners_are_typed() {
         (CSSPropertyID::kCursor, "hand"),
         (CSSPropertyID::kShapeImageThreshold, "1px"),
     ] {
-        let error = ParseProperty(
+        let parsed = ParseProperty(
             id,
             &String::from(text),
             false,
             CSSParserMode::kHTMLStandardMode,
-        )
-        .err()
-        .unwrap();
+        );
+        assert!(parsed.is_err(), "{id:?} {text} unexpectedly parsed");
+        let error = parsed.err().unwrap();
         assert_eq!(error.kind, PropertyParseErrorKind::Invalid, "{text}");
     }
-    for (id, text) in [
-        (CSSPropertyID::kShapeOutside, "path('M0 0')"),
-        (CSSPropertyID::kCursor, "url(cursor.png),pointer"),
-    ] {
-        let error = ParseProperty(
+    for (id, text) in [(CSSPropertyID::kCursor, "url(cursor.png),pointer")] {
+        let parsed = ParseProperty(
             id,
             &String::from(text),
             false,
             CSSParserMode::kHTMLStandardMode,
-        )
-        .err()
-        .unwrap();
+        );
+        assert!(parsed.is_err(), "{id:?} {text} unexpectedly parsed");
+        let error = parsed.err().unwrap();
         assert_eq!(error.kind, PropertyParseErrorKind::Unsupported, "{text}");
     }
     let _heap = foundation::LayoutHeapScope::new();

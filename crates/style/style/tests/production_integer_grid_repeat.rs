@@ -43,7 +43,7 @@ fn repeat_parser_retains_typed_count_names_and_track_sizes() {
 }
 
 #[test]
-fn repeat_parser_rejects_bad_counts_nested_repeat_and_auto_track_repeat() {
+fn repeat_parser_rejects_bad_counts_and_nested_repeat() {
     for value in [
         "repeat(0,1fr)",
         "repeat(-1,1fr)",
@@ -83,19 +83,24 @@ fn repeat_parser_rejects_bad_counts_nested_repeat_and_auto_track_repeat() {
             PropertyParseErrorKind::Invalid
         );
     }
-    for value in ["repeat(auto-fill,20px)", "repeat(auto-fit,20px)", "subgrid"] {
-        assert_eq!(
-            ParseProperty(
-                P::kGridTemplateColumns,
-                &foundation::String::from(value),
-                false,
-                CSSParserMode::kHTMLStandardMode
-            )
-            .err()
-            .unwrap()
-            .kind,
-            PropertyParseErrorKind::Unsupported
-        );
+    for (value, kind) in [
+        ("repeat(auto-fill,20px)", foundation::CSSValueID::kAutoFill),
+        ("repeat(auto-fit,20px)", foundation::CSSValueID::kAutoFit),
+    ] {
+        let parsed = ParseProperty(
+            P::kGridTemplateColumns,
+            &foundation::String::from(value),
+            false,
+            CSSParserMode::kHTMLStandardMode,
+        )
+        .unwrap_or_else(|error| panic!("{value}: {error:?}"));
+        let CSSValuePayload::kValueListClass(list) = parsed[0].Value().Payload() else {
+            panic!("not a track list: {value}")
+        };
+        let CSSValuePayload::kGridAutoRepeatClass(repeat) = list.values[0].Payload() else {
+            panic!("not an auto repeat: {value}")
+        };
+        assert_eq!(repeat.kind, kind);
     }
 }
 

@@ -233,8 +233,6 @@ fn EffectCompositorState(
     }
     value
 }
-
-#[cfg(feature = "translation_in_progress")]
 use crate::paint_shader_resolver::ResolvePaintShader;
 
 // cpp: paint/pre_paint_tree_walk.h:11-16
@@ -2620,7 +2618,6 @@ fn FindMaskImage(fragment: &FragmentPaintData, id: u64) -> &PaintImage {
 }
 
 // cpp: paint/pre_paint_tree_walk.cc:306-358
-#[cfg(feature = "translation_in_progress")]
 fn ResolveMaskLayers(
     fragment: &FragmentPaintData,
     absolute_offset: Offset,
@@ -4467,7 +4464,6 @@ impl PrePaintTreeWalk {
     }
     // cpp: paint/pre_paint_tree_walk.h:86
     // cpp: paint/pre_paint_tree_walk.cc:623-640
-    #[cfg(feature = "translation_in_progress")]
     pub fn Walk(&mut self, root: PaintFragmentSource<'_>) -> Box<PaintTreeNode<'static>> {
         self.requires_main_thread_for_background_attachment_fixed = root
             .paint
@@ -4747,7 +4743,6 @@ impl PrePaintTreeWalk {
 
     // cpp: paint/pre_paint_tree_walk.h:89-99
     // cpp: paint/pre_paint_tree_walk.cc:642-936
-    #[cfg(feature = "translation_in_progress")]
     fn BuildNode(
         &mut self,
         fragment: &FragmentPaintData,

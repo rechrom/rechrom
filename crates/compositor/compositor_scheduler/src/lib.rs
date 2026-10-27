@@ -29,7 +29,7 @@ pub mod draw_result {
 }
 
 // Keeps the mechanically translated trace-value spellings local while the
-// public compatibility path is provided by the compositor facade.
+// compositor facade preserves the public Chromium source path.
 pub(crate) mod adapter {
     pub use crate::TraceValue;
 }

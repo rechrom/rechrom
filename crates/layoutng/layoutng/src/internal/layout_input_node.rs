@@ -211,13 +211,9 @@ impl LayoutInputNode {
                 "replaced layout module is not installed",
             ))
         });
-        let legacy_sizing_info = callback(self);
-        let mut intrinsic_inline_size = legacy_sizing_info
-            .has_width
-            .then_some(legacy_sizing_info.size.width);
-        let mut intrinsic_block_size = legacy_sizing_info
-            .has_height
-            .then_some(legacy_sizing_info.size.height);
+        let sizing_info = callback(self);
+        let mut intrinsic_inline_size = sizing_info.has_width.then_some(sizing_info.size.width);
+        let mut intrinsic_block_size = sizing_info.has_height.then_some(sizing_info.size.height);
         if !self.IsHorizontalWritingMode() {
             std::mem::swap(&mut intrinsic_inline_size, &mut intrinsic_block_size);
         }

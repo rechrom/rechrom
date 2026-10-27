@@ -5,6 +5,17 @@
 //! Page connects DOM mutation notifications and the style/layout/paint lifecycle;
 //! each engine owns its state and invalidation, like LocalFrameView lifecycle wiring.
 use crate::interaction_services::PageInteraction;
+pub use compositor::CompositorMainThreadEffect;
+use compositor::{
+    adapter::{
+        begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId},
+        geometry::{PointF as CompositorPointF, Size as CompositorSize, Vector2dF},
+        time::{TimeDelta as CompositorTimeDelta, TimeTicks as CompositorTimeTicks},
+    },
+    CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor, CompositorExecutors,
+    CompositorInput, CompositorOutput, CompositorViewportState, NativeCompositorFrameSubmission,
+    ScrollPhase,
+};
 use document::{
     DocumentEffects, DocumentEngine, LayoutMutation as DocumentLayoutMutation, ResourceRequest,
 };
@@ -34,6 +45,9 @@ pub use open::OpenStatus;
 use open::{script_scheduler::ScriptLoadClient, OpenEngine};
 use page_mutation::{PageMutation, ResourceMutation};
 pub use paint::paint_engine::{CaretGeometry, PaintRect as CaretRect};
+use raster::RasterEngine;
+use renderer::RenderUpdate;
+use renderer_skia::{PixelFormat, RendererSkiaBackend};
 use resource::ResourceEngine;
 use std::{
     cell::{Cell, RefCell},
@@ -51,35 +65,11 @@ use webapi::{
     web_api_engine::{WebApiEffect, WebApiEngine, WebApiMutation},
     window_bindings::WindowJavaScriptBindings,
 };
-
-#[cfg(feature = "production_raster")]
-pub use compositor::CompositorMainThreadEffect;
-#[cfg(feature = "production_raster")]
-use compositor::{
-    adapter::{
-        begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId},
-        geometry::{PointF as CompositorPointF, Size as CompositorSize, Vector2dF},
-        time::{TimeDelta as CompositorTimeDelta, TimeTicks as CompositorTimeTicks},
-    },
-    CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor, CompositorExecutors,
-    CompositorInput, CompositorOutput, CompositorViewportState, NativeCompositorFrameSubmission,
-    ScrollPhase,
-};
-#[cfg(feature = "production_raster")]
-use raster::RasterEngine;
-#[cfg(feature = "production_raster")]
-use renderer::RenderUpdate;
-#[cfg(feature = "production_raster")]
-use renderer_skia::{PixelFormat, RendererSkiaBackend};
-
-#[cfg(feature = "production_raster")]
 struct PageCompositorExecutor {
     executor: Arc<dyn executor::Executor>,
     origin: std::time::Instant,
     sequence: std::thread::ThreadId,
 }
-
-#[cfg(feature = "production_raster")]
 impl PageCompositorExecutor {
     fn new(executor: Arc<dyn executor::Executor>) -> Self {
         Self {
@@ -114,8 +104,6 @@ impl PageCompositorExecutor {
         CompositorTimeTicks::FromMicroseconds(value.max(1))
     }
 }
-
-#[cfg(feature = "production_raster")]
 impl CompositorExecutor for PageCompositorExecutor {
     fn Now(&self) -> CompositorTimeTicks {
         self.TimeTicks(std::time::Instant::now())
@@ -136,8 +124,6 @@ impl CompositorExecutor for PageCompositorExecutor {
         std::thread::current().id() == self.sequence
     }
 }
-
-#[cfg(feature = "production_raster")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreparedRenderInput {
     width: u32,
@@ -145,16 +131,12 @@ struct PreparedRenderInput {
     scale: u64,
     layout_zoom: u64,
 }
-
-#[cfg(feature = "production_raster")]
 struct PendingPageRender {
     artifact: Arc<paint::PaintArtifact>,
     input: PreparedRenderInput,
     viewport: CompositorViewportState,
     needs_begin_frames: bool,
 }
-
-#[cfg(feature = "production_raster")]
 impl PendingPageRender {
     fn Matches(
         &self,
@@ -174,14 +156,10 @@ impl PendingPageRender {
             && self.viewport.visible == viewport.visible
     }
 }
-
-#[cfg(feature = "production_raster")]
 struct PresentablePageRender {
     artifact: std::sync::Weak<paint::PaintArtifact>,
     input: PreparedRenderInput,
 }
-
-#[cfg(feature = "production_raster")]
 pub struct PageRenderPipeline {
     compositor: Option<CompositorEngine>,
     executor: Arc<PageCompositorExecutor>,
@@ -219,24 +197,18 @@ pub struct PageRenderPipeline {
     // scroll update to deep-copy the complete PaintArtifact.
     presentable: Option<PresentablePageRender>,
 }
-
-#[cfg(feature = "production_raster")]
 #[derive(Default)]
 pub struct CompositorWheelResult {
     pub compositor_owned: bool,
     pub submitted: bool,
     pub effects: Vec<CompositorMainThreadEffect>,
 }
-
-#[cfg(feature = "production_raster")]
 pub type PageCompositorFrame = NativeCompositorFrameSubmission;
-#[cfg(feature = "production_raster")]
 pub type PageReturnedResource = compositor::runtime::resources::RasterReturnedResource;
 
 /// Viz and software Renderer state owned by a Page presentation sequence.
 /// It consumes the Page's move-only CompositorFrame output without access to
 /// Blink, PaintEngine, cc trees, tiles, or input scheduling.
-#[cfg(feature = "production_raster")]
 pub struct PageFramePresenter {
     viz: viz::native::VizEngine,
     renderer: renderer::Renderer<RendererSkiaBackend>,
@@ -246,8 +218,6 @@ pub struct PageFramePresenter {
     surface_parameters: Option<(u32, u32, u32)>,
     rendered_surface: Option<viz::native::SurfaceId>,
 }
-
-#[cfg(feature = "production_raster")]
 impl PageFramePresenter {
     pub fn new() -> Self {
         Self {
@@ -365,8 +335,6 @@ impl PageFramePresenter {
         Ok((update, target.pixels))
     }
 }
-
-#[cfg(feature = "production_raster")]
 impl PageRenderPipeline {
     pub fn new(executor: Arc<dyn executor::Executor>) -> Self {
         Self::NewWithPresentation(executor.clone(), executor, false).0
@@ -1318,8 +1286,6 @@ impl PageRenderPipeline {
         self.presentable = None;
     }
 }
-
-#[cfg(feature = "production_raster")]
 impl Default for PageRenderPipeline {
     fn default() -> Self {
         Self::new(executor::inline())
@@ -1432,7 +1398,6 @@ struct PageState {
     style_font_metrics: Rc<crate::style_services::StyleFontMetricsResolver>,
     layout_engine: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
     paint_engine: RefCell<paint::PaintEngine>,
-    #[cfg(feature = "production_raster")]
     rendering: RefCell<PageRenderPipeline>,
     constraints: Rc<RefCell<ConstraintSpace>>,
     /// Embedder/default faces plus decoded @font-face resources. System faces
@@ -1480,7 +1445,7 @@ impl PageState {
         document: Rc<DocumentEngine>,
         layout_engine: layoutng_assembly::layout_engine::LayoutEngine,
         paint_engine: paint::PaintEngine,
-        #[cfg(feature = "production_raster")] rendering: PageRenderPipeline,
+        rendering: PageRenderPipeline,
         mut constraints: ConstraintSpace,
         client: Rc<RefCell<dyn PageClient>>,
     ) -> Rc<Self> {
@@ -1513,7 +1478,6 @@ impl PageState {
             style_font_metrics,
             layout_engine: RefCell::new(layout_engine),
             paint_engine: RefCell::new(paint_engine),
-            #[cfg(feature = "production_raster")]
             rendering: RefCell::new(rendering),
             constraints: Rc::new(RefCell::new(constraints)),
             document_fonts: RefCell::new(document_fonts),
@@ -1557,7 +1521,6 @@ impl PageState {
             Rc::new(DocumentEngine::new()),
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
             paint::PaintEngine::new(),
-            #[cfg(feature = "production_raster")]
             PageRenderPipeline::default(),
             constraints,
             client,
@@ -2132,7 +2095,6 @@ impl PageState {
                 );
             }
             let mut paint = self.paint_engine.borrow_mut();
-            #[cfg(feature = "production_raster")]
             {
                 // Stop identifying the currently submitted artifact as the next
                 // commit input before Paint mutates its retained snapshot.
@@ -2167,7 +2129,7 @@ impl PageState {
             }
             reused_recordings = matches!(&property_update, Some(Ok(_)));
             let paint_output = if !reused_recordings {
-                trace.set("paint_fallback", 1.0);
+                trace.set("full_paint", 1.0);
                 if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
                     if let Some(Err(reason)) = property_update {
                         eprintln!("scroll-paint-reuse rejected={reason:?}");
@@ -2284,7 +2246,7 @@ impl PageState {
             trace.set("document_nodes", document.GetDocument().NodeCount() as f64);
             trace.set("resolved_nodes", state.stats.resolved_nodes as f64);
             trace.set("changed_nodes", state.stats.changed_nodes as f64);
-            trace.set("rule_sets_built", state.stats.rule_sets_built as f64); // compatibility metric
+            trace.set("rule_sets_built", state.stats.rule_sets_built as f64);
             trace.set(
                 "selector_dependency_sets_built",
                 state.stats.rule_sets_built as f64,
@@ -3349,7 +3311,6 @@ impl Page {
         let layout_engine =
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let paint_engine = paint::PaintEngine::new();
-        #[cfg(feature = "production_raster")]
         let rendering = PageRenderPipeline::new_with_executors(
             if threads.raster {
                 threads.compositor_executor.clone()
@@ -3366,7 +3327,6 @@ impl Page {
             document,
             layout_engine,
             paint_engine,
-            #[cfg(feature = "production_raster")]
             rendering,
             constraints,
             client.clone(),
@@ -3897,9 +3857,7 @@ impl Page {
             .is_some()
             .then(std::time::Instant::now);
         let mut routed_input = input.clone();
-        #[cfg(feature = "production_raster")]
         let mut compositor_wheel = CompositorWheelResult::default();
-        #[cfg(feature = "production_raster")]
         if let interaction::input_event::InputEvent::Wheel(wheel) = &mut routed_input {
             let regions = self.BlockingWheelEventRegions();
             let contains = |rect: paint::paint_engine::PaintRect| {
@@ -3933,7 +3891,6 @@ impl Page {
 
         if !result.default_prevented {
             if let interaction::input_event::InputEvent::Wheel(wheel) = &routed_input {
-                #[cfg(feature = "production_raster")]
                 if compositor_wheel.compositor_owned {
                     self.ApplyCompositorWheelEffects(compositor_wheel.effects)?;
                     if compositor_wheel.submitted {
@@ -4874,8 +4831,6 @@ pub fn OpenUrl(
 #[derive(Default)]
 pub(crate) struct NullPageClient;
 impl PageClient for NullPageClient {}
-
-#[cfg(feature = "production_raster")]
 impl Page {
     /// Plan and raster the current Page artifact into the host's borrowed target.
     pub fn PaintInto(

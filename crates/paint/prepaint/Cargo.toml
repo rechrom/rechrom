@@ -3,10 +3,6 @@ name = "prepaint"
 version = "0.0.1"
 edition = "2021"
 
-[features]
-default = ["translation_in_progress"]
-translation_in_progress = []
-
 [dependencies]
 browser_tracing = { path = "../../tracing" }
 font_engine = { path = "../../font_engine" }

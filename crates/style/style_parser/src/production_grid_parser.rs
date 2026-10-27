@@ -297,51 +297,89 @@ pub(super) fn ConsumeTracks<T: TokenStreamTokenizer>(
     ConsumeTracksWithGridLanes(id, stream, mode, template, no_repeat, false)
 }
 
-// cpp: css_parsing_utils.cc:7105-7203 ConsumeGridTrackRepeatFunction,
-// standalone integer-repeat branch. Auto-repeat and subgrid remain explicit
-// unsupported collaborators rather than being expanded into plain tracks.
-fn ConsumeIntegerRepeat<T: TokenStreamTokenizer>(
+// cpp: css_parsing_utils.cc:7105-7203 ConsumeGridTrackRepeatFunction. Preserve
+// both ordinary track repeaters and subgrid name-repeat entries as their native
+// typed subclasses; never expand a repeat into a flat track list.
+fn ConsumeRepeat<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    subgrid: bool,
 ) -> Result<Rc<Value>, PropertyParseError> {
     let result;
     {
         let mut args = RestoringBlockGuard::new(stream);
         args.ConsumeWhitespace();
-        if matches!(
-            args.Peek().Id(),
-            CSSValueID::kAutoFill | CSSValueID::kAutoFit
-        ) {
-            return Err(unsupported(id, "CSSGridAutoRepeatValue"));
-        }
-        let repetitions = ConsumeLiteral(id, &mut args, mode, Grammar::Integer { minimum: 1 })?;
+        let auto = match args.Peek().Id() {
+            CSSValueID::kAutoFill => {
+                args.ConsumeIncludingWhitespace();
+                Some(CSSValueID::kAutoFill)
+            }
+            CSSValueID::kAutoFit if !subgrid => {
+                args.ConsumeIncludingWhitespace();
+                Some(CSSValueID::kAutoFit)
+            }
+            CSSValueID::kAutoFit => return Err(invalid(id)),
+            _ => None,
+        };
+        let repetitions = if auto.is_none() {
+            Some(ConsumeLiteral(
+                id,
+                &mut args,
+                mode,
+                Grammar::Integer { minimum: 1 },
+            )?)
+        } else {
+            None
+        };
         if args.Peek().GetType() != kCommaToken {
             return Err(invalid(id));
         }
         args.ConsumeIncludingWhitespace();
         let mut entries = Vec::new();
-        if args.Peek().GetType() == kLeftBracketToken {
-            entries.push(ConsumeLineNames(id, &mut args)?);
-        }
         let mut tracks = 0u32;
-        while !args.AtEnd() {
-            entries.push(ConsumeTrackSize(id, &mut args, mode)?.ok_or_else(|| invalid(id))?);
-            tracks += 1;
+        let mut line_name_sets = 0u32;
+        if subgrid {
+            while !args.AtEnd() {
+                if args.Peek().GetType() != kLeftBracketToken {
+                    return Err(invalid(id));
+                }
+                entries.push(ConsumeLineNames(id, &mut args)?);
+                line_name_sets += 1;
+            }
+        } else {
             if args.Peek().GetType() == kLeftBracketToken {
                 entries.push(ConsumeLineNames(id, &mut args)?);
             }
+            while !args.AtEnd() {
+                entries.push(ConsumeTrackSize(id, &mut args, mode)?.ok_or_else(|| invalid(id))?);
+                tracks += 1;
+                if args.Peek().GetType() == kLeftBracketToken {
+                    entries.push(ConsumeLineNames(id, &mut args)?);
+                }
+            }
         }
-        if tracks == 0 || !args.Release() {
+        let repeated_items = if subgrid { line_name_sets } else { tracks };
+        if repeated_items == 0 || !args.Release() {
             return Err(invalid(id));
         }
-        result = Rc::new(Value::new(CSSValuePayload::kGridIntegerRepeatClass(
-            values::CSSGridIntegerRepeatValue {
-                repetitions,
-                extra_clamp: layoutng_style::style::grid_area::K_GRID_MAX_TRACKS as u32 / tracks,
-                list: values::CSSValueList::new(entries, values::ListSeparator::Space),
-            },
-        )));
+        result = if let Some(kind) = auto {
+            Rc::new(Value::new(CSSValuePayload::kGridAutoRepeatClass(
+                values::CSSGridAutoRepeatValue {
+                    kind,
+                    list: values::CSSValueList::new(entries, values::ListSeparator::Space),
+                },
+            )))
+        } else {
+            Rc::new(Value::new(CSSValuePayload::kGridIntegerRepeatClass(
+                values::CSSGridIntegerRepeatValue {
+                    repetitions: repetitions.unwrap(),
+                    extra_clamp: layoutng_style::style::grid_area::K_GRID_MAX_TRACKS as u32
+                        / repeated_items,
+                    list: values::CSSValueList::new(entries, values::ListSeparator::Space),
+                },
+            )))
+        };
     }
     stream.ConsumeWhitespace();
     Ok(result)
@@ -360,6 +398,34 @@ pub(super) fn ConsumeTracksWithGridLanes<T: TokenStreamTokenizer>(
         stream.ConsumeIncludingWhitespace();
         return Ok(NoneValue());
     }
+    // cpp: css_parsing_utils.cc:7274-7301 ConsumeGridTrackList. A subgrid
+    // track list starts with the axis keyword and may only carry line-name
+    // groups after it. Retain the keyword in the typed list so the shared
+    // style converter can select the native subgridded-axis representation.
+    if template && stream.Peek().Id() == CSSValueID::kSubgrid {
+        stream.ConsumeIncludingWhitespace();
+        let mut tracks = vec![values::identifier(CSSValueID::kSubgrid)];
+        let mut seen_auto_repeat = false;
+        while !at_value_end(stream) && !AtSlash(stream) {
+            if stream.Peek().GetType() == kLeftBracketToken {
+                tracks.push(ConsumeLineNames(id, stream)?);
+                continue;
+            }
+            if stream.Peek().FunctionId() == Some(CSSValueID::kRepeat) {
+                let repeated = ConsumeRepeat(id, stream, mode, true)?;
+                let auto_repeat =
+                    matches!(repeated.Payload(), CSSValuePayload::kGridAutoRepeatClass(_));
+                if auto_repeat && seen_auto_repeat {
+                    return Err(invalid(id));
+                }
+                seen_auto_repeat |= auto_repeat;
+                tracks.push(repeated);
+                continue;
+            }
+            return Err(invalid(id));
+        }
+        return Ok(values::list(tracks, values::ListSeparator::Space));
+    }
     let mut tracks = Vec::new();
     while !at_value_end(stream) && !AtSlash(stream) {
         if is_grid_lanes
@@ -374,7 +440,7 @@ pub(super) fn ConsumeTracksWithGridLanes<T: TokenStreamTokenizer>(
             if no_repeat || !template {
                 return Err(invalid(id));
             }
-            tracks.push(ConsumeIntegerRepeat(id, stream, mode)?);
+            tracks.push(ConsumeRepeat(id, stream, mode, false)?);
             continue;
         }
         if stream.Peek().GetType() == kLeftBracketToken {

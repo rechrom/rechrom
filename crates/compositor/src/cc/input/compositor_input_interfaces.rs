@@ -263,10 +263,4 @@ pub trait CompositorDelegateForInput<H: InputHostTypes> {
     );
     // Source: cc/input/compositor_input_interfaces.h:201-202.
     fn HasScrollLinkedAnimation(&self, for_scroller: ElementId) -> bool;
-    // Source: cc/input/compositor_input_interfaces.h:203-206.
-    // Temporary source escape hatch pending migration to the input interface.
-    fn GetImplDeprecated(&mut self) -> &mut H::LayerTreeHostImpl;
-    // Source: cc/input/compositor_input_interfaces.h:207.
-    // Rust gives the const overload a distinct name.
-    fn GetImplDeprecatedConst(&self) -> &H::LayerTreeHostImpl;
 }

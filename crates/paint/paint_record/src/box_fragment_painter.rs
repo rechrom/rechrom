@@ -5553,7 +5553,7 @@ fn LocalBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
         .expect("paint tree node has a fragment");
     let mut rect = ContentsBackgroundBorderRect(node);
     // Border-box painting has no ScrollTranslation property. Offset the
-    // enlarged scrolling background manually for the native fallback path.
+    // enlarged scrolling background manually for this local border-box path.
     rect.x -= fragment.paint.scroll_offset.x;
     rect.y -= fragment.paint.scroll_offset.y;
     rect

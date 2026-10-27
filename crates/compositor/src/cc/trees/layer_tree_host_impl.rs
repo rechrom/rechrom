@@ -1889,13 +1889,6 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     pub fn GetSettings(&self) -> &LayerTreeSettings {
         self.settings()
     }
-    // Source: cc/trees/layer_tree_host_impl.cc:570-576.
-    pub fn GetImplDeprecated(&self) -> &Self {
-        self
-    }
-    pub fn GetImplDeprecatedMut(&mut self) -> &mut Self {
-        self
-    }
     // Source: cc/trees/layer_tree_host_impl.cc:788-799.
     pub fn GatherAnimatedImageDriverState(&self) -> B::AnimatedImageDriverMap {
         GatherAnimatedImageDriverStateForTrees(

@@ -701,6 +701,7 @@ pub struct SelectorChecker<B: SelectorCheckerBackend> {
     part_names_: Option<Rc<B::PartNames>>,
     pseudo_argument_: AtomicString,
     pseudo_ident_list_: Vec<AtomicString>,
+    originating_pseudo_id_: PseudoId,
     scrollbar_part_: B::ScrollbarPart,
     mode_: Mode,
     is_ua_rule_: bool,
@@ -715,6 +716,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
             part_names_: None,
             pseudo_argument_: AtomicString::default(),
             pseudo_ident_list_: Vec::new(),
+            originating_pseudo_id_: PseudoId::kPseudoIdNone,
             scrollbar_part_: part,
             mode_: mode,
             is_ua_rule_: false,
@@ -753,6 +755,9 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
         checker.is_ua_rule_ = ua;
         checker
     }
+    pub fn SetOriginatingPseudoId(&mut self, id: PseudoId) {
+        self.originating_pseudo_id_ = id;
+    }
     pub fn ForStyleRequest(
         backend: Rc<B>,
         parts: Option<Rc<B::PartNames>>,
@@ -765,6 +770,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
             part_names_: parts,
             pseudo_argument_: backend.RequestPseudoArgument(request),
             pseudo_ident_list_: backend.RequestPseudoIdentList(request),
+            originating_pseudo_id_: PseudoId::kPseudoIdNone,
             scrollbar_part_: backend.RequestScrollbarPart(request),
             backend,
             mode_: mode,
@@ -1304,7 +1310,12 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
                 kSelectorFailsAllSiblings
             }
             kPseudoChild => {
-                if c.pseudo_id != PseudoId::kPseudoIdNone {
+                if self.originating_pseudo_id_ != PseudoId::kPseudoIdNone {
+                    if r.dynamic_pseudo != self.originating_pseudo_id_ {
+                        return kSelectorFailsCompletely;
+                    }
+                    next.previously_matched_pseudo_element = self.originating_pseudo_id_;
+                } else if c.pseudo_id != PseudoId::kPseudoIdNone {
                     next.pseudo_id = PseudoId::kPseudoIdNone;
                     next.pseudo_element = c.pseudo_element.clone();
                 } else {
@@ -2074,6 +2085,8 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
                     return b.ElementPseudoIdForStyling(e) == id;
                 }
                 c.previously_matched_pseudo_element == PseudoId::kPseudoIdNone
+                    || id == c.pseudo_id
+                        && c.previously_matched_pseudo_element == self.originating_pseudo_id_
             }
         }
     }

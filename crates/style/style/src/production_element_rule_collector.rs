@@ -276,8 +276,8 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         filter: &Self::SelectorFilter,
         parent: Option<&Self::Element>,
     ) -> bool {
-        // Quirks author rules use the existing compatibility branch until
-        // their parser context and folded identifiers are retained together.
+        // Quirks matching folds identifiers. Disable the ancestor fast reject
+        // until its hashes are built from the same folded representation.
         self.selector.document().GetCompatibilityMode()
             != dom::persistent_document::CompatibilityMode::kQuirks
             && filter.ParentStackIsConsistent(parent.copied())
@@ -438,14 +438,16 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
                 Rc<PersistentSelectorBackend<'static>>,
             >(self.selector.clone())
         };
-        SelectorChecker::ForPseudoRequestWithParts(
+        let mut checker = SelectorChecker::ForPseudoRequestWithParts(
             backend,
             parts.cloned().map(Rc::new),
             mode,
             request.argument.clone().unwrap_or_default(),
             request.ident_list.clone(),
             ua,
-        )
+        );
+        checker.SetOriginatingPseudoId(request.originating_id);
+        checker
     }
     fn NewCheckerMatchResult(&self) -> Self::CheckerMatchResult {
         CheckerMatchResult::default()
@@ -488,7 +490,7 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         // to set MatchResult::pseudo_element_styles without transferring the
         // pseudo declarations into the originating element.  Enabling logical
         // pseudo mode here made successful production resolution silently lose
-        // ::before/::after markers; compatibility fallback happened to mask it.
+        // ::before/::after markers; the former second matcher masked it.
         let matched = backend.WithLogicalPseudoMode(false, || checker.Match(&actual, result));
         backend.RememberSubjectFlags(*c.element, result.flags);
         matched

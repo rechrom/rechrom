@@ -74,9 +74,10 @@ fn minmax_parser_rejects_flex_minimum_and_nested_or_malformed_functions() {
 }
 
 #[test]
-fn minmax_shorthands_share_the_track_consumer_without_admitting_repeat() {
+fn minmax_shorthands_share_the_track_consumer() {
     for (property, value) in [
         (P::kGridTemplate, "minmax(10px,1fr) / minmax(0,40px)"),
+        (P::kGridTemplate, "subgrid / 1fr"),
         (P::kGrid, "auto-flow minmax(10px,auto) / minmax(0,1fr)"),
         (P::kGrid, "minmax(0,1fr) / auto-flow minmax(0,20px)"),
     ] {
@@ -88,7 +89,31 @@ fn minmax_shorthands_share_the_track_consumer_without_admitting_repeat() {
         )
         .unwrap_or_else(|e| panic!("{value}: {e:?}"));
     }
-    for value in ["repeat(2,minmax(0,1fr))", "fit-content(20px)", "subgrid"] {
+}
+
+#[test]
+fn subgrid_parser_and_native_style_retain_the_subgridded_axis() {
+    for value in [
+        "subgrid",
+        "subgrid [content-start] [content-end]",
+        "subgrid repeat(2, [a] [b])",
+        "subgrid repeat(auto-fill, [a] [b])",
+    ] {
+        let parsed = ParseProperty(
+            P::kGridTemplateColumns,
+            &foundation::String::from(value),
+            false,
+            CSSParserMode::kHTMLStandardMode,
+        )
+        .unwrap_or_else(|e| panic!("{value}: {e:?}"));
+        assert_eq!(parsed[0].Value().CssText().Utf8(), value);
+    }
+    for value in [
+        "subgrid 1fr",
+        "subgrid none",
+        "subgrid repeat(auto-fit, [a])",
+        "subgrid repeat(2, 1fr)",
+    ] {
         let error = ParseProperty(
             P::kGridTemplateColumns,
             &foundation::String::from(value),
@@ -96,9 +121,35 @@ fn minmax_shorthands_share_the_track_consumer_without_admitting_repeat() {
             CSSParserMode::kHTMLStandardMode,
         )
         .err()
-        .unwrap();
-        assert_eq!(error.kind, PropertyParseErrorKind::Unsupported, "{value}");
+        .unwrap_or_else(|| panic!("accepted {value}"));
+        assert_eq!(error.kind, PropertyParseErrorKind::Invalid, "{value}");
     }
+
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<div id=g style='display:grid;grid-template-columns:subgrid'></div>",
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine
+        .Update(&mut owner, &MediaValuesCachedData::default(), &[])
+        .unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let doc = owner.GetDocument();
+    let index = (0..doc.NodeCount())
+        .find(|&i| {
+            doc.Node(i)
+                .FindAttribute("id")
+                .is_some_and(|attribute| attribute.value == "g")
+        })
+        .unwrap();
+    let native = unsafe { &*doc.ResolvedStyleFor(index).unwrap().native_style.Get() };
+    let columns = unsafe { &*native.SpecifiedGridTemplateColumns().Get() };
+    assert!(columns.IsSubgriddedAxis());
+    assert!(columns.GetTrackList().IsSubgriddedAxis());
 }
 
 #[test]

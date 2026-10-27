@@ -1772,7 +1772,7 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSFunctionValue = CSSFunctionValue;
     type CSSImageSetValue = CSSImageSetValue;
     type CSSBracketedValueList = CSSBracketedValueList;
-    type CSSGridAutoRepeatValue = UnavailableCSSValue;
+    type CSSGridAutoRepeatValue = CSSGridAutoRepeatValue;
     type CSSGridIntegerRepeatValue = CSSGridIntegerRepeatValue;
     type CSSAxisValue = CSSAxisValue;
     // cpp: css_identifier_value.cc:55-83
@@ -2024,6 +2024,34 @@ pub fn grid_line_names(values: Vec<Rc<Value>>) -> Rc<Value> {
             list: CSSValueList::new(values, ListSeparator::Space),
         },
     )))
+}
+
+// cpp: css_grid_auto_repeat_value.{h,cc}. Auto-repeat retains its keyword
+// independently from the repeated typed entries so computed conversion can
+// select the native auto-fill/auto-fit repeater without inspecting CSS text.
+pub struct CSSGridAutoRepeatValue {
+    pub kind: CSSValueID,
+    pub list: CSSValueList,
+}
+impl CSSValueSubclass for CSSGridAutoRepeatValue {
+    fn CustomCSSText(&self) -> String {
+        String::from(
+            format!(
+                "repeat({}, {})",
+                GetCSSValueName(self.kind),
+                self.list.CustomCSSText().Utf8()
+            )
+            .as_str(),
+        )
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.list.Equals(&other.list)
+    }
+}
+impl CSSValueListSubclass<ProductionCSSValueDispatch> for CSSGridAutoRepeatValue {
+    fn AsValueList(&self) -> &CSSValueList {
+        &self.list
+    }
 }
 
 // cpp: css_grid_integer_repeat_value.{h,cc}. Keep the count expression typed

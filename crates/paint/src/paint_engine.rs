@@ -143,7 +143,7 @@ fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
     assert_eq!(old.items.len(), scrolling.items.len());
 }
 
-#[cfg(all(test, feature = "translation_in_progress"))]
+#[cfg(test)]
 #[test]
 fn document_image_mutation_retains_recording_and_targets_its_client() {
     use image_resource::{ContainerKey, DocumentImageFrame, IntrinsicSize, PaintImageContent};
@@ -255,20 +255,11 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         .expect("the committed immutable revision subsumes its queued invalidation");
     assert!(subsumed.damaged_records.is_empty());
 }
-
-#[cfg(feature = "translation_in_progress")]
-use std::cell::RefCell;
-#[cfg(feature = "translation_in_progress")]
-use std::collections::HashSet;
-
-#[cfg(feature = "translation_in_progress")]
 use crate::paint_context::PaintContext;
-#[cfg(feature = "translation_in_progress")]
 use crate::paint_layer_painter::PaintLayerPainter;
-#[cfg(feature = "translation_in_progress")]
 use crate::pre_paint_tree_walk::{PaintFragmentSource, PrePaintTreeWalk};
-
-#[cfg(feature = "translation_in_progress")]
+use std::cell::RefCell;
+use std::collections::HashSet;
 pub fn NativeFragmentClientRectsByNode(
     root: layoutng_assembly::layout_engine::NativePaintFragmentCursor<'_>,
 ) -> std::collections::HashMap<u64, Vec<PaintRect>> {
@@ -276,7 +267,6 @@ pub fn NativeFragmentClientRectsByNode(
 }
 
 // cpp: paint/paint_engine.cc:33-54
-#[cfg(feature = "translation_in_progress")]
 fn SameReplayResources(a: &PaintResources, b: &PaintResources) -> bool {
     if a.device_pixel_ratio != b.device_pixel_ratio
         || a.preferred_color_scheme != b.preferred_color_scheme
@@ -296,7 +286,6 @@ fn SameReplayResources(a: &PaintResources, b: &PaintResources) -> bool {
 }
 
 // cpp: paint/paint_engine.cc:56-91
-#[cfg(feature = "translation_in_progress")]
 fn ValidateReplayResources(resources: Option<&PaintResources>) {
     let Some(resources) = resources else {
         return;
@@ -342,7 +331,6 @@ fn ValidateReplayResources(resources: Option<&PaintResources>) {
 }
 
 // cpp: paint/paint_engine.cc:93-112
-#[cfg(feature = "translation_in_progress")]
 fn ValidateResourceCatalog(
     fragment: PaintFragmentSource<'_>,
     catalog: Option<&PaintResources>,
@@ -361,8 +349,6 @@ fn ValidateResourceCatalog(
         ValidateResourceCatalog(child, catalog, validated_catalogs);
     }
 }
-
-#[cfg(feature = "translation_in_progress")]
 fn RecordPaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: PaintFragmentSource<'_>,
@@ -669,7 +655,6 @@ fn RecordPaint(
 /// and PaintControllerPersistentData in Blink. Completed nodes retain local
 /// geometry plus the shared immutable Layout paint payload; no layout-root
 /// owner or borrowed snapshot is retained.
-#[cfg(feature = "translation_in_progress")]
 #[derive(Default)]
 pub struct PaintEngine {
     pre_paint: PrePaintTreeWalk,
@@ -679,8 +664,6 @@ pub struct PaintEngine {
     performance: crate::performance::PaintPerformanceSnapshot,
     animation_targeted_nodes: Vec<u64>,
 }
-
-#[cfg(feature = "translation_in_progress")]
 impl PaintEngine {
     pub fn new() -> Self {
         Self::default()

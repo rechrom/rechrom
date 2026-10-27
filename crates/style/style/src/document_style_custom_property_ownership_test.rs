@@ -23,7 +23,7 @@ fn update(engine: &mut DocumentStyleEngine, owner: &mut DOM) {
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 }

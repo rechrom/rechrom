@@ -19,7 +19,6 @@ use layoutng_assembly::internal::layout_input_types::{
 };
 use layoutng_assembly::layout_assembly::LayoutAssembly;
 pub use layoutng_assembly::layout_engine::LayoutEngine;
-#[cfg(any(feature = "source_paint", test))]
 use std::cell::RefCell;
 use std::io;
 use std::path::Path;
@@ -27,14 +26,12 @@ use std::path::Path;
 pub mod dom_mutation;
 mod font_catalog;
 mod font_session;
-#[cfg(feature = "source_paint")]
 mod form_submission;
 #[cfg(test)]
 mod incremental_style_tests;
 pub mod interaction_services;
 #[cfg(test)]
 mod native_test_thread;
-#[cfg(feature = "source_paint")]
 pub mod page;
 #[cfg(test)]
 mod page_parser_invalidation_tests;
@@ -44,7 +41,7 @@ mod page_resource_tests;
 mod page_tests;
 mod persistent_layout;
 pub mod style_services;
-#[cfg(all(test, feature = "source_paint"))]
+#[cfg(test)]
 mod svg_image_tests;
 pub mod system_font_provider;
 #[cfg(test)]
@@ -352,7 +349,6 @@ pub fn RenderUrl(url: &str, width: u32, height: u32) -> std::io::Result<Vec<u8>>
 }
 
 /// Navigate through the persistent Page and drain tasks as the source CLI does.
-#[cfg(feature = "source_paint")]
 pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<LayoutResultHandle> {
     let mut page = page::OpenUrl(
         url,
@@ -366,15 +362,6 @@ pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<LayoutResultH
         .ok_or_else(|| io::Error::other("page has no frame"))
 }
 
-#[cfg(not(feature = "source_paint"))]
-pub fn LayoutUrl(_: &str, _: u32, _: u32) -> io::Result<LayoutResultHandle> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "URL layout requires the source_paint Page lifecycle",
-    ))
-}
-
-#[cfg(feature = "source_paint")]
 pub fn BuildSourceDisplayListUrl(
     url: &str,
     width: u32,
@@ -420,7 +407,6 @@ mod tests {
         let mut shapes = 0;
         inspect(&root, &mut shapes);
         assert_eq!(shapes, 2);
-        #[cfg(feature = "source_paint")]
         {
             use paint::paint_engine::DisplayItemType;
             let list = paint::paint_engine::Paint(&root);
@@ -608,7 +594,6 @@ mod tests {
         let png = RenderUrl(&format!("http://127.0.0.1:{port}/start"), 400, 320).unwrap();
         server.join().unwrap();
         assert_eq!(png, REFERENCE);
-        #[cfg(feature = "source_paint")]
         {
             let fragments = LayoutStaticHtml(HTML, 400, 320).unwrap();
             let display_list = paint::paint_engine::Paint(&fragments);

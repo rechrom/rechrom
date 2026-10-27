@@ -3,9 +3,6 @@ name = "paint"
 version = "0.0.1"
 edition = "2021"
 
-[features]
-translation_in_progress = ["prepaint/translation_in_progress"]
-
 [dependencies]
 animation = { path = "../animation" }
 browser_tracing = { path = "../tracing" }

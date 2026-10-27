@@ -8,7 +8,7 @@ compositor_core = { package = "compositor", path = "../compositor" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
-paint = { path = "../paint", features = ["translation_in_progress"] }
+paint = { path = "../paint" }
 raster_commands = { path = "../raster_commands" }
 skia = { path = "../skia" }
 

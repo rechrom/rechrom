@@ -4,7 +4,7 @@
 #![allow(non_snake_case)]
 use crate::{
     css_primitive_value::UnitType,
-    css_value::CSSValuePayload,
+    css_value::{CSSValuePairSubclass, CSSValuePayload},
     media_queries::MediaValuesCachedData,
     production_css_value::Value,
     properties::{css_property::CSSProperty, longhand_dispatch::*},
@@ -600,7 +600,7 @@ fn ResolveGradientStops(
         .map(|(position, stop)| {
             let is_hint = stop.color.is_none();
             let color = if let Some(value) = &stop.color {
-                color_ui_application::ConvertStyleColorValue(id, value)?
+                ConvertColorForUsedScheme(id, b, value)?
             } else {
                 layoutng_style::css::style_color::StyleColor::from_color(Color::kTransparent)
             };
@@ -612,6 +612,25 @@ fn ResolveGradientStops(
             })
         })
         .collect()
+}
+
+fn ConvertColorForUsedScheme(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    value: &Value,
+) -> std::result::Result<StyleColor, LonghandApplicationError> {
+    let mut value = value;
+    while let CSSValuePayload::kLightDarkValuePairClass(pair) = value.Payload() {
+        let pair = pair.AsValuePair();
+        value = if b.UsedColorScheme()
+            == layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kLight
+        {
+            pair.first.as_ref()
+        } else {
+            pair.second.as_ref()
+        };
+    }
+    color_ui_application::ConvertStyleColorValue(id, value)
 }
 
 fn ResolveLinearGradient(
@@ -1228,20 +1247,9 @@ fn ConvertShadow(
         }
         _ => return Err(LonghandApplicationError::InvalidValue(id)),
     };
-    let color = match value.color.as_deref().map(Value::Payload) {
+    let color = match value.color.as_deref() {
         None => StyleColor::CurrentColor(),
-        Some(CSSValuePayload::kColorClass(color)) => StyleColor::from_color(color.0),
-        Some(CSSValuePayload::kIdentifierClass(keyword))
-            if keyword.0 == CSSValueID::kCurrentcolor =>
-        {
-            StyleColor::CurrentColor()
-        }
-        Some(CSSValuePayload::kIdentifierClass(keyword)) => {
-            let color = crate::production_css_value::NamedColor(keyword.0)
-                .ok_or(LonghandApplicationError::Unsupported(id))?;
-            StyleColor::from_color(color)
-        }
-        _ => return Err(LonghandApplicationError::Unsupported(id)),
+        Some(value) => ConvertColorForUsedScheme(id, b, value)?,
     };
     Ok(ShadowData::new(offset, blur, spread, style, color, 1.0))
 }

@@ -378,6 +378,11 @@ fn DefaultForcedSystemColor(keyword: CSSValueID, scheme: ColorScheme) -> Option<
             }
         }
         kGraytext | kInactivecaptiontext => 0xFF808080,
+        // cpp: LayoutTheme's platform defaults. Embeddings may replace these
+        // through ProductionSystemColorResolver; the generic translated path
+        // must still retain a typed color when no platform owner is installed.
+        kInternalSpellingErrorColor => 0xFFFF0000,
+        kInternalGrammarErrorColor => 0xFFC0C0C0,
         kLinktext => {
             if dark {
                 0xFF9E9EFF
@@ -481,7 +486,9 @@ fn AdjustProductionStyleForForcedColors(
         variant,
         FontVariantEmoji::kNormalVariantEmoji | FontVariantEmoji::kUnicodeVariantEmoji
     ) {
-        builder.SetFontVariantEmoji(FontVariantEmoji::kTextVariantEmoji);
+        let mut description = builder.GetFontDescription().clone();
+        description.SetVariantEmoji(FontVariantEmoji::kTextVariantEmoji);
+        production_style_builder::StageFontDescription(builder, &description);
     }
     if builder.InternalForcedColor().IsSystemColor() {
         let color = ResolveForcedSystemColor(builder.InternalForcedColor(), scheme, system_colors)
@@ -1016,7 +1023,7 @@ struct ProductionResolverCollector<'d> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ProductionRuleMatchingFallback {
+pub(crate) enum ProductionStyleResolutionFailure {
     Unsupported(&'static str),
     Cascade(ProductionCascadeFallback),
 }
@@ -1033,7 +1040,6 @@ pub(crate) struct ProductionResolverRuleSetInput {
     /// for DocumentStyleEngine's matched-rule invalidation signature; cascade
     /// order remains owned by ElementRuleCollector/MatchResult.
     pub sheet_base: usize,
-    pub routing: Option<Rc<crate::production_rule_matching::ProductionRuleRouting>>,
     /// TreeScope whose ScopedStyleResolver owns this CSSStyleSheet. `None` is
     /// the document scope for legacy direct callers.
     pub tree_scope_root: Option<usize>,
@@ -1045,7 +1051,6 @@ impl ProductionResolverRuleSetInput {
             rule_set,
             implicit_scope_trigger: None,
             sheet_base: 0,
-            routing: None,
             tree_scope_root: None,
         }
     }
@@ -1182,12 +1187,13 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     /// package-private collaborator bundle as the rest of the resolver state.
     pub html_quirks_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     pub forced_colors_user_agent_rules: Option<ProductionResolverRuleSetInput>,
+    pub pseudo_element_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     pub fullscreen_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     pub root_style: Option<Persistent<ComputedStyle>>,
     pub root_font_size: f32,
     pub color_scheme_settings: ColorSchemeSettings,
     /// Borrowed native system-color owner used only while resolving this
-    /// style. `None` selects Chromium's canonical LayoutTheme fallback.
+    /// style. `None` selects Chromium's canonical LayoutTheme failure.
     pub system_colors: ProductionSystemColorContext<'a>,
     /// Document::TextLinkColors custom text color. StyleResolver publishes
     /// the body's resolved current color here; UA quirks colors consume it.
@@ -1196,6 +1202,7 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     pub is_ensuring_style: bool,
     pub incremental_style: Option<ProductionIncrementalStyle<'a>>,
     pub pseudo_id: PseudoId,
+    pub originating_pseudo_id: PseudoId,
     pub pseudo_argument: Option<AtomicString>,
     pub search_text: SearchTextRequest,
     pub originating_style: Option<Persistent<ComputedStyle>>,
@@ -1244,6 +1251,7 @@ impl ProductionBaseStyleCollaborators<'_> {
         Self {
             html_quirks_user_agent_rules: None,
             forced_colors_user_agent_rules: None,
+            pseudo_element_user_agent_rules: None,
             fullscreen_user_agent_rules: None,
             root_style: None,
             root_font_size,
@@ -1254,6 +1262,7 @@ impl ProductionBaseStyleCollaborators<'_> {
             is_ensuring_style: false,
             incremental_style: None,
             pseudo_id: PseudoId::kPseudoIdNone,
+            originating_pseudo_id: PseudoId::kPseudoIdNone,
             pseudo_argument: None,
             search_text: SearchTextRequest::kNone,
             originating_style: None,
@@ -1281,7 +1290,7 @@ impl ProductionBaseStyleCollaborators<'_> {
 /// The part of Chromium's document-owned StyleResolver that is invariant
 /// while walking a style-update batch. Per-element state remains in
 /// `ProductionRuleMatchingHost`; UA RuleSetGroup construction and empty
-/// fallback owners are retained once for the whole traversal.
+/// failure owners are retained once for the whole traversal.
 pub(crate) struct ProductionResolverBatch {
     empty_rules: Rc<RuleSet<Backend>>,
     media_controls_rules: Rc<RuleSet<Backend>>,
@@ -1314,6 +1323,7 @@ struct ProductionRuleMatchingHost<'d> {
     svg_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     mathml_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     html_quirks_user_agent_rules: Option<ProductionResolverRuleSetInput>,
+    pseudo_element_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     fullscreen_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     empty_rules: Rc<RuleSet<Backend>>,
     /// cpp: css_default_style_sheets.cc:288-293,347-363.
@@ -1340,7 +1350,7 @@ struct ProductionRuleMatchingHost<'d> {
     variable_dependencies_complete: RefCell<bool>,
     base_style_metrics: RefCell<ProductionBaseStyleMetrics>,
     matched_signatures: RefCell<Vec<(usize, u32, u32)>>,
-    fallbacks: RefCell<Vec<ProductionRuleMatchingFallback>>,
+    failures: RefCell<Vec<ProductionStyleResolutionFailure>>,
     matched_properties_cache: ProductionMatchedPropertiesCache,
     // ComputedStyleBuilder stores StyleBaseData as a raw Oilpan Member. Keep
     // the production GC root alive until StateTakeStyle transfers that Member
@@ -1405,6 +1415,7 @@ impl<'d> ProductionRuleMatchingHost<'d> {
             svg_user_agent_rules,
             mathml_user_agent_rules,
             html_quirks_user_agent_rules: cascade.html_quirks_user_agent_rules.clone(),
+            pseudo_element_user_agent_rules: cascade.pseudo_element_user_agent_rules.clone(),
             fullscreen_user_agent_rules: cascade.fullscreen_user_agent_rules.clone(),
             empty_rules: resolver_batch.empty_rules.clone(),
             media_controls_rules: resolver_batch.media_controls_rules.clone(),
@@ -1422,17 +1433,17 @@ impl<'d> ProductionRuleMatchingHost<'d> {
             variable_dependencies_complete: RefCell::new(false),
             base_style_metrics: RefCell::new(ProductionBaseStyleMetrics::default()),
             matched_signatures: RefCell::new(Vec::new()),
-            fallbacks: RefCell::new(Vec::new()),
+            failures: RefCell::new(Vec::new()),
             matched_properties_cache,
             base_data_roots: RefCell::new(Vec::new()),
         }
     }
 
     fn unsupported(&self, operation: &'static str) {
-        let value = ProductionRuleMatchingFallback::Unsupported(operation);
-        let mut fallbacks = self.fallbacks.borrow_mut();
-        if !fallbacks.contains(&value) {
-            fallbacks.push(value);
+        let value = ProductionStyleResolutionFailure::Unsupported(operation);
+        let mut failures = self.failures.borrow_mut();
+        if !failures.contains(&value) {
+            failures.push(value);
         }
     }
 
@@ -1621,8 +1632,8 @@ impl<'d> ProductionRuleMatchingHost<'d> {
         ))
     }
 
-    fn take_fallbacks(&self) -> Vec<ProductionRuleMatchingFallback> {
-        std::mem::take(&mut *self.fallbacks.borrow_mut())
+    fn take_failures(&self) -> Vec<ProductionStyleResolutionFailure> {
+        std::mem::take(&mut *self.failures.borrow_mut())
     }
 
     fn style(style: &Persistent<ComputedStyle>) -> &ComputedStyle {
@@ -2551,34 +2562,6 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         let _transfer_trace = profile
             .then(|| browser_tracing::span("style_match", "StyleResolver.TransferMatchedRules"));
         let inputs = &collector.pending_inputs[..];
-        let incomplete_match = actual.MatchedRulesForTest().iter().any(|matched| {
-            let Some(input) = inputs.get(matched.StyleSheetIndex()) else {
-                return true;
-            };
-            let Some(routing) = input.routing.as_deref() else {
-                return false;
-            };
-            let fallback = routing.RequiresCompatibilityFallback(matched.Rule());
-            if fallback && std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
-                eprintln!(
-                    "translated compatibility rule node={} selector={}",
-                    collector.element.index,
-                    matched.Rule().SelectorsText().Utf8(),
-                );
-            }
-            fallback
-        });
-        if incomplete_match {
-            self.unsupported("base:compatibility-rule-match");
-        }
-        actual.RetainMatchedRules(|matched| {
-            inputs.get(matched.StyleSheetIndex()).is_some_and(|input| {
-                input
-                    .routing
-                    .as_deref()
-                    .is_none_or(|routing| routing.IsAuthoritativeRetainedRule(matched.Rule()))
-            })
-        });
         actual.SortAndTransferMatchedRules(origin, false, None);
         let transferred_property_sets =
             actual.MatchedResult().GetMatchedProperties().len() - first_result;
@@ -2642,6 +2625,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
             if let Some(input) = std::iter::once(&self.html_user_agent_rules)
                 .chain(self.html_quirks_user_agent_rules.iter())
                 .chain(self.forced_color_rules.iter())
+                .chain(self.pseudo_element_user_agent_rules.iter())
                 .chain(self.fullscreen_user_agent_rules.iter())
                 .chain(self.svg_user_agent_rules.iter())
                 .chain(self.mathml_user_agent_rules.iter())
@@ -2671,37 +2655,29 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         self.svg_user_agent_rules
             .as_ref()
             .map(|input| input.rule_set.clone())
-            .unwrap_or_else(|| {
-                self.unsupported("svg-user-agent-rules");
-                self.empty_rules.clone()
-            })
+            .unwrap_or_else(|| self.empty_rules.clone())
     }
     fn DefaultMathMLStyle(&self) -> Rc<Self::RuleSet> {
         self.mathml_user_agent_rules
             .as_ref()
             .map(|input| input.rule_set.clone())
-            .unwrap_or_else(|| {
-                self.unsupported("mathml-user-agent-rules");
-                self.empty_rules.clone()
-            })
+            .unwrap_or_else(|| self.empty_rules.clone())
     }
     fn DefaultFullscreenStyle(&self) -> Rc<Self::RuleSet> {
         self.fullscreen_user_agent_rules
             .as_ref()
             .map(|input| input.rule_set.clone())
-            .unwrap_or_else(|| {
-                self.unsupported("fullscreen-user-agent-rules");
-                self.empty_rules.clone()
-            })
+            .unwrap_or_else(|| self.empty_rules.clone())
     }
     fn DefaultHtmlQuirksStyle(&self) -> Rc<Self::RuleSet> {
         self.html_quirks_user_agent_rules
             .as_ref()
             .map(|input| input.rule_set.clone())
-            .unwrap_or_else(|| {
-                self.unsupported("quirks-user-agent-rules");
-                self.empty_rules.clone()
-            })
+            // Supplemental UA sheets are optional resources. Chromium's
+            // StyleResolver simply has no extra quirks declarations when the
+            // embedder did not install one; that is still a complete typed
+            // cascade, not a reason to abandon the element resolution.
+            .unwrap_or_else(|| self.empty_rules.clone())
     }
     fn DefaultViewSourceStyle(&self) -> Rc<Self::RuleSet> {
         self.unsupported("view-source-user-agent-rules");
@@ -2711,17 +2687,16 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         self.forced_color_rules
             .as_ref()
             .map(|input| input.rule_set.clone())
-            .unwrap_or_else(|| {
-                self.unsupported("forced-colors-user-agent-rules");
-                self.empty_rules.clone()
-            })
+            .unwrap_or_else(|| self.empty_rules.clone())
     }
     fn DefaultJSONDocumentStyle(&self) -> Rc<Self::RuleSet> {
         self.unsupported("json-user-agent-rules");
         self.empty_rules.clone()
     }
     fn DefaultPseudoElementStyleOrNull(&self) -> Option<Rc<Self::RuleSet>> {
-        None
+        self.pseudo_element_user_agent_rules
+            .as_ref()
+            .map(|input| input.rule_set.clone())
     }
     fn DefaultForcedColorsMediaControlsStyle(&self) -> Rc<Self::RuleSet> {
         self.forced_colors_media_controls_rules.clone()
@@ -2902,7 +2877,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn HasCustomStyleCallbacks(&self, element: &Self::Element) -> bool {
         // cpp: SVGElement, HTMLFormControlElement, HTMLFrameOwnerElement,
         // HTMLPlugInElement and the specialized HTML constructors set this bit.
-        // UA implementation elements and image fallback also have callbacks.
+        // UA implementation elements and image failure also have callbacks.
         let node = self.document.Node(element.index);
         node.Namespace() == DOMNamespace::kSVG
             || self.document.ShadowPseudoId(element.index).is_some()
@@ -3005,6 +2980,11 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn NewStyleRequest(&self) -> Self::StyleRequest {
         ProductionStyleRequest::new(if self.cascade.pseudo_id == PseudoId::kPseudoIdNone {
             ProductionPseudoRequest::Element()
+        } else if self.cascade.originating_pseudo_id != PseudoId::kPseudoIdNone {
+            ProductionPseudoRequest::NestedPseudo(
+                self.cascade.originating_pseudo_id,
+                self.cascade.pseudo_id,
+            )
         } else {
             let mut request = ProductionPseudoRequest::Pseudo(
                 self.cascade.pseudo_id,
@@ -3302,10 +3282,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                         .borrow_mut()
                         .incremental_style_updates += 1;
                 }
-                Err(errors) => self.fallbacks.borrow_mut().extend(
+                Err(errors) => self.failures.borrow_mut().extend(
                     errors
                         .into_iter()
-                        .map(ProductionRuleMatchingFallback::Cascade),
+                        .map(ProductionStyleResolutionFailure::Cascade),
                 ),
             }
         }
@@ -3840,6 +3820,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 | PseudoId::kPseudoIdAfter
                 | PseudoId::kPseudoIdFirstLetter
                 | PseudoId::kPseudoIdPlaceholder
+                | PseudoId::kPseudoIdMarker
                 | PseudoId::kPseudoIdSelection
                 | PseudoId::kPseudoIdSearchText
                 | PseudoId::kPseudoIdTargetText
@@ -4092,12 +4073,12 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 // StateTakeStyle instead of caching this intermediate value.
                 state.output = None;
             }
-            Err(cascade_fallbacks) => {
-                let mut fallbacks = self.fallbacks.borrow_mut();
-                for fallback in cascade_fallbacks {
-                    let fallback = ProductionRuleMatchingFallback::Cascade(fallback);
-                    if !fallbacks.contains(&fallback) {
-                        fallbacks.push(fallback);
+            Err(cascade_failures) => {
+                let mut failures = self.failures.borrow_mut();
+                for failure in cascade_failures {
+                    let failure = ProductionStyleResolutionFailure::Cascade(failure);
+                    if !failures.contains(&failure) {
+                        failures.push(failure);
                     }
                 }
             }
@@ -4743,11 +4724,11 @@ fn NamespaceURIFor(namespace: DOMNamespace) -> AtomicString {
 /// never consume a partially matched result as if it were complete.
 pub(crate) fn MatchAllRulesForElement(
     inputs: ProductionRuleMatchingInputs<'_>,
-) -> Result<MatchResult, Vec<ProductionRuleMatchingFallback>> {
+) -> Result<MatchResult, Vec<ProductionStyleResolutionFailure>> {
     if inputs.element_index >= inputs.document.NodeCount()
         || inputs.document.Node(inputs.element_index).Type() != DOMNodeType::kElement
     {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "non-element-match-target",
         )]);
     }
@@ -4808,17 +4789,17 @@ pub(crate) fn MatchAllRulesForElement(
         },
     };
     StyleResolver::new(&element, &host).MatchAllRulesForProduction(&state, &mut collector, false);
-    let fallbacks = host.take_fallbacks();
-    if fallbacks.is_empty() {
+    let failures = host.take_failures();
+    if failures.is_empty() {
         Ok(collector.result.borrow().clone())
     } else {
-        Err(fallbacks)
+        Err(failures)
     }
 }
 
 pub(crate) fn ApplyBaseStyleForElement(
     inputs: ProductionBaseStyleInputs<'_>,
-) -> Result<ProductionBaseStyleOutput, Vec<ProductionRuleMatchingFallback>> {
+) -> Result<ProductionBaseStyleOutput, Vec<ProductionStyleResolutionFailure>> {
     let ProductionBaseStyleInputs {
         matching: inputs,
         parent,
@@ -4827,7 +4808,7 @@ pub(crate) fn ApplyBaseStyleForElement(
     if inputs.element_index >= inputs.document.NodeCount()
         || inputs.document.Node(inputs.element_index).Type() != DOMNodeType::kElement
     {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "non-element-style-target",
         )]);
     }
@@ -4844,18 +4825,13 @@ pub(crate) fn ApplyBaseStyleForElement(
             .map_or(0, |p| p.values.len()) as f64,
     );
     let node = inputs.document.Node(inputs.element_index);
-    if node.Namespace() == DOMNamespace::kNone {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
-            "base:unsupported-element-namespace",
-        )]);
-    }
     if parent.is_none()
         && !collaborators.is_document_element
         && !layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(
             collaborators.pseudo_id,
         )
     {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "base:missing-parent-owner",
         )]);
     }
@@ -4869,7 +4845,7 @@ pub(crate) fn ApplyBaseStyleForElement(
             || (!inputs.document.TransitionStyles(node.Id()).is_empty()
                 && collaborators.transitions.is_none()))
     {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "base:missing-interpolation-owner",
         )]);
     }
@@ -4886,6 +4862,7 @@ pub(crate) fn ApplyBaseStyleForElement(
                 | PseudoId::kPseudoIdAfter
                 | PseudoId::kPseudoIdFirstLetter
                 | PseudoId::kPseudoIdPlaceholder
+                | PseudoId::kPseudoIdMarker
                 | PseudoId::kPseudoIdSelection
                 | PseudoId::kPseudoIdSearchText
                 | PseudoId::kPseudoIdTargetText
@@ -4894,7 +4871,7 @@ pub(crate) fn ApplyBaseStyleForElement(
                 | PseudoId::kPseudoIdGrammarError
         )
     {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "base:unsupported-pseudo-request",
         )]);
     }
@@ -4902,7 +4879,7 @@ pub(crate) fn ApplyBaseStyleForElement(
         collaborators.pseudo_id,
     ) && collaborators.originating_style.is_none()
     {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "base:missing-highlight-originating-style",
         )]);
     }
@@ -4951,17 +4928,17 @@ pub(crate) fn ApplyBaseStyleForElement(
             metrics.candidates_considered as f64,
         );
     }
-    let fallbacks = host.take_fallbacks();
-    trace.set("fallbacks", fallbacks.len() as f64);
-    if !fallbacks.is_empty() {
-        return Err(fallbacks);
+    let failures = host.take_failures();
+    trace.set("failures", failures.len() as f64);
+    if !failures.is_empty() {
+        return Err(failures);
     }
     let custom_properties = host
         .cascade_custom_output
         .borrow_mut()
         .take()
         .ok_or_else(|| {
-            vec![ProductionRuleMatchingFallback::Unsupported(
+            vec![ProductionStyleResolutionFailure::Unsupported(
                 "base:missing-custom-properties-output",
             )]
         })?;
@@ -4993,7 +4970,7 @@ pub(crate) fn ApplyBaseStyleForElement(
 /// reuse but still participates in the matched-properties cache.
 pub(crate) fn ResolveBaseStyleForElement(
     inputs: ProductionResolveBaseStyleInputs<'_>,
-) -> Result<ProductionBaseStyleOutput, Vec<ProductionRuleMatchingFallback>> {
+) -> Result<ProductionBaseStyleOutput, Vec<ProductionStyleResolutionFailure>> {
     let ProductionResolveBaseStyleInputs {
         matching: inputs,
         parent,
@@ -5003,13 +4980,13 @@ pub(crate) fn ResolveBaseStyleForElement(
     if inputs.element_index >= inputs.document.NodeCount()
         || inputs.document.Node(inputs.element_index).Type() != DOMNodeType::kElement
     {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "non-element-style-target",
         )]);
     }
     let node = inputs.document.Node(inputs.element_index);
     if node.Namespace() != DOMNamespace::kHTML {
-        return Err(vec![ProductionRuleMatchingFallback::Unsupported(
+        return Err(vec![ProductionStyleResolutionFailure::Unsupported(
             "base:non-html-element",
         )]);
     }
@@ -5038,16 +5015,16 @@ pub(crate) fn ResolveBaseStyleForElement(
         Some(&layout_parent),
         &context,
     );
-    let fallbacks = host.take_fallbacks();
-    if !fallbacks.is_empty() {
-        return Err(fallbacks);
+    let failures = host.take_failures();
+    if !failures.is_empty() {
+        return Err(failures);
     }
     let custom_properties = host
         .cascade_custom_output
         .borrow_mut()
         .take()
         .ok_or_else(|| {
-            vec![ProductionRuleMatchingFallback::Unsupported(
+            vec![ProductionStyleResolutionFailure::Unsupported(
                 "base:missing-custom-properties-output",
             )]
         })?;
@@ -5075,7 +5052,7 @@ pub(crate) fn ResolveBaseStyleForElement(
 /// source lifecycle as document-owned resolution.
 pub(crate) fn ApplyBaseStyleNoCacheForElement(
     inputs: ProductionBaseStyleInputs<'_>,
-) -> Result<ProductionBaseStyleOutput, Vec<ProductionRuleMatchingFallback>> {
+) -> Result<ProductionBaseStyleOutput, Vec<ProductionStyleResolutionFailure>> {
     ApplyBaseStyleForElement(inputs)
 }
 
@@ -5237,7 +5214,7 @@ mod tests {
             parent: Some(parent),
             collaborators,
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected quirks-color fallback: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected quirks-color failure: {failures:?}"));
         assert_eq!(
             ProductionRuleMatchingHost::style(actual.style.as_ref()).GetCurrentColor(None),
             expected
@@ -5599,8 +5576,8 @@ mod tests {
             parent: Some(initial),
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
         })
-        .unwrap_or_else(|fallbacks| {
-            panic!("retained text-field decoration container must stay translated: {fallbacks:?}")
+        .unwrap_or_else(|failures| {
+            panic!("retained text-field decoration container must stay translated: {failures:?}")
         });
         let actual = unsafe { &*output.style.Get() };
         assert_eq!(actual.Display(), EDisplay::kFlex);
@@ -5921,7 +5898,7 @@ mod tests {
         assert!(state.builder.HasAuthorBorder());
         assert!(state.builder.HasAuthorBorderRadius());
         assert!(state.builder.HasAuthorHighlightColors());
-        assert!(host.take_fallbacks().is_empty());
+        assert!(host.take_failures().is_empty());
     }
 
     #[test]
@@ -5953,7 +5930,7 @@ mod tests {
                 parent: Some(parent.clone()),
                 collaborators,
             })
-            .unwrap_or_else(|fallbacks| panic!("unexpected cache fallback: {fallbacks:?}"))
+            .unwrap_or_else(|failures| panic!("unexpected cache failure: {failures:?}"))
         };
 
         let first_output = resolve(first, None);
@@ -6098,7 +6075,7 @@ mod tests {
             mathml_user_agent_rules: None,
             author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
         })
-        .expect("ordinary document matching must not use a compatibility fallback");
+        .expect("ordinary document matching must not use a compatibility failure");
         assert_eq!(matched.GetMatchedProperties().len(), 1);
 
         let base = InitialStyleForDocument(&media, ColorSchemeSettings::default());
@@ -6354,7 +6331,7 @@ mod tests {
             parent,
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected base-style fallbacks: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected base-style failures: {failures:?}"));
         let actual = ProductionRuleMatchingHost::style(actual.as_ref());
         assert_eq!(actual.Display(), expected_values.0);
         assert_eq!(actual.GetPosition(), expected_values.1);
@@ -6403,8 +6380,8 @@ mod tests {
                 parent: Some(originating.clone()),
                 collaborators,
             })
-            .unwrap_or_else(|fallbacks| {
-                panic!("unexpected {pseudo_id:?} base-style fallbacks: {fallbacks:?}")
+            .unwrap_or_else(|failures| {
+                panic!("unexpected {pseudo_id:?} base-style failures: {failures:?}")
             });
             let actual = ProductionRuleMatchingHost::style(actual.as_ref());
             assert_eq!(actual.StyleType(), pseudo_id);
@@ -6448,7 +6425,7 @@ mod tests {
                 parent: Some(originating.clone()),
                 collaborators,
             })
-            .unwrap_or_else(|fallbacks| panic!("unexpected pseudo fallbacks: {fallbacks:?}"))
+            .unwrap_or_else(|failures| panic!("unexpected pseudo failures: {failures:?}"))
         };
         let initial = resolve(owner.GetDocument());
         let initial = ProductionRuleMatchingHost::style(initial.as_ref());
@@ -6494,7 +6471,7 @@ mod tests {
             parent: Some(originating.clone()),
             collaborators,
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected placeholder fallbacks: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected placeholder failures: {failures:?}"));
         let actual = ProductionRuleMatchingHost::style(actual.as_ref());
         assert_eq!(actual.StyleType(), PseudoId::kPseudoIdPlaceholder);
         assert_eq!(actual.GetFontDescription().ComputedSize(), 30.0);
@@ -6578,24 +6555,21 @@ mod tests {
                 mathml_user_agent_rules: None,
                 author_rule_sets: Rc::new(Vec::new()),
             })
-            .unwrap_or_else(|fallbacks| {
-                panic!("media UA-shadow rule-set selection fell back: {fallbacks:?}")
+            .unwrap_or_else(|failures| {
+                panic!("media UA-shadow rule-set selection fell back: {failures:?}")
             });
         }
     }
 
     #[test]
-    fn non_html_base_style_reaches_specialized_ua_owner_boundary() {
+    fn non_html_base_style_accepts_absent_optional_ua_resources() {
         let _heap = foundation::LayoutHeapScope::new();
         let media = MediaValuesCachedData::default();
         let owner = html::html_parser::ParseHTML(
             "<!doctype html><svg id=svg></svg><math id=math><mi>x</mi></math>",
         );
         let parent = InitialStyleForDocument(&media, ColorSchemeSettings::default());
-        for (id, expected) in [
-            ("svg", "svg-user-agent-rules"),
-            ("math", "mathml-user-agent-rules"),
-        ] {
+        for id in ["svg", "math"] {
             let target = element_with_id(owner.GetDocument(), id);
             let result = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
                 matching: ProductionRuleMatchingInputs {
@@ -6610,19 +6584,9 @@ mod tests {
                 parent: Some(parent.clone()),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
             });
-            let fallbacks = match result {
-                Ok(_) => panic!("missing specialized UA resources must keep the trial atomic"),
-                Err(fallbacks) => fallbacks,
-            };
-            assert_eq!(
-                fallbacks,
-                vec![ProductionRuleMatchingFallback::Unsupported(expected)]
-            );
-            assert!(
-                !fallbacks.contains(&ProductionRuleMatchingFallback::Unsupported(
-                    "base:unsupported-element-namespace"
-                ))
-            );
+            result.unwrap_or_else(|failures| {
+                panic!("absent optional {id} UA resources rejected typed cascade: {failures:?}")
+            });
         }
     }
 
@@ -6663,7 +6627,7 @@ mod tests {
             parent: Some(parent),
             collaborators,
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected collaborator fallback: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected collaborator failure: {failures:?}"));
         assert_eq!(
             output
                 .custom_properties
@@ -6728,7 +6692,7 @@ mod tests {
             parent: Some(parent),
             collaborators,
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected interpolation fallback: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected interpolation failure: {failures:?}"));
         let actual = ProductionRuleMatchingHost::style(actual.as_ref());
         assert_eq!(actual.Width().Pixels(), 80.0);
         assert_eq!(actual.Opacity(), 0.2, "author !important beats animation");
@@ -6789,7 +6753,7 @@ mod tests {
             parent: Some(parent),
             collaborators,
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected interpolation fallback: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected interpolation failure: {failures:?}"));
         let actual = ProductionRuleMatchingHost::style(actual.as_ref());
         assert!(actual.AllowsZIndex());
         assert!(actual.HasAutoZIndex());
@@ -6834,7 +6798,7 @@ mod tests {
             layout_parent,
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected ResolveBaseStyle fallback: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected ResolveBaseStyle failure: {failures:?}"));
 
         let actual = ProductionRuleMatchingHost::style(output.as_ref());
         assert_eq!(
@@ -6880,7 +6844,7 @@ mod tests {
             layout_parent: parent,
             collaborators,
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected forced-colors fallback: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected forced-colors failure: {failures:?}"));
         let style = ProductionRuleMatchingHost::style(output.as_ref());
 
         assert!(style.InForcedColorsMode());
@@ -6947,7 +6911,7 @@ mod tests {
             parent: None,
             collaborators,
         })
-        .unwrap_or_else(|fallbacks| panic!("unexpected document-element fallback: {fallbacks:?}"));
+        .unwrap_or_else(|failures| panic!("unexpected document-element failure: {failures:?}"));
         let actual = ProductionRuleMatchingHost::style(actual.as_ref());
         assert_eq!(actual.GetFontDescription().ComputedSize(), 20.0);
         assert_eq!(actual.Width().Pixels(), 32.0);

@@ -10,5 +10,5 @@ cssom = { path = "../cssom" }
 dom = { path = "../dom" }
 html = { path = "../html" }
 image_resource = { path = "../image_resource" }
-layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
-paint = { path = "../paint", features = ["translation_in_progress"] }
+layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
+paint = { path = "../paint" }

@@ -57,7 +57,7 @@ fn handle(engine: &DocumentStyleEngine, owner: &DOM, element: usize) -> Rc<usize
 fn update(engine: &mut DocumentStyleEngine, owner: &mut DOM) {
     engine.Update(owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 }
 
 #[test]
@@ -367,25 +367,29 @@ fn canonical_candidate_signatures_preserve_cascade_and_diagnostic_fallbacks() {
             .GetDocumentMut()
             .SetTextContent(rules, ".absent{width:2px}".into());
         update(&mut changing_engine, &mut changing);
-        assert!(
-            !changing_engine.matches[&empty].complete,
-            "unresolved upgrade: {global}"
+        let fully_recalculated = !global.starts_with("@media print");
+        assert_eq!(
+            changing_engine.matches[&empty].complete, fully_recalculated,
+            "replacement signature completeness: {global}"
         );
         let sheets_owner = changing_engine.active_sheets.clone();
         let sheets = sheets_owner
             .iter()
             .map(|(sheet, origin)| (sheet.as_ref(), *origin))
             .collect::<Vec<_>>();
-        assert!(changing_engine.CandidateRequiresRecalc(
-            changing.GetDocument(),
-            empty,
-            &media(),
-            &sheets,
-            None,
-            false,
-            true,
-            true
-        ));
+        assert_eq!(
+            changing_engine.CandidateRequiresRecalc(
+                changing.GetDocument(),
+                empty,
+                &media(),
+                &sheets,
+                None,
+                false,
+                true,
+                true
+            ),
+            !fully_recalculated
+        );
         attribute(&mut changing, empty, "class", "unrelated");
         update(&mut changing_engine, &mut changing);
         assert!(changing_engine.matches[&empty].complete);
@@ -423,13 +427,8 @@ fn canonical_candidate_signatures_preserve_cascade_and_diagnostic_fallbacks() {
         .iter()
         .map(|(sheet, origin)| (sheet.as_ref(), *origin))
         .collect::<Vec<_>>();
-    assert!(
-        !engine
-            .rule_candidate_index
-            .as_ref()
-            .unwrap()
-            .matching_may_report_diagnostics
-    );
+    // Fully typed UA sheets do not construct the legacy candidate index.
+    assert!(engine.rule_candidate_index.is_none());
     engine.diagnostics.clear();
     let baseline = engine.MatchingRules(
         owner.GetDocument(),
@@ -440,7 +439,7 @@ fn canonical_candidate_signatures_preserve_cascade_and_diagnostic_fallbacks() {
         None,
         None,
     );
-    assert!(engine.diagnostics.is_empty());
+    assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
     assert!(!engine.matches[&target].Equivalent(&RetainedRuleSignature::new(baseline, false)));
     assert!(engine.CandidateRequiresRecalc(
         owner.GetDocument(),

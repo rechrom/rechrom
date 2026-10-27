@@ -902,15 +902,11 @@ struct ProjectedRuleDeclaration {
 }
 
 /// Result of looking up the declaration vector for one projected CSSOM rule.
-///
-/// `RequiresLegacyFallback` means that the production parser reported an
-/// unsupported operation inside that rule's source range. Callers that still
-/// surface the legacy `DocumentStyleError` property/operation details must use
-/// their legacy declaration path for that rule.
+/// Unsupported declarations remain diagnostics on the typed sheet while the
+/// declarations accepted in the same rule continue through the native cascade.
 #[derive(Clone)]
 pub enum ProjectedRuleDeclarations {
     Typed(Rc<Vec<PropertyValue>>),
-    RequiresLegacyFallback,
 }
 
 pub(crate) enum ProductionProjectionRule<'a> {
@@ -997,7 +993,6 @@ impl ProductionStyleSheet {
     ) -> Option<Rc<Vec<PropertyValue>>> {
         match self.ProjectedRuleDeclarationsAt(rule_index)? {
             ProjectedRuleDeclarations::Typed(properties) => Some(properties),
-            ProjectedRuleDeclarations::RequiresLegacyFallback => None,
         }
     }
 
@@ -1012,31 +1007,15 @@ impl ProductionStyleSheet {
         rule_index: usize,
     ) -> Option<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>> {
         let entry = self.projected_rule_declarations.get(rule_index)?;
-        if self.diagnostics.iter().any(|diagnostic| {
-            diagnostic.kind == DiagnosticKind::Unsupported
-                && diagnostic.offset >= entry.source_range.header_start
-                && diagnostic.offset <= entry.source_range.body_end
-        }) {
-            return None;
-        }
         Some(entry.retained.clone())
     }
 
-    /// Distinguishes an out-of-range index from a rule that must temporarily
-    /// use the legacy declaration path because its source range contains an
-    /// unsupported production-parser diagnostic.
+    /// Distinguishes an out-of-range index from a retained typed rule.
     pub fn ProjectedRuleDeclarationsAt(
         &self,
         rule_index: usize,
     ) -> Option<ProjectedRuleDeclarations> {
         let entry = self.projected_rule_declarations.get(rule_index)?;
-        if self.diagnostics.iter().any(|diagnostic| {
-            diagnostic.kind == DiagnosticKind::Unsupported
-                && diagnostic.offset >= entry.source_range.header_start
-                && diagnostic.offset <= entry.source_range.body_end
-        }) {
-            return Some(ProjectedRuleDeclarations::RequiresLegacyFallback);
-        }
         Some(ProjectedRuleDeclarations::Typed(entry.properties.clone()))
     }
 
@@ -2225,11 +2204,11 @@ fn ParseFontFaceDescriptor(
             values::identifier(keyword)
         }
         D::FontStretch => {
-            let parsed = crate::parser::production_property_parser::ParsePropertyWithContext(
+            let parsed = crate::parser::production_property_parser::ParseProperty(
                 CSSPropertyID::kFontStretch,
                 text,
                 false,
-                context,
+                CSSParserMode::kCSSFontFaceRuleMode,
             )
             .map_err(|error| match error.kind {
                 crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => {
@@ -4757,9 +4736,9 @@ mod tests {
         });
         assert!(matches!(
             sheet.ProjectedRuleDeclarationsAt(2),
-            Some(ProjectedRuleDeclarations::RequiresLegacyFallback)
+            Some(ProjectedRuleDeclarations::Typed(_))
         ));
-        assert!(sheet.TypedDeclarationsForProjectedRule(2).is_none());
+        assert!(sheet.TypedDeclarationsForProjectedRule(2).is_some());
         assert!(sheet.TypedDeclarationsForProjectedRule(1).is_some());
     }
 

@@ -20,7 +20,7 @@ compositor_resource = { path = "compositor_resource" }
 compositor_scheduler = { path = "compositor_scheduler" }
 compositor_input = { path = "compositor_input" }
 compositor_animation = { path = "compositor_animation" }
-paint = { path = "../paint", features = ["translation_in_progress"] }
+paint = { path = "../paint" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 skia = { path = "../skia" }
 serde_json = "1"

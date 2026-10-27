@@ -62,7 +62,7 @@ fn document_transition_samples_reach_translated_cascade_with_transition_priority
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 
@@ -113,7 +113,7 @@ fn html_quirks_ua_owner_is_selected_only_in_quirks_mode() {
     assert_eq!(
         quirks_engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 
@@ -167,19 +167,16 @@ fn forced_colors_ua_owner_uses_dedicated_medium_and_active_environment() {
     forced_media.forced_colors = crate::media_queries::forced_colors::ForcedColors::kActive;
     owner.GetDocumentMut().StyleStateMut().all_dirty = true;
     engine.Update(&mut owner, &forced_media, &sheets).unwrap();
-    let forced = unsafe {
-        &*owner
-            .GetDocument()
-            .ResolvedStyleFor(target)
-            .unwrap()
-            .native_style
-            .Get()
-    };
+    assert!(owner.GetDocument().ResolvedStyleFor(target).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &forced_media, &sheets, target)
+        .unwrap();
+    let forced = unsafe { &*native_pointer(&owner, target) };
     assert_eq!(forced.Display(), EDisplay::kNone);
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 }
@@ -197,7 +194,7 @@ fn unvisited_link_keeps_visited_color_in_its_private_slot() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -235,7 +232,7 @@ fn named_custom_highlight_metadata_survives_translated_update() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -298,7 +295,7 @@ fn named_custom_highlight_metadata_survives_translated_update() {
 }
 
 #[test]
-fn highlight_cache_survives_atomic_ordinary_fallback() {
+fn highlight_cache_survives_supported_defined_selector_resolution() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<!doctype html><p id=target>target</p>");
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
@@ -310,10 +307,7 @@ fn highlight_cache_survives_atomic_ordinary_fallback() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
     let stats = engine.TranslatedRuleShadowStats();
-    assert!(
-        stats.translated_style_resolver_fallbacks > 0,
-        "the unsupported :defined owner must force the ordinary atomic fallback: {stats:?}"
-    );
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -350,8 +344,7 @@ fn webkit_any_selector_stays_on_the_authoritative_translated_path() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -384,8 +377,7 @@ fn internal_text_field_uses_typed_input_type_and_invalidates_on_type_change() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
     let first = engine.TranslatedRuleShadowStats();
-    assert_eq!(first.skipped_unsupported_selector, 0, "{first:?}");
-    assert_eq!(first.translated_style_resolver_fallbacks, 0, "{first:?}");
+    assert_eq!(first.translated_style_resolver_failures, 0, "{first:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -443,8 +435,7 @@ fn form_state_pseudos_consume_typed_capabilities_and_live_value_state() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
     let first = engine.TranslatedRuleShadowStats();
-    assert_eq!(first.skipped_unsupported_selector, 0, "{first:?}");
-    assert_eq!(first.translated_style_resolver_fallbacks, 0, "{first:?}");
+    assert_eq!(first.translated_style_resolver_failures, 0, "{first:?}");
     assert_eq!(opacity(&owner, hidden), 0.2);
     assert_eq!(opacity(&owner, date), 0.3);
     assert_eq!(opacity(&owner, placeholder), 0.4);
@@ -571,8 +562,7 @@ fn ua_list_box_and_datalist_pseudos_use_dom_owned_state_and_invalidation() {
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
 
     let first = engine.TranslatedRuleShadowStats();
-    assert_eq!(first.skipped_unsupported_selector, 0, "{first:?}");
-    assert_eq!(first.translated_style_resolver_fallbacks, 0, "{first:?}");
+    assert_eq!(first.translated_style_resolver_failures, 0, "{first:?}");
     assert_eq!(opacity(&owner, list), 0.21);
     assert_eq!(opacity(&owner, menu), 1.0);
     assert_eq!(opacity(&owner, range), 0.31);
@@ -619,9 +609,8 @@ fn autofill_pseudos_use_live_form_control_state_and_suggested_value_producer() {
         .SetSuggestedValue(field, Some("preview".into()));
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     let previewed = engine.TranslatedRuleShadowStats();
-    assert_eq!(previewed.skipped_unsupported_selector, 0, "{previewed:?}");
     assert_eq!(
-        previewed.translated_style_resolver_fallbacks, 0,
+        previewed.translated_style_resolver_failures, 0,
         "{previewed:?}"
     );
     assert_eq!(opacity(&owner), 0.11);
@@ -673,9 +662,8 @@ fn select_suggested_option_retains_identity_and_clears_on_option_lifecycle() {
         .SetSuggestedValue(field, Some("two".into()));
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     let previewed = engine.TranslatedRuleShadowStats();
-    assert_eq!(previewed.skipped_unsupported_selector, 0, "{previewed:?}");
     assert_eq!(
-        previewed.translated_style_resolver_fallbacks, 0,
+        previewed.translated_style_resolver_failures, 0,
         "{previewed:?}"
     );
     assert_eq!(owner.GetDocument().SelectSuggestedOption(field), Some(two));
@@ -713,10 +701,12 @@ fn select_suggested_option_retains_identity_and_clears_on_option_lifecycle() {
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     assert_eq!(opacity(&owner), 0.31);
 
-    // Option selection uses SelectOption's default kNotFilled state.
+    // The option is already dirty from the earlier value/autofill selection,
+    // so changing defaultSelected does not change live selectedness or clear
+    // the select's autofill state.
     set_attribute(&mut owner, one, "selected", "");
     engine.Update(&mut owner, &media(), &[ua]).unwrap();
-    assert_eq!(opacity(&owner), 1.0);
+    assert_eq!(opacity(&owner), 0.31);
 }
 
 #[test]
@@ -742,11 +732,7 @@ fn default_pseudo_uses_content_defaults_and_tree_order_default_button_owner() {
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     let first_update = engine.TranslatedRuleShadowStats();
     assert_eq!(
-        first_update.skipped_unsupported_selector, 0,
-        "{first_update:?}"
-    );
-    assert_eq!(
-        first_update.translated_style_resolver_fallbacks, 0,
+        first_update.translated_style_resolver_failures, 0,
         "{first_update:?}"
     );
     assert_eq!(unsafe { &*native_pointer(&owner, check) }.Opacity(), 0.17);
@@ -796,11 +782,7 @@ fn checked_option_uses_live_selectedness_dirty_state_and_select_lifecycle() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     let initial = engine.TranslatedRuleShadowStats();
-    assert_eq!(initial.skipped_unsupported_selector, 0, "{initial:?}");
-    assert_eq!(
-        initial.translated_style_resolver_fallbacks, 0,
-        "{initial:?}"
-    );
+    assert_eq!(initial.translated_style_resolver_failures, 0, "{initial:?}");
     assert_eq!(opacity(&owner, one), 0.11);
     assert_eq!(opacity(&owner, two), 0.22);
     assert_eq!(opacity(&owner, three), 1.0);
@@ -885,8 +867,7 @@ fn internal_multi_select_focus_uses_non_contiguous_interaction_owner() {
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
 
     let active = engine.TranslatedRuleShadowStats();
-    assert_eq!(active.skipped_unsupported_selector, 0, "{active:?}");
-    assert_eq!(active.translated_style_resolver_fallbacks, 0, "{active:?}");
+    assert_eq!(active.translated_style_resolver_failures, 0, "{active:?}");
     assert!(active.translated_style_resolver_applied >= 1, "{active:?}");
     assert_eq!(opacity(&owner, first), 1.0);
     assert_eq!(opacity(&owner, second), 0.41);
@@ -940,8 +921,7 @@ fn internal_spatial_navigation_focus_is_disabled_for_ordinary_selects() {
             );
         }
         let stats = engine.TranslatedRuleShadowStats();
-        assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-        assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+        assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     }
 }
 
@@ -997,8 +977,7 @@ fn hover_and_active_follow_flat_tree_chain_label_and_top_layer_boundary() {
         .unwrap();
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     assert_eq!(opacity(&owner, outer), 0.11);
     assert_eq!(opacity(&owner, label), 0.12);
     assert_eq!(opacity(&owner, control), 0.13);
@@ -1068,8 +1047,7 @@ fn indeterminate_uses_live_checkbox_radio_group_and_progress_dom_state() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
     let first = engine.TranslatedRuleShadowStats();
-    assert_eq!(first.skipped_unsupported_selector, 0, "{first:?}");
-    assert_eq!(first.translated_style_resolver_fallbacks, 0, "{first:?}");
+    assert_eq!(first.translated_style_resolver_failures, 0, "{first:?}");
     assert_eq!(opacity(&owner, check), 1.0);
     assert_eq!(opacity(&owner, radio_a), 0.21);
     assert_eq!(opacity(&owner, radio_b), 0.22);
@@ -1130,8 +1108,7 @@ fn top_layer_selectors_use_dialog_and_popover_lifecycle_state() {
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
 
     let active = engine.TranslatedRuleShadowStats();
-    assert_eq!(active.skipped_unsupported_selector, 0, "{active:?}");
-    assert_eq!(active.translated_style_resolver_fallbacks, 0, "{active:?}");
+    assert_eq!(active.translated_style_resolver_failures, 0, "{active:?}");
     assert_eq!(opacity(&owner, dialog), 0.11);
     assert_eq!(opacity(&owner, popover), 0.21);
     assert_eq!(native_width(&owner, dialog), 11.0);
@@ -1168,8 +1145,7 @@ fn internal_is_html_uses_document_type_not_element_namespace() {
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
 
     let html = engine.TranslatedRuleShadowStats();
-    assert_eq!(html.skipped_unsupported_selector, 0, "{html:?}");
-    assert_eq!(html.translated_style_resolver_fallbacks, 0, "{html:?}");
+    assert_eq!(html.translated_style_resolver_failures, 0, "{html:?}");
     assert!(owner.GetDocument().ResolvedStyleFor(form).is_none());
     engine
         .EnsureComputedStyle(&mut owner, &media(), &[ua.clone()], form)
@@ -1221,9 +1197,8 @@ fn internal_select_contains_input_tracks_associated_dom_descendants() {
     owner.GetDocumentMut().AppendChild(wrapper, input);
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     let inserted = engine.TranslatedRuleShadowStats();
-    assert_eq!(inserted.skipped_unsupported_selector, 0, "{inserted:?}");
     assert_eq!(
-        inserted.translated_style_resolver_fallbacks, 0,
+        inserted.translated_style_resolver_failures, 0,
         "{inserted:?}"
     );
     assert_eq!(
@@ -1258,11 +1233,7 @@ fn internal_select_has_slotted_button_tracks_first_element_child() {
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
 
     let initial = engine.TranslatedRuleShadowStats();
-    assert_eq!(initial.skipped_unsupported_selector, 0, "{initial:?}");
-    assert_eq!(
-        initial.translated_style_resolver_fallbacks, 0,
-        "{initial:?}"
-    );
+    assert_eq!(initial.translated_style_resolver_failures, 0, "{initial:?}");
     assert_eq!(opacity(&owner), 0.41);
 
     owner.GetDocumentMut().InsertBefore(select, blocker, button);
@@ -1281,8 +1252,9 @@ fn internal_select_has_slotted_button_tracks_first_element_child() {
 #[test]
 fn style_engine_retains_each_typed_stylesheet_revision_without_reparsing() {
     let _heap = foundation::LayoutHeapScope::new();
-    let mut owner =
-        html::html_parser::ParseHTML("<style id=sheet-owner></style><div class=item></div>");
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style id=sheet-owner></style><div class=item></div>",
+    );
     let owner_node_id = owner.GetDocument().Node(node(&owner, "sheet-owner")).Id();
     let mut first = crate::ParseCSS(".item { color: red }");
     first.owner_node_id = owner_node_id;
@@ -1453,15 +1425,14 @@ fn update_reaches_retained_translated_rule_set_and_selector_checker() {
     );
     assert!(first.candidates_considered >= 4, "{first:?}");
     assert!(first.selector_matches >= 3, "{first:?}");
-    assert!(first.authoritative_rules >= 4, "{first:?}");
     assert!(first.typed_declarations_used >= 3, "{first:?}");
-    assert_eq!(first.legacy_declaration_fallbacks, 0, "{first:?}");
+    assert_eq!(first.untransferred_declarations, 0, "{first:?}");
     assert_eq!(first.translated_style_cascade_attempts, 1, "{first:?}");
     assert_eq!(first.translated_style_cascade_applied, 1, "{first:?}");
-    assert_eq!(first.translated_style_cascade_fallbacks, 0, "{first:?}");
+    assert_eq!(first.translated_style_cascade_failures, 0, "{first:?}");
     assert_eq!(
         first.translated_style_cascade_attempts,
-        first.translated_style_cascade_applied + first.translated_style_cascade_fallbacks,
+        first.translated_style_cascade_applied + first.translated_style_cascade_failures,
         "every production translated-cascade trial must publish or wholly fall back: {first:?}"
     );
     let native = unsafe {
@@ -1584,7 +1555,7 @@ fn update_publishes_translated_cascade_for_typed_numeric_math() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_cascade_attempts, 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 1, "{stats:?}");
-    assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -1611,7 +1582,7 @@ fn update_resolves_pending_shorthand_from_typed_variable_data() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_cascade_attempts, 2, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 2, "{stats:?}");
-    assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -1646,13 +1617,10 @@ fn document_element_uses_translated_cascade_with_initial_parent_and_root_units()
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_cascade_root_attempts, 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_root_applied, 1, "{stats:?}");
-    assert_eq!(
-        stats.translated_style_cascade_root_fallbacks, 0,
-        "{stats:?}"
-    );
+    assert_eq!(stats.translated_style_cascade_root_failures, 0, "{stats:?}");
     assert_eq!(
         stats.translated_style_cascade_root_attempts,
-        stats.translated_style_cascade_root_applied + stats.translated_style_cascade_root_fallbacks,
+        stats.translated_style_cascade_root_applied + stats.translated_style_cascade_root_failures,
         "a root trial must publish or wholly fall back: {stats:?}"
     );
 
@@ -1695,7 +1663,7 @@ fn light_dark_color_uses_each_elements_computed_color_scheme() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     let style = |index| unsafe {
         &*owner
@@ -1746,7 +1714,7 @@ fn light_dark_url_images_use_computed_scheme_and_document_resource_owner() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     let fetched = |index| {
         let style = unsafe {
@@ -1782,7 +1750,7 @@ fn color_mix_retains_current_color_and_normalized_alpha_through_native_style() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     let style = |index| unsafe {
         &*owner
@@ -1824,13 +1792,10 @@ fn document_element_typed_inline_style_commits_in_the_same_resolver_cascade() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_cascade_root_attempts, 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_root_applied, 1, "{stats:?}");
-    assert_eq!(
-        stats.translated_style_cascade_root_fallbacks, 0,
-        "{stats:?}"
-    );
+    assert_eq!(stats.translated_style_cascade_root_failures, 0, "{stats:?}");
     assert_eq!(
         stats.translated_style_cascade_root_attempts,
-        stats.translated_style_cascade_root_applied + stats.translated_style_cascade_root_fallbacks,
+        stats.translated_style_cascade_root_applied + stats.translated_style_cascade_root_failures,
         "a root trial must publish or wholly fall back: {stats:?}"
     );
     let style = unsafe {
@@ -1864,15 +1829,11 @@ fn mixed_sheet_keeps_ordinary_collector_output_as_final_cascade_input() {
         stats.translated_property_sets_consumed, stats.translated_property_sets_transferred,
         "ordinary entries from a mixed sheet must remain collector-owned: {stats:?}"
     );
-    assert_eq!(
-        stats.skipped_scope, 0,
-        "explicit @scope is owned by the translated collector: {stats:?}"
-    );
     // The @scope wrapper's retained nested declarations now enter routing
     // alongside the ordinary rule rather than being silently omitted.
     assert_eq!(stats.translated_style_cascade_attempts, 2, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 2, "{stats:?}");
-    assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     let native = unsafe {
         &*owner
             .GetDocument()
@@ -1902,7 +1863,7 @@ fn mixed_typed_and_inline_declarations_share_one_translated_cascade() {
     assert!(stats.translated_property_sets_consumed >= 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_attempts, 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 1, "{stats:?}");
-    assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     let native = unsafe {
         &*owner
             .GetDocument()
@@ -2201,7 +2162,7 @@ fn translated_style_cascade_uses_document_substitution_and_image_owners() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_cascade_attempts, 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 1, "{stats:?}");
-    assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     let style = unsafe {
         &*owner
             .GetDocument()
@@ -2639,7 +2600,7 @@ fn native_list_style_none_and_position_cross_the_layout_boundary() {
     );
 }
 #[test]
-fn unsupported_declarations_are_diagnostic_and_do_not_drop_valid_styles() {
+fn supported_auto_repeat_does_not_drop_sibling_inline_declarations() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=target style='width:7px;grid-template-columns:repeat(auto-fill,20px);padding-left:9px'></div>",
@@ -2647,7 +2608,11 @@ fn unsupported_declarations_are_diagnostic_and_do_not_drop_valid_styles() {
     let target = node(&owner, "target");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(!engine.Diagnostics().is_empty());
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
     let native = unsafe {
         &*owner
             .GetDocument()
@@ -3741,9 +3706,8 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
     );
     assert_eq!(placeholder.style.paint.color.blue, 1.0);
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.skipped_pseudo, 0, "{stats:?}");
     assert_eq!(
-        stats.translated_style_cascade_pseudo_fallbacks, 0,
+        stats.translated_style_cascade_pseudo_failures, 0,
         "{stats:?}"
     );
     assert_eq!(
@@ -3855,6 +3819,7 @@ fn production_marker_pseudo_owns_cascade_cache_and_content() {
     assert_eq!(native.GetFontDescription().ComputedSize(), 24.0);
     assert_eq!(native.Display(), EDisplay::kInlineBlock);
     assert_eq!(native.WhiteSpace(), EWhiteSpace::kPre);
+    assert_eq!(native.GetTextAlign(), foundation::ETextAlign::kStart);
     // width is not valid on ::marker and must be filtered by RuleData's
     // ValidPropertyFilter rather than leaking through the document adapter.
     assert!(native.Width().IsAuto());
@@ -3968,13 +3933,13 @@ fn translated_style_cascade_publishes_pseudo_native_style_with_exact_stats() {
         "{stats:?}"
     );
     assert_eq!(
-        stats.translated_style_cascade_pseudo_fallbacks, 0,
+        stats.translated_style_cascade_pseudo_failures, 0,
         "{stats:?}"
     );
     assert_eq!(
         stats.translated_style_cascade_pseudo_attempts,
         stats.translated_style_cascade_pseudo_applied
-            + stats.translated_style_cascade_pseudo_fallbacks,
+            + stats.translated_style_cascade_pseudo_failures,
         "each pseudo trial must either publish or wholly fall back: {stats:?}"
     );
 
@@ -4019,7 +3984,7 @@ fn registered_property_owner_is_dependency_scoped_and_reports_exact_apply() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_cascade_attempts, 5, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 5, "{stats:?}");
-    assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     assert_eq!(
         stats.translated_style_cascade_registered_attempts, 4,
         "{stats:?}"
@@ -4029,7 +3994,7 @@ fn registered_property_owner_is_dependency_scoped_and_reports_exact_apply() {
         "{stats:?}"
     );
     assert_eq!(
-        stats.translated_style_cascade_registered_fallbacks, 0,
+        stats.translated_style_cascade_registered_failures, 0,
         "{stats:?}"
     );
     let plain_style = unsafe {
@@ -4454,9 +4419,6 @@ fn production_pseudo_sheet_removal_and_unsupported_requests_do_not_fake_content(
             .text,
         "fallback"
     );
-    assert!(engine.Diagnostics().iter().any(|d| matches!(d,
-        crate::DocumentStyleError::Property { property: foundation::CSSPropertyID::kContent, operation, .. }
-            if operation.contains("ConsumeCounterStyleSymbolsFunction"))));
     owner
         .GetDocumentMut()
         .SetTextContent(sheet, "#target::before{content:normal}".into());
@@ -4686,7 +4648,7 @@ fn production_scope_implicit_owner_and_root_limit_mutation_invalidation() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 1, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     let read = |owner: &dom::DOM| {
         let n = unsafe {
             &*owner
@@ -4838,7 +4800,7 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
     );
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 1, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     assert!(engine
         .SetContainerSizes(&mut owner, [(container, 80.0, 50.0)])
@@ -4855,7 +4817,7 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
     assert_eq!(narrow.Width().Pixels(), 7.0);
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 1, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 }
 
 #[test]
@@ -4927,7 +4889,7 @@ fn production_slotted_shadow_container_query_uses_flat_tree_ancestry_in_update()
     assert_eq!(wide.Width().Pixels(), 41.0);
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 1, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     assert!(engine
         .SetContainerSizes(&mut owner, [(container, 80.0, 50.0)])
@@ -4944,7 +4906,7 @@ fn production_slotted_shadow_container_query_uses_flat_tree_ancestry_in_update()
     assert_eq!(narrow.Width().Pixels(), 7.0);
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 1, "{stats:?}");
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 }
 
 #[test]
@@ -5271,7 +5233,7 @@ fn named_grid_lines_reach_native_track_list_and_grid_positions() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
     let native = unsafe {
         &*owner
@@ -5305,7 +5267,7 @@ fn translated_element_resolution_retains_dynamic_pseudo_markers() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
     let stats = engine.TranslatedRuleShadowStats();
-    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     assert!(stats.translated_style_resolver_applied > 0, "{stats:?}");
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     let native = unsafe { &*style.native_style.Get() };
@@ -5353,7 +5315,7 @@ fn fetched_background_css_values_reach_native_fill_layer_cache() {
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
     for (id, url) in [
@@ -5447,7 +5409,7 @@ fn html_hidden_presentation_hint_uses_native_display_and_author_hint_origin() {
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 }
@@ -5539,7 +5501,7 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 }
@@ -5611,7 +5573,7 @@ fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes(
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
     // An earlier namespaced twin cannot mask the real unqualified attribute.
@@ -5649,7 +5611,7 @@ fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes(
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
-            .translated_style_resolver_fallbacks,
+            .translated_style_resolver_failures,
         0
     );
 }

@@ -922,17 +922,6 @@ where
     pub fn MatchedRulesForTest(&self) -> &[MatchedRule<B>] {
         &self.matched_rules_
     }
-    /// Retains the matched rules owned by the caller's active production
-    /// route before SortAndTransferMatchedRules writes the final MatchResult.
-    ///
-    /// Chromium normally constructs MatchRequests from already-selected
-    /// ScopedStyleResolver rule sets. Rechrom keeps unsupported/scope/query
-    /// rules in an explicit compatibility route, so the package-local
-    /// assembly applies the same selection at this boundary while preserving
-    /// the collector's sorting and transfer implementation.
-    pub fn RetainMatchedRules(&mut self, mut retain: impl FnMut(&MatchedRule<B>) -> bool) {
-        self.matched_rules_.retain(|rule| retain(rule));
-    }
     /// Number of RuleData entries visited through translated RuleSet buckets.
     pub fn CandidatesConsidered(&self) -> usize {
         self.candidates_considered_

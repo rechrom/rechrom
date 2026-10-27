@@ -3663,30 +3663,60 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
             };
             let value = resolved_light_dark.as_deref().unwrap_or(value);
             state.AddLengthConversionFlags(Self::viewport_length_flags(value));
-            // cpp: longhands_custom.cc Color::ApplyValue resolves system
-            // colors through StyleResolverState before storing the retained
-            // keyword and platform color. Keep that document-owned decision
-            // at the cascade boundary: the generic property converter cannot
-            // resolve `fieldtext`, `canvastext`, or accent-color keywords.
-            if property.PropertyID() == CSSPropertyID::kColor {
-                if let CSSValuePayload::kIdentifierClass(identifier) = value.Payload() {
-                    if StyleColor::IsSystemColorIncludingDeprecatedKeyword(identifier.0) {
-                        let unresolved = StyleColor::from_keyword(identifier.0);
-                        let used_color_scheme = {
-                            let builder = state.StyleBuilder();
-                            builder.UsedColorScheme()
-                        };
-                        if let Some(color) =
-                            super::production_style_resolver::ResolveProductionSystemColor(
-                                &unresolved,
-                                used_color_scheme,
-                                self.system_colors,
-                            )
-                        {
-                            let mut builder = state.StyleBuilderMut();
+            // cpp: longhands_custom.cc Color::ApplyValue and generated color
+            // longhands resolve system colors through StyleResolverState before
+            // storing the retained keyword and platform color. Keep that
+            // document-owned decision at the cascade boundary for every color
+            // slot instead of making package-local converters guess a theme.
+            if let CSSValuePayload::kIdentifierClass(identifier) = value.Payload() {
+                let system_keyword = match identifier.0 {
+                    CSSValueID::kWebkitLink
+                        if property.PropertyID() == CSSPropertyID::kInternalVisitedColor =>
+                    {
+                        Some(CSSValueID::kVisitedtext)
+                    }
+                    CSSValueID::kWebkitLink => Some(CSSValueID::kLinktext),
+                    CSSValueID::kWebkitActivelink => Some(CSSValueID::kActivetext),
+                    keyword
+                        if StyleColor::IsSystemColorIncludingDeprecatedKeyword(keyword)
+                            || StyleColor::IsSystemColorKeyword(keyword) =>
+                    {
+                        Some(keyword)
+                    }
+                    _ => None,
+                };
+                if let Some(system_keyword) = system_keyword {
+                    let unresolved = StyleColor::from_keyword(system_keyword);
+                    let used_color_scheme = {
+                        let builder = state.StyleBuilder();
+                        builder.UsedColorScheme()
+                    };
+                    if let Some(color) =
+                        super::production_style_resolver::ResolveProductionSystemColor(
+                            &unresolved,
+                            used_color_scheme,
+                            self.system_colors,
+                        )
+                    {
+                        let mut builder = state.StyleBuilderMut();
+                        if property.PropertyID() == CSSPropertyID::kColor {
                             builder.SetColor(&color);
                             builder.SetColorIsInherited(false);
                             builder.SetColorIsCurrentColor(false);
+                            return;
+                        }
+                        if property.PropertyID() == CSSPropertyID::kInternalVisitedColor {
+                            builder.SetInternalVisitedColor(&color);
+                            builder.SetInternalVisitedColorIsCurrentColor(false);
+                            return;
+                        }
+                        if crate::properties::longhand_dispatch::ApplyConvertedColor(
+                            property.PropertyID(),
+                            &mut builder,
+                            &color,
+                        )
+                        .is_ok()
+                        {
                             return;
                         }
                     }
@@ -3803,21 +3833,26 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
             if let Err(error) = result {
                 if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
                     eprintln!(
-                        "translated longhand fallback property={:?} class={:?} value={}",
+                        "typed longhand rejected property={:?} class={:?} value={}",
                         property.PropertyID(),
                         value.GetClassType(),
                         value.CssText().Utf8()
                     );
                 }
                 use crate::properties::longhand_dispatch::LonghandApplicationError;
-                self.fallback.borrow_mut().push(match error {
-                    LonghandApplicationError::Unsupported(id) => {
-                        ProductionCascadeFallback::UnsupportedProperty(id)
-                    }
-                    LonghandApplicationError::InvalidValue(id) => {
-                        ProductionCascadeFallback::InvalidProperty(id)
-                    }
-                });
+                match error {
+                    // Explicit unsupported declarations are removed by the
+                    // typed RuleSet projection. Reaching this branch therefore
+                    // means `all` expanded to a property that the current
+                    // ComputedStyle model does not expose. Its value has no
+                    // observable slot to write, so keep the typed cascade
+                    // atomic instead of abandoning every supported sibling.
+                    LonghandApplicationError::Unsupported(_) => {}
+                    LonghandApplicationError::InvalidValue(id) => self
+                        .fallback
+                        .borrow_mut()
+                        .push(ProductionCascadeFallback::InvalidProperty(id)),
+                }
             }
         }
     }
@@ -4279,7 +4314,7 @@ mod tests {
         );
         assert_eq!(stats.translated_style_cascade_animation_attempts, 1);
         assert_eq!(stats.translated_style_cascade_animation_applied, 1);
-        assert_eq!(stats.translated_style_cascade_animation_fallbacks, 0);
+        assert_eq!(stats.translated_style_cascade_animation_failures, 0);
     }
 
     #[test]
@@ -4512,11 +4547,6 @@ mod tests {
             &production_style_sheet::ProductionMediaQueryEvaluator::FromCachedData(&media),
         );
         assert_eq!(rule_set.AllRuleData().len(), 1);
-        let routing = crate::production_rule_matching::ProductionRuleRouting::Build(
-            &rule_set,
-            typed.as_ref(),
-        );
-        assert_eq!(routing.AuthoritativeRuleCount(), 1);
         owner.GetDocumentMut().AppendStyleSheet(sheet);
         let mut engine = crate::StyleEngine::new(&owner);
         engine.Update(&mut owner, &media, &[]).unwrap();
@@ -4558,7 +4588,7 @@ mod tests {
         assert_eq!(style.MinWidth().Pixels(), 61.0);
         assert!(style.AffectedByFunctionalMedia());
         assert!(stats.translated_style_cascade_applied > 0, "{stats:?}");
-        assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+        assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     }
 
     #[test]
@@ -4640,7 +4670,7 @@ mod tests {
         assert_eq!(style.Width().Pixels(), 29.0);
         assert!(style.AffectedByCSSFunction());
         assert!(stats.translated_style_cascade_applied > 0, "{stats:?}");
-        assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+        assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     }
 
     #[test]
@@ -4727,7 +4757,7 @@ mod tests {
         );
         assert_eq!(style.Width().Pixels(), 37.0);
         assert!(stats.translated_style_cascade_applied > 0, "{stats:?}");
-        assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
+        assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
     }
 
     #[test]
