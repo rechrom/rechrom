@@ -112,6 +112,7 @@ impl SystemFontSession {
 /// The provisional result stays private to LayoutEngine. Font-sensitive caches
 /// are invalidated through the existing constraints/document mutation gates;
 /// only the final pass can reach measurement, container sizes, Paint or clients.
+#[cfg(test)]
 pub(crate) fn LayoutWithSystemFonts(
     layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
     document: &mut dom::DOM,

@@ -1,5 +1,5 @@
 //! Document-owned snapshots for local SVG <clipPath> resources.
-use crate::{persistent_document::DOMNamespace, Child, Element, ParsedDocument as Document};
+use crate::{persistent_document::DOMNamespace, Child, Element};
 use layoutng_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
 use layoutng_assembly::internal::paint_input::{
     SvgClipGeometry, SvgClipLength, SvgClipPathChild, SvgClipPathGraph, SvgClipPathUnits,
@@ -9,49 +9,37 @@ use layoutng_assembly::internal::paint_input::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-// Resource traversal borrows the live DOM. The static parser adapter still
-// exposes Element values, so materialize only the nodes the graph reads, once.
+// Resource traversal borrows the live DOM. The graph helpers consume a compact
+// Element projection, so materialize only the nodes the graph reads, once.
 // ID indexing and tree traversal never clone style/attributes for the arena.
-enum ResourceElements<'a> {
-    Parsed(&'a [Element]),
-    Persistent(
-        &'a crate::Document,
-        std::cell::OnceCell<HashMap<usize, std::cell::OnceCell<Box<Element>>>>,
-    ),
+struct ResourceElements<'a> {
+    document: &'a crate::Document,
+    cache: std::cell::OnceCell<HashMap<usize, std::cell::OnceCell<Box<Element>>>>,
 }
 impl std::ops::Index<usize> for ResourceElements<'_> {
     type Output = Element;
     fn index(&self, index: usize) -> &Element {
-        match self {
-            Self::Parsed(elements) => &elements[index],
-            Self::Persistent(document, cache) => cache.get_or_init(|| {
-                // Native ID/type/style lookups borrow DOM directly. Allocate
-                // adapter projection slots only when graph construction actually
-                // reads an Element; HTML and SVG without resource graphs need none.
-                let mut slots = HashMap::new();
-                let mut pending = document.ActiveTreeScopes();
-                while let Some(node) = pending.pop() {
-                    slots.insert(node, std::cell::OnceCell::new());
-                    pending.extend_from_slice(document.Node(node).Children());
-                }
-                slots
-            })[&index]
-                .get_or_init(|| Box::new(project_resource_element(document, index)))
-                .as_ref(),
-        }
+        self.cache.get_or_init(|| {
+            // Native ID/type/style lookups borrow DOM directly. Allocate
+            // adapter projection slots only when graph construction actually
+            // reads an Element; HTML and SVG without resource graphs need none.
+            let mut slots = HashMap::new();
+            let mut pending = self.document.ActiveTreeScopes();
+            while let Some(node) = pending.pop() {
+                slots.insert(node, std::cell::OnceCell::new());
+                pending.extend_from_slice(self.document.Node(node).Children());
+            }
+            slots
+        })[&index]
+            .get_or_init(|| Box::new(project_resource_element(self.document, index)))
+            .as_ref()
     }
 }
-enum ResourceTexts<'a> {
-    Parsed(&'a [String]),
-    Persistent(&'a crate::Document),
-}
+struct ResourceTexts<'a>(&'a crate::Document);
 impl std::ops::Index<usize> for ResourceTexts<'_> {
     type Output = str;
     fn index(&self, index: usize) -> &str {
-        match self {
-            Self::Parsed(texts) => &texts[index],
-            Self::Persistent(document) => document.Node(index).Data(),
-        }
+        self.0.Node(index).Data()
     }
 }
 struct ResourceDocument<'a> {
@@ -59,90 +47,63 @@ struct ResourceDocument<'a> {
     texts: ResourceTexts<'a>,
 }
 impl<'a> ResourceDocument<'a> {
-    fn parsed(document: &'a Document) -> Self {
-        Self {
-            elements: ResourceElements::Parsed(&document.elements),
-            texts: ResourceTexts::Parsed(&document.texts),
-        }
-    }
     fn persistent(document: &'a crate::Document) -> Self {
         Self {
-            elements: ResourceElements::Persistent(document, std::cell::OnceCell::new()),
-            texts: ResourceTexts::Persistent(document),
+            elements: ResourceElements {
+                document,
+                cache: std::cell::OnceCell::new(),
+            },
+            texts: ResourceTexts(document),
         }
     }
     fn children(&self, index: usize) -> Vec<usize> {
-        match &self.elements {
-            ResourceElements::Parsed(elements) => elements[index]
-                .children
-                .iter()
-                .filter_map(|child| match child {
-                    Child::Element(index) => Some(*index),
-                    _ => None,
-                })
-                .collect(),
-            ResourceElements::Persistent(document, _) => document
-                .Node(index)
-                .Children()
-                .iter()
-                .copied()
-                .filter(|&child| {
-                    document.Node(child).Type() == crate::persistent_document::DOMNodeType::kElement
-                })
-                .collect(),
-        }
+        self.elements
+            .document
+            .Node(index)
+            .Children()
+            .iter()
+            .copied()
+            .filter(|&child| {
+                self.elements.document.Node(child).Type()
+                    == crate::persistent_document::DOMNodeType::kElement
+            })
+            .collect()
     }
     fn id(&self, index: usize) -> Option<&str> {
-        match &self.elements {
-            ResourceElements::Parsed(elements) => {
-                attr(&elements[index], "id").or(elements[index].id.as_deref())
-            }
-            ResourceElements::Persistent(document, _) => document
-                .Node(index)
-                .FindAttribute("id")
-                .map(|a| a.value.as_str()),
-        }
+        self.elements
+            .document
+            .Node(index)
+            .FindAttribute("id")
+            .map(|attribute| attribute.value.as_str())
     }
     fn is_clip(&self, index: usize) -> bool {
-        match &self.elements {
-            ResourceElements::Parsed(elements) => {
-                elements[index].namespace == DOMNamespace::kSVG && elements[index].tag == "clipPath"
-            }
-            ResourceElements::Persistent(document, _) => document
-                .Node(index)
-                .IsElement("clipPath", DOMNamespace::kSVG),
-        }
+        self.elements
+            .document
+            .Node(index)
+            .IsElement("clipPath", DOMNamespace::kSVG)
     }
     fn reference_scope(&self, index: usize) -> u64 {
-        match &self.elements {
-            ResourceElements::Persistent(document, _) => {
-                document.SVGResourceScope(index).tree_scope_id
-            }
-            _ => 0,
-        }
+        self.elements.document.SVGResourceScope(index).tree_scope_id
     }
     fn display(&self, index: usize) -> Option<&str> {
-        if let ResourceElements::Persistent(document, _) = &self.elements {
-            if let Some(style) = document
-                .ResolvedStyleFor(index)
-                .and_then(|resolved| unsafe { resolved.native_style.Get().as_ref() })
-            {
-                // Same computed override as project_resource_element, without
-                // serializing font/geometry state just to inspect display.
-                return Some(if style.Display() == foundation::EDisplay::kNone {
-                    "none"
-                } else {
-                    "rendered"
-                });
-            }
+        if let Some(style) = self
+            .elements
+            .document
+            .ResolvedStyleFor(index)
+            .and_then(|resolved| unsafe { resolved.native_style.Get().as_ref() })
+        {
+            // Same computed override as project_resource_element, without
+            // serializing font/geometry state just to inspect display.
+            return Some(if style.Display() == foundation::EDisplay::kNone {
+                "none"
+            } else {
+                "rendered"
+            });
         }
         style_value(&self.elements[index], "display")
     }
     fn parent(&self, index: usize) -> Option<usize> {
-        match &self.elements {
-            ResourceElements::Parsed(elements) => elements[index].parent,
-            ResourceElements::Persistent(document, _) => document.Node(index).Parent(),
-        }
+        self.elements.document.Node(index).Parent()
     }
 }
 
@@ -983,20 +944,13 @@ fn collect_child(
     };
     if element.tag == "use" {
         // The persistent document supplies the actual cloned target after
-        // its instance cascade and href precedence. Only the legacy static
-        // fixture adapter lacks the retained instance lifecycle.
-        let target = if let Some(instance) = document.use_instances.get(&index) {
-            instance.clone()?
-        } else {
-            let Some(href) = attr(element, "href").or_else(|| attr(element, "xlink:href")) else {
-                stack.remove(&index);
-                return Ok(());
-            };
-            let Some(id) = href.strip_prefix('#') else {
-                return Err("external SVG clip use IRI".into());
-            };
-            find_id(document, index, id)
-        };
+        // its instance cascade and href precedence. A missing lifecycle result
+        // is unsupported; raw href lookup cannot substitute for SVGUseElement.
+        let target = document
+            .use_instances
+            .get(&index)
+            .ok_or_else(|| "SVG clip use instance lifecycle was not projected".to_owned())?
+            .clone()?;
         let Some(target) = target else {
             stack.remove(&index);
             return Ok(());
@@ -1152,21 +1106,17 @@ fn build_one(document: &GraphDocument<'_>, index: usize) -> SvgClipPathGraph {
     graph
 }
 fn raw_resource_display_suppressed(document: &ResourceDocument<'_>, index: usize) -> bool {
-    if let ResourceElements::Persistent(owner, _) = &document.elements {
-        // Element::RecalcOwnStyle has already applied parent-style absence and
-        // ShouldStoreComputedStyle, including SVG's hidden-container exceptions.
-        // A clip/mask below display:none <g> still has a resource layout object;
-        // physical box suppression on that ancestor is not resource suppression.
-        // The static DOM adapter can also be used before its first style
-        // lifecycle; retain its existing raw-input projection until style is
-        // ready. Page always updates style before publishing this catalog.
-        if !owner.StyleState().all_dirty {
-            return owner.ResolvedStyleFor(index).is_none_or(|resolved| {
-                !resolved.own_generates_box
-                    || unsafe { resolved.native_style.Get().as_ref() }
-                        .is_some_and(|style| style.IsEnsuredInDisplayNone())
-            });
-        }
+    let owner = document.elements.document;
+    // Element::RecalcOwnStyle has already applied parent-style absence and
+    // ShouldStoreComputedStyle, including SVG's hidden-container exceptions.
+    // A clip/mask below display:none <g> still has a resource layout object;
+    // physical box suppression on that ancestor is not resource suppression.
+    if !owner.StyleState().all_dirty {
+        return owner.ResolvedStyleFor(index).is_none_or(|resolved| {
+            !resolved.own_generates_box
+                || unsafe { resolved.native_style.Get().as_ref() }
+                    .is_some_and(|style| style.IsEnsuredInDisplayNone())
+        });
     }
     if document.display(index) == Some("contents") {
         return true;
@@ -1179,35 +1129,6 @@ fn raw_resource_display_suppressed(document: &ResourceDocument<'_>, index: usize
         ancestor = document.parent(node);
     }
     false
-}
-
-pub(super) fn build(document: &Document) -> Arc<SvgClipResourceSnapshot> {
-    let mut catalog = GraphDocument::new(
-        ResourceDocument::parsed(document),
-        vec![0; document.elements.len()],
-    );
-    let mut order = Vec::new();
-    if let Some(root) = document.root {
-        collect_tree_order(&catalog.document, root, &mut order);
-    } else {
-        for (index, element) in document.elements.iter().enumerate() {
-            if element.parent.is_none() {
-                collect_tree_order(&catalog.document, index, &mut order);
-            }
-        }
-    }
-    for index in order {
-        if !catalog.index_target(index, 0, index as u64 + 1) {
-            continue;
-        }
-        let has_svg_parent = document.elements[index]
-            .parent
-            .is_some_and(|parent| document.elements[parent].namespace == DOMNamespace::kSVG);
-        if !has_svg_parent || raw_resource_display_suppressed(&catalog.document, index) {
-            catalog.unavailable_targets.insert(index);
-        }
-    }
-    catalog.snapshot(0)
 }
 
 fn project_resource_element(document: &crate::Document, index: usize) -> Element {
@@ -1337,9 +1258,9 @@ fn project_resource_element(document: &crate::Document, index: usize) -> Element
     }
 }
 
-/// Project the retained DOM into the same immutable resource snapshot used by
-/// the static adapter. Arena indices stay unchanged so local fragment links
-/// and mutation-driven rebuilds keep document identity semantics.
+/// Project the retained DOM into its immutable resource snapshot. Arena
+/// indices stay unchanged so local fragment links and mutation-driven rebuilds
+/// keep document identity semantics.
 pub(super) fn build_persistent(document: &crate::Document) -> Arc<SvgClipResourceSnapshot> {
     use crate::persistent_document::DOMNodeType;
 
@@ -1442,12 +1363,15 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<SvgClipResourc
         catalog.unavailable_targets.len() as f64,
     );
     let snapshot = catalog.snapshot(document.SVGResourceScope(document.Root()).document_id);
-    if let ResourceElements::Persistent(_, cache) = &catalog.document.elements {
-        trace.set(
-            "projection_slots",
-            cache.get().map_or(0, |slots| slots.len()) as f64,
-        );
-    }
+    trace.set(
+        "projection_slots",
+        catalog
+            .document
+            .elements
+            .cache
+            .get()
+            .map_or(0, |slots| slots.len()) as f64,
+    );
     snapshot
 }
 

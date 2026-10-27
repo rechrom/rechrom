@@ -1,7 +1,6 @@
 //! Document-owned SVG filter resource snapshots.  CSS keeps only the IRI;
 //! this is the DOM -> Layout projection of the referenced SVG graph.
 use crate::persistent_document::{DOMNamespace, DOMNode, DOMNodeType};
-use crate::{Child, Element, ParsedDocument as Document};
 use layoutng_assembly::internal::layout_input::ComputedStyle;
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::*;
@@ -12,108 +11,61 @@ use std::sync::Arc;
 // In particular, do not serialize the live document and clone every computed
 // style just to adapt it to the static parser's graph builder.
 #[derive(Clone, Copy)]
-enum FilterElement<'a> {
-    Parsed(&'a Element),
-    Persistent(&'a DOMNode),
-}
+struct FilterElement<'a>(&'a DOMNode);
 impl<'a> FilterElement<'a> {
     fn tag(self) -> &'a str {
-        match self {
-            Self::Parsed(n) => &n.tag,
-            Self::Persistent(n) => n.Name(),
-        }
+        self.0.Name()
     }
     fn namespace(self) -> DOMNamespace {
-        match self {
-            Self::Parsed(n) => n.namespace,
-            Self::Persistent(n) => n.Namespace(),
-        }
+        self.0.Namespace()
     }
     fn id(self) -> Option<&'a str> {
-        match self {
-            Self::Parsed(n) => n.id.as_deref(),
-            Self::Persistent(n) => n.FindAttribute("id").map(|a| a.value.as_str()),
-        }
+        self.0.FindAttribute("id").map(|a| a.value.as_str())
     }
 }
-enum FilterDocument<'a> {
-    Parsed(&'a Document, &'a [ComputedStyle]),
-    Persistent(&'a crate::Document),
-}
+struct FilterDocument<'a>(&'a crate::Document);
 impl<'a> FilterDocument<'a> {
     // TreeScopeResources resolves attached targets in DOM tree order. The
     // persistent arena also contains detached allocation history, which must
     // neither add filter resources nor make a local layout update scan it.
     fn indices<'b>(&'b self) -> impl Iterator<Item = usize> + 'b + use<'a, 'b> {
-        let mut parsed_index = 0;
-        let mut stack = match self {
-            Self::Persistent(document) => document.ActiveTreeScopes(),
-            Self::Parsed(..) => Vec::new(),
-        };
+        let mut stack = self.0.ActiveTreeScopes();
         stack.reverse();
-        std::iter::from_fn(move || match self {
-            Self::Parsed(document, _) => {
-                let index = parsed_index;
-                parsed_index += 1;
-                (index < document.elements.len()).then_some(index)
+        std::iter::from_fn(move || loop {
+            let index = stack.pop()?;
+            let node = self.0.Node(index);
+            stack.extend(node.Children().iter().rev().copied());
+            if node.Type() == DOMNodeType::kElement {
+                return Some(index);
             }
-            Self::Persistent(document) => loop {
-                let index = stack.pop()?;
-                let node = document.Node(index);
-                stack.extend(node.Children().iter().rev().copied());
-                if node.Type() == DOMNodeType::kElement {
-                    return Some(index);
-                }
-            },
         })
     }
     fn element(&self, index: usize) -> FilterElement<'a> {
-        match self {
-            Self::Parsed(d, _) => FilterElement::Parsed(&d.elements[index]),
-            Self::Persistent(d) => FilterElement::Persistent(d.Node(index)),
-        }
+        FilterElement(self.0.Node(index))
     }
     fn style(&self, index: usize) -> Option<&'a ComputedStyle> {
-        match self {
-            Self::Parsed(_, s) => s.get(index),
-            Self::Persistent(d) => d.ResolvedStyleFor(index).map(|s| &s.style),
-        }
+        self.0.ResolvedStyleFor(index).map(|s| &s.style)
     }
     fn children<'b>(
         &'b self,
         element: FilterElement<'b>,
     ) -> impl Iterator<Item = usize> + 'b + use<'a, 'b> {
-        let (parsed, persistent) = match element {
-            FilterElement::Parsed(n) => (n.children.as_slice(), &[][..]),
-            FilterElement::Persistent(n) => (&[][..], n.Children()),
-        };
-        parsed
+        element
+            .0
+            .Children()
             .iter()
-            .filter_map(|c| match c {
-                Child::Element(i) => Some(*i),
-                _ => None,
-            })
-            .chain(persistent.iter().copied().filter(|&i| match self {
-                Self::Persistent(d) => d.Node(i).Type() == DOMNodeType::kElement,
-                _ => false,
-            }))
+            .copied()
+            .filter(|&index| self.0.Node(index).Type() == DOMNodeType::kElement)
     }
     fn image(&self, source: &str) -> Option<&'a crate::ImageResourceMetadata> {
-        match self {
-            Self::Parsed(d, _) => d.ImageResourceFor(source),
-            Self::Persistent(d) => d.ImageResourceFor(source),
-        }
+        self.0.ImageResourceFor(source)
     }
 }
 fn attr<'a>(element: FilterElement<'a>, name: &str) -> Option<&'a str> {
-    match element {
-        FilterElement::Parsed(n) => n
-            .attributes
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str()),
-        FilterElement::Persistent(n) => n.FindAttribute(name).map(|a| a.value.as_str()),
-    }
+    element
+        .0
+        .FindAttribute(name)
+        .map(|attribute| attribute.value.as_str())
 }
 fn number(value: Option<&str>, default: f64) -> f64 {
     value
@@ -570,16 +522,8 @@ fn primitive(document: &FilterDocument<'_>, index: usize) -> Result<SvgFilterPri
     })
 }
 fn find_id(document: &FilterDocument<'_>, source: usize, id: &str) -> Option<usize> {
-    match document {
-        FilterDocument::Persistent(document) => {
-            let source = document.CorrespondingSVGElement(source).unwrap_or(source);
-            document.FindElementByIdInTreeScope(source, id)
-        }
-        FilterDocument::Parsed(..) => document.indices().find(|&index| {
-            let element = document.element(index);
-            attr(element, "id") == Some(id) || element.id() == Some(id)
-        }),
-    }
+    let source = document.0.CorrespondingSVGElement(source).unwrap_or(source);
+    document.0.FindElementByIdInTreeScope(source, id)
 }
 
 fn build_one(
@@ -687,10 +631,6 @@ fn build_graphs(document: &FilterDocument<'_>) -> Arc<Vec<SvgFilterGraph>> {
     trace.set("filters", graphs.len() as f64);
     Arc::new(graphs)
 }
-pub(super) fn build(document: &Document, styles: &[ComputedStyle]) -> Arc<Vec<SvgFilterGraph>> {
-    build_graphs(&FilterDocument::Parsed(document, styles))
-}
-
 // cpp: FilterEffectBuilder::BuildReferenceFilter / SVGFilterBuilder::BuildGraph.
 // Read resource attributes and canonical computed styles directly from their
 // DOM owner. The output alone is owned by the immutable paint snapshot.
@@ -698,5 +638,5 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgFilterG
     document
         .SVGFilterGraphs()
         .cloned()
-        .unwrap_or_else(|| build_graphs(&FilterDocument::Persistent(document)))
+        .unwrap_or_else(|| build_graphs(&FilterDocument(document)))
 }

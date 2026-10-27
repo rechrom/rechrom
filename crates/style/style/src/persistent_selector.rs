@@ -2261,14 +2261,6 @@ impl PersistentSelectorService {
 }
 
 impl<'d> PersistentSelectorMatchSession<'d> {
-    pub(crate) fn RuleStyleScope(
-        scope: &crate::style_scope::StyleScope,
-        implicit_root: Option<usize>,
-    ) -> Rc<PersistentStyleScope> {
-        let implicit_roots = implicit_root.into_iter().collect::<Vec<_>>();
-        Self::RuleStyleScopeWithImplicitRoots(scope, &implicit_roots)
-    }
-
     /// Builds the SelectorChecker view of one retained StyleScope chain with
     /// the exact StyleScopeData trigger set installed by active sheet owners.
     /// Each chain belongs to one StyleSheetContents, so every implicit scope
@@ -2290,25 +2282,6 @@ impl<'d> PersistentSelectorMatchSession<'d> {
 
     pub(crate) fn Backend(&self) -> Rc<PersistentSelectorBackend<'d>> {
         self.backend.clone()
-    }
-
-    fn StyleScopeFrame(&self, index: usize) -> Rc<PersistentStyleScopeFrame> {
-        let backend = &self.backend;
-        let mut ancestors = Vec::new();
-        let mut ancestor = Some(backend.handle(index));
-        while let Some(element) = ancestor {
-            ancestor = backend.ParentOrShadowHostElement(&element);
-            ancestors.push(element);
-        }
-        let mut frame = None;
-        for element in ancestors.into_iter().rev() {
-            frame = Some(Rc::new(PersistentStyleScopeFrame {
-                element,
-                parent: frame,
-                data: RefCell::new(HashMap::new()),
-            }));
-        }
-        frame.expect("an element always contributes a style scope frame")
     }
 
     fn SubjectMayMatch(
@@ -2401,55 +2374,6 @@ impl<'d> PersistentSelectorMatchSession<'d> {
         context.selector = Some(selector);
         context.tree_scope = Some(backend.ElementTreeScope(&index));
         checker.Match(&context, &mut MatchResult::default())
-    }
-
-    /// Matches retained `RuleData` selector storage with the contexts that
-    /// ElementRuleCollector normally installs before invoking SelectorChecker.
-    /// The scope boundaries are the parser-owned typed lists; no selector text
-    /// is serialized or parsed again.
-    pub(crate) fn MatchesCompiledComplexInRuleContext(
-        &self,
-        index: usize,
-        selector: crate::css_selector::CSSSelectorComplex<'_>,
-        scope: Option<&crate::style_scope::StyleScope>,
-        implicit_scope_root: Option<usize>,
-        pseudo_id: layoutng_style::style::computed_style_constants::PseudoId,
-        originating_pseudo_id: layoutng_style::style::computed_style_constants::PseudoId,
-        pseudo_argument: Option<&AtomicString>,
-        pseudo_ident_list: &[AtomicString],
-    ) -> Option<ScopedSelectorMatch> {
-        if !self.SubjectMayMatch(index, selector) {
-            return None;
-        }
-        let backend = &self.backend;
-        let mut checker = SelectorChecker::ForPseudoRequest(
-            backend.clone(),
-            Mode::kResolvingStyle,
-            pseudo_argument.cloned().unwrap_or_default(),
-            pseudo_ident_list.to_vec(),
-        );
-        checker.SetOriginatingPseudoId(originating_pseudo_id);
-        let mut context = SelectorCheckingContext::new(backend.handle(index));
-        context.selector = Some(selector);
-        context.tree_scope = Some(backend.ElementTreeScope(&index));
-        context.pseudo_id = pseudo_id;
-        context.pseudo_argument = pseudo_argument.cloned();
-        if let Some(scope) = scope {
-            context.style_scope = Some(Self::RuleStyleScope(scope, implicit_scope_root));
-            context.style_scope_frame = Some(self.StyleScopeFrame(index));
-        }
-        let mut result = MatchResult::default();
-        // The source feature is disabled at the audited Chromium commit. A
-        // pseudo StyleRequest therefore uses SelectorChecker's dynamic-pseudo
-        // result, while selector queries retain their existing logical mode.
-        let did_match = backend.WithLogicalPseudoMode(pseudo_id == PseudoId::kPseudoIdNone, || {
-            checker.Match(&context, &mut result)
-        });
-        let matched = did_match.then_some(ScopedSelectorMatch {
-            specificity: selector.Specificity(),
-            proximity: result.proximity,
-        });
-        matched
     }
 
     pub fn MatchingCompiledSpecificity(&self, index: usize, list: &CSSSelectorList) -> Option<u32> {

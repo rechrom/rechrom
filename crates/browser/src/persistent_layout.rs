@@ -1,8 +1,9 @@
 #![allow(non_snake_case)]
 use dom::{UserInteractionState, DOM};
 use layout_fragment::LayoutResultHandle;
+#[cfg(test)]
+use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::{
-    fragment_tree::FragmentPaintData,
     internal::layout_input::ConstraintSpace,
     layout_engine::{LayoutEngine, NativePaintFragmentCursor},
 };

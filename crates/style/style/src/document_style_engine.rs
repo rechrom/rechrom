@@ -438,14 +438,6 @@ impl PseudoStyleKind {
     fn IsNestedMarker(self) -> bool {
         matches!(self, Self::BeforeMarker | Self::AfterMarker)
     }
-
-    fn ValidPropertyFilter(self) -> ValidPropertyFilter {
-        match self {
-            Self::FirstLetter => ValidPropertyFilter::kFirstLetter,
-            Self::Marker | Self::BeforeMarker | Self::AfterMarker => ValidPropertyFilter::kMarker,
-            Self::Before | Self::After | Self::Placeholder => ValidPropertyFilter::kNoFilter,
-        }
-    }
 }
 struct StyleSelector {
     compiled_subject: Rc<CSSSelectorList>,
@@ -5883,23 +5875,6 @@ impl DocumentStyleEngine {
             rules: direct_rules,
         })
     }
-    fn CompiledRuleHasTarget(
-        &self,
-        document: &Document,
-        text: &str,
-        scopes: &[cssom::CSSStyleScope],
-        pseudo: Option<PseudoStyleKind>,
-    ) -> bool {
-        let variant = (
-            document.GetCompatibilityMode() == CompatibilityMode::kQuirks,
-            !scopes.is_empty(),
-        );
-        self.style_selectors
-            .get(text)
-            .and_then(|variants| variants.get(&variant))
-            .is_some_and(|selectors| selectors.iter().any(|selector| selector.pseudo == pseudo))
-    }
-
     fn CompiledRuleMayMatchElement(
         &self,
         document: &Document,

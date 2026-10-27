@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
 use cssom::{CSSStyleSheet, CSSUserAgentStyleSheetRole};
-use dom::ParsedDocument;
 use std::rc::Rc;
 use style::{ParseUserAgentCSS, ParseUserAgentCSSWithRole};
 
@@ -61,10 +60,6 @@ impl UserAgentStyleSheets {
         &self.sheets_
     }
 
-    // cpp: browser/user_agent_styles.cc:49-52
-    pub fn For(&self, _document: &ParsedDocument) -> &[Rc<CSSStyleSheet>] {
-        self.sheets_.as_slice()
-    }
     // cpp: browser/user_agent_styles.cc:49-52
     pub fn ForDocument(&self, _document: &dom::Document) -> &[Rc<CSSStyleSheet>] {
         self.sheets_.as_slice()

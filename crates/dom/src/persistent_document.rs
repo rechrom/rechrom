@@ -795,8 +795,7 @@ enum ImageResourceState {
 }
 
 // cpp: dom/document.h:207-232
-// Re-exported as dom::Document. The older parser's narrow tree is exposed
-// separately as dom::ParsedDocument until its callers migrate.
+// Re-exported as dom::Document.
 pub struct PersistentDocument {
     document_url: String,
     arena: Vec<DOMNode>,

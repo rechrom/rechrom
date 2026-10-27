@@ -143,20 +143,6 @@ impl<'d> ProductionElementRuleCollectorRuntime<'d> {
         }
     }
 
-    pub fn with_author_layer_map(
-        session: &PersistentSelectorMatchSession<'d>,
-        author_layer_map: Option<Rc<CascadeLayerMap>>,
-    ) -> Self {
-        Self {
-            selector: session.Backend(),
-            author_layer_map: author_layer_map.map(Rc::new),
-            implicit_scope_roots: Default::default(),
-            container_runtime: None,
-            style_scopes: RefCell::new(HashMap::new()),
-            tree_scopes: RefCell::new(HashMap::new()),
-        }
-    }
-
     pub fn with_production_inputs(
         session: &PersistentSelectorMatchSession<'d>,
         author_layer_map: Option<Rc<CascadeLayerMap>>,

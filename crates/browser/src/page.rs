@@ -4799,9 +4799,19 @@ pub fn OpenUrl(
     client: Rc<RefCell<dyn PageClient>>,
 ) -> io::Result<Page> {
     let options = url_loader::DefaultURLLoaderOptions::default();
-    let loader = Rc::new(RefCell::new(url_loader::DefaultURLLoader::new(
-        options.clone(),
-    )?));
+    let loader = url_loader::DefaultURLLoader::new(options.clone())?;
+    OpenUrlWithDefaultLoader(url, width, height, client, options, loader)
+}
+
+pub(crate) fn OpenUrlWithDefaultLoader(
+    url: &str,
+    width: u32,
+    height: u32,
+    client: Rc<RefCell<dyn PageClient>>,
+    options: url_loader::DefaultURLLoaderOptions,
+    loader: url_loader::DefaultURLLoader,
+) -> io::Result<Page> {
+    let loader = Rc::new(RefCell::new(loader));
     let xhr = xhr_transport::CreateHTTPXMLHttpRequestTransport(&options)?;
     let assembly = crate::CreateLayoutAssembly();
     let mut page = Page::Create(

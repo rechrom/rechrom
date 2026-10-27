@@ -52,16 +52,6 @@ impl ProductionPseudoRequest {
             search_text: SearchTextRequest::kNone,
         }
     }
-
-    pub fn SearchText(current: SearchTextRequest) -> Self {
-        Self {
-            id: PseudoId::kPseudoIdSearchText,
-            originating_id: PseudoId::kPseudoIdNone,
-            argument: None,
-            ident_list: Vec::new(),
-            search_text: current,
-        }
-    }
 }
 
 /// Inputs behind ElementRuleCollector's `reject_starting_styles` calculation.

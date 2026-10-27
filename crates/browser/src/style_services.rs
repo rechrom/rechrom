@@ -1,9 +1,12 @@
 #![allow(non_snake_case)]
 use crate::user_agent_styles::UserAgentStyleSheets;
-use dom::{Document, UserInteractionState, DOM};
+#[cfg(test)]
+use dom::UserInteractionState;
+use dom::{Document, DOM};
 use layoutng_assembly::internal::layout_input::ConstraintSpace;
 use std::{cell::RefCell, rc::Rc};
 use style::media_queries::{media_values_cached::MediaValuesCachedData, scripting::Scripting};
+#[cfg(test)]
 use webapi::dom_bindings::DOMBindingsHost;
 
 struct StyleFontMetricsState {
@@ -368,7 +371,8 @@ pub(crate) fn SelectResponsiveImageFromAttributes(
 // cpp: browser/browser.cc:641-648,932-939
 // The callback adapter measures on demand. Page's mutation-invalidated cache
 // will own these same inputs; no cached snapshot is used by this adapter.
-pub fn CreateLayoutBindingsHost(
+#[cfg(test)]
+pub(crate) fn CreateLayoutBindingsHost(
     document: Rc<RefCell<DOM>>,
     constraints: Rc<RefCell<ConstraintSpace>>,
     interaction: Rc<RefCell<UserInteractionState>>,
@@ -448,6 +452,7 @@ pub fn CreateLayoutBindingsHost(
 }
 
 // cpp: browser/browser.cc:1748-1758
+#[cfg(test)]
 pub(crate) fn ResolveLayoutStyles(owner: &mut DOM, constraints: &ConstraintSpace) {
     let mut engine = style::StyleEngine::new(owner);
     ResolveLayoutStylesWithEngine(
@@ -458,6 +463,7 @@ pub(crate) fn ResolveLayoutStyles(owner: &mut DOM, constraints: &ConstraintSpace
     );
 }
 
+#[cfg(test)]
 pub(crate) fn ResolveLayoutStylesWithEngine(
     engine: &mut style::StyleEngine,
     owner: &mut DOM,
@@ -473,6 +479,7 @@ pub(crate) fn ResolveLayoutStylesWithEngine(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColors(
     engine: &mut style::StyleEngine,
     owner: &mut DOM,
@@ -563,7 +570,8 @@ pub(crate) fn PublishContainerSizes(
 // Supply source computed-style resolution on the same DOM arena used by the
 // script runtime. Page's dirty cache and measurement/render lifecycle are
 // separate services; this callback computes current styles on demand.
-pub fn CreateStyleBindingsHost(
+#[cfg(test)]
+pub(crate) fn CreateStyleBindingsHost(
     document: Rc<RefCell<DOM>>,
     environment: Rc<RefCell<MediaValuesCachedData>>,
 ) -> DOMBindingsHost {

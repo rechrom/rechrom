@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 
-use dom::StyleSource;
 use layout_algo_block::assembly::InstallBlockAlgorithm;
 use layout_algo_flex::assembly::InstallFlexAlgorithm;
 use layout_algo_float::assembly::InstallFloatAlgorithm;
@@ -9,6 +8,7 @@ use layout_algo_list::assembly::InstallListModule;
 use layout_algo_replaced::assembly::InstallReplacedAlgorithm;
 use layout_algo_svg::assembly::InstallSvgModule;
 use layout_fragment::LayoutResultHandle;
+#[cfg(test)]
 use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::internal::boundary::assembly::InstallLayoutBoundary;
 use layoutng_assembly::internal::layout_input::{
@@ -188,7 +188,7 @@ pub fn CreateSVGImageDecoderWithConstraints(
     )
 }
 
-/// Host viewport, system fonts and theme inputs shared by static and live DOM layout.
+/// Host viewport, system fonts and theme inputs shared by Page and isolated-document layout.
 pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
     let started = std::env::var_os("BROWSER_PROFILE_INPUT")
         .is_some()
@@ -249,11 +249,36 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
     space
 }
 
-/// First static-page profile: block elements, embedded CSS, solid colors and
-/// borders. Other page features report unsupported at their owning boundary.
+/// Render inline HTML through the same persistent Page lifecycle as URL
+/// navigation. A hierarchical in-memory document URL preserves the source
+/// URL semantics required by same-document SVG/CSS fragment references.
 pub fn RenderHtml(source: &str, width: u32, height: u32) -> Vec<u8> {
-    let (_, artifact) =
-        LayoutStaticHtmlWithPaint(source, width, height).expect("HTML render failed");
+    let options = url_loader::DefaultURLLoaderOptions::default();
+    let mut loader = url_loader::DefaultURLLoader::new(options.clone())
+        .expect("HTML render URL loader creation failed");
+    let url = "memory://render-html/document.html";
+    loader
+        .RegisterMemoryURL(
+            url.to_owned(),
+            "text/html".to_owned(),
+            source.as_bytes().to_vec(),
+            "utf-8".to_owned(),
+        )
+        .expect("HTML render source registration failed");
+    let mut page = page::OpenUrlWithDefaultLoader(
+        url,
+        width,
+        height,
+        std::rc::Rc::new(RefCell::new(page::NullPageClient)),
+        options,
+        loader,
+    )
+    .expect("HTML render navigation failed");
+    page.RunTask().expect("HTML render task failed");
+    let artifact = page
+        .CurrentFrame()
+        .map(|frame| (*frame.display_items).clone())
+        .expect("HTML render produced no frame");
     RenderArtifactPng(&artifact, width, height)
 }
 
@@ -264,72 +289,6 @@ fn RenderArtifactPng(
 ) -> Vec<u8> {
     let rgba = raster::RasterizePaintArtifact(artifact, width, height);
     raster::EncodeRgbaPng(&rgba, width, height)
-}
-
-/// Resource-free diagnostic layout used by inline HTML unit tests. Anything
-/// that can load an external resource must enter through Page/OpenEngine.
-fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<LayoutResultHandle> {
-    LayoutStaticHtmlWithPaint(source, width, height).map(|(fragments, _)| fragments)
-}
-
-fn LayoutStaticHtmlWithPaint(
-    source: &str,
-    width: u32,
-    height: u32,
-) -> io::Result<(LayoutResultHandle, paint::paint_engine::PaintArtifact)> {
-    let resource_document = html::Parse(source);
-    let mut sheets = Vec::new();
-    for style_source in &resource_document.style_sources {
-        match style_source {
-            StyleSource::Inline(text) => sheets.push(style::ParseCSS(text)),
-            StyleSource::Link(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "external resources require the Page/OpenEngine path",
-                ))
-            }
-        }
-    }
-
-    let mut document = html::html_parser::ParseHTML(source);
-    for sheet in &sheets {
-        document.GetDocumentMut().AppendStyleSheet(sheet.clone());
-    }
-    let assembly = CreateLayoutAssembly();
-    let mut space = CreateBrowserConstraints(width, height);
-    let mut fonts = font_engine::FontEngine::new(
-        font_engine::FontContextVersion::default(),
-        space.font_backend_factory.clone(),
-    );
-    fonts
-        .ApplyMutation(font_engine::FontMutation::SetFaces(
-            space.fonts.iter().cloned().collect(),
-        ))
-        .expect("initial font catalog mutation");
-    fonts.SetQueryCollector(space.font_queries.clone());
-    let fonts = font_engine::FontEngineHandle::new(fonts);
-    space.font_engine = Some(fonts.clone());
-    style_services::ResolveLayoutStyles(&mut document, &space);
-    let mut layout = LayoutEngine::new(&assembly);
-    let mut font_session = font_session::SystemFontSession::with_engine(
-        fonts,
-        Box::new(system_font_provider::BrowserSystemFontProvider::default()),
-    );
-    font_session::LayoutWithSystemFonts(
-        &mut layout,
-        &mut document,
-        &dom::UserInteractionState::default(),
-        &mut space,
-        &mut font_session,
-    );
-    let layout_output = layout
-        .TakePaintOutput()
-        .expect("completed font/layout transaction");
-    let mut paint_engine = paint::paint_engine::PaintEngine::new();
-    paint_engine.Paint(&layout_output, Default::default());
-    let paint_output = paint_engine.CommitPaintResult();
-    let (fragments, artifact) = layout.CommitPaint(layout_output, paint_output, None);
-    Ok((fragments, (*artifact).clone()))
 }
 
 pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
@@ -457,16 +416,9 @@ mod tests {
         let source = document_loader::DecodeText(&document_response).unwrap();
         let css_href = "./css/simpleweb.css?080526";
         assert!(source.contains(&format!("href=\"{css_href}\"")));
-        let document = html::Parse(&source);
-        assert!(document
-            .style_sources
-            .iter()
-            .any(|style| matches!(style, StyleSource::Link(href) if href == css_href)));
-        assert_eq!(document.style_sources.len(), 2);
-        assert!(document
-            .elements
-            .iter()
-            .any(|element| element.tag == "main"));
+        let document = html::html_parser::ParseHTML(&source);
+        assert!((0..document.GetDocument().NodeCount())
+            .any(|index| document.GetDocument().Node(index).IsHTMLElement("main")));
         let css_url = document_loader::ResolveUrl(&document_response.final_url, css_href).unwrap();
         assert_eq!(css_url, "https://www.cjpj.de/css/simpleweb.css?080526");
         resources.SetDocumentURL(document_response.final_url.clone());
@@ -594,16 +546,6 @@ mod tests {
         let png = RenderUrl(&format!("http://127.0.0.1:{port}/start"), 400, 320).unwrap();
         server.join().unwrap();
         assert_eq!(png, REFERENCE);
-        {
-            let fragments = LayoutStaticHtml(HTML, 400, 320).unwrap();
-            let display_list = paint::paint_engine::Paint(&fragments);
-            assert!(!display_list.items.is_empty());
-            assert!(!display_list.chunks.is_empty());
-            assert_eq!(
-                display_list.chunks.last().unwrap().end_index,
-                u32::try_from(display_list.display_items.len()).unwrap()
-            );
-        }
     }
 }
 

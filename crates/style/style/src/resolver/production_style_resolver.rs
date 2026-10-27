@@ -1359,6 +1359,7 @@ struct ProductionRuleMatchingHost<'d> {
 }
 
 impl<'d> ProductionRuleMatchingHost<'d> {
+    #[cfg(test)]
     fn new(
         document: &'d Document,
         media: &'d MediaValuesCachedData,
@@ -1375,6 +1376,7 @@ impl<'d> ProductionRuleMatchingHost<'d> {
         )
     }
 
+    #[cfg(test)]
     fn new_with_collaborators(
         document: &'d Document,
         media: &'d MediaValuesCachedData,
@@ -4653,6 +4655,7 @@ pub(crate) struct ProductionBaseStyleInputs<'a> {
     pub collaborators: ProductionBaseStyleCollaborators<'a>,
 }
 
+#[cfg(test)]
 pub(crate) struct ProductionResolveBaseStyleInputs<'a> {
     pub matching: ProductionRuleMatchingInputs<'a>,
     pub parent: Persistent<ComputedStyle>,
@@ -4698,6 +4701,7 @@ pub(crate) struct ProductionBaseStyleMetrics {
 }
 
 impl ProductionBaseStyleOutput {
+    #[cfg(test)]
     pub(crate) fn Get(&self) -> *mut ComputedStyle {
         self.style.Get()
     }
@@ -4722,6 +4726,7 @@ fn NamespaceURIFor(namespace: DOMNamespace) -> AtomicString {
 /// selector checks and transfer through `ProductionElementRuleCollectorRuntime`.
 /// Unsupported document features are reported after the trial, so callers
 /// never consume a partially matched result as if it were complete.
+#[cfg(test)]
 pub(crate) fn MatchAllRulesForElement(
     inputs: ProductionRuleMatchingInputs<'_>,
 ) -> Result<MatchResult, Vec<ProductionStyleResolutionFailure>> {
@@ -4968,6 +4973,7 @@ pub(crate) fn ApplyBaseStyleForElement(
 /// parents; the returned style is the unanimated value later retained by
 /// `StyleBaseData`. Source `ApplyBaseStyleNoCache` bypasses animation-base
 /// reuse but still participates in the matched-properties cache.
+#[cfg(test)]
 pub(crate) fn ResolveBaseStyleForElement(
     inputs: ProductionResolveBaseStyleInputs<'_>,
 ) -> Result<ProductionBaseStyleOutput, Vec<ProductionStyleResolutionFailure>> {
@@ -5044,16 +5050,6 @@ pub(crate) fn ResolveBaseStyleForElement(
         variable_dependencies_complete,
         metrics,
     })
-}
-
-/// Compatibility name for direct tests and callers that do not retain a
-/// cache owner. `ProductionBaseStyleCollaborators::ordinary` creates a fresh
-/// owner, so these calls remain effectively no-cache while sharing the same
-/// source lifecycle as document-owned resolution.
-pub(crate) fn ApplyBaseStyleNoCacheForElement(
-    inputs: ProductionBaseStyleInputs<'_>,
-) -> Result<ProductionBaseStyleOutput, Vec<ProductionStyleResolutionFailure>> {
-    ApplyBaseStyleForElement(inputs)
 }
 
 /// Runs the source-aligned `StyleResolver::InitialStyleForElement` path for
@@ -6318,7 +6314,7 @@ mod tests {
                     .ResolvedStyleFor(parent)
                     .map(|resolved| resolved.native_style.clone())
             });
-        let actual = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+        let actual = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {
                 document: owner.GetDocument(),
                 element_index: target,
@@ -6367,7 +6363,7 @@ mod tests {
             collaborators.root_style = Some(originating.clone());
             collaborators.pseudo_id = pseudo_id;
             collaborators.originating_style = Some(originating.clone());
-            let actual = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+            let actual = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
                 matching: ProductionRuleMatchingInputs {
                     document: owner.GetDocument(),
                     element_index: target,
@@ -6412,7 +6408,7 @@ mod tests {
             let mut collaborators = ProductionBaseStyleCollaborators::ordinary(media.em_size);
             collaborators.pseudo_id = PseudoId::kPseudoIdFirstLetter;
             collaborators.originating_style = Some(originating.clone());
-            ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+            ApplyBaseStyleForElement(ProductionBaseStyleInputs {
                 matching: ProductionRuleMatchingInputs {
                     document,
                     element_index: target,
@@ -6453,7 +6449,7 @@ mod tests {
         let mut collaborators = ProductionBaseStyleCollaborators::ordinary(media.em_size);
         collaborators.pseudo_id = PseudoId::kPseudoIdPlaceholder;
         collaborators.originating_style = Some(originating.clone());
-        let actual = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+        let actual = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {
                 document: owner.GetDocument(),
                 element_index: target,
@@ -6614,7 +6610,7 @@ mod tests {
             attributes: Some(&attributes),
         };
 
-        let output = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+        let output = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {
                 document: owner.GetDocument(),
                 element_index: target,
@@ -6679,7 +6675,7 @@ mod tests {
         collaborators.root_style = Some(parent.clone());
         collaborators.animations = Some(&animations);
 
-        let actual = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+        let actual = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {
                 document: owner.GetDocument(),
                 element_index: target,
@@ -6740,7 +6736,7 @@ mod tests {
         collaborators.root_style = Some(parent.clone());
         collaborators.animations = Some(&animations);
 
-        let actual = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+        let actual = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {
                 document: owner.GetDocument(),
                 element_index: target,
@@ -6898,7 +6894,7 @@ mod tests {
         let mut collaborators = ProductionBaseStyleCollaborators::ordinary(16.0);
         collaborators.is_document_element = true;
 
-        let actual = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+        let actual = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {
                 document: owner.GetDocument(),
                 element_index: root,

@@ -2167,6 +2167,28 @@ mod tests {
     }
 
     #[test]
+    fn resolves_referenced_text_path_on_the_persistent_dom() {
+        let owner = crate::test_html::html_parser::ParseHTML(
+            "<svg><path id='route' d='M0 0 L200 0'></path><text><textPath id='label' \
+             href='#route' startOffset='25%' side='RIGHT'>x</textPath></text></svg>",
+        );
+        let document = owner.GetDocument();
+        let label = document.FindNodeById("label").unwrap();
+        let path = ResolveSVGTextPath(document, label).unwrap();
+        assert_eq!(path.points.len(), 2);
+        assert_eq!(path.start_offset, 50.0);
+        assert!(path.reverse_direction);
+
+        let invalid = crate::test_html::html_parser::ParseHTML(
+            "<svg><path id='route' d='M0 0 L10 0 M20 0 L30 0'></path><text>\
+             <textPath id='label' href='#route'>x</textPath></text></svg>",
+        );
+        let document = invalid.GetDocument();
+        let label = document.FindNodeById("label").unwrap();
+        assert!(ResolveSVGTextPath(document, label).is_none());
+    }
+
+    #[test]
     fn details_attachment_matches_manual_summary_and_content_slots() {
         let mut owner = crate::test_html::html_parser::ParseHTML(
             "<details id='closed'><p id='before'></p><summary id='closed-summary'></summary><p id='closed-content'></p></details><details id='open' open><p id='open-before'></p><summary id='open-summary'></summary><p id='open-content'></p></details>",
