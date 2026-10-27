@@ -1,0 +1,9 @@
+[package]
+name = "compositor_layerize"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+compositor_tree = { path = "../compositor_tree" }

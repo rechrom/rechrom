@@ -9,11 +9,77 @@ use crate::{
 };
 use foundation::begin_frame::BeginFrameSource;
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     io,
     sync::{mpsc, Arc},
     time::{Duration, Instant},
 };
+
+/// Window-owned readiness for the Page surfaces embedded by the current Scene.
+///
+/// Page producers finish independently. During a resize, treating the first
+/// arriving surface as an all-surfaces-ready signal lets a fast toolbar frame
+/// force an immediate draw while the content surface still has the old size.
+/// Keep this coordination beside DisplayScheduler; Page and Viz algorithms only
+/// continue to publish their normal immutable outputs.
+#[derive(Default)]
+struct SurfaceReadiness {
+    scene: Option<crate::page_presentation::Scene>,
+    viewports: BTreeMap<crate::page_presentation::Document, crate::engine::Viewport>,
+    ready_damage: bool,
+    interaction_damage: bool,
+}
+
+impl SurfaceReadiness {
+    fn observe(&mut self, message: &display::Message) -> Option<bool> {
+        match message {
+            display::Message::Scene(scene) => {
+                self.scene = Some(scene.clone());
+                self.ready_damage = false;
+                self.interaction_damage = false;
+                None
+            }
+            display::Message::Prepare { submitted } => {
+                self.viewports
+                    .insert(submitted.provenance.document, submitted.viewport);
+                self.interaction_damage |= submitted.is_handling_interaction;
+                let all_ready = self.all_placed_surfaces_match();
+                self.ready_damage |= all_ready;
+                Some(all_ready)
+            }
+            display::Message::Submit { .. }
+            | display::Message::SwapAck(_)
+            | display::Message::Stop => None,
+        }
+    }
+
+    fn all_placed_surfaces_match(&self) -> bool {
+        self.scene.as_ref().is_some_and(|scene| {
+            !scene.placements.is_empty()
+                && scene.placements.iter().all(|placement| {
+                    self.viewports
+                        .get(&placement.document)
+                        .is_some_and(|viewport| {
+                            viewport.width == placement.destination.width
+                                && viewport.height == placement.destination.height
+                        })
+                })
+        })
+    }
+
+    fn has_ready_damage(&self) -> bool {
+        self.ready_damage
+    }
+
+    fn has_interaction_damage(&self) -> bool {
+        self.interaction_damage
+    }
+
+    fn did_schedule_draw(&mut self) {
+        self.ready_damage = false;
+        self.interaction_damage = false;
+    }
+}
 
 pub(crate) enum Command {
     Display(display::Message),
@@ -186,6 +252,7 @@ fn run(
         Ok(())
     };
     let mut scheduler = viz::DisplayScheduler::default();
+    let mut surfaces = SurfaceReadiness::default();
     loop {
         let timeout = scheduler
             .NextDeadline()
@@ -199,14 +266,9 @@ fn run(
                 return Ok(());
             }
             Ok(Command::Display(message)) => {
-                let interaction = match &message {
-                    display::Message::Prepare { submitted } => {
-                        Some(submitted.is_handling_interaction)
-                    }
-                    _ => None,
-                };
+                let all_surfaces_ready = surfaces.observe(&message);
                 dispatch(DisplayWork::Command(message))?;
-                if let Some(interaction) = interaction {
+                if let Some(all_surfaces_ready) = all_surfaces_ready {
                     // Damage after a completed deadline belongs to the next
                     // scheduler opportunity. Chromium's optional previous-frame
                     // swap requires CanDrawForPreviousFrame; a deadline alone
@@ -220,8 +282,15 @@ fn run(
                     // scroll damage is ready now and therefore selects the
                     // immediate deadline instead of waiting until the regular
                     // display draw deadline and missing Core Animation's latch.
-                    scheduler.SetDamageDueToInteraction(interaction);
-                    scheduler.OnPendingSurfacesChanged(false);
+                    // is_handling_interaction is aggregate display-frame state.
+                    // Do not expose it to DisplayScheduler while another placed
+                    // Page surface still has the previous resize geometry: its
+                    // immediate mode would otherwise bypass the pending-surface
+                    // wait. Retain the bit until the complete candidate arrives.
+                    if all_surfaces_ready && surfaces.has_interaction_damage() {
+                        scheduler.SetDamageDueToInteraction(true);
+                    }
+                    scheduler.OnPendingSurfacesChanged(!all_surfaces_ready);
                     scheduler.OnDisplayDamaged(Instant::now());
                 }
                 source.request_begin_frame();
@@ -243,7 +312,10 @@ fn run(
                 // to Page compositors. Keep Viz in regular-deadline mode until
                 // a Page surface arrives; if none does, the deadline still
                 // aggregates the previously submitted surfaces.
-                scheduler.OnPendingSurfacesChanged(true);
+                if surfaces.has_ready_damage() && surfaces.has_interaction_damage() {
+                    scheduler.SetDamageDueToInteraction(true);
+                }
+                scheduler.OnPendingSurfacesChanged(!surfaces.has_ready_damage());
                 let pending = scheduler.PendingFrame().unwrap();
                 scheduler.MarkPrepared(pending, true);
             }
@@ -253,7 +325,75 @@ fn run(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if let Some(frame) = scheduler.TakeIfDrawDue(Instant::now()) {
+            surfaces.did_schedule_draw();
             dispatch(DisplayWork::Command(display::Message::Submit { frame }))?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        engine::Viewport,
+        page_presentation::{DeviceRect, FrameProvenance, PageFrame, Placement, Scene},
+    };
+
+    fn page(document: (u64, u64), width: u32, height: u32, interaction: bool) -> display::Message {
+        display::Message::Prepare {
+            submitted: PageFrame {
+                provenance: FrameProvenance {
+                    document,
+                    content: None,
+                },
+                viewport: Viewport {
+                    width,
+                    height,
+                    scale: 1.0,
+                },
+                is_handling_interaction: interaction,
+                pixels: Arc::new(Vec::new()),
+                recycler: None,
+            },
+        }
+    }
+
+    #[test]
+    fn resize_damage_waits_for_every_placed_surface() {
+        let toolbar = (0, 0);
+        let content = (1, 1);
+        let mut state = SurfaceReadiness::default();
+        state.observe(&display::Message::Scene(Scene {
+            viewport: Viewport {
+                width: 1000,
+                height: 700,
+                scale: 1.0,
+            },
+            placements: vec![
+                Placement {
+                    document: toolbar,
+                    destination: DeviceRect::new(0, 0, 1000, 86),
+                },
+                Placement {
+                    document: content,
+                    destination: DeviceRect::new(0, 86, 1000, 614),
+                },
+            ],
+            live_documents: vec![toolbar, content],
+            metadata: Vec::new(),
+        }));
+
+        assert_eq!(state.observe(&page(toolbar, 1000, 86, true)), Some(false));
+        assert!(!state.has_ready_damage());
+        assert!(state.has_interaction_damage());
+        assert_eq!(state.observe(&page(content, 900, 614, false)), Some(false));
+        assert!(!state.has_ready_damage());
+        assert_eq!(state.observe(&page(content, 1000, 614, false)), Some(true));
+        assert!(state.has_ready_damage());
+        assert!(state.has_interaction_damage());
+
+        state.did_schedule_draw();
+        assert!(!state.has_ready_damage());
+        assert!(!state.has_interaction_damage());
     }
 }

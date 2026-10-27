@@ -145,6 +145,16 @@ impl Display {
 
     fn Prepare(&mut self, submitted: SubmittedFrame) -> io::Result<Vec<Effect>> {
         let document = submitted.provenance.document;
+        let resize = submitted
+            .provenance
+            .content
+            .and_then(|content| content.resize);
+        let _resize_scope = resize.map(|resize| {
+            browser_tracing::scope(browser_tracing::Context {
+                task_id: resize.id,
+                ..Default::default()
+            })
+        });
         browser_tracing::instant(
             "frame",
             "DisplayPageFrameReceived",
@@ -225,6 +235,18 @@ impl Display {
         self.pending.take();
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
+        let resize = provenance.content.and_then(|content| content.resize);
+        let _resize_scope = resize.map(|resize| {
+            browser_tracing::scope(browser_tracing::Context {
+                task_id: resize.id,
+                ..Default::default()
+            })
+        });
+        let mut prepare_trace = browser_tracing::span("present", "Display.PrepareFrame");
+        prepare_trace.set("width", viewport.width as f64);
+        prepare_trace.set("height", viewport.height as f64);
+        prepare_trace.set("device_scale", viewport.scale);
+        prepare_trace.set("stale_surfaces", stale_surfaces as f64);
         let output = self
             .target
             .render_page_surfaces(&placements, viewport, sequence)?;
@@ -236,6 +258,15 @@ impl Display {
             drag_regions: scene.metadata.clone(),
             is_handling_interaction,
         });
+        if resize.is_some() {
+            if let Some(content) = self
+                .pages
+                .get_mut(&provenance.document)
+                .and_then(|page| page.frame.provenance.content.as_mut())
+            {
+                content.resize = None;
+            }
+        }
         browser_tracing::instant(
             "frame",
             "CompositorCandidateReady",
@@ -338,6 +369,13 @@ impl Display {
             drag_regions,
             is_handling_interaction,
         } = prepared;
+        let resize = provenance.content.and_then(|content| content.resize);
+        let _resize_scope = resize.map(|resize| {
+            browser_tracing::scope(browser_tracing::Context {
+                task_id: resize.id,
+                ..Default::default()
+            })
+        });
         frame_trace.set(
             "is_handling_interaction",
             is_handling_interaction as u8 as f64,
@@ -364,7 +402,23 @@ impl Display {
         let presented = self.target.present_prepared(
             output,
             sequence,
-            Box::new(move |_, _| {
+            Box::new(move |_, finished| {
+                if let Some(resize) = resize {
+                    browser_tracing::interval(
+                        "resize",
+                        "ResizeToPresentationComplete",
+                        resize.queued_at,
+                        finished,
+                        &[
+                            ("samples", resize.samples as f64),
+                            ("width", viewport.width as f64),
+                            ("height", viewport.height as f64),
+                            ("device_scale", viewport.scale),
+                            ("present_sequence", sequence as f64),
+                            ("native", native_presentation as u8 as f64),
+                        ],
+                    );
+                }
                 if native_presentation {
                     (notify)(UserEvent::FrameSwapCompleted(viewport));
                 }

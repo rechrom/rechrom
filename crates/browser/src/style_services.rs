@@ -1,10 +1,7 @@
 #![allow(non_snake_case)]
 use crate::user_agent_styles::UserAgentStyleSheets;
 use dom::{Document, UserInteractionState, DOM};
-use layoutng_assembly::{
-    fragment_tree::{FragmentKind, FragmentNode},
-    internal::layout_input::ConstraintSpace,
-};
+use layoutng_assembly::internal::layout_input::ConstraintSpace;
 use std::{cell::RefCell, rc::Rc};
 use style::media_queries::{media_values_cached::MediaValuesCachedData, scripting::Scripting};
 use webapi::dom_bindings::DOMBindingsHost;
@@ -186,10 +183,7 @@ pub(crate) fn ResponsiveMediaMatches(
         return true;
     }
     let set = style::media_queries::media_query_backend::ParseMediaQuerySet(query);
-    style::media_queries::media_query_evaluator::MediaQueryEvaluator::<
-        style::media_queries::media_query_backend::MediaQueryValueBackend<'_>,
-    >::ForMediaValues(values)
-    .Eval(&set)
+    style::media_queries::media_query_backend::ForMediaValues(values).Eval(&set)
 }
 
 fn SupportedResponsiveImageType(value: Option<&str>) -> bool {
@@ -373,111 +367,6 @@ pub(crate) fn SelectResponsiveImageFromAttributes(
         source: candidate.source,
         density: Some(candidate.density),
     })
-}
-
-// cpp: browser/browser.cc:649-671
-/// CSSOM used dimensions require a CSS layout box, rather than line boxes.
-/// Preserve that distinction in the typed host result instead of reporting a
-/// fabricated zero used width for an ordinary inline (ComputedStyleUtils::UsedBoxSize).
-pub(crate) fn ReadFragmentMetric(root: &FragmentNode, id: u64, name: &str) -> Option<f64> {
-    if matches!(
-        name,
-        "contentWidth" | "contentHeight" | "borderBoxWidth" | "borderBoxHeight"
-    ) && root
-        .inline_geometry
-        .iter()
-        .any(|inline| inline.node_id == id)
-    {
-        return None;
-    }
-    Some(FragmentMetric(root, id, name))
-}
-
-pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
-    fn find(node: &FragmentNode, id: u64) -> Option<&FragmentNode> {
-        if node.node_id == id && node.kind == FragmentKind::kBox {
-            return Some(node);
-        }
-        node.children.iter().find_map(|child| find(child, id))
-    }
-    if let Some(inline) = root
-        .inline_geometry
-        .iter()
-        .find(|inline| inline.node_id == id)
-    {
-        let unzoom = |value: f64| (value as f32 / inline.effective_zoom) as f64;
-        match name {
-            "offsetWidth" => return unzoom(inline.local_bounds.size.width).round(),
-            "offsetHeight" => return unzoom(inline.local_bounds.size.height).round(),
-            "offsetLeft" => return unzoom(inline.local_bounds.offset.x).round(),
-            "offsetTop" => return unzoom(inline.local_bounds.offset.y).round(),
-            // Non-replaced inlines have no client/scroll CSS layout box.
-            "clientWidth" | "clientHeight" | "clientLeft" | "clientTop" | "scrollWidth"
-            | "scrollHeight" => return 0.0,
-            _ => {}
-        }
-    }
-    let Some(fragment) = find(root, id) else {
-        return 0.0;
-    };
-    let p = &fragment.paint;
-    // CSSOM View integer dimensions exclude CSS zoom; client rectangles
-    // retain the zoomed physical geometry exported by paint.
-    // Blink's zoom adjustment uses float division before integer rounding.
-    // Keeping the quotient in f64 would round 90 / float(0.8) to 112 instead
-    // of the native float quotient 112.5, whose integer result is 113.
-    let unzoom = |value: f64| {
-        if p.effective_zoom == 1.0 {
-            value
-        } else {
-            (value as f32 / p.effective_zoom) as f64
-        }
-    };
-    match name {
-        "offsetWidth" => unzoom(fragment.size.width).round(),
-        "offsetHeight" => unzoom(fragment.size.height).round(),
-        // Fragment offsets are relative to their containing fragment. This is
-        // the same coordinate space CSSOM View exposes for offsetLeft/Top in
-        // the common unfragmented offset-parent case.
-        "offsetLeft" => unzoom(fragment.offset.x).round(),
-        "offsetTop" => unzoom(fragment.offset.y).round(),
-        "clientWidth" => unzoom(p.client_size.map_or(
-            fragment.content_size.width + p.padding.left + p.padding.right,
-            |size| size.width,
-        ))
-        .round(),
-        "clientHeight" => unzoom(p.client_size.map_or(
-            fragment.content_size.height + p.padding.top + p.padding.bottom,
-            |size| size.height,
-        ))
-        .round(),
-        "borderBoxWidth" => unzoom(fragment.size.width),
-        "borderBoxHeight" => unzoom(fragment.size.height),
-        "contentWidth" => unzoom(fragment.content_size.width),
-        "contentHeight" => unzoom(fragment.content_size.height),
-        "clientLeft" => unzoom(p.border.left).round(),
-        "clientTop" => unzoom(p.border.top).round(),
-        "scrollWidth" => unzoom(p.scroll_size.width).round(),
-        "scrollHeight" => unzoom(p.scroll_size.height).round(),
-        // Internal CSSOM View adapter metrics. ScrollableArea's range is not
-        // necessarily 0..(scroll-size - client-size): RTL and vertical writing
-        // modes can put the logical start at a negative physical offset.
-        "minimumScrollLeft" => p
-            .scroll_container
-            .map_or(0.0, |scroll| unzoom(scroll.minimum_scroll_offset.x)),
-        "maximumScrollLeft" => p.scroll_container.map_or_else(
-            || unzoom((p.scroll_size.width - fragment.size.width).max(0.0)),
-            |scroll| unzoom(scroll.maximum_scroll_offset.x),
-        ),
-        "minimumScrollTop" => p
-            .scroll_container
-            .map_or(0.0, |scroll| unzoom(scroll.minimum_scroll_offset.y)),
-        "maximumScrollTop" => p.scroll_container.map_or_else(
-            || unzoom((p.scroll_size.height - fragment.size.height).max(0.0)),
-            |scroll| unzoom(scroll.maximum_scroll_offset.y),
-        ),
-        _ => 0.0,
-    }
 }
 
 // cpp: browser/browser.cc:641-648,932-939

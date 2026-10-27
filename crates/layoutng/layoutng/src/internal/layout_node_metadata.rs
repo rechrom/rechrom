@@ -23,6 +23,23 @@ use super::layout_object::LayoutObject;
 use super::scroll_types::ScrollOffset;
 use super::svg_length_adjust_type::SVGLengthAdjustType;
 
+#[path = "../../../layout_algo_svg/src/native_svg_metadata_validation.rs"]
+mod layout_algo_svg_native_metadata_validation;
+use layout_algo_svg_native_metadata_validation::ValidateSvgElementInput;
+#[path = "../../../layout_invalidation/src/native_timeline_trigger_metadata.rs"]
+mod layout_invalidation_native_timeline_trigger_metadata;
+use layout_invalidation_native_timeline_trigger_metadata::PopulateTimelineTriggerNames;
+#[path = "../../../layout_algo_list/src/native_list_marker_lookup.rs"]
+mod layout_algo_list_native_marker_lookup;
+#[path = "../../../layout_invalidation/src/native_element_metadata_input.rs"]
+mod layout_invalidation_native_element_metadata_input;
+#[path = "../../../layout_invalidation/src/native_metadata_append.rs"]
+mod layout_invalidation_native_metadata_append;
+#[path = "../../../layout_invalidation/src/native_node_input_state.rs"]
+mod layout_invalidation_native_node_input_state;
+#[path = "../../../layout_invalidation/src/native_node_metadata_tree.rs"]
+mod layout_invalidation_native_node_metadata_tree;
+
 // This header mapping remains in progress while cross-file declarations and
 // the owning tree builder are connected.
 
@@ -73,7 +90,7 @@ pub enum NodeType {
     kCommentNode = 8,
     kDocumentNode = 9,
     kDocumentTypeNode = 10,
-    kDocumentFragmentNode = 11,
+    kDocumentFragmentPaintData = 11,
 }
 
 // cpp: layoutng/internal/layout_node_metadata.cc:16-49
@@ -94,8 +111,8 @@ pub struct StandaloneNodeData {
     pub input_id: u64,
     pub input_kind: NodeKind,
     pub input_is_style_generated: bool,
-    pub input_style: InputComputedStyle,
-    pub input_first_line_style_data: Option<InputComputedStyle>,
+    pub input_style: Arc<InputComputedStyle>,
+    pub input_first_line_style_data: Option<Arc<InputComputedStyle>>,
     pub debug_name: String,
     pub element_data: Option<ElementData>,
     pub reusable_layout_environment: Option<Arc<ReusableLayoutEnvironment>>,
@@ -104,34 +121,9 @@ pub struct StandaloneNodeData {
     bound_font: Member<font_engine::fonts::font::Font>,
 }
 impl StandaloneNodeData {
+    #[inline(always)]
     pub fn new(input: &NativeNodeConstructionData) -> Self {
-        Self {
-            compatibility_mode: CompatibilityMode::kStandards,
-            printing: false,
-            paginated: false,
-            fragmentainer_block_size: None,
-            vertical_scroll_enforced: false,
-            device_pixel_ratio: 1.0,
-            canvas_draw_element_enabled: false,
-            prefer_non_composited_scrolling_enabled: false,
-            viewport: None,
-            minimum_font_physical_size: None,
-            scrollbar_theme: None,
-            control_theme: ControlThemeMetrics::default(),
-            document_role: input
-                .element
-                .as_ref()
-                .map_or(DocumentRole::kNone, |element| element.document_role),
-            input_id: input.id,
-            input_kind: input.kind,
-            input_is_style_generated: input.style_generated,
-            input_style: input.style.clone(),
-            input_first_line_style_data: input.first_line_style.clone(),
-            debug_name: input.debug_name.clone(),
-            element_data: input.element.clone(),
-            reusable_layout_environment: None,
-            bound_font: Member::default(),
-        }
+        layout_invalidation_native_node_input_state::NewStandaloneNodeData(input)
     }
 }
 
@@ -307,9 +299,9 @@ impl Node {
         self.input_data_.input_is_style_generated
     }
     pub fn InputStyle(&self) -> &InputComputedStyle {
-        &self.input_data_.input_style
+        self.input_data_.input_style.as_ref()
     }
-    pub fn InputFirstLineStyleData(&self) -> &Option<InputComputedStyle> {
+    pub fn InputFirstLineStyleData(&self) -> &Option<Arc<InputComputedStyle>> {
         &self.input_data_.input_first_line_style_data
     }
     pub fn InputDebugName(&self) -> &String {
@@ -336,19 +328,9 @@ impl Node {
         self.style_ = Member::from_ptr(style as *mut NativeComputedStyle);
     }
     // The owning layout tree updates source data without replacing node identity.
+    #[inline(always)]
     pub fn UpdateInputData(&mut self, input: &NativeNodeConstructionData) {
-        assert_eq!(self.InputId(), input.id);
-        assert_eq!(self.InputKind(), input.kind);
-        self.input_font_dirty_ = true;
-        self.input_data_.input_style = input.style.clone();
-        self.input_data_.input_first_line_style_data = input.first_line_style.clone();
-        self.input_data_.document_role = input
-            .element
-            .as_ref()
-            .map_or(DocumentRole::kNone, |e| e.document_role);
-        self.input_data_.element_data = input.element.clone();
-        self.input_data_.debug_name = input.debug_name.clone();
-        self.input_tree_sealed_ = false;
+        layout_invalidation_native_node_input_state::UpdateNodeInputData(self, input)
     }
 
     // Scroll translation is paint state, not a font or geometry invalidation.
@@ -387,27 +369,7 @@ impl Node {
     }
 
     pub(crate) fn DetachForTreeUpdate(&mut self) {
-        let parent = self.parent_.Get();
-        if parent.is_null() {
-            return;
-        }
-        let previous = self.previous_.Get();
-        let next = self.next_.Get();
-        unsafe {
-            if previous.is_null() {
-                (*parent).first_child_ = Member::from_ptr(next);
-            } else {
-                (*previous).next_ = Member::from_ptr(next);
-            }
-            if next.is_null() {
-                (*parent).last_child_ = Member::from_ptr(previous);
-            } else {
-                (*next).previous_ = Member::from_ptr(previous);
-            }
-        }
-        self.parent_ = Member::default();
-        self.previous_ = Member::default();
-        self.next_ = Member::default();
+        layout_invalidation_native_metadata_append::DetachForTreeUpdate(self)
     }
 
     pub fn SetInputFirstLineStyle(&mut self, style: *const NativeComputedStyle) {
@@ -515,20 +477,6 @@ impl Node {
     pub fn IsFirstLetterPseudoElement(&self) -> bool {
         self.ComputedStyleRef().StyleType() == PseudoId::kPseudoIdFirstLetter
     }
-    pub fn parentElement(&self) -> *mut Element {
-        let mut parent = self.parent_.Get();
-        while !parent.is_null() {
-            // SAFETY: parent links point to live metadata nodes owned by the
-            // native tree. Element begins with ContainerNode at offset zero.
-            let node = unsafe { &(*parent).node };
-            if node.IsElementNode() {
-                return parent.cast::<Element>();
-            }
-            parent = node.parent_.Get();
-        }
-        std::ptr::null_mut()
-    }
-
     // cpp: layoutng/internal/layout_node_metadata.cc:179-189
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.control_host_);
@@ -594,69 +542,11 @@ impl ContainerNode {
 
     // cpp: layoutng/internal/layout_node_metadata.cc:202-215
     pub fn AppendChild(&mut self, child: &mut Node) -> Result<(), AppendChildError> {
-        if self.node.InputTreeIsSealed() || child.InputTreeIsSealed() {
-            return Err(AppendChildError::SealedTree);
-        }
-        if !child.parent_.Get().is_null()
-            || !child.previous_.Get().is_null()
-            || !child.next_.Get().is_null()
-        {
-            return Err(AppendChildError::AlreadyAttached);
-        }
-        let child_ptr = child as *mut Node;
-        let mut ancestor = &mut self.node as *mut Node;
-        while !ancestor.is_null() {
-            if ancestor == child_ptr {
-                return Err(AppendChildError::Cycle);
-            }
-            // SAFETY: metadata tree links are valid for the owning tree's
-            // lifetime; only the root owner destroys nodes.
-            ancestor = unsafe {
-                let parent = (*ancestor).parent_.Get();
-                if parent.is_null() {
-                    std::ptr::null_mut()
-                } else {
-                    &mut (*parent).node
-                }
-            };
-        }
-        child.parent_ = Member::from_ptr(self);
-        child.previous_ = Member::from_ptr(self.last_child_.Get());
-        if !self.last_child_.Get().is_null() {
-            // SAFETY: last_child_ is a linked node owned by the same tree.
-            unsafe {
-                (*self.last_child_.Get()).next_ = Member::from_ptr(child_ptr);
-            }
-        } else {
-            self.first_child_ = Member::from_ptr(child_ptr);
-        }
-        self.last_child_ = Member::from_ptr(child_ptr);
-        Ok(())
+        layout_invalidation_native_metadata_append::AppendChild(self, child)
     }
 
     pub(crate) fn InsertForTreeUpdate(&mut self, child: &mut Node, before: *mut Node) {
-        assert!(before.is_null() || unsafe { &*before }.parentNode() == self);
-        child.DetachForTreeUpdate();
-        let previous = if before.is_null() {
-            self.last_child_.Get()
-        } else {
-            unsafe { &*before }.previousSibling()
-        };
-        child.parent_ = Member::from_ptr(self);
-        child.previous_ = Member::from_ptr(previous);
-        child.next_ = Member::from_ptr(before);
-        unsafe {
-            if previous.is_null() {
-                self.first_child_ = Member::from_ptr(child);
-            } else {
-                (*previous).next_ = Member::from_ptr(child);
-            }
-            if before.is_null() {
-                self.last_child_ = Member::from_ptr(child);
-            } else {
-                (*before).previous_ = Member::from_ptr(child);
-            }
-        }
+        layout_invalidation_native_metadata_append::InsertForTreeUpdate(self, child, before)
     }
 
     // cpp: layoutng/internal/layout_node_metadata.cc:217-221
@@ -851,87 +741,6 @@ pub enum ElementMetadataError {
 
 #[allow(non_snake_case)]
 impl Element {
-    // cpp: layoutng/internal/layout_node_metadata.cc:229-399
-    pub fn new(
-        input: &NativeNodeConstructionData,
-        style: *const NativeComputedStyle,
-    ) -> Result<Self, ElementMetadataError> {
-        let container = ContainerNode::new(input, style, NodeType::kElementNode)
-            .map_err(ElementMetadataError::Node)?;
-        let mut element = Self {
-            container,
-            element_type_: ElementType::kElement,
-            is_form_control_element_: false,
-            remembered_inline_size_: None,
-            remembered_block_size_: None,
-            used_canvas_transform_: None,
-            saved_layer_scroll_offset_: ScrollOffset::default(),
-            timeline_trigger_names_: Vec::new(),
-            anchor_scroll_data_: Member::default(),
-            out_of_flow_data_: Member::default(),
-            active_transform_animations_: 0,
-            may_be_implicit_anchor_: false,
-        };
-        validate_element_input_prefix(input).map_err(ElementMetadataError::InvalidInput)?;
-        prepare_element_dimensions(&mut element, input)
-            .map_err(ElementMetadataError::InvalidInput)?;
-        element.InputSvgLengthAdjust();
-        if let Some(style) = input.style.extended.as_ref() {
-            for value in &style.timeline_trigger_names {
-                let Some(name) = value else {
-                    element.timeline_trigger_names_.push(Member::default());
-                    continue;
-                };
-                if name.is_empty() {
-                    return Err(ElementMetadataError::InvalidInput(
-                        "Timeline trigger requires a nonempty UTF-8 name",
-                    ));
-                }
-                let units: Vec<u16> = name.encode_utf16().collect();
-                let atom = AtomicString::from_utf16(&units);
-                let scoped_name = MakeGarbageCollected(ScopedCSSName::new(&atom, std::ptr::null()));
-                element
-                    .timeline_trigger_names_
-                    .push(Member::from_ptr(scoped_name));
-            }
-        }
-        Ok(element)
-    }
-
-    pub(crate) fn UpdateElementInput(&mut self, input: &NativeNodeConstructionData) {
-        validate_element_input_prefix(input).unwrap_or_else(|error| panic!("{error:?}"));
-        self.node.UpdateInputData(input);
-        self.remembered_inline_size_ = None;
-        self.remembered_block_size_ = None;
-        self.used_canvas_transform_ = None;
-        prepare_element_dimensions(self, input).unwrap_or_else(|error| panic!("{error:?}"));
-        self.InputSvgLengthAdjust();
-        let textarea = foundation::DynamicTo::<super::form_node_metadata::HTMLTextAreaElement>(
-            self as *mut Element,
-        );
-        if !textarea.is_null() {
-            let sizing = input
-                .element
-                .as_ref()
-                .and_then(|data| data.text_area_sizing.as_ref());
-            unsafe { &mut *textarea }.UpdateSizing(
-                sizing.map_or(2, |sizing| sizing.rows),
-                sizing.map_or(20, |sizing| sizing.columns),
-            );
-        }
-        let control = foundation::DynamicTo::<super::form_node_metadata::HTMLFormControlElement>(
-            self as *mut Element,
-        );
-        if !control.is_null() {
-            unsafe { &mut *control }.autofill_state_ = input
-                .element
-                .as_ref()
-                .map_or(super::form_control_types::AutofillState::kNotFilled, |e| {
-                    e.autofill_state
-                });
-        }
-    }
-
     // Derived metadata constructors select their C++ virtual identity through
     // these tags after the base Element constructor completes.
     pub(crate) fn set_runtime_identity(&mut self, kind: ElementType, form_control: bool) {
@@ -1013,18 +822,7 @@ impl Element {
 
     // cpp: layoutng/internal/layout_node_metadata.cc:463-473
     pub fn InputListMarker(&self) -> *mut Element {
-        let mut child = self.container.firstChild();
-        while !child.is_null() {
-            // SAFETY: child links are owned by the native metadata tree and
-            // list-marker nodes have element identity.
-            let child_ref = unsafe { &*child };
-            if child_ref.InputKind() == NodeKind::kListMarker {
-                assert!(child_ref.IsElementNode());
-                return child.cast::<Element>();
-            }
-            child = child_ref.nextSibling();
-        }
-        std::ptr::null_mut()
+        layout_algo_list_native_marker_lookup::InputListMarker(self)
     }
     pub fn InputListMarkerLayoutObject(&self) -> *mut LayoutObject {
         let marker = self.InputListMarker();
@@ -1137,205 +935,4 @@ pub trait OutOfFlowDataProvider {
     fn EnsureOutOfFlowData(
         element: &mut Element,
     ) -> *mut super::css::out_of_flow_data::OutOfFlowData;
-}
-
-// The pure first stage of Element construction. The owning constructor must
-// call this after constructing ContainerNode, as in the C++ initializer list.
-// cpp: layoutng/internal/layout_node_metadata.cc:231-327
-fn validate_element_input_prefix(input: &NativeNodeConstructionData) -> Result<(), &'static str> {
-    let data = input.element.as_ref();
-    if input.kind == NodeKind::kText || !input.text.is_empty() {
-        return Err("Element metadata requires an element input; text needs a Text node");
-    }
-    // SVGTextPathElement creates LayoutSVGTextPath before its referenced
-    // geometry necessarily exists. Missing geometry is a normal LayoutPath
-    // result; present geometry still receives the typed validation below.
-    if let Some(data) = data {
-        if let Some(shape) = data.svg_shape.as_ref() {
-            if input.kind != NodeKind::kSvgShape {
-                return Err("SVG shape geometry requires an SVG shape node");
-            }
-            let finite = |value: f64| value.is_finite() && value.abs() <= f32::MAX as f64;
-            if !finite(shape.bounds_offset.x)
-                || !finite(shape.bounds_offset.y)
-                || !finite(shape.bounds_width)
-                || !finite(shape.bounds_height)
-                || shape.bounds_width < 0.0
-                || shape.bounds_height < 0.0
-            {
-                return Err("SVG shape bounds must be finite and nonnegative");
-            }
-            if shape.geometry == SvgShapeGeometry::kPath
-                && (shape.path.is_empty() || shape.path[0].verb != PaintPathVerb::kMoveTo)
-            {
-                return Err("SVG path must start with move-to");
-            }
-            for command in &shape.path {
-                for point in [command.control1, command.control2, command.point] {
-                    if !finite(point.x) || !finite(point.y) {
-                        return Err("SVG path coordinates must be finite native values");
-                    }
-                }
-            }
-            if let Some(transform) = shape.local_transform.as_ref() {
-                for value in transform.values {
-                    if !finite(value) {
-                        return Err("SVG shape transform must be finite native values");
-                    }
-                }
-            }
-        } else if input.kind == NodeKind::kSvgShape {
-            return Err("An SVG shape node requires resolved geometry");
-        }
-        if let Some(path) = data.svg_text_path.as_ref() {
-            if input.kind != NodeKind::kSvgTextPath {
-                return Err("SVG textPath geometry requires an SVG textPath node");
-            }
-            if !path.start_offset.is_finite() {
-                return Err("SVG textPath offset must be finite");
-            }
-            for point in &path.points {
-                if !point.x.is_finite()
-                    || !point.y.is_finite()
-                    || point.x.abs() > f32::MAX as f64
-                    || point.y.abs() > f32::MAX as f64
-                {
-                    return Err("SVG textPath points must be finite native coordinates");
-                }
-            }
-        }
-        if data.supports_base_appearance && input.kind != NodeKind::kFormControl {
-            return Err("Base-appearance capability requires a form control");
-        }
-        if data.select_uses_menu_list.is_some()
-            && (input.kind != NodeKind::kFormControl
-                || (data.form_control_type != Some(FormControlType::kSelectOne)
-                    && data.form_control_type != Some(FormControlType::kSelectMultiple)))
-        {
-            return Err("Select presentation requires a select form control");
-        }
-        if let Some(sizing) = data.text_area_sizing.as_ref() {
-            if input.kind != NodeKind::kFormControl
-                || data.form_control_type != Some(FormControlType::kTextArea)
-                || sizing.rows == 0
-                || sizing.columns == 0
-            {
-                return Err("Textarea sizing requires a textarea and positive rows/columns");
-            }
-        }
-        if data.text_field_sizing.is_some()
-            && (input.kind != NodeKind::kFormControl
-                || data.form_control_type.is_none()
-                || data.form_control_type.is_some_and(|kind| {
-                    (kind as i32) < FormControlType::kInputButton as i32
-                        || (kind as i32) > FormControlType::kInputWeek as i32
-                }))
-        {
-            return Err("Text-field sizing requires an input control");
-        }
-        if data.text_control_inner_editor
-            || data.text_control_container
-            || data.text_control_spin_button
-            || data.text_control_placeholder
-        {
-            let part_count = data.text_control_inner_editor as u32
-                + data.text_control_container as u32
-                + data.text_control_spin_button as u32
-                + data.text_control_placeholder as u32;
-            if input.kind != NodeKind::kBox
-                || part_count > 1
-                || data.form_control_type.is_some()
-                || data.file_upload_button
-                || data.image_map_area
-                || data.html_image
-                || data.first_letter_pseudo
-            {
-                return Err("Text control part has conflicting node identity");
-            }
-        }
-        if data
-            .content_lock
-            .is_some_and(|lock| !lock.is_locked && !lock.should_layout_children)
-        {
-            return Err("An unlocked content-lock context must allow child layout");
-        }
-    }
-    Ok(())
-}
-
-// The second construction stage validates and converts each native value in
-// source order. Rust String already enforces the UTF-8 validity that C++
-// checks after accepting arbitrary std::string bytes for the file label.
-// cpp: layoutng/internal/layout_node_metadata.cc:328-385
-fn prepare_element_dimensions(
-    element: &mut Element,
-    input: &NativeNodeConstructionData,
-) -> Result<(), &'static str> {
-    let Some(data) = input.element.as_ref() else {
-        return Ok(());
-    };
-    if data.file_no_file_label.is_some()
-        && (input.kind != NodeKind::kFormControl
-            || data.form_control_type != Some(FormControlType::kInputFile))
-    {
-        return Err("No-file-selected label requires an input-file control");
-    }
-    let remembered_size = |size: Option<f64>| -> Result<Option<LayoutUnit>, &'static str> {
-        let Some(size) = size else {
-            return Ok(None);
-        };
-        if !size.is_finite() || size < 0.0 || size > LayoutUnit::Max().ToDouble() {
-            return Err("Remembered intrinsic size must be finite, nonnegative and representable");
-        }
-        Ok(Some(LayoutUnit::from_f64(size)))
-    };
-    element.remembered_inline_size_ = remembered_size(data.remembered_inline_size)?;
-    element.remembered_block_size_ = remembered_size(data.remembered_block_size)?;
-    if let Some(transform) = data.used_canvas_transform.as_ref() {
-        for value in transform.values {
-            if !value.is_finite() {
-                return Err("Used Canvas transform coefficients must be finite");
-            }
-        }
-        element.used_canvas_transform_ = Some(gfx::Transform::ColMajor(&transform.values));
-    }
-    if data
-        .root_scroller_visible_size
-        .is_some_and(|size| size.width < 0 || size.height < 0)
-    {
-        return Err("Root scroller visible size must be nonnegative");
-    }
-    let valid_natural_dimension = |value: Option<f64>| {
-        value.map_or(true, |value| {
-            value.is_finite() && value >= 0.0 && value <= LayoutUnit::Max().ToDouble()
-        })
-    };
-    if !valid_natural_dimension(data.natural_width)
-        || !valid_natural_dimension(data.natural_height)
-        || data
-            .natural_aspect_ratio
-            .is_some_and(|ratio| !ratio.is_finite() || ratio <= 0.0)
-        || !data.image_device_pixel_ratio.is_finite()
-        || data.image_device_pixel_ratio <= 0.0
-    {
-        return Err("Replaced natural dimensions must be finite and nonnegative");
-    }
-    let has_replaced_data = data.natural_width.is_some()
-        || data.natural_height.is_some()
-        || data.natural_aspect_ratio.is_some()
-        || data.image_device_pixel_ratio != 1.0
-        || data.replaced_respects_css_overflow;
-    if has_replaced_data && input.kind != NodeKind::kReplaced && input.kind != NodeKind::kSvgRoot {
-        return Err("Replaced natural dimensions require a replaced node");
-    }
-    if data.image_device_pixel_ratio != 1.0 && !data.html_image {
-        return Err("Image density correction requires HTML image identity");
-    }
-    let offset = data.scroll_offset;
-    let valid_offset = |value: f64| value.is_finite() && value.abs() <= f32::MAX as f64;
-    if !valid_offset(offset.x) || !valid_offset(offset.y) {
-        return Err("Scroll offset must be finite and representable as a native float");
-    }
-    element.saved_layer_scroll_offset_ = ScrollOffset::new(offset.x as f32, offset.y as f32);
-    Ok(())
 }

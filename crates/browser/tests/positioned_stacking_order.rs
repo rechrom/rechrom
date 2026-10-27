@@ -4,7 +4,7 @@
 mod native_test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::{fragment_tree::FragmentNode, internal::layout_input::FontFace};
+use layoutng_assembly::{fragment_tree::FragmentPaintData, internal::layout_input::FontFace};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -105,8 +105,8 @@ fn flags(page: &Page, name: &str) -> (bool, bool, i32) {
         native.EffectiveZIndex(),
     )
 }
-fn fragment(node: &FragmentNode, id: u64) -> &FragmentNode {
-    fn find(node: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+fn fragment(node: &FragmentPaintData, id: u64) -> &FragmentPaintData {
+    fn find(node: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
         if node.node_id == id {
             Some(node)
         } else {

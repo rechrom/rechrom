@@ -116,9 +116,11 @@ impl<B: SynthesizedClipTypes> SynthesizedClip<B> {
         }
         let layer = self.layer_.as_ref().unwrap();
         layer.WithPictureLayer(c, |layer, _| {
-            assert!(layer
-                .client()
-                .is_some_and(|client| client.ptr_eq(&self.identity_)))
+            assert!(
+                layer
+                    .client()
+                    .is_some_and(|client| client.ptr_eq(&self.identity_))
+            )
         });
         let path = clip.ClipPath();
         let mut new_rrect = services.ToSkRoundedRect(&clip.PaintClipRect());
@@ -596,11 +598,13 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
             .PaintChunk(cursor)
             .expect("source current PaintChunk");
         debug_assert!(chunk.hit_test_data().is_some());
-        debug_assert!(chunk
-            .hit_test_data()
-            .unwrap()
-            .scroll_translation()
-            .is_some());
+        debug_assert!(
+            chunk
+                .hit_test_data()
+                .unwrap()
+                .scroll_translation()
+                .is_some()
+        );
         debug_assert!(chunk.display_item_count() == 0);
         let translation = chunk.hit_test_data().unwrap().scroll_translation().unwrap();
         debug_assert!(translation.ScrollNode().is_some());
@@ -707,39 +711,53 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         chunk: &B::PaintChunk,
         services: &dyn PaintArtifactCompositorServices<B>,
     ) -> CompositingType {
-        if let Some(translation) = chunk
+        let scroll_hit_test_requires_compositing = chunk
             .hit_test_data()
             .and_then(|data| data.scroll_translation())
-        {
-            if self
-                .ScrollState(services)
-                .NeedsCompositedScrolling(&translation)
-            {
-                return CompositingType::kScrollHitTestLayer;
-            }
+            .map(|translation| {
+                self.ScrollState(services)
+                    .NeedsCompositedScrolling(&translation)
+            })
+            .unwrap_or(false);
+        if scroll_hit_test_requires_compositing {
+            return compositor_layerize::chunk_policy::ChooseChunkCompositingType(
+                compositor_layerize::chunk_policy::ChunkCompositingInput {
+                    scroll_hit_test_requires_compositing: true,
+                    ..Default::default()
+                },
+            );
         }
-        if chunk.display_item_count() == 1 {
+        let mut input = compositor_layerize::chunk_policy::ChunkCompositingInput {
+            has_single_display_item: chunk.display_item_count() == 1,
+            ..Default::default()
+        };
+        if input.has_single_display_item {
             let item = artifact.DisplayItemsForChunk(chunk).next().unwrap();
-            if item.IsForeignLayer() {
-                return CompositingType::kForeignLayer;
+            input.single_item_is_foreign_layer = item.IsForeignLayer();
+            if input.single_item_is_foreign_layer {
+                return compositor_layerize::chunk_policy::ChooseChunkCompositingType(input);
             }
-            if ConversionDisplayItem::<B>::IsScrollbar(item) {
+            input.single_item_is_scrollbar = ConversionDisplayItem::<B>::IsScrollbar(item);
+            if input.single_item_is_scrollbar {
+                input.raster_inducing_scroll_enabled = services.RasterInducingScrollEnabled();
                 if let Some(translation) = item.ScrollTranslation() {
-                    if services.RasterInducingScrollEnabled()
-                        || self
-                            .ScrollState(services)
-                            .NeedsCompositedScrolling(&translation)
-                    {
-                        assert!(!chunk
-                            .PropertiesUnalias()
-                            .EffectNode()
-                            .IsInDrawableCanvasSubtree());
-                        return CompositingType::kScrollbarLayer;
-                    }
+                    input.scrollbar_has_scroll_translation = true;
+                    input.scrollbar_scroll_requires_compositing = self
+                        .ScrollState(services)
+                        .NeedsCompositedScrolling(&translation);
                 }
             }
         }
-        CompositingType::kOther
+        let result = compositor_layerize::chunk_policy::ChooseChunkCompositingType(input);
+        if result == CompositingType::kScrollbarLayer {
+            assert!(
+                !chunk
+                    .PropertiesUnalias()
+                    .EffectNode()
+                    .IsInDrawableCanvasSubtree()
+            );
+        }
+        result
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:442-447.
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h:329-330.
@@ -840,6 +858,59 @@ fn DumpWithDifferingPaintPropertiesIncluded<B: PaintArtifactCompositorTypes>(
         "Paint Property Tree State differs for Paint Chunk: Missing call to PaintArtifactCompositor::SetNeedsUpdate?"
     );
 }
+struct RepaintComparison<'a, B: PaintArtifactCompositorTypes> {
+    previous: &'a B::PaintChunk,
+    previous_artifact: &'a B::PaintArtifact,
+    repainted: &'a B::PaintChunk,
+    repainted_artifact: &'a B::PaintArtifact,
+}
+
+impl<B: PaintArtifactCompositorTypes>
+    compositor_layerize::repaint_policy::RepaintChunkComparisonSource for RepaintComparison<'_, B>
+{
+    fn ChunksMatch(&self) -> bool {
+        self.repainted.Matches(self.previous)
+    }
+    fn MovedFromCachedSubsequence(&self) -> bool {
+        self.repainted.is_moved_from_cached_subsequence()
+    }
+    fn BoundsEqual(&self) -> bool {
+        self.previous.bounds_rect() == self.repainted.bounds_rect()
+    }
+    fn ForeignLayerEqual(&self) -> bool {
+        ForeignLayer::<B>(self.previous, self.previous_artifact)
+            == ForeignLayer::<B>(self.repainted, self.repainted_artifact)
+    }
+    fn OpaqueRectEqual(&self) -> bool {
+        self.previous.opaque_rect() == self.repainted.opaque_rect()
+    }
+    fn OpaqueTextStateEqual(&self) -> bool {
+        self.previous.text_known_to_be_on_opaque_background()
+            == self.repainted.text_known_to_be_on_opaque_background()
+    }
+    fn BackgroundTransparencyEqual(&self) -> bool {
+        let transparent = crate::adapter::layer_tree_impl::Color4f::default();
+        (self.previous.background_color().color == transparent)
+            == (self.repainted.background_color().color == transparent)
+    }
+    fn TextPresenceEqual(&self) -> bool {
+        self.previous.has_text() == self.repainted.has_text()
+    }
+    fn DrawsContentEqual(&self) -> bool {
+        self.previous.DrawsContent() == self.repainted.DrawsContent()
+    }
+    fn SolidColorStateEqual(&self) -> bool {
+        self.previous.background_color().is_solid_color
+            == self.repainted.background_color().is_solid_color
+    }
+    fn HitTestOpaquenessEqual(&self) -> bool {
+        self.previous.hit_test_opaqueness() == self.repainted.hit_test_opaqueness()
+    }
+    fn RawPropertiesEqual(&self) -> bool {
+        self.previous.SameRawProperties(self.repainted)
+    }
+}
+
 // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:516-616.
 fn NeedsFullUpdateAfterPaintingChunk<B: PaintArtifactCompositorTypes>(
     previous: &B::PaintChunk,
@@ -848,10 +919,7 @@ fn NeedsFullUpdateAfterPaintingChunk<B: PaintArtifactCompositorTypes>(
     repainted_artifact: &B::PaintArtifact,
     services: &dyn PaintArtifactCompositorServices<B>,
 ) -> bool {
-    if !repainted.Matches(previous) {
-        return true;
-    }
-    if repainted.is_moved_from_cached_subsequence() {
+    if repainted.Matches(previous) && repainted.is_moved_from_cached_subsequence() {
         debug_assert_eq!(previous.bounds_rect(), repainted.bounds_rect());
         debug_assert_eq!(previous.DrawsContent(), repainted.DrawsContent());
         debug_assert_eq!(previous.opaque_rect(), repainted.opaque_rect());
@@ -860,51 +928,18 @@ fn NeedsFullUpdateAfterPaintingChunk<B: PaintArtifactCompositorTypes>(
             repainted.text_known_to_be_on_opaque_background()
         );
         debug_assert_eq!(previous.has_text(), repainted.has_text());
-        if !previous.SameRawProperties(repainted) {
-            DumpWithDifferingPaintPropertiesIncluded::<B>(previous, repainted, services);
-            return true;
-        }
-        return false;
     }
-    if previous.bounds_rect() != repainted.bounds_rect() {
-        return true;
-    }
-    if ForeignLayer::<B>(previous, previous_artifact)
-        != ForeignLayer::<B>(repainted, repainted_artifact)
-    {
-        return true;
-    }
-    if previous.opaque_rect() != repainted.opaque_rect() {
-        return true;
-    }
-    if previous.text_known_to_be_on_opaque_background()
-        != repainted.text_known_to_be_on_opaque_background()
-    {
-        return true;
-    }
-    let transparent = crate::adapter::layer_tree_impl::Color4f::default();
-    if (previous.background_color().color == transparent)
-        != (repainted.background_color().color == transparent)
-    {
-        return true;
-    }
-    if previous.has_text() != repainted.has_text() {
-        return true;
-    }
-    if previous.DrawsContent() != repainted.DrawsContent() {
-        return true;
-    }
-    if previous.background_color().is_solid_color != repainted.background_color().is_solid_color {
-        return true;
-    }
-    if previous.hit_test_opaqueness() != repainted.hit_test_opaqueness() {
-        return true;
-    }
-    if !previous.SameRawProperties(repainted) {
+    let decision =
+        compositor_layerize::repaint_policy::ClassifyRepaintLayerization(&RepaintComparison::<B> {
+            previous,
+            previous_artifact,
+            repainted,
+            repainted_artifact,
+        });
+    if decision.RawPropertiesDiffer() {
         DumpWithDifferingPaintPropertiesIncluded::<B>(previous, repainted, services);
-        return true;
     }
-    false
+    decision.NeedsFullUpdate()
 }
 // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:617-629.
 fn GetPropertyTreeStateForPaint<B: PaintArtifactCompositorTypes>(
@@ -979,6 +1014,77 @@ struct Layerizer<'a, B: PaintArtifactCompositorTypes> {
     directly_composited_transforms_: HashSet<B::TransformNode>,
     services: &'a dyn PaintArtifactCompositorServices<B>,
 }
+
+struct LayerMergeSearchAdapter<'search, B: PaintArtifactCompositorTypes> {
+    pending_layers: &'search mut Vec<PendingLayer<B>>,
+    merged_sticky_transforms: &'search mut Vec<B::TransformNode>,
+    composited_transform: Option<B::TransformNode>,
+    is_composited_scroll: &'search mut dyn FnMut(&B::TransformNode) -> bool,
+    lcd_text_preference: LcdTextPreference,
+    device_pixel_ratio: f32,
+    services: &'search dyn PaintArtifactCompositorServices<B>,
+    range_dependent_states: Vec<B::PropertyTreeState>,
+}
+
+impl<B: PaintArtifactCompositorTypes> compositor_layerize::layer_search::MergeCandidateContext
+    for LayerMergeSearchAdapter<'_, B>
+{
+    fn TryMergeCandidate(&mut self, candidate_index: usize) -> bool {
+        let new_index = self.pending_layers.len() - 1;
+        let (merged, record_sticky, range_state) = {
+            let (previous, last) = self.pending_layers.split_at_mut(new_index);
+            let candidate_layer = &mut previous[candidate_index];
+            let new_layer = &mut last[0];
+            let merge_result = candidate_layer.Merge(
+                new_layer,
+                self.lcd_text_preference,
+                self.device_pixel_ratio,
+                self.is_composited_scroll,
+                self.services,
+            );
+            if !merge_result.merged {
+                return false;
+            }
+            let record_sticky = self.composited_transform.as_ref().is_some_and(|transform| {
+                transform.RequiresCompositingForStickyPositionOnly()
+                    && candidate_layer
+                        .GetPropertyTreeState()
+                        .TransformNode()
+                        .NearestDirectlyCompositedAncestor()
+                        .as_ref()
+                        != Some(transform)
+            });
+            let range_state = merge_result
+                .scroll_range_dependent
+                .then(|| candidate_layer.GetPropertyTreeState());
+            (true, record_sticky, range_state)
+        };
+        debug_assert!(merged);
+        if record_sticky {
+            self.merged_sticky_transforms
+                .push(self.composited_transform.clone().unwrap());
+        }
+        self.pending_layers.pop();
+        if let Some(state) = range_state {
+            self.range_dependent_states.push(state);
+        }
+        true
+    }
+
+    fn MightOverlapCandidate(&self, candidate_index: usize) -> bool {
+        let new_index = self.pending_layers.len() - 1;
+        self.pending_layers[new_index]
+            .MightOverlap(&self.pending_layers[candidate_index], self.services)
+    }
+
+    fn MarkNewLayerAsOverlap(&mut self) {
+        self.pending_layers
+            .last_mut()
+            .unwrap()
+            .SetCompositingTypeToOverlap();
+    }
+}
+
 impl<'a, B: PaintArtifactCompositorTypes> Layerizer<'a, B> {
     fn new(
         compositor: &'a mut PaintArtifactCompositor<B>,
@@ -1005,17 +1111,20 @@ impl<'a, B: PaintArtifactCompositorTypes> Layerizer<'a, B> {
         first_layer_in_parent_group_index: usize,
         effect: &B::EffectNode,
         layer_index: usize,
-    ) -> bool {
+    ) -> compositor_layerize::layerize_walk::EffectDecompositionOutcome {
         debug_assert_eq!(layer_index, self.pending_layers_.len() - 1);
         let layer = &self.pending_layers_[layer_index];
-        if layer.GetPropertyTreeState().EffectNode() != *effect {
-            return false;
-        }
-        if layer.ChunkRequiresOwnLayer() {
-            return false;
-        }
-        if effect.HasDirectCompositingReasons() {
-            return false;
+        if compositor_layerize::effect_decomposition::CheckEffectDecompositionBase(
+            layer.GetPropertyTreeState().EffectNode() == *effect,
+            layer.ChunkRequiresOwnLayer(),
+            effect.HasDirectCompositingReasons(),
+        )
+        .is_err()
+        {
+            return compositor_layerize::layerize_walk::EffectDecompositionOutcome {
+                rejected: true,
+                ..Default::default()
+            };
         }
         let group_state = self.services.MakeState(
             effect.LocalTransformSpaceUnalias(),
@@ -1032,206 +1141,271 @@ impl<'a, B: PaintArtifactCompositorTypes> Layerizer<'a, B> {
             self.services.MergeStickyLayersEnabled(),
             &mut is_composited_scroll,
         ) else {
-            return false;
+            return compositor_layerize::layerize_walk::EffectDecompositionOutcome {
+                rejected: true,
+                ..Default::default()
+            };
         };
+        let mut scroll_range_dependent_upcasts = 0;
         if upcast_result.scroll_range_dependent {
+            scroll_range_dependent_upcasts = 1;
             self.compositor_
                 .AddRangeDependentScroll(&upcast_result.upcasted_state);
         }
         upcast_result
             .upcasted_state
             .SetEffectNode(parent_effect.clone());
-        if effect.BlendMode() != crate::adapter::property_types::BlendMode::kSrcOver {
-            let num_previous_siblings = layer_index - first_layer_in_parent_group_index;
-            if num_previous_siblings != 0 {
-                if num_previous_siblings > 2 {
-                    return false;
-                }
-                if num_previous_siblings == 2
-                    && self.pending_layers_[first_layer_in_parent_group_index].DrawsContent()
-                {
-                    return false;
-                }
-                let previous_sibling = &self.pending_layers_[layer_index - 1];
-                let layer = &self.pending_layers_[layer_index];
-                let scroll = self.compositor_.ScrollState(self.services);
-                let mut is_composited_scroll =
-                    |t: &B::TransformNode| scroll.NeedsCompositedScrolling(t);
-                if previous_sibling.DrawsContent()
-                    && !previous_sibling.CanMergeWithDecompositedBlendMode(
-                        layer,
-                        &upcast_result.upcasted_state,
-                        self.services.MergeFixedLayersEnabled(),
-                        self.services.MergeStickyLayersEnabled(),
-                        &mut is_composited_scroll,
-                    )
-                {
-                    return false;
-                }
-            }
-        }
-        self.pending_layers_[layer_index].Upcast(&upcast_result.upcasted_state, self.services);
-        true
-    }
-    // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:836-965.
-    fn LayerizeGroup(
-        &mut self,
-        current_group: &B::EffectNode,
-        mut canvas_child_id: B::DomNodeId,
-        force_draws_content: bool,
-    ) {
-        if current_group.CanvasChildId() != B::InvalidDomNodeId() {
-            canvas_child_id = current_group.CanvasChildId();
-        }
-        let first_layer_in_current_group = self.pending_layers_.len();
-        while self.chunk_cursor_ != self.artifact_.PaintChunkCount() {
-            let chunk_effect = self
-                .artifact_
-                .PaintChunk(self.chunk_cursor_)
-                .unwrap()
-                .UnaliasedEffect();
-            if chunk_effect == *current_group {
-                self.compositor_
-                    .UpdatePaintedScrollTranslationsBeforeLayerization(
-                        &self.artifact_,
-                        self.chunk_cursor_,
-                        self.services,
-                    );
-                self.pending_layers_.push(PendingLayer::new(
-                    self.artifact_.clone(),
-                    self.chunk_cursor_,
-                    canvas_child_id,
-                    self.compositor_.ChunkCompositingType(
-                        &self.artifact_,
-                        self.artifact_.PaintChunk(self.chunk_cursor_).unwrap(),
-                        self.services,
-                    ),
-                    self.services,
-                ));
-                self.chunk_cursor_ += 1;
-                if self.pending_layers_.last().unwrap().ChunkRequiresOwnLayer() {
-                    continue;
-                }
-            } else {
-                let Some(subgroup) =
-                    StrictUnaliasedChildOfAlongPath::<B>(current_group, &chunk_effect)
-                else {
-                    break;
-                };
-                let first_layer_in_subgroup = self.pending_layers_.len();
-                self.LayerizeGroup(
-                    &subgroup,
-                    canvas_child_id,
-                    force_draws_content || subgroup.DrawsContent(),
-                );
-                if first_layer_in_subgroup != self.pending_layers_.len().wrapping_sub(1) {
-                    continue;
-                }
-                if !self.DecompositeEffect(
-                    current_group,
-                    first_layer_in_current_group,
-                    &subgroup,
-                    first_layer_in_subgroup,
-                ) {
-                    continue;
-                }
-            }
-            let new_layer = self.pending_layers_.last_mut().unwrap();
-            debug_assert!(!new_layer.ChunkRequiresOwnLayer());
-            debug_assert!(new_layer.GetPropertyTreeState().EffectNode() == *current_group);
-            if force_draws_content {
-                new_layer.ForceDrawsContent();
-            }
-            let composited_transform = new_layer
-                .GetPropertyTreeState()
-                .TransformNode()
-                .NearestDirectlyCompositedAncestor();
-            if let Some(transform) = &composited_transform {
-                if (!self.services.MergeFixedLayersEnabled()
-                    || !transform.RequiresCompositingForFixedPositionOnly())
-                    && (!self.services.MergeStickyLayersEnabled()
-                        || !transform.RequiresCompositingForStickyPositionOnly())
-                    && self
-                        .directly_composited_transforms_
-                        .insert(transform.clone())
-                {
-                    continue;
-                }
-            }
+        let has_non_source_over_blend =
+            effect.BlendMode() != crate::adapter::property_types::BlendMode::kSrcOver;
+        let previous_sibling_count = layer_index - first_layer_in_parent_group_index;
+        let first_sibling_draws_content = previous_sibling_count == 2
+            && self.pending_layers_[first_layer_in_parent_group_index].DrawsContent();
+        let previous_sibling_draws_content = has_non_source_over_blend
+            && (1..=2).contains(&previous_sibling_count)
+            && self.pending_layers_[layer_index - 1].DrawsContent();
+        let previous_sibling_can_merge = if previous_sibling_draws_content {
+            let previous_sibling = &self.pending_layers_[layer_index - 1];
+            let layer = &self.pending_layers_[layer_index];
             let scroll = self.compositor_.ScrollState(self.services);
             let mut is_composited_scroll =
                 |t: &B::TransformNode| scroll.NeedsCompositedScrolling(t);
-            let mut candidate_index = self.pending_layers_.len() - 1;
-            while candidate_index > first_layer_in_current_group
-                && self.pending_layers_.len() - candidate_index <= self.layer_merge_distance_limit_
-            {
-                candidate_index -= 1;
-                let new_index = self.pending_layers_.len() - 1;
-                let (previous, last) = self.pending_layers_.split_at_mut(new_index);
-                let candidate_layer = &mut previous[candidate_index];
-                let new_layer = &mut last[0];
-                let merge_result = candidate_layer.Merge(
-                    new_layer,
-                    self.compositor_.lcd_text_preference_,
-                    self.compositor_.device_pixel_ratio_,
-                    &mut is_composited_scroll,
-                    self.services,
-                );
-                if merge_result.merged {
-                    if let Some(transform) = &composited_transform {
-                        if transform.RequiresCompositingForStickyPositionOnly()
-                            && candidate_layer
-                                .GetPropertyTreeState()
-                                .TransformNode()
-                                .NearestDirectlyCompositedAncestor()
-                                .as_ref()
-                                != Some(transform)
-                        {
-                            self.merged_sticky_transforms_.push(transform.clone());
-                        }
-                    }
-                    let range_state = merge_result
-                        .scroll_range_dependent
-                        .then(|| candidate_layer.GetPropertyTreeState());
-                    self.pending_layers_.pop();
-                    if let Some(state) = range_state {
-                        self.compositor_.AddRangeDependentScroll(&state);
-                    }
-                    break;
-                }
-                if new_layer.MightOverlap(candidate_layer, self.services) {
-                    new_layer.SetCompositingTypeToOverlap();
-                    break;
-                }
-            }
+            previous_sibling.CanMergeWithDecompositedBlendMode(
+                layer,
+                &upcast_result.upcasted_state,
+                self.services.MergeFixedLayersEnabled(),
+                self.services.MergeStickyLayersEnabled(),
+                &mut is_composited_scroll,
+                self.services,
+            )
+        } else {
+            true
+        };
+        if compositor_layerize::effect_decomposition::CheckBlendModeDecomposition(
+            has_non_source_over_blend,
+            previous_sibling_count,
+            first_sibling_draws_content,
+            previous_sibling_draws_content,
+            previous_sibling_can_merge,
+        )
+        .is_err()
+        {
+            return compositor_layerize::layerize_walk::EffectDecompositionOutcome {
+                rejected: true,
+                scroll_range_dependent_upcasts,
+                ..Default::default()
+            };
+        }
+        self.pending_layers_[layer_index].Upcast(&upcast_result.upcasted_state, self.services);
+        compositor_layerize::layerize_walk::EffectDecompositionOutcome {
+            decomposed: true,
+            scroll_range_dependent_upcasts,
+            ..Default::default()
         }
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:966-978.
-    fn Layerize(mut self) -> (Vec<PendingLayer<B>>, Vec<B::TransformNode>) {
-        self.LayerizeGroup(&B::RootEffectNode(), B::InvalidDomNodeId(), false);
-        debug_assert_eq!(self.chunk_cursor_, self.artifact_.PaintChunkCount());
+    fn Layerize(
+        mut self,
+    ) -> (
+        Vec<PendingLayer<B>>,
+        Vec<B::TransformNode>,
+        compositor_layerize::stats::LayerizeStats,
+    ) {
+        let mut stats = compositor_layerize::layerize_walk::Layerize(&mut self);
         // Source dependency: third_party/blink/renderer/platform/wtf/vector.h:1678-1684.
         if self.pending_layers_.len() * 2 < self.pending_layers_.capacity() {
             self.pending_layers_
                 .shrink_to(self.pending_layers_.len() + self.pending_layers_.len() / 4 + 1);
         }
-        (self.pending_layers_, self.merged_sticky_transforms_)
+        stats.output_layers = self.pending_layers_.len();
+        (self.pending_layers_, self.merged_sticky_transforms_, stats)
     }
 }
+
+impl<B: PaintArtifactCompositorTypes> compositor_layerize::layerize_walk::LayerizeWalkContext
+    for Layerizer<'_, B>
+{
+    type Effect = B::EffectNode;
+    type CanvasChildId = B::DomNodeId;
+    type Transform = B::TransformNode;
+
+    fn root_effect(&self) -> Self::Effect {
+        B::RootEffectNode()
+    }
+
+    fn invalid_canvas_child_id(&self) -> Self::CanvasChildId {
+        B::InvalidDomNodeId()
+    }
+
+    fn effect_canvas_child_id(&self, effect: &Self::Effect) -> Option<Self::CanvasChildId> {
+        let id = effect.CanvasChildId();
+        (id != B::InvalidDomNodeId()).then_some(id)
+    }
+
+    fn effect_draws_content(&self, effect: &Self::Effect) -> bool {
+        effect.DrawsContent()
+    }
+
+    fn chunk_cursor(&self) -> usize {
+        self.chunk_cursor_
+    }
+
+    fn chunk_count(&self) -> usize {
+        self.artifact_.PaintChunkCount()
+    }
+
+    fn chunk_effect(&self, index: usize) -> Self::Effect {
+        self.artifact_.PaintChunk(index).unwrap().UnaliasedEffect()
+    }
+
+    fn update_before_layerizing_chunk(&mut self, index: usize) {
+        self.compositor_
+            .UpdatePaintedScrollTranslationsBeforeLayerization(
+                &self.artifact_,
+                index,
+                self.services,
+            );
+    }
+
+    fn push_pending_layer(&mut self, index: usize, canvas_child_id: Self::CanvasChildId) {
+        let compositing_type = self.compositor_.ChunkCompositingType(
+            &self.artifact_,
+            self.artifact_.PaintChunk(index).unwrap(),
+            self.services,
+        );
+        self.pending_layers_.push(PendingLayer::new(
+            self.artifact_.clone(),
+            index,
+            canvas_child_id,
+            compositing_type,
+            self.services,
+        ));
+    }
+
+    fn advance_chunk_cursor(&mut self) {
+        self.chunk_cursor_ += 1;
+    }
+
+    fn pending_layer_count(&self) -> usize {
+        self.pending_layers_.len()
+    }
+
+    fn last_layer_requires_own_layer(&self) -> bool {
+        self.pending_layers_.last().unwrap().ChunkRequiresOwnLayer()
+    }
+
+    fn last_layer_effect_matches(&self, effect: &Self::Effect) -> bool {
+        self.pending_layers_
+            .last()
+            .unwrap()
+            .GetPropertyTreeState()
+            .EffectNode()
+            == *effect
+    }
+
+    fn strict_child_along_path(
+        &self,
+        ancestor: &Self::Effect,
+        node: &Self::Effect,
+    ) -> Option<Self::Effect> {
+        StrictUnaliasedChildOfAlongPath::<B>(ancestor, node)
+    }
+
+    fn decomposite_effect(
+        &mut self,
+        parent_effect: &Self::Effect,
+        first_layer_in_parent_group: usize,
+        effect: &Self::Effect,
+        layer_index: usize,
+    ) -> compositor_layerize::layerize_walk::EffectDecompositionOutcome {
+        self.DecompositeEffect(
+            parent_effect,
+            first_layer_in_parent_group,
+            effect,
+            layer_index,
+        )
+    }
+
+    fn force_last_layer_draws_content(&mut self) {
+        self.pending_layers_.last_mut().unwrap().ForceDrawsContent();
+    }
+
+    fn last_layer_composited_transform(&self) -> Option<Self::Transform> {
+        self.pending_layers_
+            .last()
+            .unwrap()
+            .GetPropertyTreeState()
+            .TransformNode()
+            .NearestDirectlyCompositedAncestor()
+    }
+
+    fn direct_composited_transform_state(
+        &self,
+        transform: &Self::Transform,
+    ) -> compositor_layerize::layerize_walk::DirectCompositedTransformState {
+        compositor_layerize::layerize_walk::DirectCompositedTransformState {
+            merge_fixed_layers_enabled: self.services.MergeFixedLayersEnabled(),
+            merge_sticky_layers_enabled: self.services.MergeStickyLayersEnabled(),
+            requires_fixed_position_only: transform.RequiresCompositingForFixedPositionOnly(),
+            requires_sticky_position_only: transform.RequiresCompositingForStickyPositionOnly(),
+        }
+    }
+
+    fn insert_directly_composited_transform(&mut self, transform: Self::Transform) -> bool {
+        self.directly_composited_transforms_.insert(transform)
+    }
+
+    fn search_merge_candidate(
+        &mut self,
+        first_layer_in_group: usize,
+    ) -> compositor_layerize::layer_search::MergeSearchStats {
+        let new_index = self.pending_layers_.len() - 1;
+        let merge_limit = self.layer_merge_distance_limit_;
+        let composited_transform = self
+            .pending_layers_
+            .last()
+            .unwrap()
+            .GetPropertyTreeState()
+            .TransformNode()
+            .NearestDirectlyCompositedAncestor();
+        let lcd_text_preference = self.compositor_.lcd_text_preference_;
+        let device_pixel_ratio = self.compositor_.device_pixel_ratio_;
+        let (merge_stats, range_dependent_states) = {
+            let scroll = self.compositor_.ScrollState(self.services);
+            let mut is_composited_scroll =
+                |t: &B::TransformNode| scroll.NeedsCompositedScrolling(t);
+            let mut search = LayerMergeSearchAdapter {
+                pending_layers: &mut self.pending_layers_,
+                merged_sticky_transforms: &mut self.merged_sticky_transforms_,
+                composited_transform,
+                is_composited_scroll: &mut is_composited_scroll,
+                lcd_text_preference,
+                device_pixel_ratio,
+                services: self.services,
+                range_dependent_states: Vec::new(),
+            };
+            let stats = compositor_layerize::layer_search::SearchMergeCandidate(
+                &mut search,
+                new_index,
+                first_layer_in_group,
+                merge_limit,
+            );
+            (stats, search.range_dependent_states)
+        };
+        for state in range_dependent_states {
+            self.compositor_.AddRangeDependentScroll(&state);
+        }
+        merge_stats
+    }
+}
+
 // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:746-758.
 fn StrictUnaliasedChildOfAlongPath<B: PaintArtifactCompositorTypes>(
     ancestor: &B::EffectNode,
     node: &B::EffectNode,
 ) -> Option<B::EffectNode> {
-    let mut n = Some(node.clone());
-    while let Some(current) = n {
-        let parent = current.UnaliasedParent();
-        if parent.as_ref() == Some(ancestor) {
-            return Some(current);
-        }
-        n = parent;
-    }
-    None
+    compositor_layerize::layer_search::StrictChildAlongPath(ancestor, node, |current| {
+        current.UnaliasedParent()
+    })
 }
 
 use super::property_tree_manager::PropertyTreeManager;
@@ -1395,6 +1569,405 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
             c,
             services,
         )
+    }
+}
+
+struct FullUpdateAdapter<
+    'compositor,
+    'viewport,
+    'call,
+    'layer,
+    'host,
+    B: PaintArtifactCompositorTypes,
+> {
+    compositor: &'compositor mut PaintArtifactCompositor<B>,
+    artifact: Arc<B::PaintArtifact>,
+    viewport: &'viewport ViewportProperties<B>,
+    scroll_translation_nodes: Vec<B::TransformNode>,
+    transition_requests: Vec<Box<B::ViewTransitionRequest>>,
+    context: &'call mut PaintArtifactCompositorContext<'layer, 'host, B>,
+    update_trace: Option<B::UpdateTraceScope>,
+    old_size: usize,
+    old_matcher: Option<OldPendingLayerMatcher<B>>,
+    merged_sticky_transforms: Vec<B::TransformNode>,
+}
+
+impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpdateContext
+    for FullUpdateAdapter<'_, '_, '_, '_, '_, B>
+{
+    fn validate_full_update(&self) {
+        debug_assert!(self.compositor.needs_update_ == UpdateType::kFull);
+        debug_assert!(self.compositor.root_layer_.is_some());
+    }
+
+    fn begin_update_trace(&mut self) {
+        self.update_trace = Some(self.context.services.NewUpdateTrace());
+    }
+
+    fn has_attached_host(&self) -> bool {
+        self.compositor
+            .root_layer_
+            .as_ref()
+            .expect("source root")
+            .host_id()
+            .is_some()
+    }
+
+    fn install_requests_callbacks_and_sequence(&mut self) {
+        let host = self
+            .compositor
+            .root_layer_
+            .as_ref()
+            .expect("source root")
+            .host_id()
+            .expect("source attached host");
+        for request in std::mem::take(&mut self.transition_requests) {
+            self.context
+                .layer
+                .HostMut(host)
+                .AddViewTransitionRequest(request);
+        }
+        {
+            let (scroll_tree, _, state) = self
+                .context
+                .layer
+                .HostMut(host)
+                .property_trees_mut()
+                .scroll_tree_with_context();
+            scroll_tree.SetScrollCallbacks(self.compositor.scroll_callbacks_.clone(), state);
+        }
+        self.compositor
+            .root_layer_
+            .as_ref()
+            .unwrap()
+            .set_property_tree_sequence_number(
+                *self.context.property_tree_sequence_number,
+                self.context.layer,
+            );
+    }
+
+    fn prepare_layerization(&mut self) -> usize {
+        self.old_size = self.compositor.pending_layers_.len();
+        self.old_matcher = Some(OldPendingLayerMatcher::new(std::mem::take(
+            &mut self.compositor.pending_layers_,
+        )));
+        self.compositor.canvas_child_layer_map_.clear();
+        assert!(self.compositor.painted_scroll_translations_.is_empty());
+        self.compositor.range_dependent_scrolls_.clear();
+        self.compositor.should_always_update_on_scroll_ = false;
+        self.old_size
+    }
+
+    fn layerize_pending_layers(&mut self) -> usize {
+        let (pending, merged_sticky_transforms, _) = Layerizer::new(
+            self.compositor,
+            self.artifact.clone(),
+            self.old_size,
+            self.context.services,
+        )
+        .Layerize();
+        self.compositor.pending_layers_ = pending;
+        self.merged_sticky_transforms = merged_sticky_transforms;
+        PendingLayer::DecompositeTransforms(&mut self.compositor.pending_layers_);
+        self.compositor.pending_layers_.len()
+    }
+
+    fn build_and_commit_property_trees(&mut self) -> usize {
+        let host = self
+            .compositor
+            .root_layer_
+            .as_ref()
+            .expect("source root")
+            .host_id()
+            .expect("source attached host");
+        let compositor = &mut *self.compositor;
+        let old_matcher = self.old_matcher.as_mut().expect("prepared old layers");
+        let mut builder = LayerListBuilder::default();
+        let root = compositor.root_layer_.as_ref().unwrap();
+        let mut client = PropertyTreeManagerClientFacade {
+            cache: &mut compositor.synthesized_clip_cache_,
+            root,
+            layer_debug_info_enabled: compositor.layer_debug_info_enabled_,
+            should_always_update_on_scroll: &mut compositor.should_always_update_on_scroll_,
+            needs_update: &compositor.needs_update_,
+            lcd: &compositor.lcd_text_preference_,
+            painted_mut: Some(&mut compositor.painted_scroll_translations_),
+            painted_shared: None,
+            services: self.context.services,
+        };
+        let scale = self.context.layer.Host(host).device_scale_factor();
+        let viewport_rect = self.context.layer.Host(host).device_viewport_rect();
+        let mut manager = PropertyTreeManager::<B, _>::new(
+            &mut client,
+            host,
+            root,
+            &mut builder,
+            self.context.layer,
+            *self.context.property_tree_sequence_number,
+            scale,
+            viewport_rect,
+            self.context.services.RootEffectElementId(),
+        );
+        UpdateCompositorViewportProperties(self.viewport, &mut manager, host);
+        for entry in manager.ClientMutable().cache.iter_mut() {
+            entry.in_use = false;
+        }
+        for node in &self.scroll_translation_nodes {
+            manager.EnsureCompositorScrollNode(node);
+        }
+        let painted = manager.ClientMutable().FinishViewportWrites();
+        for node in painted.keys() {
+            manager.EnsureCompositorScrollAndTransformNode(node);
+        }
+        let report_metrics = self.context.services.ShouldRecordSubsampledMetric(0.01);
+        let mut fixed_count = 0;
+        let mut merged_fixed_count = 0;
+        let mut sticky_count = 0;
+        let mut merged_sticky_count = 0;
+        let mut selection = crate::cc::input::layer_selection_bound::LayerSelection::default();
+        let mut layers_having_text = HashSet::new();
+        let mut layers_having_video = HashSet::new();
+        for (index, pending) in compositor.pending_layers_.iter_mut().enumerate() {
+            let state = pending.GetPropertyTreeState();
+            let state_for_paint = GetPropertyTreeStateForPaint::<B>(&state);
+            let old = old_matcher.Find(pending);
+            pending.UpdateCompositedLayer(
+                old,
+                state_for_paint,
+                &mut selection,
+                compositor.tracks_raster_invalidations_,
+                Some(host),
+                self.context.pending,
+                manager.LayerContextMutable(),
+                self.context.services,
+            );
+            let layer = pending.CcLayer();
+            if std::env::var_os("RECHROM_DIAG_STACKING").is_some() {
+                eprintln!(
+                    "pending-layer index={} cc_layer={} {:?}",
+                    index,
+                    layer.id(),
+                    pending.ToJSON()
+                );
+            }
+            let clip = state.ClipNode();
+            let effect = state.EffectNode();
+            let transform = if effect.CanvasChildId() != B::InvalidDomNodeId() {
+                effect.CanvasChildContentTransform()
+            } else {
+                state.TransformNode()
+            };
+            let transform_id = manager.EnsureCompositorTransformNode(&transform);
+            let draws_content = layer.draws_content(manager.LayerContextMutable());
+            let effect_id =
+                manager.SwitchToEffectNodeWithSynthesizedClip(&effect, &clip, draws_content);
+            let clip_id = manager.EnsureCompositorClipNode(&clip);
+            if state.EffectRequiresCompositingForBackdropFilterMask()
+                && effect.CcNodeId(*self.context.property_tree_sequence_number) == effect_id
+            {
+                assert!(pending.GetContentLayerClient().is_some());
+                let picture = layer
+                    .clone()
+                    .IntoPicture()
+                    .ok()
+                    .expect("source mask PictureLayer static_cast");
+                picture.WithPictureLayer(manager.LayerContextMutable(), |picture, c| {
+                    picture.SetIsBackdropFilterMask(true, c)
+                });
+                layer.SetElementId(
+                    effect.GetCompositorElementId(),
+                    manager.LayerContextMutable(),
+                );
+                let effect_tree = manager
+                    .LayerContextMutable()
+                    .HostMut(host)
+                    .property_trees_mut()
+                    .effect_tree_mutable();
+                let parent = effect_tree.Node(effect_id).parent_id;
+                if parent != crate::cc::trees::property_ids::kInvalidPropertyNodeId {
+                    let node = effect_tree.MutableNode(parent);
+                    if !crate::adapter::property_types::FilterOperations::IsEmpty(
+                        &node.backdrop_filters,
+                    ) {
+                        node.backdrop_mask_element_id = effect.GetCompositorElementId();
+                    }
+                }
+            } else if pending.GetContentLayerClient().is_some()
+                && !state.EffectRequiresCompositingForBackdropFilterMask()
+            {
+                let picture = layer
+                    .clone()
+                    .IntoPicture()
+                    .ok()
+                    .expect("source PictureLayer static_cast");
+                picture.WithPictureLayer(manager.LayerContextMutable(), |picture, c| {
+                    if picture.is_backdrop_filter_mask() {
+                        picture.SetIsBackdropFilterMask(false, c);
+                    }
+                });
+            }
+            let scroll_id = manager.EnsureCompositorScrollAndTransformNode(
+                &PaintArtifactCompositor::<B>::ScrollTranslationStateForLayer(pending),
+            );
+            manager.LayerListBuilderMutable().Add(layer.clone());
+            if pending.HasText() {
+                layers_having_text.insert(layer.id());
+            }
+            if pending.HasVideo() {
+                layers_having_video.insert(layer.id());
+            }
+            let sequence = root.property_tree_sequence_number(manager.LayerContextMutable());
+            layer.set_property_tree_sequence_number(sequence, manager.LayerContextMutable());
+            layer.SetTransformTreeIndex(transform_id, manager.LayerContextMutable());
+            layer.SetScrollTreeIndex(scroll_id, manager.LayerContextMutable());
+            layer.SetClipTreeIndex(clip_id, manager.LayerContextMutable());
+            layer.SetEffectTreeIndex(effect_id, manager.LayerContextMutable());
+            layer.SetShouldCheckBackfaceVisibility(
+                transform.IsBackfaceHidden(),
+                manager.LayerContextMutable(),
+            );
+            if effect.CanvasChildId() != B::InvalidDomNodeId() {
+                compositor
+                    .canvas_child_layer_map_
+                    .insert(effect.CanvasChildId(), index);
+                layer.SetCanvasChildId(
+                    self.context
+                        .services
+                        .CompositorElementIdFromDomNodeId(effect.CanvasChildId()),
+                    manager.LayerContextMutable(),
+                );
+            } else {
+                assert!(!effect.IsInDrawableCanvasSubtree());
+            }
+            if layer.subtree_property_changed(manager.LayerContextMutable()) {
+                root.SetNeedsCommit(manager.LayerContextMutable());
+            }
+            if report_metrics {
+                if transform.RequiresCompositingForFixedPosition() {
+                    fixed_count += 1;
+                    merged_fixed_count += pending.MergedAcrossCompositingBoundaryCount();
+                }
+                if transform.RequiresCompositingForStickyPosition() {
+                    sticky_count += 1;
+                    merged_sticky_count += pending.MergedAcrossCompositingBoundaryCount();
+                }
+            }
+        }
+        if report_metrics {
+            self.context
+                .services
+                .HistogramCounts100("Blink.Compositor.FixedLayerCount", fixed_count);
+            self.context
+                .services
+                .HistogramCounts100("Blink.Compositor.MergedFixedLayerCount", merged_fixed_count);
+            self.context
+                .services
+                .HistogramCounts100("Blink.Compositor.StickyLayerCount", sticky_count);
+            self.context.services.HistogramCounts100(
+                "Blink.Compositor.MergedStickyLayerCount",
+                merged_sticky_count,
+            );
+        }
+        manager
+            .LayerContextMutable()
+            .HostMut(host)
+            .RegisterSelection(selection);
+        manager.Finalize();
+        {
+            let (client, c) = manager.ClientAndLayerContext();
+            let mut index = 0;
+            while index < client.cache.len() {
+                if !client.cache[index].in_use {
+                    client.cache.remove(index).synthesized_clip.Release(c);
+                } else {
+                    index += 1;
+                }
+            }
+        }
+        manager
+            .LayerContextMutable()
+            .HostMut(host)
+            .property_trees_mut()
+            .set_sequence_number(*self.context.property_tree_sequence_number);
+        let layers = manager.LayerListBuilderMutable().Finalize();
+        let committed_layers = layers.len();
+        manager.UpdateConditionalRenderSurfaceReasons(
+            &layers,
+            &layers_having_text,
+            &layers_having_video,
+        );
+        root.SetChildLayerList(layers, manager.LayerContextMutable());
+        manager.EnsureCompositorNodesForAnchorPositionAdjustmentContainers(
+            &self.scroll_translation_nodes,
+        );
+        manager.EnsureCompositorNodesForAnchorPositionAdjustmentContainers(
+            &self.merged_sticky_transforms,
+        );
+        manager
+            .LayerContextMutable()
+            .HostMut(host)
+            .property_trees_mut()
+            .set_needs_rebuild(false);
+        manager
+            .LayerContextMutable()
+            .HostMut(host)
+            .property_trees_mut()
+            .ResetCachedData();
+        drop(manager);
+        drop(client);
+        committed_layers
+    }
+
+    fn finish_update_state(&mut self) {
+        self.compositor.previous_update_for_testing_ = self.compositor.needs_update_;
+        self.compositor
+            .UpdateDebugInfo(self.context.layer, self.context.services);
+        self.compositor.painted_scroll_translations_.clear();
+        self.compositor.needs_update_ = UpdateType::kNone;
+        *self.context.property_tree_sequence_number += 1;
+    }
+
+    fn clear_paint_property_change_markers(&mut self) -> usize {
+        let count = self.artifact.PaintChunkCount();
+        for index in 0..count {
+            let chunk = self.artifact.PaintChunk(index).unwrap();
+            chunk
+                .PropertiesUnalias()
+                .ClearChangedToRoot(*self.context.property_tree_sequence_number);
+            if let Some(translation) = chunk
+                .hit_test_data()
+                .and_then(|hit| hit.scroll_translation())
+            {
+                translation.ClearChangedToRoot(*self.context.property_tree_sequence_number);
+            }
+        }
+        count
+    }
+
+    fn debug_log_result(&mut self) {
+        if self.context.services.VlogIsOn(2) {
+            self.context.services.DebugVlogLayers(
+                "PaintArtifactCompositor::Update() done",
+                self.compositor.GetLayersAsJSON(
+                    super::content_layer_client_impl::LayerTreeFlags(
+                        if self.context.services.VlogIsOn(3) {
+                            u32::MAX
+                        } else {
+                            0
+                        },
+                    ),
+                    self.context.layer,
+                    self.context.services,
+                ),
+            );
+        }
+    }
+
+    fn release_old_layer_clients(&mut self) {
+        self.old_matcher
+            .as_mut()
+            .expect("prepared old layers")
+            .ReleaseClients(self.context.layer);
     }
 }
 
@@ -1962,9 +2535,16 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         if let Some(host) = self.root_layer_.as_ref().expect("source root").host_id() {
             if let Some(layer) = c.Host(host).LayerByElementId(element) {
                 return layer.WithSource(c, |object, context| {
-                    let scrollbar = object.AsScrollbarLayer().expect("source scrollbar static_cast precondition");
-                    if scrollbar.GetScrollbarLayerType() == crate::cc::layers::scrollbar_layer_base::ScrollbarLayerType::kSolidColor {
-                        scrollbar.AsSolidColorScrollbarLayer().expect("source solid scrollbar static_cast").SetColor(color, context);
+                    let scrollbar = object
+                        .AsScrollbarLayer()
+                        .expect("source scrollbar static_cast precondition");
+                    if scrollbar.GetScrollbarLayerType()
+                        == crate::cc::layers::scrollbar_layer_base::ScrollbarLayerType::kSolidColor
+                    {
+                        scrollbar
+                            .AsSolidColorScrollbarLayer()
+                            .expect("source solid scrollbar static_cast")
+                            .SetColor(color, context);
                         return true;
                     }
                     false
@@ -1989,8 +2569,7 @@ fn UpdateCompositorViewportProperties<B: PaintArtifactCompositorTypes>(
         properties.inner_scroll_translation.is_some()
     );
     assert!(properties.outer_clip.is_none() || properties.inner_scroll_translation.is_some());
-    let mut ids =
-        crate::cc::trees::viewport_property_ids::ViewportPropertyIds::default();
+    let mut ids = crate::cc::trees::viewport_property_ids::ViewportPropertyIds::default();
     if let Some(node) = &properties.overscroll_elasticity_transform {
         ids.overscroll_elasticity_transform = manager.EnsureCompositorTransformNode(node);
     }
@@ -2035,6 +2614,105 @@ fn UpdateCompositorViewportProperties<B: PaintArtifactCompositorTypes>(
         .HostMut(host)
         .RegisterViewportPropertyIds(ids);
 }
+
+struct FastPathUpdateAdapter<'a, 'b, 'c, 'd, B: PaintArtifactCompositorTypes> {
+    compositor: &'a mut PaintArtifactCompositor<B>,
+    artifact: Arc<B::PaintArtifact>,
+    context: &'b mut PaintArtifactCompositorContext<'c, 'd, B>,
+}
+
+impl<B: PaintArtifactCompositorTypes> compositor_layerize::fast_path_update::FastPathUpdateContext
+    for FastPathUpdateAdapter<'_, '_, '_, '_, B>
+{
+    fn validate_fast_path_inputs(&mut self) {
+        #[cfg(debug_assertions)]
+        if self.compositor.needs_update_ != UpdateType::kFull {
+            for index in 0..self.artifact.PaintChunkCount() {
+                debug_assert!(
+                    !self
+                        .artifact
+                        .PaintChunk(index)
+                        .unwrap()
+                        .PropertiesUnalias()
+                        .ChangedToRoot(B::ChangedOnlySimpleValues())
+                );
+            }
+        }
+    }
+
+    fn update_kind(&self) -> compositor_layerize::fast_path_update::FastPathUpdateKind {
+        use compositor_layerize::fast_path_update::FastPathUpdateKind;
+        match self.compositor.needs_update_ {
+            UpdateType::kNone => FastPathUpdateKind::NoChanges,
+            UpdateType::kRasterInducingScroll => FastPathUpdateKind::RasterInducingScroll,
+            UpdateType::kRepaint => FastPathUpdateKind::Repaint,
+            UpdateType::kFull => FastPathUpdateKind::Full,
+        }
+    }
+
+    fn update_raster_inducing_scroll(&mut self) -> usize {
+        for layer in &mut self.compositor.pending_layers_ {
+            layer.UpdateForRasterInducingScroll();
+        }
+        self.compositor.pending_layers_.len()
+    }
+
+    fn update_repaint(&mut self) -> usize {
+        let mut selection = crate::cc::input::layer_selection_bound::LayerSelection::default();
+        for layer in &mut self.compositor.pending_layers_ {
+            let state = GetPropertyTreeStateForPaint::<B>(&layer.GetPropertyTreeState());
+            layer.UpdateCompositedLayerForRepaint(
+                self.artifact.clone(),
+                state,
+                &mut selection,
+                self.context.layer,
+                self.context.services,
+            );
+        }
+        let host = self
+            .compositor
+            .root_layer_
+            .as_ref()
+            .expect("source root")
+            .host_id()
+            .expect("source attached host");
+        self.context
+            .layer
+            .HostMut(host)
+            .RegisterSelection(selection);
+        self.compositor
+            .UpdateDebugInfo(self.context.layer, self.context.services);
+        self.compositor.pending_layers_.len()
+    }
+
+    fn finish_fast_path_update(
+        &mut self,
+        _kind: compositor_layerize::fast_path_update::FastPathUpdateKind,
+    ) {
+        self.compositor.previous_update_for_testing_ = self.compositor.needs_update_;
+        self.compositor.needs_update_ = UpdateType::kNone;
+    }
+
+    fn debug_log_fast_path_result(&mut self) {
+        if self.context.services.VlogIsOn(3) {
+            self.context.services.DebugVlogLayers(
+                "PaintArtifactCompositor::TryFastPathUpdate() done",
+                self.compositor.GetLayersAsJSON(
+                    super::content_layer_client_impl::LayerTreeFlags(
+                        if self.context.services.VlogIsOn(3) {
+                            u32::MAX
+                        } else {
+                            0
+                        },
+                    ),
+                    self.context.layer,
+                    self.context.services,
+                ),
+            );
+        }
+    }
+}
+
 impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:1397-1446.
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h:180-183.
@@ -2043,66 +2721,12 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         artifact: Arc<B::PaintArtifact>,
         context: &mut PaintArtifactCompositorContext<'_, '_, B>,
     ) -> bool {
-        #[cfg(debug_assertions)]
-        if self.needs_update_ != UpdateType::kFull {
-            for index in 0..artifact.PaintChunkCount() {
-                debug_assert!(!artifact
-                    .PaintChunk(index)
-                    .unwrap()
-                    .PropertiesUnalias()
-                    .ChangedToRoot(B::ChangedOnlySimpleValues()));
-            }
-        }
-        match self.needs_update_ {
-            UpdateType::kNone => return true,
-            UpdateType::kRasterInducingScroll => {
-                for layer in &mut self.pending_layers_ {
-                    layer.UpdateForRasterInducingScroll();
-                }
-            }
-            UpdateType::kRepaint => {
-                let mut selection =
-                    crate::cc::input::layer_selection_bound::LayerSelection::default();
-                for layer in &mut self.pending_layers_ {
-                    let state = GetPropertyTreeStateForPaint::<B>(&layer.GetPropertyTreeState());
-                    layer.UpdateCompositedLayerForRepaint(
-                        artifact.clone(),
-                        state,
-                        &mut selection,
-                        context.layer,
-                        context.services,
-                    );
-                }
-                let host = self
-                    .root_layer_
-                    .as_ref()
-                    .expect("source root")
-                    .host_id()
-                    .expect("source attached host");
-                context.layer.HostMut(host).RegisterSelection(selection);
-                self.UpdateDebugInfo(context.layer, context.services);
-            }
-            UpdateType::kFull => return false,
-        }
-        self.previous_update_for_testing_ = self.needs_update_;
-        self.needs_update_ = UpdateType::kNone;
-        if context.services.VlogIsOn(3) {
-            context.services.DebugVlogLayers(
-                "PaintArtifactCompositor::TryFastPathUpdate() done",
-                self.GetLayersAsJSON(
-                    super::content_layer_client_impl::LayerTreeFlags(
-                        if context.services.VlogIsOn(3) {
-                            u32::MAX
-                        } else {
-                            0
-                        },
-                    ),
-                    context.layer,
-                    context.services,
-                ),
-            );
-        }
-        true
+        compositor_layerize::fast_path_update::TryFastPathUpdate(&mut FastPathUpdateAdapter {
+            compositor: self,
+            artifact,
+            context,
+        })
+        .0
     }
 }
 
@@ -2117,310 +2741,18 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         transition_requests: Vec<Box<B::ViewTransitionRequest>>,
         context: &mut PaintArtifactCompositorContext<'_, '_, B>,
     ) {
-        debug_assert!(self.needs_update_ == UpdateType::kFull);
-        debug_assert!(self.root_layer_.is_some());
-        let _trace = context.services.NewUpdateTrace();
-        let Some(host) = self.root_layer_.as_ref().expect("source root").host_id() else {
-            return;
-        };
-        for request in transition_requests {
-            context
-                .layer
-                .HostMut(host)
-                .AddViewTransitionRequest(request);
-        }
-        {
-            let (scroll_tree, _, state) = context
-                .layer
-                .HostMut(host)
-                .property_trees_mut()
-                .scroll_tree_with_context();
-            scroll_tree.SetScrollCallbacks(self.scroll_callbacks_.clone(), state);
-        }
-        self.root_layer_
-            .as_ref()
-            .unwrap()
-            .set_property_tree_sequence_number(
-                *context.property_tree_sequence_number,
-                context.layer,
-            );
-        let old_size = self.pending_layers_.len();
-        let mut old_matcher =
-            OldPendingLayerMatcher::new(std::mem::take(&mut self.pending_layers_));
-        self.canvas_child_layer_map_.clear();
-        assert!(self.painted_scroll_translations_.is_empty());
-        self.range_dependent_scrolls_.clear();
-        self.should_always_update_on_scroll_ = false;
-        let (pending, merged_sticky_transforms) =
-            Layerizer::new(self, artifact.clone(), old_size, context.services).Layerize();
-        self.pending_layers_ = pending;
-        PendingLayer::DecompositeTransforms(&mut self.pending_layers_);
-        let mut builder = LayerListBuilder::default();
-        let root = self.root_layer_.as_ref().unwrap();
-        let mut client = PropertyTreeManagerClientFacade {
-            cache: &mut self.synthesized_clip_cache_,
-            root,
-            layer_debug_info_enabled: self.layer_debug_info_enabled_,
-            should_always_update_on_scroll: &mut self.should_always_update_on_scroll_,
-            needs_update: &self.needs_update_,
-            lcd: &self.lcd_text_preference_,
-            painted_mut: Some(&mut self.painted_scroll_translations_),
-            painted_shared: None,
-            services: context.services,
-        };
-        let scale = context.layer.Host(host).device_scale_factor();
-        let viewport_rect = context.layer.Host(host).device_viewport_rect();
-        let mut manager = PropertyTreeManager::<B, _>::new(
-            &mut client,
-            host,
-            root,
-            &mut builder,
-            context.layer,
-            *context.property_tree_sequence_number,
-            scale,
-            viewport_rect,
-            context.services.RootEffectElementId(),
-        );
-        UpdateCompositorViewportProperties(viewport, &mut manager, host);
-        for entry in manager.ClientMutable().cache.iter_mut() {
-            entry.in_use = false;
-        }
-        for node in &scroll_translation_nodes {
-            manager.EnsureCompositorScrollNode(node);
-        }
-        let painted = manager.ClientMutable().FinishViewportWrites();
-        for node in painted.keys() {
-            manager.EnsureCompositorScrollAndTransformNode(node);
-        }
-        let report_metrics = context.services.ShouldRecordSubsampledMetric(0.01);
-        let mut fixed_count = 0;
-        let mut merged_fixed_count = 0;
-        let mut sticky_count = 0;
-        let mut merged_sticky_count = 0;
-        let mut selection =
-            crate::cc::input::layer_selection_bound::LayerSelection::default();
-        let mut layers_having_text = HashSet::new();
-        let mut layers_having_video = HashSet::new();
-        for (index, pending) in self.pending_layers_.iter_mut().enumerate() {
-            let state = pending.GetPropertyTreeState();
-            let state_for_paint = GetPropertyTreeStateForPaint::<B>(&state);
-            let old = old_matcher.Find(pending);
-            pending.UpdateCompositedLayer(
-                old,
-                state_for_paint,
-                &mut selection,
-                self.tracks_raster_invalidations_,
-                Some(host),
-                context.pending,
-                manager.LayerContextMutable(),
-                context.services,
-            );
-            let layer = pending.CcLayer();
-            if std::env::var_os("RECHROM_DIAG_STACKING").is_some() {
-                eprintln!(
-                    "pending-layer index={} cc_layer={} {:?}",
-                    index,
-                    layer.id(),
-                    pending.ToJSON()
-                );
-            }
-            let clip = state.ClipNode();
-            let effect = state.EffectNode();
-            let transform = if effect.CanvasChildId() != B::InvalidDomNodeId() {
-                effect.CanvasChildContentTransform()
-            } else {
-                state.TransformNode()
-            };
-            let transform_id = manager.EnsureCompositorTransformNode(&transform);
-            let draws_content = layer.draws_content(manager.LayerContextMutable());
-            let effect_id =
-                manager.SwitchToEffectNodeWithSynthesizedClip(&effect, &clip, draws_content);
-            let clip_id = manager.EnsureCompositorClipNode(&clip);
-            if state.EffectRequiresCompositingForBackdropFilterMask()
-                && effect.CcNodeId(*context.property_tree_sequence_number) == effect_id
-            {
-                assert!(pending.GetContentLayerClient().is_some());
-                let picture = layer
-                    .clone()
-                    .IntoPicture()
-                    .ok()
-                    .expect("source mask PictureLayer static_cast");
-                picture.WithPictureLayer(manager.LayerContextMutable(), |picture, c| {
-                    picture.SetIsBackdropFilterMask(true, c)
-                });
-                layer.SetElementId(
-                    effect.GetCompositorElementId(),
-                    manager.LayerContextMutable(),
-                );
-                let effect_tree = manager
-                    .LayerContextMutable()
-                    .HostMut(host)
-                    .property_trees_mut()
-                    .effect_tree_mutable();
-                let parent = effect_tree.Node(effect_id).parent_id;
-                if parent != crate::cc::trees::property_ids::kInvalidPropertyNodeId {
-                    let node = effect_tree.MutableNode(parent);
-                    if !crate::adapter::property_types::FilterOperations::IsEmpty(
-                        &node.backdrop_filters,
-                    ) {
-                        node.backdrop_mask_element_id = effect.GetCompositorElementId();
-                    }
-                }
-            } else if pending.GetContentLayerClient().is_some()
-                && !state.EffectRequiresCompositingForBackdropFilterMask()
-            {
-                let picture = layer
-                    .clone()
-                    .IntoPicture()
-                    .ok()
-                    .expect("source PictureLayer static_cast");
-                picture.WithPictureLayer(manager.LayerContextMutable(), |picture, c| {
-                    if picture.is_backdrop_filter_mask() {
-                        picture.SetIsBackdropFilterMask(false, c);
-                    }
-                });
-            }
-            let scroll_id = manager.EnsureCompositorScrollAndTransformNode(
-                &Self::ScrollTranslationStateForLayer(pending),
-            );
-            manager.LayerListBuilderMutable().Add(layer.clone());
-            if pending.HasText() {
-                layers_having_text.insert(layer.id());
-            }
-            if pending.HasVideo() {
-                layers_having_video.insert(layer.id());
-            }
-            let sequence = root.property_tree_sequence_number(manager.LayerContextMutable());
-            layer.set_property_tree_sequence_number(sequence, manager.LayerContextMutable());
-            layer.SetTransformTreeIndex(transform_id, manager.LayerContextMutable());
-            layer.SetScrollTreeIndex(scroll_id, manager.LayerContextMutable());
-            layer.SetClipTreeIndex(clip_id, manager.LayerContextMutable());
-            layer.SetEffectTreeIndex(effect_id, manager.LayerContextMutable());
-            layer.SetShouldCheckBackfaceVisibility(
-                transform.IsBackfaceHidden(),
-                manager.LayerContextMutable(),
-            );
-            if effect.CanvasChildId() != B::InvalidDomNodeId() {
-                self.canvas_child_layer_map_
-                    .insert(effect.CanvasChildId(), index);
-                layer.SetCanvasChildId(
-                    context
-                        .services
-                        .CompositorElementIdFromDomNodeId(effect.CanvasChildId()),
-                    manager.LayerContextMutable(),
-                );
-            } else {
-                assert!(!effect.IsInDrawableCanvasSubtree());
-            }
-            if layer.subtree_property_changed(manager.LayerContextMutable()) {
-                root.SetNeedsCommit(manager.LayerContextMutable());
-            }
-            if report_metrics {
-                if transform.RequiresCompositingForFixedPosition() {
-                    fixed_count += 1;
-                    merged_fixed_count += pending.MergedAcrossCompositingBoundaryCount();
-                }
-                if transform.RequiresCompositingForStickyPosition() {
-                    sticky_count += 1;
-                    merged_sticky_count += pending.MergedAcrossCompositingBoundaryCount();
-                }
-            }
-        }
-        if report_metrics {
-            context
-                .services
-                .HistogramCounts100("Blink.Compositor.FixedLayerCount", fixed_count);
-            context
-                .services
-                .HistogramCounts100("Blink.Compositor.MergedFixedLayerCount", merged_fixed_count);
-            context
-                .services
-                .HistogramCounts100("Blink.Compositor.StickyLayerCount", sticky_count);
-            context.services.HistogramCounts100(
-                "Blink.Compositor.MergedStickyLayerCount",
-                merged_sticky_count,
-            );
-        }
-        manager
-            .LayerContextMutable()
-            .HostMut(host)
-            .RegisterSelection(selection);
-        manager.Finalize();
-        {
-            let (client, c) = manager.ClientAndLayerContext();
-            // std::remove_if's retained order is unchanged. Native erased unique
-            // clients finalize against this same current LayerContext.
-            let mut index = 0;
-            while index < client.cache.len() {
-                if !client.cache[index].in_use {
-                    client.cache.remove(index).synthesized_clip.Release(c);
-                } else {
-                    index += 1;
-                }
-            }
-        }
-        manager
-            .LayerContextMutable()
-            .HostMut(host)
-            .property_trees_mut()
-            .set_sequence_number(*context.property_tree_sequence_number);
-        let layers = manager.LayerListBuilderMutable().Finalize();
-        manager.UpdateConditionalRenderSurfaceReasons(
-            &layers,
-            &layers_having_text,
-            &layers_having_video,
-        );
-        root.SetChildLayerList(layers, manager.LayerContextMutable());
-        manager
-            .EnsureCompositorNodesForAnchorPositionAdjustmentContainers(&scroll_translation_nodes);
-        manager
-            .EnsureCompositorNodesForAnchorPositionAdjustmentContainers(&merged_sticky_transforms);
-        manager
-            .LayerContextMutable()
-            .HostMut(host)
-            .property_trees_mut()
-            .set_needs_rebuild(false);
-        manager
-            .LayerContextMutable()
-            .HostMut(host)
-            .property_trees_mut()
-            .ResetCachedData();
-        drop(manager);
-        drop(client);
-        self.previous_update_for_testing_ = self.needs_update_;
-        self.UpdateDebugInfo(context.layer, context.services);
-        self.painted_scroll_translations_.clear();
-        self.needs_update_ = UpdateType::kNone;
-        *context.property_tree_sequence_number += 1;
-        for index in 0..artifact.PaintChunkCount() {
-            let chunk = artifact.PaintChunk(index).unwrap();
-            chunk
-                .PropertiesUnalias()
-                .ClearChangedToRoot(*context.property_tree_sequence_number);
-            if let Some(translation) = chunk
-                .hit_test_data()
-                .and_then(|hit| hit.scroll_translation())
-            {
-                translation.ClearChangedToRoot(*context.property_tree_sequence_number);
-            }
-        }
-        if context.services.VlogIsOn(2) {
-            context.services.DebugVlogLayers(
-                "PaintArtifactCompositor::Update() done",
-                self.GetLayersAsJSON(
-                    super::content_layer_client_impl::LayerTreeFlags(
-                        if context.services.VlogIsOn(3) {
-                            u32::MAX
-                        } else {
-                            0
-                        },
-                    ),
-                    context.layer,
-                    context.services,
-                ),
-            );
-        }
-        old_matcher.ReleaseClients(context.layer);
+        compositor_layerize::full_update::Update(&mut FullUpdateAdapter {
+            compositor: self,
+            artifact,
+            viewport,
+            scroll_translation_nodes,
+            transition_requests,
+            context,
+            update_trace: None,
+            old_size: 0,
+            old_matcher: None,
+            merged_sticky_transforms: Vec::new(),
+        });
     }
 }
 

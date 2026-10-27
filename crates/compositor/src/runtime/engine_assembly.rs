@@ -22,6 +22,7 @@ use crate::{
         CompositorError, CompositorInput, CompositorMainThreadEffect, CompositorOutput,
         CompositorViewportState,
     },
+    performance::{CompositorPackage, Span},
 };
 use paint::PaintArtifact;
 use std::sync::Arc;
@@ -167,6 +168,11 @@ impl NativeEngineAssembly {
         &mut self,
         args: BeginFrameArgs,
     ) -> Result<CompositorOutput, CompositorError> {
+        let mut trace = Span(
+            CompositorPackage::Scheduler,
+            "Compositor.Scheduler.BeginFrame",
+        );
+        trace.set("sequence", args.frame_id.sequence_number as f64);
         self.scheduler.OnBeginFrame(&args, &mut self.core);
         self.Poll()
     }
@@ -177,6 +183,16 @@ impl NativeEngineAssembly {
         &mut self,
         input: CompositorInput,
     ) -> Result<CompositorOutput, CompositorError> {
+        let mut input_trace = Span(CompositorPackage::Input, "Compositor.Input.Dispatch");
+        input_trace.set(
+            "kind",
+            match &input {
+                CompositorInput::Wheel { .. } => 0.0,
+                CompositorInput::PinchBegin { .. } => 1.0,
+                CompositorInput::PinchUpdate { .. } => 2.0,
+                CompositorInput::PinchEnd { .. } => 3.0,
+            },
+        );
         use crate::{
             adapter::{geometry::Point, input_handler::ScrollInputType, time::TimeDelta},
             cc::input::{
@@ -296,6 +312,8 @@ impl NativeEngineAssembly {
                     if let Some(error) = self.core.failure.take() {
                         return Err(error);
                     }
+                    input_trace.set("compositor_owned", compositor_owned as u8 as f64);
+                    input_trace.set("queued_for_begin_frame", 1.0);
                     self.core
                         .effects
                         .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
@@ -417,6 +435,7 @@ impl NativeEngineAssembly {
             }
         };
         if let Some(compositor_owned) = compositor_owned {
+            input_trace.set("compositor_owned", compositor_owned as u8 as f64);
             self.core
                 .effects
                 .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
@@ -940,73 +959,71 @@ impl NativeEngineAssembly {
         }
     }
     pub(crate) fn Poll(&mut self) -> Result<CompositorOutput, CompositorError> {
+        let mut poll_trace = Span(
+            CompositorPackage::Scheduler,
+            "Compositor.Scheduler.OwnerTurn",
+        );
         const OWNER_TURN_BUDGET: std::time::Duration = std::time::Duration::from_micros(1_000);
         let turn_started = std::time::Instant::now();
         let mut budget_exhausted = false;
+        let mut tasks_processed = 0usize;
+        let mut turns = 0usize;
         if let Some(effect) = self.deferred.take() {
             self.Lifecycle(effect)?;
         }
         loop {
+            turns += 1;
             let mut progressed = false;
             while let Some(task) = self.commands.Pop() {
-                let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
-                    .is_some()
-                    .then(std::time::Instant::now);
-                let task_name = match &task {
-                    EngineTask::RenewTreePriority => "RenewTreePriority",
-                    EngineTask::PaintWorkletState { .. } => "PaintWorkletState",
-                    EngineTask::AnimationWorkletState { .. } => "AnimationWorkletState",
-                    EngineTask::RemoveLatencyMonitor { .. } => "RemoveLatencyMonitor",
-                    EngineTask::ScrollbarAnimation { .. } => "ScrollbarAnimation",
-                    EngineTask::DidNotProduceFrame { .. } => "DidNotProduceFrame",
-                    EngineTask::BeginFrameSourcePaused { .. } => "BeginFrameSourcePaused",
-                    EngineTask::CheckerNeedsInvalidation { .. } => "CheckerNeedsInvalidation",
-                    EngineTask::Autoscroll { .. } => "Autoscroll",
-                    EngineTask::ImageAnimation(_) => "ImageAnimation",
-                    EngineTask::MainHost(_) => "MainHost",
-                    EngineTask::ImageDecoded { .. } => "ImageDecoded",
-                    EngineTask::Host(_) => "Host",
-                    EngineTask::Metrics { .. } => "Metrics",
-                    EngineTask::PostedHost(_) => "PostedHost",
+                let (task_package, task_name) = match &task {
+                    EngineTask::RenewTreePriority => (CompositorPackage::Tile, "Compositor.Tile.RenewPriority"),
+                    EngineTask::PaintWorkletState { .. } => (CompositorPackage::Layerize, "Compositor.Layerize.PaintWorkletState"),
+                    EngineTask::AnimationWorkletState { .. } => (CompositorPackage::Animation, "Compositor.Animation.WorkletState"),
+                    EngineTask::RemoveLatencyMonitor { .. } => (CompositorPackage::Input, "Compositor.Input.RemoveLatencyMonitor"),
+                    EngineTask::ScrollbarAnimation { .. } => (CompositorPackage::Animation, "Compositor.Animation.Scrollbar"),
+                    EngineTask::DidNotProduceFrame { .. } => (CompositorPackage::Scheduler, "Compositor.Scheduler.DidNotProduceFrame"),
+                    EngineTask::BeginFrameSourcePaused { .. } => (CompositorPackage::Scheduler, "Compositor.Scheduler.SourcePaused"),
+                    EngineTask::CheckerNeedsInvalidation { .. } => (CompositorPackage::Tile, "Compositor.Tile.CheckerInvalidation"),
+                    EngineTask::Autoscroll { .. } => (CompositorPackage::Input, "Compositor.Input.Autoscroll"),
+                    EngineTask::ImageAnimation(_) => (CompositorPackage::Animation, "Compositor.Animation.Image"),
+                    EngineTask::MainHost(_) => (CompositorPackage::Tree, "Compositor.Tree.MainHostTask"),
+                    EngineTask::ImageDecoded { .. } => (CompositorPackage::Resource, "Compositor.Resource.ImageDecoded"),
+                    EngineTask::Host(_) => (CompositorPackage::Tree, "Compositor.Tree.HostTask"),
+                    EngineTask::Metrics { .. } => (CompositorPackage::Scheduler, "Compositor.Scheduler.Metrics"),
+                    EngineTask::PostedHost(_) => (CompositorPackage::Tree, "Compositor.Tree.PostedHostTask"),
                     EngineTask::Scheduler(task) => match task.kind {
                         crate::adapter::scheduler_host::SchedulerTaskKind::BeginImplFrameDeadline =>
-                            "Scheduler.BeginImplFrameDeadline",
+                            (CompositorPackage::Scheduler, "Compositor.Scheduler.BeginImplFrameDeadline"),
                         crate::adapter::scheduler_host::SchedulerTaskKind::PendingBeginFrame =>
-                            "Scheduler.PendingBeginFrame",
+                            (CompositorPackage::Scheduler, "Compositor.Scheduler.PendingBeginFrame"),
                     },
-                    EngineTask::PoolEviction(_) => "PoolEviction",
+                    EngineTask::PoolEviction(_) => (CompositorPackage::Resource, "Compositor.Resource.PoolEviction"),
                     EngineTask::Tile { command, .. } => match command {
                         crate::cc::tiles::tile_manager::TileManagerCommand::CheckIfMoreTilesNeedToBePrepared =>
-                            "Tile.CheckIfMoreTilesNeedToBePrepared",
+                            (CompositorPackage::Tile, "Compositor.Tile.CheckIfMoreNeedPreparation"),
                         crate::cc::tiles::tile_manager::TileManagerCommand::CheckForCompletedTasksAndIssueSignals =>
-                            "Tile.CheckForCompletedTasksAndIssueSignals",
+                            (CompositorPackage::Tile, "Compositor.Tile.CheckCompletedTasks"),
                         crate::cc::tiles::tile_manager::TileManagerCommand::ReduceTileMemoryWhenIdle =>
-                            "Tile.ReduceTileMemoryWhenIdle",
+                            (CompositorPackage::Resource, "Compositor.Resource.ReduceTileMemory"),
                         crate::cc::tiles::tile_manager::TileManagerCommand::TrimPrepaintTiles =>
-                            "Tile.TrimPrepaintTiles",
+                            (CompositorPackage::Tile, "Compositor.Tile.TrimPrepaint"),
                         crate::cc::tiles::tile_manager::TileManagerCommand::CheckRasterFinishedQueries =>
-                            "Tile.CheckRasterFinishedQueries",
+                            (CompositorPackage::Raster, "Compositor.Raster.CheckFinishedQueries"),
                         crate::cc::tiles::tile_manager::TileManagerCommand::CheckPendingGpuWorkAndIssueSignals =>
-                            "Tile.CheckPendingGpuWorkAndIssueSignals",
+                            (CompositorPackage::Raster, "Compositor.Raster.CheckPendingWork"),
                         crate::cc::tiles::tile_manager::TileManagerCommand::DidFinishRunningTileTasksRequiredForActivation =>
-                            "Tile.DidFinishRunningTileTasksRequiredForActivation",
+                            (CompositorPackage::Raster, "Compositor.Raster.ActivationTasksFinished"),
                         crate::cc::tiles::tile_manager::TileManagerCommand::DidFinishRunningTileTasksRequiredForDraw =>
-                            "Tile.DidFinishRunningTileTasksRequiredForDraw",
+                            (CompositorPackage::Raster, "Compositor.Raster.DrawTasksFinished"),
                     },
-                    EngineTask::TileTasksFinished { .. } => "TileTasksFinished",
-                    EngineTask::PostedClosure(_) => "PostedClosure",
-                    EngineTask::RasterWorkCompleted => "RasterWorkCompleted",
-                    EngineTask::RasterFailure(_) => "RasterFailure",
+                    EngineTask::TileTasksFinished { .. } => (CompositorPackage::Raster, "Compositor.Raster.TileTasksFinished"),
+                    EngineTask::PostedClosure(_) => (CompositorPackage::Scheduler, "Compositor.Scheduler.PostedClosure"),
+                    EngineTask::RasterWorkCompleted => (CompositorPackage::Raster, "Compositor.Raster.WorkCompleted"),
+                    EngineTask::RasterFailure(_) => (CompositorPackage::Raster, "Compositor.Raster.Failure"),
                 };
+                let _task_trace = Span(task_package, task_name);
                 self.Task(task)?;
-                if let Some(started) = profile.filter(|started| started.elapsed().as_millis() >= 1)
-                {
-                    eprintln!(
-                        "compositor-engine-task-profile task={} total_ms={:.3}",
-                        task_name,
-                        started.elapsed().as_secs_f64() * 1000.0,
-                    );
-                }
+                tasks_processed += 1;
                 progressed = true;
                 if turn_started.elapsed() >= OWNER_TURN_BUDGET {
                     budget_exhausted = true;
@@ -1078,6 +1095,10 @@ impl NativeEngineAssembly {
             || !self.lifecycle.IsEmpty()
             || !self.resource_effects.IsEmpty()
             || !self.scheduler_effects.IsEmpty();
+        poll_trace.set("budget_exhausted", budget_exhausted as u8 as f64);
+        poll_trace.set("work_pending", work_pending as u8 as f64);
+        poll_trace.set("tasks", tasks_processed as f64);
+        poll_trace.set("turns", turns as f64);
         if std::env::var_os("RECHROM_DIAG_CC_LIFECYCLE").is_some()
             && (self.core.HasReadyCommit()
                 || self.scheduler.CommitPending()

@@ -1,0 +1,19 @@
+[package]
+name = "prepaint"
+version = "0.0.1"
+edition = "2021"
+
+[features]
+default = ["translation_in_progress"]
+translation_in_progress = []
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+font_engine = { path = "../../font_engine" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+paint_model = { path = "../paint_model" }
+paint_reuse = { path = "../paint_reuse" }
+
+[dev-dependencies]
+image_resource = { path = "../../image_resource" }

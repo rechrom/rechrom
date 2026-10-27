@@ -7,7 +7,7 @@ use foundation::TextDirection;
 impl ShapeResult {
     // cpp: font_engine/fonts/shaping/shape_result_auto_spacing.cc:11-19
     pub fn HasAutoSpacingAfter(&self, offset: u32) -> bool {
-        let character_position = self.character_position_.borrow();
+        let character_position = self.character_position_.get();
         if !character_position.empty() && offset >= self.StartIndex() && offset < self.EndIndex() {
             if character_position.size() == 1 && self.NumCharacters() > 1 {
                 return false;
@@ -113,10 +113,12 @@ impl ShapeResult {
                 let spacing = current.peek().unwrap().spacing;
                 glyph.AddAdvanceFloat(spacing);
                 total_space += spacing;
-                let mut data = self.CharacterDataMut(offset.wrapping_sub(1));
+                // SAFETY: ApplyTextAutoSpacing owns the ShapeResult mutation;
+                // the runs_ iteration is disjoint from the mutable position cache.
+                let positions = unsafe { self.character_position_.get_mut_from_shared() };
+                let data = &mut positions[(offset - self.StartIndex() - 1) as usize];
                 debug_assert!(!data.has_auto_spacing_after);
                 data.has_auto_spacing_after = true;
-                drop(data);
                 current.next();
                 let Some(item) = current.peek() else {
                     break;
@@ -164,7 +166,7 @@ impl ShapeResult {
         mut offset: u32,
         mut position: f32,
     ) -> u32 {
-        debug_assert!(!self.character_position_.borrow().empty());
+        debug_assert!(!self.character_position_.get().empty());
         debug_assert!(self.HasAutoSpacingAfter(offset));
         debug_assert!(offset >= self.StartIndex());
         offset -= self.StartIndex();
@@ -172,7 +174,7 @@ impl ShapeResult {
         if self.IsLtr() {
             position += spacing_width;
             if offset + 1 < self.NumCharacters() {
-                if self.character_position_.borrow()[(offset + 1) as usize]
+                if self.character_position_.get()[(offset + 1) as usize]
                     .x_position()
                     .ToFloat()
                     <= position
@@ -185,7 +187,7 @@ impl ShapeResult {
         } else {
             position -= spacing_width;
             if offset + 1 < self.NumCharacters() {
-                if self.character_position_.borrow()[(offset + 1) as usize]
+                if self.character_position_.get()[(offset + 1) as usize]
                     .x_position()
                     .ToFloat()
                     >= position

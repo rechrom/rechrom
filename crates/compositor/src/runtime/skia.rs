@@ -5,27 +5,23 @@ use crate::cc::base::region::Region;
 use std::sync::OnceLock;
 
 pub use skia::src::core::SkPath::SkPath as BoundaryPath;
-pub use skia::src::core::SkRegion::SkRegion;
 use skia::src::core::{
     SkRect::SkIRect as SkRegionIRect,
-    SkRegion::{Op, RegionIterator as SkRegionIterator},
+    SkRegion::{Op, RegionIterator as SkRegionIterator, SkRegion as NativeSkRegion},
 };
 
-impl From<SkIRect> for SkRegionIRect {
-    fn from(rect: SkIRect) -> Self {
-        {
-            Self::make_ltrb(rect.left, rect.top, rect.right, rect.bottom)
-        }
-    }
+#[derive(Clone, Default, PartialEq)]
+pub struct SkRegion(NativeSkRegion);
+
+fn native_rect(rect: SkIRect) -> SkRegionIRect {
+    SkRegionIRect::make_ltrb(rect.left, rect.top, rect.right, rect.bottom)
 }
-impl From<SkRegionIRect> for SkIRect {
-    fn from(rect: SkRegionIRect) -> Self {
-        Self {
-            left: rect.fLeft,
-            top: rect.fTop,
-            right: rect.fRight,
-            bottom: rect.fBottom,
-        }
+fn region_rect(rect: SkRegionIRect) -> SkIRect {
+    SkIRect {
+        left: rect.fLeft,
+        top: rect.fTop,
+        right: rect.fRight,
+        bottom: rect.fBottom,
     }
 }
 fn region_op(op: SkRegionOp) -> Op {
@@ -44,7 +40,7 @@ impl Iterator for RegionRectIterator<'_> {
         if self.0.done() {
             return None;
         }
-        let rect = (*self.0.rect()).into();
+        let rect = region_rect(*self.0.rect());
         self.0.next();
         Some(rect)
     }
@@ -53,83 +49,83 @@ impl SkRegionBackend for SkRegion {
     type BoundaryPath = BoundaryPath;
     type RectIterator<'a> = RegionRectIterator<'a>;
     fn from_rect(rect: SkIRect) -> Self {
-        Self::from_rect(rect.into())
+        Self(NativeSkRegion::from_rect(native_rect(rect)))
     }
     fn shared_empty_region() -> &'static Region<Self> {
         static EMPTY: OnceLock<Region<SkRegion>> = OnceLock::new();
         EMPTY.get_or_init(Region::default)
     }
     fn translate(&mut self, x: i32, y: i32) {
-        SkRegion::translate(self, x, y);
+        NativeSkRegion::translate(&mut self.0, x, y);
     }
     fn setEmpty(&mut self) {
         {
-            self.set_empty();
+            self.0.set_empty();
         }
     }
     fn isEmpty(&self) -> bool {
         {
-            self.is_empty()
+            self.0.is_empty()
         }
     }
     fn computeRegionComplexity(&self) -> i32 {
         {
-            self.compute_region_complexity()
+            self.0.compute_region_complexity()
         }
     }
     fn getBoundaryPath(&self) -> BoundaryPath {
         {
-            self.get_boundary_path()
+            self.0.get_boundary_path()
         }
     }
     fn contains_point(&self, x: i32, y: i32) -> bool {
         {
-            self.contains_xy(x, y)
+            self.0.contains_xy(x, y)
         }
     }
     fn contains_rect(&self, rect: SkIRect) -> bool {
         {
-            SkRegion::contains_rect(self, &rect.into())
+            NativeSkRegion::contains_rect(&self.0, &native_rect(rect))
         }
     }
     fn contains_region(&self, region: &Self) -> bool {
         {
-            self.contains_region(region)
+            self.0.contains_region(&region.0)
         }
     }
     fn intersects_rect(&self, rect: SkIRect) -> bool {
         {
-            SkRegion::intersects_rect(self, &rect.into())
+            NativeSkRegion::intersects_rect(&self.0, &native_rect(rect))
         }
     }
     fn intersects_region(&self, region: &Self) -> bool {
         {
-            self.intersects_region(region)
+            self.0.intersects_region(&region.0)
         }
     }
     fn op_rect(&mut self, rect: SkIRect, op: SkRegionOp) {
         {
-            SkRegion::op_rect(self, rect.into(), region_op(op));
+            NativeSkRegion::op_rect(&mut self.0, native_rect(rect), region_op(op));
         }
     }
     fn op_region(&mut self, region: &Self, op: SkRegionOp) {
         {
-            SkRegion::op_region(self, region, region_op(op));
+            NativeSkRegion::op_region(&mut self.0, &region.0, region_op(op));
         }
     }
     fn setRects(&mut self, rects: &[SkIRect]) {
         {
-            let rects = rects.iter().copied().map(Into::into).collect::<Vec<_>>();
-            self.set_rects(&rects);
+            let rects = rects.iter().copied().map(native_rect).collect::<Vec<_>>();
+            self.0.set_rects(&rects);
         }
     }
     fn getBounds(&self) -> SkIRect {
         {
-            (*self.get_bounds()).into()
+            region_rect(*self.0.get_bounds())
         }
     }
     fn rects(&self) -> RegionRectIterator<'_> {
-        RegionRectIterator(SkRegionIterator::new(self))
+        RegionRectIterator(SkRegionIterator::new(&self.0))
     }
 }
 
@@ -246,22 +242,6 @@ fn native_filter_rect(rect: Rect) -> gfx::Rect {
 }
 fn filter_rect(rect: gfx::Rect) -> Rect {
     Rect::new(rect.x(), rect.y(), rect.width(), rect.height())
-}
-impl crate::adapter::property_types::FilterOperations for FilterOperations {
-    fn IsEmpty(&self) -> bool {
-        Self::IsEmpty(self)
-    }
-    fn ToString(&self) -> String {
-        Self::ToString(self)
-    }
-}
-impl crate::adapter::property_tree::PropertyTreeFilters for FilterOperations {
-    fn AllowsLCDText(&self) -> bool {
-        Self::AllowsLCDText(self)
-    }
-    fn HasZoomFilter(&self) -> bool {
-        self.HasFilterOfType(FilterType::ZOOM)
-    }
 }
 impl crate::adapter::draw_property::DrawFilters for FilterOperations {
     fn HasReferenceFilter(&self) -> bool {

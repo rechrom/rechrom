@@ -1,0 +1,63 @@
+// Copyright 2015 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+// cpp: third_party/blink/renderer/core/css/parser/css_at_rule_id.h
+
+#![allow(non_camel_case_types, non_snake_case)]
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CSSAtRuleID {
+    kCSSAtRuleInvalid,
+    kCSSAtRuleViewTransition,
+    kCSSAtRuleCharset,
+    kCSSAtRuleFontFace,
+    kCSSAtRuleFontPaletteValues,
+    kCSSAtRuleImport,
+    kCSSAtRuleKeyframes,
+    kCSSAtRuleLayer,
+    kCSSAtRuleMedia,
+    kCSSAtRuleNamespace,
+    kCSSAtRulePage,
+    kCSSAtRulePositionTry,
+    kCSSAtRuleProperty,
+    kCSSAtRuleLocation,
+    kCSSAtRuleNavigation,
+    kCSSAtRuleContainer,
+    kCSSAtRuleCounterStyle,
+    kCSSAtRuleScope,
+    kCSSAtRuleStartingStyle,
+    kCSSAtRuleSupports,
+    kCSSAtRuleWebkitKeyframes,
+    kCSSAtRuleAnnotation,
+    kCSSAtRuleCharacterVariant,
+    kCSSAtRuleFontFeatureValues,
+    kCSSAtRuleOrnaments,
+    kCSSAtRuleStylistic,
+    kCSSAtRuleStyleset,
+    kCSSAtRuleSwash,
+    kCSSAtRuleTopLeftCorner,
+    kCSSAtRuleTopLeft,
+    kCSSAtRuleTopCenter,
+    kCSSAtRuleTopRight,
+    kCSSAtRuleTopRightCorner,
+    kCSSAtRuleBottomLeftCorner,
+    kCSSAtRuleBottomLeft,
+    kCSSAtRuleBottomCenter,
+    kCSSAtRuleBottomRight,
+    kCSSAtRuleBottomRightCorner,
+    kCSSAtRuleLeftTop,
+    kCSSAtRuleLeftMiddle,
+    kCSSAtRuleLeftBottom,
+    kCSSAtRuleRightTop,
+    kCSSAtRuleRightMiddle,
+    kCSSAtRuleRightBottom,
+    kCSSAtRuleFunction,
+    kCSSAtRuleMixin,
+    kCSSAtRuleApplyMixin,
+    kCSSAtRuleContents,
+    kCSSAtRuleResult,
+    kCSSAtRulePrivate,
+    kCSSAtRuleCustomMedia,
+    kCount,
+}

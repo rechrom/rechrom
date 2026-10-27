@@ -211,6 +211,26 @@ pub mod internal {
     pub mod variable_length_transform_result;
 }
 
+// The native cache lookup is compiled at the reciprocal LayoutNG assembly
+// boundary but physically owned by layout_reuse for profiler attribution.
+#[path = "../../layout_reuse/src/native_cache_lookup.rs"]
+pub mod layout_reuse_package;
+
+// Completed-client tree traversal is compiled at the reciprocal assembly
+// boundary but physically owned by layout_commit for profiler attribution.
+#[path = "../../layout_commit/src/native_client_commit.rs"]
+pub mod layout_commit_package;
+
+// Native object indexing is compiled at the reciprocal assembly boundary but
+// physically owned by layout_fragment for profiler attribution.
+#[path = "../../layout_fragment/src/native_object_index.rs"]
+pub mod layout_fragment_native;
+
+// Native sticky-position refresh is compiled at the reciprocal assembly
+// boundary but physically owned by layout_fragment for profiler attribution.
+#[path = "../../layout_fragment/src/native_sticky_offsets.rs"]
+pub mod layout_fragment_native_sticky;
+
 pub mod layout_assembly;
 pub mod layout_boundary_support;
 pub mod layout_engine;

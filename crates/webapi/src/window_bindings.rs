@@ -428,8 +428,9 @@ impl WindowJavaScriptBindings {
             return match call.operation {
                 HostOperation::kGet => method(0, name),
                 HostOperation::kCall => {
-                    use style::media_queries::media_query_backend::ParseMediaQuerySet;
-                    use style::media_queries::media_query_evaluator::MediaQueryEvaluator;
+                    use style::media_queries::media_query_backend::{
+                        ForMediaValues, ParseMediaQuerySet,
+                    };
                     use style::media_queries::{MediaValuesCached, MediaValuesCachedData};
                     let queries = ParseMediaQuerySet(text_arg(args, 0).unwrap_or(""));
                     let values = MediaValuesCached::new(&MediaValuesCachedData {
@@ -450,9 +451,7 @@ impl WindowJavaScriptBindings {
                         scripting: style::media_queries::scripting::Scripting::kEnabled,
                         ..Default::default()
                     });
-                    value(HostValue::Boolean(
-                        MediaQueryEvaluator::ForMediaValues(&values).Eval(&queries),
-                    ))
+                    value(HostValue::Boolean(ForMediaValues(&values).Eval(&queries)))
                 }
                 _ => unhandled(),
             };

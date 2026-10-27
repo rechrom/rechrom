@@ -134,6 +134,28 @@ impl NativeFrameSink<crate::NativeCompositorTypes> for OutputFrameSink {
             self.client.is_some(),
             "native frame submission requires a bound client"
         );
+        let mut trace = crate::performance::Span(
+            crate::performance::CompositorPackage::Frame,
+            "Compositor.Frame.Submit",
+        );
+        trace.set("render_passes", frame.render_pass_list.len() as f64);
+        trace.set(
+            "quads",
+            frame
+                .render_pass_list
+                .iter()
+                .map(|pass| pass.quad_list.len())
+                .sum::<usize>() as f64,
+        );
+        trace.set(
+            "shared_quad_states",
+            frame
+                .render_pass_list
+                .iter()
+                .map(|pass| pass.shared_quad_state_list.len())
+                .sum::<usize>() as f64,
+        );
+        trace.set("resources", frame.resource_list.len() as f64);
         self.output.Submit(crate::NativeCompositorFrameSubmission {
             local_surface_id: self.local_surface_id,
             frame,

@@ -13,7 +13,7 @@ use super::{
     main_thread_scrolling_reason::{
         MainThreadHitTestReason, MainThreadHitTestReasons, MainThreadRepaintReasons,
     },
-    overscroll_behavior::{OverscrollBehavior, Type as OverscrollType},
+    overscroll_behavior::OverscrollBehavior,
     scroll_snap_data::{SnapPositionType, TargetSnapAreaElementIds},
     scroll_state::ScrollState,
     scroll_state_data::ScrollStateData,
@@ -146,65 +146,13 @@ fn zero(v: Vector2dF) -> bool {
     v == Vector2dF::default()
 }
 // Source: cc/input/input_handler.h:53-88
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PointerResultType {
-    kUnhandled = 0,
-    kScrollbarScroll,
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct InputHandlerPointerResult {
-    pub type_: PointerResultType,
-    pub scroll_units: ScrollGranularity,
-    pub scroll_delta: Vector2dF,
-    pub target_scroller: ElementId,
-}
-impl Default for InputHandlerPointerResult {
-    fn default() -> Self {
-        Self {
-            type_: PointerResultType::kUnhandled,
-            scroll_units: ScrollGranularity::kScrollByPrecisePixel,
-            scroll_delta: Vector2dF::default(),
-            target_scroller: ElementId::default(),
-        }
-    }
-}
-// Source: cc/input/input_handler.h:57-64
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollBeginThreadState {
-    kScrollingOnCompositor = 0,
-    kScrollingOnCompositorBlockedOnMain = 1,
-    kScrollingOnMain = 2,
-    kRasterInducingScroll = 3,
-    kRasterInducingScrollBlockedOnMain = 4,
-}
-impl ScrollBeginThreadState {
-    pub const kMaxValue: Self = Self::kRasterInducingScrollBlockedOnMain;
-}
-// Source: cc/input/input_handler.h:90-128
-#[derive(Clone, Copy, Debug, Default)]
-pub struct InputHandlerScrollResult {
-    pub did_scroll: bool,
-    pub did_overscroll_root: bool,
-    pub accumulated_root_overscroll: Vector2dF,
-    pub unused_scroll_delta: Vector2dF,
-    pub overscroll_behavior: OverscrollBehavior,
-    pub current_visual_offset: PointF,
-    pub needs_main_thread_repaint: bool,
-    pub hit_snap_constraint: bool,
-}
-#[derive(Clone, Copy, Debug, Default)]
-pub struct InputHandlerScrollEndResult {
-    pub updates_need_main_thread_repaint: bool,
-}
-// Source: cc/input/input_handler.h:130-189
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollEventDispatchMode {
-    kEnqueueScrollEvents,
-    kDispatchScrollEventsImmediately,
-    kUseScrollPredictorForEmptyQueue,
-    kUseScrollPredictorForDeadline,
-    kDispatchScrollEventsUntilDeadline,
-}
+pub use compositor_input::input_handler_types::{
+    kScrollEpsilon, GetScrollEventDispatchMode, GetScrollInputTypeSuffix,
+    InputHandlerScrollEndResult, InputHandlerScrollResult, ScrollBeginThreadState,
+    ScrollEventDispatchMode, ScrollStatus, ScrollThread, ScrollVector, SnapAnimationData,
+    SnapFlingState, SnapReason, TouchStartOrMoveEventListenerType,
+};
+pub use compositor_input::input_types::{InputHandlerPointerResult, PointerResultType};
 pub trait InputHandlerClient {
     fn WillShutdown(&self);
     fn Animate(&self, time: TimeTicks);
@@ -229,54 +177,8 @@ pub trait InputHandlerClient {
     fn HasQueuedInput(&self) -> bool;
     fn SetScrollEventDispatchMode(&self, mode: ScrollEventDispatchMode, ratio: f64);
 }
-// Source: cc/input/input_handler.h:214-258
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollThread {
-    kScrollOnMainThread_NotUsed = 0,
-    kScrollOnImplThread,
-    kScrollIgnored,
-    kScrollUnknown_NotUsed,
-}
-impl ScrollThread {
-    pub const kLastScrollStatus: Self = Self::kScrollUnknown_NotUsed;
-}
-#[derive(Clone, Debug)]
-pub struct ScrollStatus {
-    pub thread: ScrollThread,
-    pub main_thread_hit_test_reasons: MainThreadHitTestReasons,
-    pub main_thread_repaint_reasons: MainThreadRepaintReasons,
-    pub viewport_cannot_scroll: bool,
-    pub raster_inducing: bool,
-}
-impl Default for ScrollStatus {
-    fn default() -> Self {
-        Self {
-            thread: ScrollThread::kScrollOnImplThread,
-            main_thread_hit_test_reasons: MainThreadHitTestReasons::default(),
-            main_thread_repaint_reasons: MainThreadRepaintReasons::default(),
-            viewport_cannot_scroll: false,
-            raster_inducing: false,
-        }
-    }
-}
-// Source: cc/input/input_handler.h:260-291
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ViewportScrollResult {
-    pub consumed_delta: Vector2dF,
-    pub content_scrolled_delta: Vector2dF,
-    pub outer_viewport_scrolled_delta: Vector2dF,
-    pub inner_viewport_scrolled_delta: Vector2dF,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TouchStartOrMoveEventListenerType {
-    kNoHandler,
-    kHandler,
-    kHandlerOnScrollingLayer,
-}
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SnapAnimationData {
-    pub animating_snap_target_ids_: TargetSnapAreaElementIds,
-}
+// Source: cc/input/input_handler.h:260-291. Viewport policy owns the result.
+pub use compositor_input::viewport::ViewportScrollResult;
 // Source: cc/input/input_handler.cc:1616-1637; cc/input/input_handler.h:818,849,874.
 // Read-only output borrows the canonical input state. It owns no flags, state,
 // map or host/tree reference, so selected-tree callbacks can query this source
@@ -310,15 +212,11 @@ impl InputHandlerView<'_> {
         self.IsCurrentlyScrollingWithCurrentNode(scroll_tree.CurrentlyScrollingNode().is_some())
     }
     fn IsCurrentlyScrollingWithCurrentNode(&self, has_current: bool) -> bool {
-        if has_current {
-            return true;
-        }
-        for data in self.snap_animation_data_map_.values() {
-            if data.animating_snap_target_ids_ != TargetSnapAreaElementIds::default() {
-                return true;
-            }
-        }
-        false
+        compositor_input::interaction_state::IsCurrentlyScrolling(has_current, || {
+            compositor_input::interaction_state::HasAnimatingSnapTargets(
+                self.snap_animation_data_map_.values(),
+            )
+        })
     }
 
     // Source: cc/input/input_handler.cc:2124-2146.
@@ -380,24 +278,22 @@ impl InputHandlerView<'_> {
         currently_scrolling_node: bool,
         settings: impl FnOnce() -> &'s S,
     ) -> ActivelyScrollingType {
-        if currently_scrolling_node
-            && self.last_scroll_update_state_.is_some()
-            && *self.delta_consumed_for_scroll_gesture_
-        {
-            if ShouldAnimateScrollForState(
-                settings(),
-                self.last_scroll_update_state_.as_ref().unwrap(),
-            ) {
-                return ActivelyScrollingType::kAnimated;
-            }
-            return ActivelyScrollingType::kPrecise;
-        }
-        for data in self.snap_animation_data_map_.values() {
-            if data.animating_snap_target_ids_ != TargetSnapAreaElementIds::default() {
-                return ActivelyScrollingType::kAnimated;
-            }
-        }
-        ActivelyScrollingType::kNone
+        compositor_input::interaction_state::GetActivelyScrollingType(
+            currently_scrolling_node,
+            self.last_scroll_update_state_.is_some(),
+            *self.delta_consumed_for_scroll_gesture_,
+            || {
+                ShouldAnimateScrollForState(
+                    settings(),
+                    self.last_scroll_update_state_.as_ref().unwrap(),
+                )
+            },
+            || {
+                compositor_input::interaction_state::HasAnimatingSnapTargets(
+                    self.snap_animation_data_map_.values(),
+                )
+            },
+        )
     }
 }
 // Source: cc/input/input_handler.cc:2459-2467.
@@ -405,30 +301,10 @@ fn ShouldAnimateScrollForState(
     settings: &(impl InputSettings + ?Sized),
     state: &ScrollState,
 ) -> bool {
-    if !settings.enable_smooth_scroll() {
-        return false;
-    }
-    let precise = state.delta_granularity() == ScrollGranularity::kScrollByPrecisePixel;
-    !precise
-}
-// Source: cc/input/input_handler.h:334-337
-#[derive(Clone, Copy, Debug)]
-pub struct ScrollVector {
-    pub scroll_delta: Vector2dF,
-    pub granularity: ScrollGranularity,
-}
-// Source: cc/input/input_handler.h:636,682-686,828-833
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnapReason {
-    kGestureScrollEnd,
-    kScrollOffsetAnimationFinished,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SnapFlingState {
-    kNoFling,
-    kNativeFling,
-    kConstrainedNativeFling,
-    kSnapFling,
+    compositor_input::input_handler_types::ShouldAnimateScroll(
+        settings.enable_smooth_scroll(),
+        state.delta_granularity(),
+    )
 }
 struct ScrollHitTestResult<N> {
     scroll_node: Option<N>,
@@ -487,31 +363,316 @@ enum SlowScrollMetricThread {
     MAIN_THREAD,
     CC_THREAD,
 }
-// Source: cc/input/input_handler.cc:52-76
-fn GetScrollEventDispatchMode(mode: &str) -> ScrollEventDispatchMode {
-    // Source dependency constants: cc/base/features.cc:111-119.
-    if mode == "DispatchScrollEventsImmediately" {
-        return ScrollEventDispatchMode::kDispatchScrollEventsImmediately;
-    } else if mode == "UseScrollPredictorForEmptyQueue" {
-        return ScrollEventDispatchMode::kUseScrollPredictorForEmptyQueue;
-    } else if mode == "UseScrollPredictorForDeadline" {
-        return ScrollEventDispatchMode::kUseScrollPredictorForDeadline;
-    } else if mode == "DispatchScrollEventsUntilDeadline" {
-        return ScrollEventDispatchMode::kDispatchScrollEventsUntilDeadline;
-    }
-    ScrollEventDispatchMode::kEnqueueScrollEvents
+
+struct ScrollEndAdapter<'a, B: InputHandlerTypes, C: InputHost<B> + ?Sized> {
+    handler: &'a mut InputHandler<B>,
+    host: &'a mut C,
+    compensated: Option<ScrollVector>,
 }
-// Source: cc/input/input_handler.cc:78-90
-fn GetScrollInputTypeSuffix(input: ScrollInputType) -> &'static str {
-    match input {
-        ScrollInputType::kTouchscreen => "Touchscreen",
-        ScrollInputType::kWheel => "Wheel",
-        ScrollInputType::kAutoscroll => "Autoscroll",
-        ScrollInputType::kScrollbar => "Scrollbar",
+
+impl<B: InputHandlerTypes, C: InputHost<B> + ?Sized> compositor_input::scroll_end::ScrollEndContext
+    for ScrollEndAdapter<'_, B, C>
+{
+    type Node = B::ScrollNode;
+    type ElementId = ElementId;
+
+    fn currently_scrolling_node(&mut self) -> Option<B::ScrollNode> {
+        self.handler.CurrentlyScrollingNode(self.host)
+    }
+
+    fn updates_need_main_thread_repaint(&mut self, node: &B::ScrollNode) -> bool {
+        self.host.ScrollTree_ShouldRealizeScrollsOnMain(node)
+    }
+
+    fn node_element_id(&mut self, node: &B::ScrollNode) -> ElementId {
+        self.host.ReadScrollNode(node, |node| node.element_id)
+    }
+
+    fn insert_pending_scrollend_container(&mut self, element_id: ElementId) {
+        self.handler
+            .InsertPendingScrollendContainer(self.host, element_id);
+    }
+
+    fn remove_deferred_scroll_end(&mut self, element_id: ElementId) {
+        self.handler.deferred_scroll_ends_.remove(&element_id);
+    }
+
+    fn deferred_scroll_end_exists(&mut self, element_id: ElementId) -> bool {
+        self.handler.deferred_scroll_ends_.contains(&element_id)
+    }
+
+    fn insert_deferred_scroll_end(&mut self, element_id: ElementId) {
+        self.handler.deferred_scroll_ends_.insert(element_id);
+    }
+
+    fn reset_scrollbar_state(&mut self) {
+        self.handler.scrollbar_controller_.ResetState();
+    }
+
+    fn end_of_scroll_cleanup(&mut self, node: &B::ScrollNode) {
+        self.handler
+            .EndOfScrollCleanup(self.host, node, self.compensated);
+    }
+
+    fn remove_snap_animation_data(&mut self, element_id: ElementId) {
+        self.handler.snap_animation_data_map_.remove(&element_id);
+    }
+
+    fn current_scroller_is_animating(&mut self) -> bool {
+        self.handler
+            .GetAnimatingNodeForCurrentScrollingNode(self.host)
+            .is_some()
+    }
+
+    fn has_elastic_overscroll(&mut self, element_id: ElementId) -> bool {
+        self.handler
+            .scroll_elasticity_helper_
+            .as_ref()
+            .is_some_and(|helper| !zero(self.host.StretchAmount(helper, element_id)))
+    }
+
+    fn snap_at_scroll_end(&mut self) -> bool {
+        self.handler
+            .SnapAtScrollEnd(self.host, SnapReason::kGestureScrollEnd)
+    }
+
+    fn has_latched_scroll_type(&self) -> bool {
+        self.handler.latched_scroll_type_.is_some()
+    }
+
+    fn gesture_consumed_scroll_delta(&self) -> bool {
+        self.handler.did_scroll_x_for_scroll_gesture_
+            || self.handler.did_scroll_y_for_scroll_gesture_
+    }
+
+    fn clear_currently_scrolling_node(&mut self) {
+        self.handler.ClearCurrentlyScrollingNode(self.host);
+    }
+
+    fn request_commit(&mut self) {
+        self.handler.SetNeedsCommit(self.host);
     }
 }
-// Source: cc/input/input_handler.cc:94-98
-pub const kScrollEpsilon: f32 = 0.1;
+
+struct OverscrollRoutingAdapter<'a, B: InputHandlerTypes, C: InputHost<B> + ?Sized> {
+    handler: &'a mut InputHandler<B>,
+    host: &'a mut C,
+    node: B::ScrollNode,
+}
+
+impl<B: InputHandlerTypes, C: InputHost<B> + ?Sized>
+    compositor_input::scroll_update::OverscrollRoutingContext
+    for OverscrollRoutingAdapter<'_, B, C>
+{
+    fn inner_viewport_user_scrollable_delta(&mut self, delta: Vector2dF) -> Vector2dF {
+        if let Some(inner) = self.handler.InnerViewportScrollNode(self.host) {
+            self.handler.UserScrollableDelta(self.host, &inner, delta)
+        } else {
+            delta
+        }
+    }
+
+    fn non_root_effects_enabled(&mut self) -> bool {
+        self.host
+            .feature(InputFeature::OverscrollEffectOnNonRootScrollers)
+    }
+
+    fn non_root_has_x_border_effect(&mut self) -> bool {
+        self.host.ReadScrollNode(&self.node, |node| {
+            node.overscroll_behavior.HasXLocalBorderEffects()
+        })
+    }
+
+    fn non_root_has_y_border_effect(&mut self) -> bool {
+        self.host.ReadScrollNode(&self.node, |node| {
+            node.overscroll_behavior.HasYLocalBorderEffects()
+        })
+    }
+
+    fn active_tree_overscroll_behavior(&mut self) -> OverscrollBehavior {
+        self.host.ActiveTree_overscroll_behavior()
+    }
+}
+
+struct ScrollBeginAdapter<'a, B: InputHandlerTypes, C: InputHost<B> + ?Sized> {
+    handler: &'a mut InputHandler<B>,
+    host: &'a mut C,
+    state: &'a mut ScrollState,
+    input: ScrollInputType,
+}
+
+impl<B: InputHandlerTypes, C: InputHost<B> + ?Sized>
+    compositor_input::scroll_begin::ScrollBeginContext for ScrollBeginAdapter<'_, B, C>
+{
+    type Node = B::ScrollNode;
+    type ElementId = ElementId;
+
+    fn state_delta_is_zero(&self) -> bool {
+        self.state.delta_x() == 0.0 && self.state.delta_y() == 0.0
+    }
+
+    fn precise_pixel_scroll(&self) -> bool {
+        self.state.delta_granularity() == ScrollGranularity::kScrollByPrecisePixel
+    }
+
+    fn animating_node_for_current_scroller(&mut self) -> Option<B::ScrollNode> {
+        self.handler
+            .GetAnimatingNodeForCurrentScrollingNode(self.host)
+    }
+
+    fn node_element_id(&mut self, node: &B::ScrollNode) -> ElementId {
+        self.host.ReadScrollNode(node, |node| node.element_id)
+    }
+
+    fn abort_scroll_animation(&mut self, element_id: ElementId) {
+        self.host.ScrollAnimationAbort(element_id);
+    }
+
+    fn currently_scrolling_node(&mut self) -> Option<B::ScrollNode> {
+        self.handler.CurrentlyScrollingNode(self.host)
+    }
+
+    fn clear_animating_snap_targets(&mut self, element_id: ElementId) {
+        self.handler.ClearAnimatingSnapTargetsForElement(element_id);
+    }
+
+    fn input_matches_latched_type(&self) -> bool {
+        Some(self.input) == self.handler.latched_scroll_type_
+    }
+
+    fn node_has_snap_data(&mut self, node: &B::ScrollNode) -> bool {
+        self.host
+            .ReadScrollNode(node, |node| node.snap_container_data.is_some())
+    }
+
+    fn deferred_scroll_end_exists(&self, element_id: ElementId) -> bool {
+        self.handler.deferred_scroll_ends_.contains(&element_id)
+    }
+
+    fn remove_deferred_scroll_end(&mut self, element_id: ElementId) {
+        self.handler.deferred_scroll_ends_.remove(&element_id);
+    }
+
+    fn can_realize_scrolls_on_pending_tree(&mut self, node: &B::ScrollNode) -> bool {
+        self.host.ScrollTree_CanRealizeScrollsOnPendingTree(node)
+    }
+
+    fn clear_currently_scrolling_node(&mut self) {
+        self.handler.ClearCurrentlyScrollingNode(self.host);
+    }
+
+    fn target_element_is_valid(&self) -> bool {
+        self.state.target_element_id().IsValid()
+    }
+
+    fn main_thread_hit_test_reasons_empty(&self) -> bool {
+        self.state.main_thread_hit_tested_reasons().empty()
+    }
+
+    fn scrollbar_interaction(&self) -> bool {
+        self.state.is_scrollbar_interaction()
+    }
+
+    fn trace_latched_node_provided(&mut self) {
+        self.host.InstantTrace("Latched scroll node provided", &[]);
+    }
+
+    fn trace_unlatched_node_provided(&mut self) {
+        self.host
+            .InstantTrace("Unlatched scroll node provided", &[]);
+    }
+
+    fn trace_hit_testing(&mut self) {
+        self.host.InstantTrace("Hit Testing for ScrollNode", &[]);
+    }
+
+    fn find_target_node(&mut self) -> Option<B::ScrollNode> {
+        self.host
+            .ScrollTree_MutableFindNodeFromElementId(self.state.target_element_id())
+    }
+
+    fn hit_test_scroll_node(
+        &mut self,
+    ) -> compositor_input::scroll_begin::ScrollBeginHitTest<B::ScrollNode> {
+        let point = point_scale(
+            PointF::new(
+                self.state.position_x() as f32,
+                self.state.position_y() as f32,
+            ),
+            self.host.ActiveTree_device_scale_factor(),
+        );
+        let hit = self.handler.HitTestScrollNode(self.host, point);
+        compositor_input::scroll_begin::ScrollBeginHitTest {
+            scroll_node: hit.scroll_node,
+            hit_test_successful: hit.hit_test_successful,
+            main_thread_hit_test_reasons: hit.main_thread_hit_test_reasons,
+        }
+    }
+
+    fn trace_request_main_thread_hit_test(&mut self) {
+        self.host.InstantTrace("Request Main Thread Hit Test", &[]);
+    }
+
+    fn find_node_to_latch(&mut self, starting: Option<B::ScrollNode>) -> Option<B::ScrollNode> {
+        self.handler
+            .FindNodeToLatch(self.host, self.state, starting, self.input)
+    }
+
+    fn fluent_overlay_scrollbar_enabled(&self) -> bool {
+        self.host.GetSettings().enable_fluent_overlay_scrollbar()
+    }
+
+    fn notify_will_scroll_content(&mut self, element_id: ElementId) {
+        self.host.WillScrollContent(element_id);
+    }
+
+    fn embedded_frame(&self) -> bool {
+        self.host.GetSettings().is_for_embedded_frame()
+    }
+
+    fn trace_no_scroll_node(&mut self, embedded: bool) {
+        self.host.InstantTrace(
+            if embedded {
+                "Ignored - No ScrollNode (OOPIF or FencedFrame)"
+            } else {
+                "Ignored - No ScrollNode"
+            },
+            &[],
+        );
+    }
+
+    fn set_currently_scrolling_node(&mut self, node: B::ScrollNode) {
+        self.host.SetCurrentlyScrollingNode(node);
+    }
+
+    fn node_main_thread_repaint_reasons(
+        &mut self,
+        node: &B::ScrollNode,
+    ) -> MainThreadRepaintReasons {
+        self.host
+            .ReadScrollNode(node, |node| node.main_thread_repaint_reasons.clone())
+    }
+
+    fn did_latch_to_scroller(&mut self) {
+        self.handler
+            .DidLatchToScroller(self.host, self.state, self.input);
+    }
+
+    fn viewport_should_scroll(&mut self, node: &B::ScrollNode) -> bool {
+        self.host.Viewport_ShouldScroll(node)
+    }
+
+    fn reset_viewport_consumed_delta(&mut self) {
+        self.handler.outer_viewport_consumed_delta_ = false;
+        self.handler.inner_viewport_consumed_delta_ = false;
+    }
+
+    fn viewport_can_scroll(&mut self, node: &B::ScrollNode) -> bool {
+        self.host
+            .Viewport_CanScroll(&self.handler.View(), node, self.state)
+    }
+}
+
 impl<B: InputHandlerTypes> InputHandler<B> {
     // Source: cc/input/input_handler.cc:101-107
     pub fn Create<C: InputHost<B> + InputBindingHost<B> + ?Sized>(host: &mut C) -> InputHandlerWeak
@@ -524,10 +685,12 @@ impl<B: InputHandlerTypes> InputHandler<B> {
     }
     // Source: cc/input/input_handler.cc:101-107. Rust borrow split: release
     // the per-call InputHost facade before binding the same Box into its owner.
-    pub(crate) fn CreateUnbound<C:InputHost<B>+?Sized>(host:&mut C)->(Box<Self>,InputHandlerWeak){
-        let input=Box::new(Self::new(host));
-        let weak=input.AsWeakPtr();
-        (input,weak)
+    pub(crate) fn CreateUnbound<C: InputHost<B> + ?Sized>(
+        host: &mut C,
+    ) -> (Box<Self>, InputHandlerWeak) {
+        let input = Box::new(Self::new(host));
+        let weak = input.AsWeakPtr();
+        (input, weak)
     }
     // Source: cc/input/input_handler.cc:109-112; cc/input/input_handler.h:786-937
     pub fn new<C: InputHost<B> + ?Sized>(host: &mut C) -> Self {
@@ -609,111 +772,15 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         state: &mut ScrollState,
         input: ScrollInputType,
     ) -> ScrollStatus {
-        debug_assert!(state.delta_x() == 0. && state.delta_y() == 0.);
-        let mut status = ScrollStatus::default();
         let _trace = host.BeginTrace("InputHandler::ScrollBegin", &[]);
-        let mut had_animation = false;
-        if state.delta_granularity() == ScrollGranularity::kScrollByPrecisePixel {
-            if let Some(n) = self.GetAnimatingNodeForCurrentScrollingNode(host) {
-                had_animation = true;
-                delegate!(
-                    host,
-                    ScrollAnimationAbort(node_read!(host, n, |n| n.element_id))
-                );
-            }
-            if let Some(n) = self.CurrentlyScrollingNode(host) {
-                self.ClearAnimatingSnapTargetsForElement(node_read!(host, n, |n| n.element_id));
-            }
-        }
-        if let Some(n) = self.CurrentlyScrollingNode(host) {
-            if Some(input) == self.latched_scroll_type_
-                && (self.GetAnimatingNodeForCurrentScrollingNode(host).is_some()
-                    || had_animation
-                    || node_read!(host, n, |n| n.snap_container_data.is_some()))
-            {
-                let id = node_read!(host, n, |n| n.element_id);
-                debug_assert!(self.deferred_scroll_ends_.contains(&id));
-                self.deferred_scroll_ends_.remove(&id);
-                status.raster_inducing = host.ScrollTree_CanRealizeScrollsOnPendingTree(&n);
-                return status;
-            }
-        }
-        self.ClearCurrentlyScrollingNode(host);
-        let target = state.target_element_id();
-        let scrolling;
-        if target.IsValid()
-            && (state.main_thread_hit_tested_reasons().empty() || state.is_scrollbar_interaction())
-        {
-            host.InstantTrace("Latched scroll node provided", &[]);
-            scrolling = host.ScrollTree_MutableFindNodeFromElementId(target);
-        } else {
-            let starting;
-            if target.IsValid() {
-                host.InstantTrace("Unlatched scroll node provided", &[]);
-                debug_assert!(!state.main_thread_hit_tested_reasons().empty());
-                starting = host.ScrollTree_MutableFindNodeFromElementId(target);
-                if starting.is_none() {
-                    status.thread = ScrollThread::kScrollIgnored;
-                    return status;
-                }
-            } else {
-                host.InstantTrace("Hit Testing for ScrollNode", &[]);
-                let point = point_scale(
-                    PointF::new(state.position_x() as f32, state.position_y() as f32),
-                    host.ActiveTree_device_scale_factor(),
-                );
-                assert!(state.main_thread_hit_tested_reasons().empty());
-                let hit = self.HitTestScrollNode(host, point);
-                if !hit.hit_test_successful {
-                    host.InstantTrace("Request Main Thread Hit Test", &[]);
-                    status.thread = ScrollThread::kScrollOnImplThread;
-                    debug_assert!(!hit.main_thread_hit_test_reasons.empty());
-                    status.main_thread_hit_test_reasons = hit.main_thread_hit_test_reasons;
-                    return status;
-                }
-                starting = hit.scroll_node;
-            }
-            scrolling = self.FindNodeToLatch(host, state, starting.clone(), input);
-            if let Some(n) = &scrolling {
-                if setting!(host, enable_fluent_overlay_scrollbar)
-                    && node_read!(host, n, |n| n.element_id)
-                        != node_read!(host, starting.as_ref().unwrap(), |n| n.element_id)
-                {
-                    delegate!(
-                        host,
-                        WillScrollContent(
-                            node_read!(host, starting.as_ref().unwrap(), |n| n.element_id)
-                        )
-                    );
-                }
-            }
-        }
-        let Some(n) = scrolling else {
-            if setting!(host, is_for_embedded_frame) {
-                host.InstantTrace("Ignored - No ScrollNode (OOPIF or FencedFrame)", &[]);
-            } else {
-                host.InstantTrace("Ignored - No ScrollNode", &[]);
-            }
-            status.thread = ScrollThread::kScrollIgnored;
-            return status;
-        };
-        debug_assert_eq!(status.thread, ScrollThread::kScrollOnImplThread);
-        host.SetCurrentlyScrollingNode(n.clone());
-        status.main_thread_repaint_reasons =
-            node_read!(host, n, |n| n.main_thread_repaint_reasons.clone());
-        status.raster_inducing = host.ScrollTree_CanRealizeScrollsOnPendingTree(&n);
-        self.DidLatchToScroller(host, state, input);
-        let current = self.CurrentlyScrollingNode(host).unwrap();
-        if host.Viewport_ShouldScroll(&current) {
-            self.outer_viewport_consumed_delta_ = false;
-            self.inner_viewport_consumed_delta_ = false;
-            if !host.Viewport_CanScroll(&self.View(), &current, state) {
-                status.viewport_cannot_scroll = true;
-            }
-        }
-        status
+        compositor_input::scroll_begin::BeginScroll(&mut ScrollBeginAdapter {
+            handler: self,
+            host,
+            state,
+            input,
+        })
+        .0
     }
-    // Source: cc/input/input_handler.cc:318-337
     pub fn RootScrollBegin<C: InputHost<B> + ?Sized>(
         &mut self,
         host: &mut C,
@@ -742,6 +809,11 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         delayed_by: TimeDelta,
     ) -> InputHandlerScrollResult {
         debug_assert!(!state.data().current_native_scrolling_element().IsValid());
+        let mut package_trace = compositor_input::performance::ScrollUpdateTrace::new(
+            state.delta_x(),
+            state.delta_y(),
+            state.delta_granularity() as u8,
+        );
         let _trace = host.BeginTrace(
             "InputHandler::ScrollUpdate",
             &[
@@ -754,6 +826,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
             ],
         );
         let Some(node) = self.CurrentlyScrollingNode(host) else {
+            package_trace.no_current_scroll_node();
             return InputHandlerScrollResult::default();
         };
         self.last_scroll_update_state_ = Some(state.clone());
@@ -800,15 +873,20 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         let initial_controls = delegate!(host, GetBrowserControlsTopOffset());
         self.ScrollLatchedScroller(host, &mut state, delayed_by);
         self.delta_consumed_for_scroll_gesture_ |= state.delta_consumed_for_scroll_sequence();
-        let did_any = (state.delta_x() - resolved.x() as f64).abs() > kScrollEpsilon as f64
-            || (state.delta_y() - resolved.y() as f64).abs() > kScrollEpsilon as f64;
-        if did_any {
+        let consumption = compositor_input::scroll_update::ClassifyScrollConsumption(
+            Vector2dF::new(state.delta_x() as f32, state.delta_y() as f32),
+            resolved,
+            state.caused_scroll_x(),
+            state.caused_scroll_y(),
+            false,
+            kScrollEpsilon,
+        );
+        if consumption.consumed_any_delta {
             delegate!(host, DidScrollForMetrics());
         }
         let did_x = state.caused_scroll_x();
         let did_y = state.caused_scroll_y();
-        let did_content = did_x || did_y;
-        if did_content {
+        if consumption.scrolled_content {
             let animated = self.ShouldAnimateScroll(host, &state);
             delegate!(
                 host,
@@ -821,49 +899,32 @@ impl<B: InputHandlerTypes> InputHandler<B> {
             );
         }
         self.SetNeedsCommit(host);
-        if did_x {
-            self.accumulated_root_overscroll_.set_x(0.);
-        }
-        if did_y {
-            self.accumulated_root_overscroll_.set_y(0.);
-        }
-        let mut unused = Vector2dF::new(state.delta_x() as f32, state.delta_y() as f32);
         let root = host.Viewport_ShouldScroll(&node);
-        if root {
-            if let Some(inner) = self.InnerViewportScrollNode(host) {
-                unused = self.UserScrollableDelta(host, &inner, unused);
-            }
-            self.accumulated_root_overscroll_ += unused;
-        }
-        if !host.feature(InputFeature::OverscrollEffectOnNonRootScrollers) && !root {
-            unused = Vector2dF::default();
-        }
-        if host.feature(InputFeature::OverscrollEffectOnNonRootScrollers) && !root {
-            if !node_read!(host, node, |n| n
-                .overscroll_behavior
-                .HasXLocalBorderEffects())
-            {
-                unused.set_x(0.);
-            }
-            if !node_read!(host, node, |n| n
-                .overscroll_behavior
-                .HasYLocalBorderEffects())
-            {
-                unused.set_y(0.);
-            }
-        }
+        let routing_input = compositor_input::scroll_update::OverscrollRoutingInput {
+            residual_delta: Vector2dF::new(state.delta_x() as f32, state.delta_y() as f32),
+            accumulated_root_overscroll: self.accumulated_root_overscroll_,
+            caused_scroll_x: did_x,
+            caused_scroll_y: did_y,
+            is_root_scroller: root,
+            scroll_chain_cut: state.is_scroll_chain_cut(),
+        };
+        let routing = compositor_input::scroll_update::ResolveOverscrollRouting(
+            &mut OverscrollRoutingAdapter {
+                handler: self,
+                host,
+                node,
+            },
+            routing_input,
+        );
+        self.accumulated_root_overscroll_ = routing.accumulated_root_overscroll;
         let did_controls = initial_controls != delegate!(host, GetBrowserControlsTopOffset());
         let mut result = InputHandlerScrollResult::default();
-        result.did_scroll = did_content || did_controls;
+        result.did_scroll = consumption.scrolled_content || did_controls;
         result.hit_snap_constraint = hit_constraint;
-        result.did_overscroll_root = root && !zero(unused);
+        result.did_overscroll_root = routing.did_overscroll_root;
         result.accumulated_root_overscroll = self.accumulated_root_overscroll_;
-        result.unused_scroll_delta = unused;
-        result.overscroll_behavior = if state.is_scroll_chain_cut() {
-            OverscrollBehavior::FromType(OverscrollType::kNone)
-        } else {
-            host.ActiveTree_overscroll_behavior()
-        };
+        result.unused_scroll_delta = routing.unused_scroll_delta;
+        result.overscroll_behavior = routing.overscroll_behavior;
         if result.did_scroll {
             self.UpdateRootLayerStateForSynchronousInputHandler(host);
         }
@@ -882,6 +943,12 @@ impl<B: InputHandlerTypes> InputHandler<B> {
             result.needs_main_thread_repaint = true;
         }
         delegate!(host, TickScrollAnimations());
+        package_trace.finish(
+            result.did_scroll,
+            result.did_overscroll_root,
+            result.hit_snap_constraint,
+            result.needs_main_thread_repaint,
+        );
         result
     }
     // Source: cc/input/input_handler.cc:518-556
@@ -978,55 +1045,18 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         snap: bool,
         compensated: Option<ScrollVector>,
     ) -> InputHandlerScrollEndResult {
-        let latched = self.CurrentlyScrollingNode(host);
-        let mut result = InputHandlerScrollEndResult::default();
-        if let Some(n) = node.as_ref().or(latched.as_ref()) {
-            result.updates_need_main_thread_repaint = host.ScrollTree_ShouldRealizeScrollsOnMain(n);
+        let result = compositor_input::scroll_end::FinishScroll(
+            &mut ScrollEndAdapter {
+                handler: self,
+                host,
+                compensated,
+            },
+            node,
+            snap,
+        );
+        InputHandlerScrollEndResult {
+            updates_need_main_thread_repaint: result.updates_need_main_thread_repaint,
         }
-        if node.is_some() && node != latched {
-            let node = node.unwrap();
-            debug_assert!(!snap);
-            let id = node_read!(host, node, |n| n.element_id);
-            self.InsertPendingScrollendContainer(host, id);
-            self.deferred_scroll_ends_.remove(&id);
-            if latched.is_none() {
-                self.scrollbar_controller_.ResetState();
-                self.EndOfScrollCleanup(host, &node, compensated);
-            }
-            self.snap_animation_data_map_.remove(&id);
-        } else if let Some(n) = latched {
-            let id = node_read!(host, n, |n| n.element_id);
-            self.scrollbar_controller_.ResetState();
-            if self.GetAnimatingNodeForCurrentScrollingNode(host).is_some() {
-                debug_assert!(!self.deferred_scroll_ends_.contains(&id));
-                self.deferred_scroll_ends_.insert(id);
-                return result;
-            }
-            let overscroll = self
-                .scroll_elasticity_helper_
-                .as_ref()
-                .is_some_and(|h| !zero(host.StretchAmount(h, id)));
-            if overscroll {
-                self.deferred_scroll_ends_.insert(id);
-                return result;
-            }
-            if snap && self.SnapAtScrollEnd(host, SnapReason::kGestureScrollEnd) {
-                self.deferred_scroll_ends_.insert(id);
-                return result;
-            }
-            debug_assert!(self.latched_scroll_type_.is_some());
-            if self.did_scroll_x_for_scroll_gesture_ || self.did_scroll_y_for_scroll_gesture_ {
-                self.InsertPendingScrollendContainer(host, id);
-            }
-            self.EndOfScrollCleanup(host, &n, compensated);
-            self.snap_animation_data_map_.remove(&id);
-            self.ClearCurrentlyScrollingNode(host);
-        } else {
-            self.scrollbar_controller_.ResetState();
-            return result;
-        }
-        self.SetNeedsCommit(host);
-        result
     }
     // Source: cc/input/input_handler.cc:604-619 (source's local cleanup closure).
     fn EndOfScrollCleanup<C: InputHost<B> + ?Sized>(
@@ -1148,6 +1178,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         host: &mut C,
         point: PointF,
     ) -> PointerResultType {
+        let _package_trace = compositor_input::performance::BeginHitTestTrace();
         let view = InputHandlerView {
             pinch_gesture_active_: &self.pinch_gesture_active_,
             external_pinch_gesture_active_: &self.external_pinch_gesture_active_,
@@ -3366,9 +3397,12 @@ impl<B: InputHandlerTypes> Drop for InputHandler<B> {
 
 // Source: cc/input/input_handler.h:555-579. Source virtual interface dispatch.
 impl<B: InputHandlerTypes> InputDelegateForCompositor<B> for InputHandler<B> {
-    fn RunAutoscrollTask<C:InputHost<B>+?Sized>(&mut self,
-        task:crate::adapter::scrollbar::AutoscrollTask,host:&mut C){
-        InputHandler::RunAutoscrollTask(self,task,host)
+    fn RunAutoscrollTask<C: InputHost<B> + ?Sized>(
+        &mut self,
+        task: crate::adapter::scrollbar::AutoscrollTask,
+        host: &mut C,
+    ) {
+        InputHandler::RunAutoscrollTask(self, task, host)
     }
 
     fn ProcessCommitDeltas<C: InputHost<B> + ?Sized>(
@@ -3496,15 +3530,20 @@ impl<B: InputHandlerTypes> InputDelegateForCompositor<B> for InputHandler<B> {
     }
 }
 
-impl<B:InputHandlerTypes> InputHandler<B>{
+impl<B: InputHandlerTypes> InputHandler<B> {
     /// Source: cc/input/scrollbar_controller.cc:151-156. The source weak once
     /// callback reaches the same resident controller with a live Host context.
-    pub(crate) fn RunAutoscrollTask<C:crate::adapter::input_handler::InputHost<B>+?Sized>(
-        &mut self,token:crate::adapter::scrollbar::AutoscrollTask,host:&mut C,
-    ){
-        self.WithRegistrationAndView(|controller,view|{
-            host.WithScrollbarHost(&view,view.last_scroll_update_state_.as_ref(),
-                |scrollbar_host|controller.RunAutoscrollTask(scrollbar_host,token))
+    pub(crate) fn RunAutoscrollTask<C: crate::adapter::input_handler::InputHost<B> + ?Sized>(
+        &mut self,
+        token: crate::adapter::scrollbar::AutoscrollTask,
+        host: &mut C,
+    ) {
+        self.WithRegistrationAndView(|controller, view| {
+            host.WithScrollbarHost(
+                &view,
+                view.last_scroll_update_state_.as_ref(),
+                |scrollbar_host| controller.RunAutoscrollTask(scrollbar_host, token),
+            )
         });
     }
 }

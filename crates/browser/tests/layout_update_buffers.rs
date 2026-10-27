@@ -2,7 +2,7 @@
 mod native_test_thread;
 
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
+    fragment_tree::FragmentPaintData,
     internal::{
         layout_input::{ComputedStyle, ConstraintSpace},
         layout_object::LayoutObject,
@@ -42,7 +42,7 @@ fn new_engine(space: &ConstraintSpace) -> LayoutEngine {
     engine
 }
 
-fn geometry(fragment: &FragmentNode, out: &mut Vec<(u64, f64, f64, f64, f64)>) {
+fn geometry(fragment: &FragmentPaintData, out: &mut Vec<(u64, f64, f64, f64, f64)>) {
     out.push((
         fragment.node_id,
         fragment.offset.x,
@@ -360,7 +360,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
             geometry(&fresh, &mut fresh_geometry);
             assert_eq!(actual_geometry, fresh_geometry, "step {step}");
             {
-                let pixels = |fragment: &FragmentNode| {
+                let pixels = |fragment: &FragmentPaintData| {
                     raster::RasterizePaintArtifactTransparent(
                         &paint::paint_engine::Paint(fragment),
                         320,

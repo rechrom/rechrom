@@ -13,8 +13,9 @@ use dom::{
 };
 use layoutng_assembly::{
     editing_state::{DocumentSelection, DocumentSelectionPosition, SelectionState},
-    fragment_tree::FragmentNode,
+    fragment_tree::FragmentPaintData,
     internal::layout_input::{Display, Offset},
+    layout_engine::NativePaintFragmentCursor,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -43,10 +44,37 @@ pub enum InteractionOutput {
 
 pub type InteractionOutputEmitter = Rc<dyn Fn(InteractionOutput)>;
 
+#[derive(Clone, Copy)]
+pub struct InteractionFragmentSource<'a>(NativePaintFragmentCursor<'a>);
+
+impl<'a> InteractionFragmentSource<'a> {
+    pub(crate) fn Children(self) -> Vec<Self> {
+        self.0.Children().into_iter().map(Self).collect()
+    }
+
+    pub(crate) fn Native(self) -> NativePaintFragmentCursor<'a> {
+        self.0
+    }
+}
+
+impl<'a> From<NativePaintFragmentCursor<'a>> for InteractionFragmentSource<'a> {
+    fn from(value: NativePaintFragmentCursor<'a>) -> Self {
+        Self(value)
+    }
+}
+
+impl std::ops::Deref for InteractionFragmentSource<'_> {
+    type Target = FragmentPaintData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 // Native input is expressed in CSS viewport pixels. Fragment geometry is in
 // LocalFrame::LayoutZoomFactor coordinates, matching Blink's
 // LocalFrameView::ViewportToFrame conversion before hit testing.
-fn LayoutPoint(fragments: &FragmentNode, point: Offset) -> Offset {
+fn LayoutPoint(fragments: InteractionFragmentSource<'_>, point: Offset) -> Offset {
     let zoom = fragments
         .paint
         .resources
@@ -60,7 +88,11 @@ fn LayoutPoint(fragments: &FragmentNode, point: Offset) -> Offset {
 }
 
 // Map a root-space point through the exact same transform and scroll state as paint.
-fn LocalPoint(fragment: &FragmentNode, point: Offset, parent: Offset) -> Option<(Offset, Offset)> {
+fn LocalPoint(
+    fragment: &FragmentPaintData,
+    point: Offset,
+    parent: Offset,
+) -> Option<(Offset, Offset)> {
     let absolute = Offset {
         x: parent.x + fragment.offset.x,
         y: parent.y + fragment.offset.y,
@@ -107,7 +139,7 @@ fn LocalPoint(fragment: &FragmentNode, point: Offset, parent: Offset) -> Option<
     }
     Some((point, absolute))
 }
-fn ChildOrigin(fragment: &FragmentNode, absolute: Offset) -> Offset {
+fn ChildOrigin(fragment: &FragmentPaintData, absolute: Offset) -> Offset {
     if fragment.paint.establishes_paint_state {
         Offset {
             x: absolute.x - fragment.paint.scroll_offset.x,
@@ -118,7 +150,7 @@ fn ChildOrigin(fragment: &FragmentNode, absolute: Offset) -> Offset {
     }
 }
 fn HitGeometry(
-    fragment: &FragmentNode,
+    fragment: &FragmentPaintData,
     point: Offset,
     parent: Offset,
 ) -> Option<(Offset, Offset, bool)> {
@@ -146,7 +178,7 @@ fn HitGeometry(
     Some((point, absolute, inside))
 }
 
-fn HitsScrollbar(fragment: &FragmentNode, point: Offset, absolute: Offset) -> bool {
+fn HitsScrollbar(fragment: &FragmentPaintData, point: Offset, absolute: Offset) -> bool {
     let Some(scrollbars) = fragment.paint.scrollbars.as_ref() else {
         return false;
     };
@@ -173,7 +205,7 @@ fn HitsScrollbar(fragment: &FragmentNode, point: Offset, absolute: Offset) -> bo
 
 fn ScrollbarHitTarget(
     document: &Document,
-    fragment: &FragmentNode,
+    fragment: &FragmentPaintData,
     point: Offset,
     absolute: Offset,
 ) -> Option<u64> {
@@ -186,13 +218,13 @@ fn ScrollbarHitTarget(
 
 #[derive(Clone, Copy)]
 struct HitLayer<'a> {
-    fragment: &'a FragmentNode,
+    fragment: InteractionFragmentSource<'a>,
     point: Offset,
     parent: Offset,
     classification: paint::paint_order::PaintLayerClassification,
 }
 
-fn ChildrenAreFlexOrGridItems(fragment: &FragmentNode) -> bool {
+fn ChildrenAreFlexOrGridItems(fragment: &FragmentPaintData) -> bool {
     fragment.paint.has_source
         && matches!(
             fragment.paint.display,
@@ -205,24 +237,24 @@ fn ChildrenAreFlexOrGridItems(fragment: &FragmentNode) -> bool {
 // geometry path with each candidate so hit testing can walk that order in
 // reverse without teaching interaction how paint layers are classified.
 fn CollectHitLayers<'a>(
-    fragment: &'a FragmentNode,
+    fragment: InteractionFragmentSource<'a>,
     point: Offset,
     parent: Offset,
     root_point: Offset,
     output: &mut Vec<HitLayer<'a>>,
 ) {
-    let Some((point, absolute, _)) = HitGeometry(fragment, point, parent) else {
+    let Some((point, absolute, _)) = HitGeometry(&fragment, point, parent) else {
         return;
     };
-    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(fragment);
-    for child in &fragment.children {
+    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(&fragment);
+    for child in fragment.Children() {
         let (child_point, child_parent) = if child.paint.fixed_to_view {
             (root_point, Offset::default())
         } else {
-            (point, ChildOrigin(fragment, absolute))
+            (point, ChildOrigin(&fragment, absolute))
         };
         let classification = paint::paint_order::ClassifyFragmentPaintLayer(
-            child,
+            &child,
             false,
             children_are_flex_or_grid_items,
         );
@@ -244,23 +276,23 @@ fn CollectHitLayers<'a>(
 
 fn HitTestNormalFlow(
     document: &Document,
-    fragment: &FragmentNode,
+    fragment: InteractionFragmentSource<'_>,
     point: Offset,
     parent: Offset,
     root_point: Offset,
     include_self: bool,
 ) -> Option<u64> {
-    let (point, absolute, inside) = HitGeometry(fragment, point, parent)?;
+    let (point, absolute, inside) = HitGeometry(&fragment, point, parent)?;
     // Overflow controls are painted after this subtree. Give their owner the
     // same frontmost hit priority, especially for overlay scrollbars which
     // otherwise dispatch through to covered links and controls.
-    if let Some(target) = ScrollbarHitTarget(document, fragment, point, absolute) {
+    if let Some(target) = ScrollbarHitTarget(document, &fragment, point, absolute) {
         return Some(target);
     }
-    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(fragment);
-    for child in fragment.children.iter().rev() {
+    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(&fragment);
+    for child in fragment.Children().into_iter().rev() {
         if paint::paint_order::ClassifyFragmentPaintLayer(
-            child,
+            &child,
             false,
             children_are_flex_or_grid_items,
         )
@@ -271,7 +303,7 @@ fn HitTestNormalFlow(
         let (child_point, child_parent) = if child.paint.fixed_to_view {
             (root_point, Offset::default())
         } else {
-            (point, ChildOrigin(fragment, absolute))
+            (point, ChildOrigin(&fragment, absolute))
         };
         if let Some(target) =
             HitTestNormalFlow(document, child, child_point, child_parent, root_point, true)
@@ -310,13 +342,13 @@ fn HitTestPaintLayer(document: &Document, layer: &HitLayer<'_>, root_point: Offs
 
 fn HitTestStackingContext(
     document: &Document,
-    fragment: &FragmentNode,
+    fragment: InteractionFragmentSource<'_>,
     point: Offset,
     parent: Offset,
     root_point: Offset,
 ) -> Option<u64> {
-    let (local_point, absolute, inside) = HitGeometry(fragment, point, parent)?;
-    if let Some(target) = ScrollbarHitTarget(document, fragment, local_point, absolute) {
+    let (local_point, absolute, inside) = HitGeometry(&fragment, point, parent)?;
+    if let Some(target) = ScrollbarHitTarget(document, &fragment, local_point, absolute) {
         return Some(target);
     }
     let mut layers = Vec::new();
@@ -347,24 +379,24 @@ fn HitTestStackingContext(
 
 fn HitTest(
     document: &Document,
-    fragment: &FragmentNode,
+    fragment: InteractionFragmentSource<'_>,
     point: Offset,
     parent: Offset,
     root_point: Offset,
 ) -> Option<u64> {
     HitTestStackingContext(document, fragment, point, parent, root_point)
 }
-fn ControlPoint(
-    fragment: &FragmentNode,
+fn ControlPoint<'a>(
+    fragment: InteractionFragmentSource<'a>,
     id: u64,
     point: Offset,
     parent: Offset,
     root_point: Offset,
-) -> Option<(&FragmentNode, Offset)> {
+) -> Option<(InteractionFragmentSource<'a>, Offset)> {
     if fragment.paint.svg_hidden_container {
         return None;
     }
-    let (point, absolute) = LocalPoint(fragment, point, parent)?;
+    let (point, absolute) = LocalPoint(&fragment, point, parent)?;
     if fragment.node_id == id && fragment.paint.text_control_caret_metrics.is_some() {
         return Some((
             fragment,
@@ -374,11 +406,11 @@ fn ControlPoint(
             },
         ));
     }
-    for child in &fragment.children {
+    for child in fragment.Children() {
         let (child_point, child_parent) = if child.paint.fixed_to_view {
             (root_point, Offset::default())
         } else {
-            (point, ChildOrigin(fragment, absolute))
+            (point, ChildOrigin(&fragment, absolute))
         };
         if let Some(found) = ControlPoint(child, id, child_point, child_parent, root_point) {
             return Some(found);
@@ -388,19 +420,19 @@ fn ControlPoint(
 }
 
 fn TextPositionAtPoint(
-    fragment: &FragmentNode,
+    fragment: InteractionFragmentSource<'_>,
     point: Offset,
     require_inside: bool,
 ) -> Option<DocumentSelectionPosition> {
     fn visit(
-        fragment: &FragmentNode,
+        fragment: InteractionFragmentSource<'_>,
         point: Offset,
         parent: Offset,
         root_point: Offset,
         require_inside: bool,
         best: &mut Option<(f64, f64, DocumentSelectionPosition)>,
     ) {
-        let Some((point, absolute, inside)) = HitGeometry(fragment, point, parent) else {
+        let Some((point, absolute, inside)) = HitGeometry(&fragment, point, parent) else {
             return;
         };
         if matches!(
@@ -410,23 +442,20 @@ fn TextPositionAtPoint(
         ) && fragment.paint.text_control_host.is_none()
             && fragment.paint.style.visible
             && !fragment.paint.style.user_select_none
-            && !fragment.paint.text_caret_positions.is_empty()
             && (!require_inside || inside)
         {
             let dy = (absolute.y - point.y)
                 .max(0.0)
                 .max(point.y - absolute.y - fragment.size.height);
-            if let Some(&(offset, x)) =
-                fragment
-                    .paint
-                    .text_caret_positions
-                    .iter()
-                    .min_by(|(_, a), (_, b)| {
-                        (absolute.x + *a - point.x)
-                            .abs()
-                            .total_cmp(&(absolute.x + *b - point.x).abs())
-                    })
-            {
+            let local = Offset {
+                x: point.x - absolute.x,
+                y: point.y - absolute.y,
+            };
+            if let Some(offset) = fragment.Native().TextOffsetForPoint(local) {
+                let x = fragment
+                    .Native()
+                    .TextInlinePosition(offset)
+                    .unwrap_or(local.x);
                 let dx = (absolute.x + x - point.x).abs();
                 let candidate = DocumentSelectionPosition {
                     tree_order: fragment.paint.logical_tree_order,
@@ -441,11 +470,11 @@ fn TextPositionAtPoint(
                 }
             }
         }
-        for child in fragment.children.iter().rev() {
+        for child in fragment.Children().into_iter().rev() {
             let (child_point, child_parent) = if child.paint.fixed_to_view {
                 (root_point, Offset::default())
             } else {
-                (point, ChildOrigin(fragment, absolute))
+                (point, ChildOrigin(&fragment, absolute))
             };
             visit(
                 child,
@@ -711,12 +740,13 @@ impl<'a> Interaction<'a> {
     }
     /// Same read-only hit test used for event targeting. Selection policy stays
     /// here; the host receives only a platform-independent cursor value.
-    pub fn CursorAt(
+    pub fn CursorAt<'b>(
         &self,
         document: &InteractionDocument,
-        fragments: &FragmentNode,
+        fragments: impl Into<InteractionFragmentSource<'b>>,
         point: Offset,
     ) -> crate::cursor::Cursor {
+        let fragments = fragments.into();
         let owner = document.borrow();
         let doc = owner.GetDocument();
         let point = LayoutPoint(fragments, point);
@@ -770,11 +800,32 @@ impl<'a> Interaction<'a> {
         }
     }
     // cpp: interaction/interaction_engine.cc:147-234
-    pub fn Dispatch(
+    pub fn Dispatch<'b>(
         &self,
         input: &InputEvent,
         document: &InteractionDocument,
-        fragments: &FragmentNode,
+        fragments: impl Into<InteractionFragmentSource<'b>>,
+    ) -> InteractionResult {
+        self.DispatchInternal(input, document, Some(fragments.into()))
+    }
+
+    /// Dispatch an event carrying an explicit DOM target. Focus and blur do
+    /// not perform layout hit testing in Chromium, so they do not require a
+    /// fabricated fragment root.
+    pub fn DispatchTargeted(
+        &self,
+        input: &InputEvent,
+        document: &InteractionDocument,
+    ) -> InteractionResult {
+        assert!(ExplicitTarget(input).is_some());
+        self.DispatchInternal(input, document, None)
+    }
+
+    fn DispatchInternal(
+        &self,
+        input: &InputEvent,
+        document: &InteractionDocument,
+        fragments: Option<InteractionFragmentSource<'_>>,
     ) -> InteractionResult {
         let _emit_state = self.ExitGuard();
         let previous_hover = self.State().hovered_node_id;
@@ -791,6 +842,7 @@ impl<'a> Interaction<'a> {
         }
         if target.is_none() {
             if let Some(point) = EventPosition(input) {
+                let fragments = fragments.expect("positioned input requires native fragments");
                 let point = LayoutPoint(fragments, point);
                 let owner = document.borrow();
                 target = HitTest(
@@ -923,7 +975,12 @@ impl<'a> Interaction<'a> {
                         let is_text_field = IsTextField(document, control);
                         focus.Focus(control, is_text_field);
                         if is_text_field && self.State().focused_node_id == Some(control) {
-                            self.SelectWordAtPoint(document, fragments, control, v.position);
+                            self.SelectWordAtPoint(
+                                document,
+                                fragments.expect("mouse input requires native fragments"),
+                                control,
+                                v.position,
+                            );
                         }
                     }
                 }
@@ -944,7 +1001,7 @@ impl<'a> Interaction<'a> {
                             self.selections.SetDocument(None);
                             self.PlaceCaretAtPoint(
                                 document,
-                                fragments,
+                                fragments.expect("mouse input requires native fragments"),
                                 control,
                                 v.position,
                                 v.modifiers.shift,
@@ -953,9 +1010,14 @@ impl<'a> Interaction<'a> {
                     }
                 }
                 if v.button == MouseButton::kPrimary && self.selection_drag.get().is_none() {
-                    if let Some(anchor) =
-                        TextPositionAtPoint(fragments, LayoutPoint(fragments, v.position), true)
-                    {
+                    if let Some(anchor) = TextPositionAtPoint(
+                        fragments.expect("mouse input requires native fragments"),
+                        LayoutPoint(
+                            fragments.expect("mouse input requires native fragments"),
+                            v.position,
+                        ),
+                        true,
+                    ) {
                         self.selection_drag
                             .set(Some(SelectionDrag::Document(anchor)));
                         self.selections.SetDocument(Some(DocumentSelection {
@@ -970,12 +1032,21 @@ impl<'a> Interaction<'a> {
                     Some(SelectionDrag::TextControl(control))
                         if Some(control) == self.State().focused_node_id =>
                     {
-                        self.PlaceCaretAtPoint(document, fragments, control, v.position, true);
+                        self.PlaceCaretAtPoint(
+                            document,
+                            fragments.expect("mouse input requires native fragments"),
+                            control,
+                            v.position,
+                            true,
+                        );
                     }
                     Some(SelectionDrag::Document(anchor)) => {
                         if let Some(focus) = TextPositionAtPoint(
-                            fragments,
-                            LayoutPoint(fragments, v.position),
+                            fragments.expect("mouse input requires native fragments"),
+                            LayoutPoint(
+                                fragments.expect("mouse input requires native fragments"),
+                                v.position,
+                            ),
                             false,
                         ) {
                             self.selections
@@ -995,7 +1066,7 @@ impl<'a> Interaction<'a> {
     fn PlaceCaretAtPoint(
         &self,
         document: &InteractionDocument,
-        fragments: &FragmentNode,
+        fragments: InteractionFragmentSource<'_>,
         id: u64,
         point: Offset,
         extend: bool,
@@ -1004,15 +1075,18 @@ impl<'a> Interaction<'a> {
         if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default(), point) {
             let empty =
                 ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
-            let offset =
-                layoutng_assembly::caret::geometry::TextControlOffsetForPoint(owner, local, empty);
+            let offset = layoutng_assembly::caret::geometry::TextControlOffsetForPoint(
+                owner.Native(),
+                local,
+                empty,
+            );
             self.editor.PlaceCaret(document, id, offset, extend);
         }
     }
     fn SelectWordAtPoint(
         &self,
         document: &InteractionDocument,
-        fragments: &FragmentNode,
+        fragments: InteractionFragmentSource<'_>,
         id: u64,
         point: Offset,
     ) {
@@ -1020,8 +1094,11 @@ impl<'a> Interaction<'a> {
         if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default(), point) {
             let empty =
                 ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
-            let offset =
-                layoutng_assembly::caret::geometry::TextControlOffsetForPoint(owner, local, empty);
+            let offset = layoutng_assembly::caret::geometry::TextControlOffsetForPoint(
+                owner.Native(),
+                local,
+                empty,
+            );
             self.editor.SelectWordAt(document, id, offset);
         }
     }

@@ -5,22 +5,28 @@
 // Source: cc/tiles/tile_manager.h:1-59
 // Source: cc/tiles/tile_manager.cc:1-55
 use crate::{
-    adapter::{
-        geometry::Size,
-        resource_pool::ResourcePoolTypes,
-        resource_types::{SharedImageFormat, TileDrawResource},
-    },
+    adapter::{prioritized_tile::PrioritizedTileResidentExt, resource_pool::ResourcePoolTypes},
     cc::{resources::resource_pool::InUsePoolResource, tiles::tile::Tile},
 };
-use std::ops::{AddAssign, Sub, SubAssign};
+use compositor_raster::completion_stats::{
+    RasterCompletionToken as RasterCompletionTokenValue, RasterCompletionTokenError,
+    RasterTaskCompletionStats, ValidateRasterCompletionToken,
+};
+use compositor_raster::completion_task::{
+    DidFinishRunningAllTilesTask, TaskSetFinishedTask as TaskSetFinishedTaskImpl,
+};
+use compositor_tile::tile_manager_policy::{
+    DecideEvictionStep, DecideNoRasterWorkAction, EvictionStep, MemoryUsage, NoRasterWorkAction,
+    ShouldRasterOccludedTiles as ShouldRasterOccludedTilesForPolicy, Signals,
+    TilePriorityViolatesMemoryPolicy as TilePriorityViolatesMemoryPolicyForPolicy,
+};
+use compositor_tile::tile_assignment::{
+    AssignTileWork, TileAssignmentConfig, TileAssignmentContext,
+};
+use compositor_tile::prepaint_trim::{PrepaintTrimContext, TrimPrepaintTiles as TrimPrepaintPolicy};
 
 // Source: cc/tiles/tile_manager.h:60-68
 // Source: cc/tiles/tile_manager.cc:354-366
-#[derive(Default)]
-pub(crate) struct RasterTaskCompletionStats {
-    pub completed_count: usize,
-    pub canceled_count: usize,
-}
 pub(crate) fn RasterTaskCompletionStatsAsValue(
     stats: &RasterTaskCompletionStats,
 ) -> TracedValueJSON {
@@ -36,271 +42,19 @@ pub(crate) fn RasterTaskCompletionStatsAsValue(
     state
 }
 
-// Source: cc/tiles/tile_manager.h:254-273
-// Source: cc/tiles/tile_manager.cc:2338-2353
-#[derive(Clone, Copy, Default)]
-struct MemoryUsage {
-    memory_bytes_: i64,
-    resource_count_: i32,
-}
-impl MemoryUsage {
-    fn new(memory_bytes: usize, resource_count: usize) -> Self {
-        let result = Self {
-            memory_bytes_: memory_bytes as i64,
-            resource_count_: resource_count as i32,
-        };
-        debug_assert!(memory_bytes <= i64::MAX as usize);
-        debug_assert!(resource_count <= i32::MAX as usize);
-        result
-    }
-    // Source: cc/tiles/tile_manager.cc:2355-2363
-    // Format size accounting is a value primitive supplied by the existing
-    // ResourcePool format service; no resource, pixels or pool is allocated.
-    fn FromConfig<B: ResourcePoolTypes>(size: &Size, format: SharedImageFormat) -> Self {
-        Self::new(B::EstimatedSizeInBytes(&format, size), 1)
-    }
-    // Source: cc/tiles/tile_manager.cc:2365-2372
-    fn FromTile<B>(tile: &Tile<B>) -> Self
-    where
-        B: crate::adapter::tile::TileTypes,
-        B::Resource: TileManagerResource,
-    {
-        let draw_info = tile.draw_info();
-        if draw_info.has_resource() {
-            return Self::new(draw_info.GetResource().memory_usage(), 1);
-        }
-        Self::default()
-    }
-    // Source: cc/tiles/tile_manager.h:268
-    fn memory_bytes(&self) -> i64 {
-        self.memory_bytes_
-    }
-    // Source: cc/tiles/tile_manager.cc:2395-2398
-    fn Exceeds(&self, limit: &Self) -> bool {
-        self.memory_bytes_ > limit.memory_bytes_ || self.resource_count_ > limit.resource_count_
-    }
-}
-// Source: cc/tiles/tile_manager.cc:2374-2379
-impl AddAssign<&Self> for MemoryUsage {
-    fn add_assign(&mut self, other: &Self) {
-        self.memory_bytes_ += other.memory_bytes_;
-        self.resource_count_ += other.resource_count_;
-    }
-}
-// Source: cc/tiles/tile_manager.cc:2381-2386
-impl SubAssign<&Self> for MemoryUsage {
-    fn sub_assign(&mut self, other: &Self) {
-        self.memory_bytes_ -= other.memory_bytes_;
-        self.resource_count_ -= other.resource_count_;
-    }
-}
-// Source: cc/tiles/tile_manager.cc:2388-2393
-impl Sub<&Self> for MemoryUsage {
-    type Output = Self;
-    fn sub(self, other: &Self) -> Self {
-        let mut result = self;
-        result -= other;
-        result
-    }
-}
-// Exact source resource query, not an alternative resource owner. This local
-// bound closes to the canonical ResourcePool lease used by the manager.
-trait TileManagerResource: TileDrawResource {
-    fn memory_usage(&self) -> usize;
-}
-impl<B: ResourcePoolTypes> TileManagerResource for InUsePoolResource<B> {
-    fn memory_usage(&self) -> usize {
-        InUsePoolResource::memory_usage(self)
-    }
-}
-
-// Source: cc/tiles/tile_manager.h:275-286
-#[derive(Default)]
-struct Signals {
-    activate_tile_tasks_completed: bool,
-    draw_tile_tasks_completed: bool,
-    all_tile_tasks_completed: bool,
-    activate_gpu_work_completed: bool,
-    draw_gpu_work_completed: bool,
-    did_notify_ready_to_activate: bool,
-    did_notify_ready_to_draw: bool,
-    did_notify_all_tile_tasks_completed: bool,
-}
-
-// Category values use the already translated same-package enum.
-use crate::cc::raster::task_category::TaskCategory;
-const TASK_CATEGORY_NONCONCURRENT_FOREGROUND: u16 =
-    TaskCategory::TASK_CATEGORY_NONCONCURRENT_FOREGROUND as u16;
-const TASK_CATEGORY_FOREGROUND: u16 = TaskCategory::TASK_CATEGORY_FOREGROUND as u16;
-const TASK_CATEGORY_BACKGROUND: u16 = TaskCategory::TASK_CATEGORY_BACKGROUND as u16;
-const TASK_CATEGORY_BACKGROUND_WITH_NORMAL_THREAD_PRIORITY: u16 =
-    TaskCategory::TASK_CATEGORY_BACKGROUND_WITH_NORMAL_THREAD_PRIORITY as u16;
 use crate::cc::raster::{
-    task::{Edge, Node, TaskGraph, TaskRef},
+    task::TaskGraph,
     tile_task::{TileTaskImpl, TileTaskRef},
 };
-
-// Source: cc/tiles/tile_manager.cc:213-225
-fn TaskCategoryForTileTask<C>(task: &dyn TileTaskImpl<C>, use_foreground_category: bool) -> u16 {
-    if !task.tile_task().supports_concurrent_execution() {
-        return TASK_CATEGORY_NONCONCURRENT_FOREGROUND;
-    }
-    if use_foreground_category {
-        return TASK_CATEGORY_FOREGROUND;
-    }
-    if !task.tile_task().supports_background_thread_priority() {
-        return TASK_CATEGORY_BACKGROUND_WITH_NORMAL_THREAD_PRIORITY;
-    }
-    TASK_CATEGORY_BACKGROUND
-}
-// Source: cc/tiles/tile_manager.cc:227-239
-fn IsForegroundCategory(category: u16) -> bool {
-    match category {
-        TASK_CATEGORY_NONCONCURRENT_FOREGROUND | TASK_CATEGORY_FOREGROUND => true,
-        TASK_CATEGORY_BACKGROUND | TASK_CATEGORY_BACKGROUND_WITH_NORMAL_THREAD_PRIORITY => false,
-        _ => unreachable!("native NOTREACHED: invalid TaskCategory"),
-    }
-}
-// Source: cc/tiles/tile_manager.cc:241-249
-const kRequiredForActivationDoneTaskPriority: u16 = 1;
-const kRequiredForDrawDoneTaskPriority: u16 = 2;
-const kAllDoneTaskPriority: u16 = 3;
-const kTileTaskPriorityBase: u16 = 10;
-
-// Source: cc/tiles/tile_manager.cc:251-262
-// The caller's live trace sink represents TRACE_EVENT; graph membership and
-// mutation remain here. Base projection retains the exact same Arc allocation.
-fn InsertNodeForTask<C>(
-    graph: &mut TaskGraph<C>,
-    task: TileTaskRef<C>,
-    category: u16,
-    priority: u16,
-    dependencies: usize,
-    has_external_dependency: bool,
-    trace: &dyn TileManagerGraphTrace,
-) {
-    let _trace = trace.InsertNodeForTask(category, dependencies);
-    debug_assert!(!graph
-        .nodes
-        .iter()
-        .any(|node| std::ptr::eq(node.task.task(), task.task())));
-    let task: TaskRef<C> = task;
-    graph.nodes.push(Node::new(
-        task,
-        category,
-        priority,
-        dependencies as u32,
-        has_external_dependency,
-    ));
-}
-// Narrow diagnostics only. No task/state/queue/owner capability escapes.
-pub(crate) trait TileManagerGraphTrace {
-    fn InsertNodeForTask(
-        &self,
-        category: u16,
-        dependencies: usize,
-    ) -> Box<dyn crate::adapter::tile_manager::TileManagerTraceScope>;
-}
-// Source: cc/tiles/tile_manager.h:394-396
-// Source: cc/tiles/tile_manager.cc:1633-1654
-// Rust borrow split of the manager's graph_; all source branches remain here.
-fn InsertNodeForDecodeTask<C>(
-    graph: &mut TaskGraph<C>,
-    task: TileTaskRef<C>,
-    priority: u16,
-    use_foreground_category: bool,
-    trace: &dyn TileManagerGraphTrace,
-) {
-    let mut dependency_count = 0u32;
-    let mut has_external_dependency = false;
-    task.tile_task().WithDependencies(|dependencies| {
-        if !dependencies.is_empty() {
-            debug_assert_eq!(dependencies.len(), 1);
-            let dependency = &dependencies[0];
-            if !dependency.tile_task().HasCompleted() {
-                if dependency.IsRasterTask() {
-                    InsertNodeForDecodeTask(
-                        graph,
-                        dependency.clone(),
-                        priority,
-                        use_foreground_category,
-                        trace,
-                    );
-                    let dependency_base: TaskRef<C> = dependency.clone();
-                    let task_base: TaskRef<C> = task.clone();
-                    graph.edges.push(Edge::new(&dependency_base, &task_base));
-                } else {
-                    has_external_dependency = true;
-                }
-                dependency_count = 1;
-            }
-        }
-    });
-    let category = TaskCategoryForTileTask(task.as_ref(), use_foreground_category);
-    InsertNodeForTask(
-        graph,
-        task,
-        category,
-        priority,
-        dependency_count as usize,
-        has_external_dependency,
-        trace,
-    );
-}
-// Source: cc/tiles/tile_manager.h:391-393
-// Source: cc/tiles/tile_manager.cc:1656-1700
-fn InsertNodesForRasterTask<C>(
-    graph: &mut TaskGraph<C>,
-    raster_task: TileTaskRef<C>,
-    priority: u16,
-    use_foreground_category: bool,
-    trace: &dyn TileManagerGraphTrace,
-) {
-    let mut dependencies = 0usize;
-    raster_task.tile_task().WithDependencies(|tasks| {
-        for decode_task in tasks {
-            if decode_task.tile_task().HasCompleted() {
-                continue;
-            }
-            dependencies += 1;
-            let decode_it = graph
-                .nodes
-                .iter()
-                .position(|node| std::ptr::eq(node.task.task(), decode_task.task()));
-            if let Some(index) = decode_it {
-                if use_foreground_category && !IsForegroundCategory(graph.nodes[index].category) {
-                    graph.nodes[index].category = TASK_CATEGORY_FOREGROUND;
-                }
-            }
-            if decode_it.is_none() {
-                InsertNodeForDecodeTask(
-                    graph,
-                    decode_task.clone(),
-                    priority,
-                    use_foreground_category,
-                    trace,
-                );
-            }
-            let decode_base: TaskRef<C> = decode_task.clone();
-            let raster_base: TaskRef<C> = raster_task.clone();
-            graph.edges.push(Edge::new(&decode_base, &raster_base));
-        }
-    });
-    let category = TaskCategoryForTileTask(raster_task.as_ref(), use_foreground_category);
-    InsertNodeForTask(
-        graph,
-        raster_task,
-        category,
-        priority,
-        dependencies,
-        false,
-        trace,
-    );
-}
+pub use compositor_raster::tile_task_graph::TileTaskGraphTrace as TileManagerGraphTrace;
+use compositor_raster::tile_task_graph::{
+    CompletionTasks, FinalizeCompletionGraph, InsertRasterTaskBatchWithCompletionEdges,
+    InsertStandaloneDecodeTaskBatchWithCompletionEdge, RasterTaskGraphCandidate,
+    RasterTaskGraphMembership, TILE_TASK_PRIORITY_BASE as kTileTaskPriorityBase,
+};
 
 use crate::adapter::{
-    raster_task::TraceTaskIdProvider,
-    task_runner::{OnceClosure, SequencedTaskRunner, TaskLocation},
+    task_runner::{SequencedTaskRunner, TaskLocation},
     time::TimeDelta,
 };
 use crate::cc::raster::{
@@ -311,11 +65,9 @@ use std::sync::{Arc, Mutex};
 
 // External diagnostics and raster-execution capabilities only. They contain no
 // manager/layer/tile queries, owner routes or scheduling/completion decisions.
-pub(crate) trait TileManagerWorkerDiagnostics: TraceTaskIdProvider + Send + Sync {
-    fn TraceWorkerTask(
-        &self,
-        event: &'static str,
-    ) -> Box<dyn crate::adapter::tile_manager::TileManagerTraceScope>;
+pub(crate) trait TileManagerWorkerDiagnostics:
+    compositor_raster::completion_task::RasterWorkerTaskDiagnostics
+{
     fn CalledOnOriginThread(&self) -> bool;
     fn TraceRasterWorker(
         &self,
@@ -329,162 +81,25 @@ pub(crate) trait TileManagerWorkerDiagnostics: TraceTaskIdProvider + Send + Sync
         layer_id: i32,
     ) -> Box<dyn crate::adapter::tile_manager::TileManagerTraceScope>;
 }
-pub(crate) trait TileManagerRasterQueryQueue: Send + Sync {
-    fn CheckRasterFinishedQueries(&self) -> bool;
-}
-pub(crate) trait TileManagerRasterFlush: Send + Sync {
-    fn FlushTileRasterGraphiteCommands(&self);
-}
+pub(crate) use compositor_raster::completion_task::{
+    RasterCommandFlush as TileManagerRasterFlush, RasterQueryQueue as TileManagerRasterQueryQueue,
+};
 
-// Source: cc/tiles/tile_manager.cc:264-298
-struct TaskSetFinishedTaskImpl<C> {
-    on_task_set_finished_callback_: Mutex<Option<OnceClosure>>,
-    task_runner_: Arc<dyn SequencedTaskRunner>,
-    base_: TileTask<C>,
-    diagnostics_: Arc<dyn TileManagerWorkerDiagnostics>,
-}
-impl<C> TaskSetFinishedTaskImpl<C> {
-    fn new(
-        task_runner: Arc<dyn SequencedTaskRunner>,
-        on_task_set_finished_callback: OnceClosure,
-        diagnostics: Arc<dyn TileManagerWorkerDiagnostics>,
-    ) -> Self {
-        let base = TileTask::new(
-            diagnostics.as_ref(),
-            SupportsConcurrentExecution::kYes,
-            SupportsBackgroundThreadPriority::kYes,
-            None,
-        );
-        Self {
-            base_: base,
-            task_runner_: task_runner,
-            on_task_set_finished_callback_: Mutex::new(Some(on_task_set_finished_callback)),
-            diagnostics_: diagnostics,
-        }
-    }
-    fn TaskSetFinished(&self) {
-        let callback = self
-            .on_task_set_finished_callback_
-            .lock()
-            .unwrap()
-            .take()
-            .expect("source CHECK(on_task_set_finished_callback_)");
-        self.task_runner_.PostDelayedTask(
+impl compositor_raster::completion_task::RasterOriginTaskRunner for dyn SequencedTaskRunner {
+    fn PostRasterTask(
+        &self,
+        location: compositor_raster::completion_task::RasterTaskLocation,
+        closure: compositor_raster::completion_task::OnceClosure,
+    ) {
+        self.PostDelayedTask(
             TaskLocation {
-                function: "TaskSetFinishedTaskImpl::TaskSetFinished",
-                file: "cc/tiles/tile_manager.cc",
-                line: 290,
+                function: location.function,
+                file: location.file,
+                line: location.line,
             },
-            callback,
+            closure,
             TimeDelta::default(),
         );
-    }
-}
-impl<C> TaskImpl<C> for TaskSetFinishedTaskImpl<C> {
-    fn task(&self) -> &Task {
-        self.base_.task()
-    }
-    fn RunOnWorkerThread(&self) {
-        let _trace = self
-            .diagnostics_
-            .TraceWorkerTask("TaskSetFinishedTaskImpl::RunOnWorkerThread");
-        self.TaskSetFinished();
-    }
-    fn AsTileTask(&self) -> Option<&dyn TileTaskImpl<C>> {
-        Some(self)
-    }
-}
-impl<C> TileTaskImpl<C> for TaskSetFinishedTaskImpl<C> {
-    fn tile_task(&self) -> &TileTask<C> {
-        &self.base_
-    }
-    fn OnTaskCompleted(&self) -> Option<C> {
-        None
-    }
-}
-
-// Source: cc/tiles/tile_manager.cc:300-343
-// The posting endpoint is a typed command/effect callback supplied by the
-// assembly root. It cannot call or capture a manager/Page owner. Raster query
-// and flush implementations are independent injected raster services.
-struct DidFinishRunningAllTilesTask<C> {
-    completion_cb_: Mutex<Option<Box<dyn FnOnce(bool) + Send>>>,
-    raster_buffer_provider_for_flush_: Option<Arc<dyn TileManagerRasterFlush>>,
-    pending_raster_queries_: Option<Arc<dyn TileManagerRasterQueryQueue>>,
-    task_runner_: Arc<dyn SequencedTaskRunner>,
-    base_: TileTask<C>,
-    diagnostics_: Arc<dyn TileManagerWorkerDiagnostics>,
-}
-impl<C> DidFinishRunningAllTilesTask<C> {
-    fn new(
-        task_runner: Arc<dyn SequencedTaskRunner>,
-        pending_raster_queries: Option<Arc<dyn TileManagerRasterQueryQueue>>,
-        raster_buffer_provider: Option<Arc<dyn TileManagerRasterFlush>>,
-        num_tile_tasks: usize,
-        completion_cb: Box<dyn FnOnce(bool) + Send>,
-        diagnostics: Arc<dyn TileManagerWorkerDiagnostics>,
-    ) -> Self {
-        let base = TileTask::new(
-            diagnostics.as_ref(),
-            SupportsConcurrentExecution::kNo,
-            SupportsBackgroundThreadPriority::kYes,
-            None,
-        );
-        Self {
-            base_: base,
-            task_runner_: task_runner,
-            pending_raster_queries_: pending_raster_queries,
-            raster_buffer_provider_for_flush_: if num_tile_tasks > 0 {
-                raster_buffer_provider
-            } else {
-                None
-            },
-            completion_cb_: Mutex::new(Some(completion_cb)),
-            diagnostics_: diagnostics,
-        }
-    }
-}
-impl<C> TaskImpl<C> for DidFinishRunningAllTilesTask<C> {
-    fn task(&self) -> &Task {
-        self.base_.task()
-    }
-    fn RunOnWorkerThread(&self) {
-        let _trace = self
-            .diagnostics_
-            .TraceWorkerTask("DidFinishRunningAllTilesTask::RunOnWorkerThread");
-        if let Some(provider) = self.raster_buffer_provider_for_flush_.as_ref() {
-            provider.FlushTileRasterGraphiteCommands();
-        }
-        let mut has_pending_queries = false;
-        if let Some(queries) = self.pending_raster_queries_.as_ref() {
-            has_pending_queries = queries.CheckRasterFinishedQueries();
-        }
-        let callback = self
-            .completion_cb_
-            .lock()
-            .unwrap()
-            .take()
-            .expect("source once completion_cb_");
-        self.task_runner_.PostDelayedTask(
-            TaskLocation {
-                function: "DidFinishRunningAllTilesTask::RunOnWorkerThread",
-                file: "cc/tiles/tile_manager.cc",
-                line: 327,
-            },
-            Box::new(move || callback(has_pending_queries)),
-            TimeDelta::default(),
-        );
-    }
-    fn AsTileTask(&self) -> Option<&dyn TileTaskImpl<C>> {
-        Some(self)
-    }
-}
-impl<C> TileTaskImpl<C> for DidFinishRunningAllTilesTask<C> {
-    fn tile_task(&self) -> &TileTask<C> {
-        &self.base_
-    }
-    fn OnTaskCompleted(&self) -> Option<C> {
-        None
     }
 }
 
@@ -507,25 +122,14 @@ use std::collections::{HashMap, HashSet};
 // Rust boundary of source cc158-170: source OnTaskCompleted's direct owner
 // callback is returned as a move-only value. The origin TileTaskManager consumes
 // it at that same source point, before DidComplete and dependent notification.
-// No worker can invoke a manager. This token names only its producing owner and
-// task generation; the manager validates it before consuming the original lease.
-pub(crate) struct RasterCompletionToken {
-    pub manager: TileManagerId,
-    pub tile_id: Id,
-    pub prepare_tiles_id: u64,
-    pub trace_task_id: u64,
-}
+// No worker can invoke a manager. This package-owned token names only its
+// producing owner and task generation.
+pub(crate) type RasterCompletionToken = RasterCompletionTokenValue<TileManagerId, Id>;
 pub struct RasterCompletion<B: ResourcePoolTypes> {
     pub token: RasterCompletionToken,
     pub resource: InUsePoolResource<B>,
     pub was_canceled: bool,
 }
-impl<C> crate::adapter::tile::TileRasterTask for dyn TileTaskImpl<C> {
-    fn TaskContainsLCPCandidateImages(&self) -> bool {
-        TileTaskImpl::TaskContainsLCPCandidateImages(self)
-    }
-}
-
 // Source: cc/tiles/tile_manager.h:70-98,398-475
 // The only native owned compositor state is retained here. Source raw pointers
 // are non-owning identities resolved through a per-call live context; no Page,
@@ -606,7 +210,7 @@ impl<B: TileManagerTypes> Default for PrioritizedWorkToSchedule<B> {
 
 use crate::adapter::{
     geometry::TracedValue,
-    property_types::{PropertyTrace, TracedValueJSON},
+    property_types::{PropertyTrace, TilePriorityTrace, TracedValueJSON},
     tile_manager::TileManagerRuntime,
 };
 // Commands carry source callback identity only. Posting is an external
@@ -622,6 +226,361 @@ pub(crate) enum TileManagerCommand {
     DidFinishRunningTileTasksRequiredForActivation,
     DidFinishRunningTileTasksRequiredForDraw,
 }
+struct PrepaintTrimAdapter<'a, B: TileManagerTypes, C: TileManagerRuntime<B>> {
+    manager: &'a mut TileManager<B>,
+    context: &'a mut C,
+    queue: Option<Box<EvictionTilePriorityQueue<B>>>,
+}
+
+impl<B: TileManagerTypes, C: TileManagerRuntime<B>> PrepaintTrimContext
+    for PrepaintTrimAdapter<'_, B, C>
+{
+    fn queue_is_empty(&self) -> bool {
+        self.queue.as_ref().expect("prepaint eviction queue").IsEmpty()
+    }
+
+    fn current_priority(&self) -> TilePriority {
+        *self
+            .queue
+            .as_ref()
+            .expect("prepaint eviction queue")
+            .Top(self.context)
+            .priority()
+    }
+
+    fn current_was_used(&self) -> bool {
+        let tile = self
+            .queue
+            .as_ref()
+            .expect("prepaint eviction queue")
+            .Top(self.context)
+            .tile_id()
+            .expect("source non-null tile");
+        self.context.TileById(tile).used()
+    }
+
+    fn free_current_resource(&mut self) -> bool {
+        let tile = self
+            .queue
+            .as_ref()
+            .expect("prepaint eviction queue")
+            .Top(self.context)
+            .tile_id()
+            .expect("source non-null tile");
+        self.manager
+            .FreeResourcesForTileAndNotifyClientIfTileWasReadyToDraw(tile, self.context)
+    }
+
+    fn clear_current_used(&mut self) {
+        let tile = self
+            .queue
+            .as_ref()
+            .expect("prepaint eviction queue")
+            .Top(self.context)
+            .tile_id()
+            .expect("source non-null tile");
+        self.context.TileByIdMutable(tile).clear_used();
+    }
+
+    fn pop_current(&mut self) {
+        let context = &*self.context;
+        self.queue
+            .as_mut()
+            .expect("prepaint eviction queue")
+            .Pop(context);
+    }
+}
+
+struct PreparedRasterCandidate<B: TileManagerTypes> {
+    prioritized_tile: super::prioritized_tile::PrioritizedTile,
+    target_color_params: B::TargetColorParams,
+}
+
+struct TileAssignmentAdapter<'a, B: TileManagerTypes, C: TileManagerRuntime<B>> {
+    manager: &'a mut TileManager<B>,
+    context: &'a mut C,
+    raster_priority_queue:
+        Option<Box<dyn super::raster_tile_priority_queue::RasterTilePriorityQueue<B>>>,
+    eviction_priority_queue: Option<Box<EvictionTilePriorityQueue<B>>>,
+    work: PrioritizedWorkToSchedule<B>,
+}
+
+impl<B: TileManagerTypes, C: TileManagerRuntime<B>> TileAssignmentAdapter<'_, B, C> {
+    fn queue(&self) -> &dyn super::raster_tile_priority_queue::RasterTilePriorityQueue<B> {
+        self.raster_priority_queue
+            .as_deref()
+            .expect("assignment raster queue")
+    }
+
+    fn current(&self) -> super::prioritized_tile::PrioritizedTile {
+        self.queue().Top().clone()
+    }
+}
+
+impl<B: TileManagerTypes, C: TileManagerRuntime<B>> TileAssignmentContext
+    for TileAssignmentAdapter<'_, B, C>
+{
+    type PreparedRasterCandidate = PreparedRasterCandidate<B>;
+
+    fn queue_is_empty(&self) -> bool {
+        self.queue().IsEmpty()
+    }
+
+    fn current_priority(&self) -> TilePriority {
+        *self.queue().Top().priority()
+    }
+
+    fn current_is_occluded(&self) -> bool {
+        self.queue().Top().is_occluded()
+    }
+
+    fn pop_current(&mut self) {
+        let context = &*self.context;
+        self.raster_priority_queue
+            .as_deref_mut()
+            .expect("assignment raster queue")
+            .Pop(context);
+    }
+
+    fn analyze_current_solid_color(&mut self) -> bool {
+        let prioritized_tile = self.current();
+        let tile = prioritized_tile.tile_id().expect("source non-null tile");
+        if self.context.TileById(tile).is_solid_color_analysis_performed()
+            || !self.context.TileById(tile).use_picture_analysis()
+            || !kUseColorEstimator
+        {
+            return false;
+        }
+        self.context
+            .TileByIdMutable(tile)
+            .set_solid_color_analysis_performed(true);
+        let mut color = crate::adapter::layer_tree_impl::Color4f::default();
+        const kMaxOpsToAnalyze: i32 = 5;
+        let raster_source = prioritized_tile
+            .raster_source::<super::picture_layer_tiling::PictureLayerTiling<B>>(self.context)
+            .as_ref()
+            .expect("source raster_source");
+        let rect = self.context.TileById(tile).enclosing_layer_rect();
+        let is_solid_color = raster_source.PerformSolidColorAnalysis(
+            rect,
+            &mut color,
+            kMaxOpsToAnalyze,
+        );
+        if !is_solid_color {
+            return false;
+        }
+        self.context
+            .TileByIdMutable(tile)
+            .draw_info_mut()
+            .set_solid_color(&color);
+        self.context.NotifyTileStateChangedById(
+            self.manager.client_,
+            tile,
+            true,
+            false,
+        );
+        self.work.required_for_draw_tile_state_changed |=
+            self.context.TileById(tile).required_for_draw();
+        true
+    }
+
+    fn current_is_prepaint_images_only(&self) -> bool {
+        let prioritized_tile = self.queue().Top();
+        let tile = prioritized_tile.tile_id().expect("source non-null tile");
+        self.context.TileById(tile).is_prepaint()
+            && prioritized_tile.is_process_for_images_only()
+    }
+
+    fn queue_current_for_image_processing(&mut self) {
+        self.work.tiles_to_process_for_images.push(self.current());
+    }
+
+    fn prepare_current_raster_candidate(&mut self) -> Self::PreparedRasterCandidate {
+        let prioritized_tile = self.current();
+        let content_color_usage =
+            GetContentColorUsageForPrioritizedTile(&prioritized_tile, self.context);
+        let target_color_params = self
+            .context
+            .GetTargetColorParams(self.manager.client_, content_color_usage);
+        PreparedRasterCandidate {
+            prioritized_tile,
+            target_color_params,
+        }
+    }
+
+    fn current_needs_raster(&self) -> bool {
+        let tile = self
+            .queue()
+            .Top()
+            .tile_id()
+            .expect("source non-null tile");
+        self.context.TileById(tile).draw_info().NeedsRaster()
+    }
+
+    fn queue_checker_decode_only(&mut self, candidate: Self::PreparedRasterCandidate) {
+        let tile = candidate
+            .prioritized_tile
+            .tile_id()
+            .expect("source non-null tile");
+        debug_assert!(self.context.TileById(tile).draw_info().is_checker_imaged());
+        debug_assert!(
+            candidate
+                .prioritized_tile
+                .should_decode_checkered_images_for_tile()
+        );
+        self.manager.AddCheckeredImagesToDecodeQueue(
+            &candidate.prioritized_tile,
+            &candidate.target_color_params,
+            DecodeType::kRaster,
+            &mut self.work.checker_image_decode_queue,
+            self.context,
+        );
+    }
+
+    fn current_memory_requirement(&self) -> MemoryUsage {
+        let tile = self
+            .queue()
+            .Top()
+            .tile_id()
+            .expect("source non-null tile");
+        if self.context.TileById(tile).raster_task().is_some() {
+            return MemoryUsage::default();
+        }
+        let size = self.context.TileById(tile).desired_texture_size();
+        let format = self.context.GetTileFormat(self.manager.client_);
+        MemoryUsage::FromEstimatedBytes(B::EstimatedSizeInBytes(&format, &size))
+    }
+
+    fn free_lower_priority_resources(
+        &mut self,
+        limit: &MemoryUsage,
+        protected_priority: &TilePriority,
+        usage: &mut MemoryUsage,
+    ) {
+        self.eviction_priority_queue = self
+            .manager
+            .FreeTileResourcesWithLowerPriorityUntilUsageIsWithinLimit(
+                self.eviction_priority_queue.take(),
+                limit,
+                protected_priority,
+                usage,
+                &mut self.work.required_for_draw_tile_state_changed,
+                self.context,
+            );
+    }
+
+    fn free_resources_to_hard_limit(
+        &mut self,
+        hard_limit: &MemoryUsage,
+        usage: &mut MemoryUsage,
+    ) {
+        self.eviction_priority_queue = self.manager.FreeTileResourcesUntilUsageIsWithinLimit(
+            self.eviction_priority_queue.take(),
+            hard_limit,
+            usage,
+            &mut self.work.required_for_draw_tile_state_changed,
+            self.context,
+        );
+    }
+
+    fn schedule_current_raster(
+        &mut self,
+        candidate: Self::PreparedRasterCandidate,
+        schedule_priority: u32,
+    ) -> bool {
+        let tile = candidate
+            .prioritized_tile
+            .tile_id()
+            .expect("source non-null tile");
+        debug_assert!(
+            self.context.TileById(tile).draw_info().mode()
+                == super::tile_draw_info::Mode::OOM_MODE
+                || !self.context.TileById(tile).draw_info().IsReadyToDraw()
+        );
+        if self.context.TileById(tile).HasRasterTask() {
+            if self
+                .context
+                .TileById(tile)
+                .raster_task_scheduled_with_checker_images()
+                && candidate
+                    .prioritized_tile
+                    .should_decode_checkered_images_for_tile()
+            {
+                self.manager.AddCheckeredImagesToDecodeQueue(
+                    &candidate.prioritized_tile,
+                    &candidate.target_color_params,
+                    DecodeType::kRaster,
+                    &mut self.work.checker_image_decode_queue,
+                    self.context,
+                );
+            }
+        } else {
+            let Some(raster_task) = self.manager.CreateRasterTask(
+                &candidate.prioritized_tile,
+                &candidate.target_color_params,
+                &mut self.work,
+                self.context,
+            ) else {
+                return false;
+            };
+            self.context
+                .TileByIdMutable(tile)
+                .set_raster_task(Some(raster_task));
+            self.context.TileByIdMutable(tile).mark_used();
+        }
+        self.context
+            .TileByIdMutable(tile)
+            .set_scheduled_priority(schedule_priority);
+        self.work
+            .tiles_to_raster
+            .push(candidate.prioritized_tile);
+        true
+    }
+
+    fn current_should_decode_checkered_images(&self) -> bool {
+        self.queue()
+            .Top()
+            .should_decode_checkered_images_for_tile()
+    }
+
+    fn queue_current_oom_checker_decode(&mut self) {
+        let prioritized_tile = self.current();
+        let tile = prioritized_tile.tile_id().expect("source non-null tile");
+        let content_color_usage =
+            GetContentColorUsageForPrioritizedTile(&prioritized_tile, self.context);
+        let target_color_params = self
+            .context
+            .GetTargetColorParams(self.manager.client_, content_color_usage);
+        if !self.context.TileById(tile).draw_info().is_checker_imaged()
+            && !self
+                .context
+                .TileById(tile)
+                .raster_task_scheduled_with_checker_images()
+        {
+            return;
+        }
+        self.manager.AddCheckeredImagesToDecodeQueue(
+            &prioritized_tile,
+            &target_color_params,
+            DecodeType::kRaster,
+            &mut self.work.checker_image_decode_queue,
+            self.context,
+        );
+    }
+
+    fn trace_memory_policy_violation(&mut self) {
+        self.context.TraceInstant(
+            "TileManager::AssignGpuMemory tile violates memory policy",
+            || None,
+        );
+    }
+
+    fn report_hard_memory_limit_exceeded(&mut self) {
+        self.context
+            .LogError("WARNING: tile memory limits exceeded, some content may not draw");
+    }
+}
+
 impl<B: TileManagerTypes> TileManager<B> {
     // Source: cc/tiles/tile_manager.h:93-103
     // Source: cc/tiles/tile_manager.cc:368-413
@@ -745,7 +704,10 @@ impl<B: TileManagerTypes> TileManager<B> {
     }
     // Source: cc/tiles/tile_manager.h:154
     // Source: cc/tiles/tile_manager.cc:793-800
-    pub(crate) fn BasicStateAsValueInto(&self, state: &mut impl PropertyTrace) {
+    pub(crate) fn BasicStateAsValueInto(
+        &self,
+        state: &mut (impl PropertyTrace + TilePriorityTrace),
+    ) {
         state.SetInteger(
             "tile_count",
             self.tiles_.len().min(i32::MAX as usize) as i32,
@@ -946,25 +908,19 @@ impl<B: TileManagerTypes> TileManager<B> {
         &self,
         priority: &super::tile_priority::TilePriority,
     ) -> bool {
-        use super::tile_priority::PriorityBin;
-        use super::tile_priority::TileMemoryLimitPolicy::*;
-        match self.global_state_.memory_limit_policy {
-            ALLOW_NOTHING => true,
-            ALLOW_ABSOLUTE_MINIMUM => priority.priority_bin > PriorityBin::NOW,
-            ALLOW_PREPAINT_ONLY => priority.priority_bin > PriorityBin::SOON,
-            ALLOW_ANYTHING => priority.distance_to_visible == f32::INFINITY,
-        }
+        TilePriorityViolatesMemoryPolicyForPolicy(self.global_state_.memory_limit_policy, priority)
     }
     // Source: cc/tiles/tile_manager.h:382
     // Source: cc/tiles/tile_manager.cc:2323-2326
     fn ShouldRasterOccludedTiles(&self) -> bool {
-        use super::tile_priority::TileMemoryLimitPolicy::*;
-        self.global_state_.memory_limit_policy != ALLOW_NOTHING
-            && self.global_state_.memory_limit_policy != ALLOW_ABSOLUTE_MINIMUM
+        ShouldRasterOccludedTilesForPolicy(self.global_state_.memory_limit_policy)
     }
     // Source: cc/tiles/tile_manager.h:147
     // Source: cc/tiles/tile_manager.cc:2069-2071
-    pub(crate) fn TakeImagesToInvalidateOnSyncTree<'c, C: crate::adapter::tile_manager::TileManagerImages<B>>(
+    pub(crate) fn TakeImagesToInvalidateOnSyncTree<
+        'c,
+        C: crate::adapter::tile_manager::TileManagerImages<B>,
+    >(
         &self,
         context: &'c mut C,
     ) -> &'c std::collections::BTreeSet<B::PaintImageId> {
@@ -974,7 +930,10 @@ impl<B: TileManagerTypes> TileManager<B> {
     }
     // Source: cc/tiles/tile_manager.h:148
     // Source: cc/tiles/tile_manager.cc:2073-2075
-    pub(crate) fn DidActivateSyncTree(&mut self, context: &mut impl crate::adapter::tile_manager::TileManagerImages<B>) {
+    pub(crate) fn DidActivateSyncTree(
+        &mut self,
+        context: &mut impl crate::adapter::tile_manager::TileManagerImages<B>,
+    ) {
         context
             .CheckerImageTracker(self.checker_image_tracker_)
             .DidActivateSyncTree();
@@ -1016,14 +975,20 @@ impl<B: TileManagerTypes> TileManager<B> {
         self.scheduled_draw_images_.entry(id).or_default()
     }
     // Source: cc/tiles/tile_manager.h:226-228
-    pub(crate) fn checker_image_tracker<'c, C: crate::adapter::tile_manager::TileManagerImages<B>>(
+    pub(crate) fn checker_image_tracker<
+        'c,
+        C: crate::adapter::tile_manager::TileManagerImages<B>,
+    >(
         &self,
         context: &'c mut C,
     ) -> &'c mut dyn crate::adapter::tile_manager::CheckerImageTracker<B> {
         context.CheckerImageTracker(self.checker_image_tracker_)
     }
     // Source: cc/tiles/tile_manager.h:229-231
-    pub(crate) fn decoded_image_tracker<'c, C: crate::adapter::tile_manager::TileManagerImages<B>>(
+    pub(crate) fn decoded_image_tracker<
+        'c,
+        C: crate::adapter::tile_manager::TileManagerImages<B>,
+    >(
         &self,
         context: &'c mut C,
     ) -> &'c mut dyn crate::adapter::tile_manager::DecodedImageTracker<B> {
@@ -1063,7 +1028,7 @@ impl<B: TileManagerTypes, C: TileManagerRuntime<B>> TileManagerCompletionParts<'
         let mut raster_task_was_scheduled_with_checker_images = false;
         if let Some(tile) = tile {
             let tile = self.context.TileByIdMutable(tile);
-            tile.raster_task_ = None;
+            tile.set_raster_task(None);
             raster_task_was_scheduled_with_checker_images =
                 tile.set_raster_task_scheduled_with_checker_images(false);
             if raster_task_was_scheduled_with_checker_images {
@@ -1141,20 +1106,23 @@ impl<B: TileManagerTypes, C: TileManagerRuntime<B>> TileTaskCompletionConsumer<R
     for TileManagerCompletionParts<'_, '_, B, C>
 {
     fn OnRasterCompletion(&mut self, completion: RasterCompletion<B>) {
-        assert_eq!(
-            completion.token.manager, self.identity,
-            "completion belongs to current owner"
-        );
-        assert!(
-            completion.token.prepare_tiles_id <= self.prepare_tiles_count,
-            "completion generation cannot be from a future prepare"
-        );
+        match ValidateRasterCompletionToken(
+            &completion.token,
+            &self.identity,
+            self.prepare_tiles_count,
+        ) {
+            Ok(()) => {}
+            Err(RasterCompletionTokenError::WrongManager) => {
+                panic!("completion belongs to current owner")
+            }
+            Err(RasterCompletionTokenError::FuturePrepareGeneration) => {
+                panic!("completion generation cannot be from a future prepare")
+            }
+        }
         if let Some(tile) = self.tiles.get(&completion.token.tile_id) {
             let tile = self.context.TileById(*tile);
             assert_eq!(
-                tile.raster_task_
-                    .as_ref()
-                    .map(|task| task.task().trace_task_id()),
+                tile.raster_task().map(|task| task.task().trace_task_id()),
                 Some(completion.token.trace_task_id),
                 "completion belongs to the current tile task"
             );
@@ -1423,9 +1391,7 @@ impl<B: TileManagerTypes> TileManager<B> {
         resource_pool: Option<ResourcePoolId>,
         image_decode_cache: Option<crate::adapter::tile_manager::ImageDecodeCacheId>,
         task_graph_runner: Arc<
-            dyn crate::cc::raster::task_graph_runner::TaskGraphRunner<
-                RasterCompletion<B>,
-            >,
+            dyn crate::cc::raster::task_graph_runner::TaskGraphRunner<RasterCompletion<B>>,
         >,
         raster_buffer_provider: Option<RasterBufferProviderId>,
         use_gpu_rasterization: bool,
@@ -1919,32 +1885,21 @@ impl<B: TileManagerTypes> TileManager<B> {
     // Source: cc/tiles/tile_manager.cc:520-580
     fn TrimPrepaintTiles(&mut self, context: &mut impl TileManagerRuntime<B>) {
         self.has_pending_tile_trimming_task_ = false;
-        let mut eviction_priority_queue = context.BuildEvictionQueue(self.client_);
-        let mut has_eligible_used_tiles = false;
-        let mut freed_required_for_draw_tile = false;
-        while !eviction_priority_queue.IsEmpty() {
-            let prioritized_tile = eviction_priority_queue.Top(context);
-            let tile = prioritized_tile.tile_id().expect("source non-null tile");
-            let eligible = prioritized_tile.priority().priority_bin > PriorityBin::SOON
-                && self.TilePriorityViolatesMemoryPolicy(prioritized_tile.priority());
-            if !eligible {
-                eviction_priority_queue.Pop(context);
-                continue;
-            }
-            if !context.TileById(tile).used() {
-                freed_required_for_draw_tile |=
-                    self.FreeResourcesForTileAndNotifyClientIfTileWasReadyToDraw(tile, context);
-            } else {
-                context.TileByIdMutable(tile).clear_used();
-                has_eligible_used_tiles = true;
-            }
-            eviction_priority_queue.Pop(context);
-        }
-        drop(eviction_priority_queue);
-        if freed_required_for_draw_tile {
+        let memory_limit_policy = self.global_state_.memory_limit_policy;
+        let queue = context.BuildEvictionQueue(self.client_);
+        let mut adapter = PrepaintTrimAdapter {
+            manager: self,
+            context,
+            queue: Some(queue),
+        };
+        let outcome = TrimPrepaintPolicy(&mut adapter, memory_limit_policy);
+        let queue = adapter.queue.take().expect("prepaint eviction queue");
+        drop(adapter);
+        drop(queue);
+        if outcome.freed_required_for_draw_tile {
             context.SetNeedsRedraw(self.client_, false, true);
         }
-        if has_eligible_used_tiles {
+        if outcome.retry_for_deferred_tiles {
             self.ScheduleTrimPrepaintTiles(context);
         }
     }
@@ -1958,7 +1913,10 @@ impl<B: TileManagerTypes> TileManager<B> {
         freed_required_for_draw_tile: &mut bool,
         context: &mut impl TileManagerRuntime<B>,
     ) -> Option<Box<EvictionTilePriorityQueue<B>>> {
-        while usage.Exceeds(limit) {
+        loop {
+            if DecideEvictionStep(usage, limit, None, None) != EvictionStep::Evict {
+                break;
+            }
             if eviction_priority_queue.is_none() {
                 eviction_priority_queue = Some(context.BuildEvictionQueue(self.client_));
             }
@@ -1985,7 +1943,10 @@ impl<B: TileManagerTypes> TileManager<B> {
         freed_required_for_draw_tile: &mut bool,
         context: &mut impl TileManagerRuntime<B>,
     ) -> Option<Box<EvictionTilePriorityQueue<B>>> {
-        while usage.Exceeds(limit) {
+        loop {
+            if DecideEvictionStep(usage, limit, None, None) != EvictionStep::Evict {
+                break;
+            }
             if eviction_priority_queue.is_none() {
                 eviction_priority_queue = Some(context.BuildEvictionQueue(self.client_));
             }
@@ -1994,8 +1955,14 @@ impl<B: TileManagerTypes> TileManager<B> {
                 break;
             }
             let prioritized_tile = queue.Top(context);
-            if !other_priority.IsHigherPriorityThan(prioritized_tile.priority()) {
-                break;
+            match DecideEvictionStep(
+                usage,
+                limit,
+                Some(prioritized_tile.priority()),
+                Some(other_priority),
+            ) {
+                EvictionStep::Evict => {}
+                EvictionStep::StopAtPriorityBarrier | EvictionStep::StopWithinLimit => break,
             }
             let tile = prioritized_tile.tile_id().expect("source non-null tile");
             *usage -= &MemoryUsage::FromTile(context.TileById(tile));
@@ -2056,20 +2023,23 @@ impl<B: TileManagerTypes> TileManager<B> {
             self.client_,
             self.resource_pool_.expect("source resource_pool_"),
             |mut parts| {
-                let _ = parts.traversal.ForEachResourceTile(&mut |tile, is_occluded, notification| {
-                    if is_occluded {
-                        FreeResourcesForTile(
-                            tile,
-                            parts.pool,
-                            &mut self.num_of_tiles_with_checker_images_,
-                            &mut self.pending_gpu_work_tiles_,
-                        );
-                        // Source GetCurrent again denotes this same live Tile
-                        // after its resource release; the borrow never escapes.
-                        notification.NotifyTileStateChanged(tile, false, true);
-                    }
-                    std::ops::ControlFlow::Continue(())
-                });
+                let _ =
+                    parts
+                        .traversal
+                        .ForEachResourceTile(&mut |tile, is_occluded, notification| {
+                            if is_occluded {
+                                FreeResourcesForTile(
+                                    tile,
+                                    parts.pool,
+                                    &mut self.num_of_tiles_with_checker_images_,
+                                    &mut self.pending_gpu_work_tiles_,
+                                );
+                                // Source GetCurrent again denotes this same live Tile
+                                // after its resource release; the borrow never escapes.
+                                notification.NotifyTileStateChanged(tile, false, true);
+                            }
+                            std::ops::ControlFlow::Continue(())
+                        });
             },
         );
     }
@@ -2548,22 +2518,26 @@ impl<B: TileManagerTypes> TileManager<B> {
             context.CreatePlaybackImageProvider(cache, target_color_params, settings);
         // This is the source's deliberate immutable worklet-record copy for
         // worker lifetime (cc1615-1619), not an owner/tree snapshot API.
-        let paint_worklet_records = prioritized_tile
-            .GetPaintWorkletRecords::<super::picture_layer_tiling::PictureLayerTiling<B>>(context)
-            .clone();
+        let (paint_worklet_records, raster_source, raster_inducing_scroll_offsets) = {
+            let source_tiling = context.TilingById(
+                prioritized_tile
+                    .source_tiling_id()
+                    .expect("source nonnull tiling"),
+            );
+            (
+                source_tiling.GetPaintWorkletRecords(context).clone(),
+                source_tiling
+                    .raster_source()
+                    .as_ref()
+                    .expect("source raster_source")
+                    .clone(),
+                source_tiling.GetRasterInducingScrollOffsets(context),
+            )
+        };
         let paint_worklet_image_provider =
             context.CreatePaintWorkletImageProvider(paint_worklet_records);
         let dispatching_image_provider =
             DispatchingImageProvider::new(image_provider, paint_worklet_image_provider);
-        let raster_source = prioritized_tile
-            .raster_source::<super::picture_layer_tiling::PictureLayerTiling<B>>(context)
-            .as_ref()
-            .expect("source raster_source")
-            .clone();
-        let raster_inducing_scroll_offsets = prioritized_tile
-            .GetRasterInducingScrollOffsets::<super::picture_layer_tiling::PictureLayerTiling<B>>(
-            context,
-        );
         Some(Arc::new(RasterTaskImpl::new(
             self.identity_,
             context.TileById(tile),
@@ -2628,10 +2602,6 @@ impl<B: TileManagerTypes> TileManager<B> {
         }
         self.task_set_finished_weak_ptr_factory_ = Arc::new(());
         self.has_scheduled_tile_tasks_ = true;
-        let mut required_for_activate_count = 0;
-        let mut required_for_draw_count = 0;
-        let mut all_count = 0;
-        let mut priority = kTileTaskPriorityBase as usize;
         let required_for_activation_done_task = self.CreateTaskSetFinishedTask(
             TileManagerCommand::DidFinishRunningTileTasksRequiredForActivation,
             context,
@@ -2660,42 +2630,38 @@ impl<B: TileManagerTypes> TileManager<B> {
                 all_done_cb,
                 context.WorkerDiagnostics(),
             ));
+        let completion_tasks = CompletionTasks {
+            required_for_activation: &required_for_activation_done_task,
+            required_for_draw: &required_for_draw_done_task,
+            all: &all_done_task,
+        };
+        let mut raster_candidates = Vec::with_capacity(tiles_that_need_to_be_rasterized.len());
         for prioritized_tile in tiles_that_need_to_be_rasterized {
             let tile = context.TileById(prioritized_tile.tile_id().expect("source non-null tile"));
             debug_assert!(tile.draw_info().requires_resource());
             debug_assert!(!tile.draw_info().has_resource());
             debug_assert!(tile.HasRasterTask());
-            let task = tile.raster_task_.as_ref().unwrap().clone();
+            let task = tile.raster_task().unwrap().clone();
             task.task()
                 .set_frame_number(i64::from(tile.source_frame_number()));
             debug_assert!(!task.tile_task().HasCompleted());
-            let base: TaskRef<RasterCompletion<B>> = task.clone();
-            if tile.required_for_activation() {
-                required_for_activate_count += 1;
-                let dependent: TaskRef<RasterCompletion<B>> =
-                    required_for_activation_done_task.clone();
-                self.graph_.edges.push(Edge::new(&base, &dependent));
-            }
-            if tile.required_for_draw() {
-                required_for_draw_count += 1;
-                let dependent: TaskRef<RasterCompletion<B>> = required_for_draw_done_task.clone();
-                self.graph_.edges.push(Edge::new(&base, &dependent));
-            }
-            all_count += 1;
-            let all_done_base: TaskRef<RasterCompletion<B>> = all_done_task.clone();
-            self.graph_.edges.push(Edge::new(&base, &all_done_base));
-            let use_foreground_category = tile.required_for_draw()
-                || tile.required_for_activation()
-                || prioritized_tile.priority().priority_bin == PriorityBin::NOW;
-            InsertNodesForRasterTask(
-                &mut self.graph_,
+            raster_candidates.push(RasterTaskGraphCandidate {
                 task,
-                priority as u16,
-                use_foreground_category,
-                context.GraphTrace(),
-            );
-            priority += 1;
+                membership: RasterTaskGraphMembership {
+                    required_for_activation: tile.required_for_activation(),
+                    required_for_draw: tile.required_for_draw(),
+                    needed_now: prioritized_tile.priority().priority_bin == PriorityBin::NOW,
+                },
+            });
         }
+        let raster_batch = InsertRasterTaskBatchWithCompletionEdges(
+            &mut self.graph_,
+            raster_candidates,
+            kTileTaskPriorityBase as usize,
+            completion_tasks,
+            context.GraphTrace(),
+        );
+        let mut completion_counts = raster_batch.completion_counts;
         let tiles_to_process_for_images = &work_to_schedule.tiles_to_process_for_images;
         let mut new_locked_images = Vec::new();
         for prioritized_tile in tiles_to_process_for_images {
@@ -2738,28 +2704,14 @@ impl<B: TileManagerTypes> TileManager<B> {
             .DecodedImageTracker(self.decoded_image_tracker_)
             .OnImagesUsedInDraw(&new_locked_images);
         work_to_schedule.extra_prepaint_images.clear();
-        for task in &new_locked_image_tasks {
-            let decode_it = self
-                .graph_
-                .nodes
-                .iter()
-                .position(|node| std::ptr::eq(node.task.task(), task.task()));
-            if decode_it.is_some() {
-                continue;
-            }
-            InsertNodeForDecodeTask(
-                &mut self.graph_,
-                task.clone(),
-                priority as u16,
-                false,
-                context.GraphTrace(),
-            );
-            priority += 1;
-            all_count += 1;
-            let base: TaskRef<RasterCompletion<B>> = task.clone();
-            let dependent: TaskRef<RasterCompletion<B>> = all_done_task.clone();
-            self.graph_.edges.push(Edge::new(&base, &dependent));
-        }
+        let decode_batch = InsertStandaloneDecodeTaskBatchWithCompletionEdge(
+            &mut self.graph_,
+            new_locked_image_tasks.iter().cloned(),
+            raster_batch.next_priority,
+            &all_done_task,
+            context.GraphTrace(),
+        );
+        completion_counts.all += decode_batch.inserted_tasks;
         std::mem::swap(&mut self.locked_image_tasks_, &mut new_locked_image_tasks);
         context
             .ResourcePoolMutable(self.resource_pool_.expect("source resource_pool_"))
@@ -2767,62 +2719,12 @@ impl<B: TileManagerTypes> TileManager<B> {
         context
             .ImageController(self.image_controller_)
             .ReduceMemoryUsage();
-        let only_completion_tasks = self.graph_.nodes.is_empty();
-        InsertNodeForTask(
+        FinalizeCompletionGraph(
             &mut self.graph_,
-            required_for_activation_done_task.clone(),
-            TASK_CATEGORY_NONCONCURRENT_FOREGROUND,
-            kRequiredForActivationDoneTaskPriority,
-            required_for_activate_count,
-            false,
+            completion_tasks,
+            completion_counts,
             context.GraphTrace(),
         );
-        InsertNodeForTask(
-            &mut self.graph_,
-            required_for_draw_done_task.clone(),
-            TASK_CATEGORY_NONCONCURRENT_FOREGROUND,
-            kRequiredForDrawDoneTaskPriority,
-            required_for_draw_count,
-            false,
-            context.GraphTrace(),
-        );
-        InsertNodeForTask(
-            &mut self.graph_,
-            all_done_task.clone(),
-            TASK_CATEGORY_NONCONCURRENT_FOREGROUND,
-            kAllDoneTaskPriority,
-            all_count,
-            false,
-            context.GraphTrace(),
-        );
-        if only_completion_tasks {
-            debug_assert_eq!(required_for_activate_count, 0);
-            debug_assert_eq!(required_for_draw_count, 0);
-            debug_assert_eq!(all_count, 0);
-            for node in &self.graph_.nodes {
-                debug_assert_eq!(node.dependencies, 0);
-                debug_assert!(!node.has_external_dependency);
-                debug_assert!(
-                    std::ptr::eq(node.task.task(), required_for_activation_done_task.task())
-                        || std::ptr::eq(node.task.task(), required_for_draw_done_task.task())
-                        || std::ptr::eq(node.task.task(), all_done_task.task())
-                );
-                let tile_task = node.task.AsTileTask().expect(
-                    "source static_cast: this graph contains the three concrete completion tasks",
-                );
-                tile_task.task().WithState(|state| state.DidSchedule());
-                tile_task.task().WithState(|state| state.DidStart());
-                tile_task.RunOnWorkerThread();
-                tile_task.task().WithState(|state| state.DidFinish());
-                let completion = tile_task.OnTaskCompleted();
-                debug_assert!(
-                    completion.is_none(),
-                    "the three source completion classes return no raster completion"
-                );
-                tile_task.tile_task().DidComplete();
-            }
-            self.graph_.Reset();
-        }
         let services = context.TaskManagerServices();
         self.tile_task_manager_
             .as_ref()
@@ -2852,9 +2754,7 @@ impl<B: TileManagerTypes> TileManager<B> {
         context.TraceBeginDefault("TileManager::AssignGpuMemoryToTiles");
         debug_assert!(self.resource_pool_.is_some());
         debug_assert!(self.tile_task_manager_.is_some());
-        let mut schedule_priority = 1u32;
-        self.all_tiles_that_need_to_be_rasterized_are_scheduled_ = true;
-        let mut had_enough_memory_to_schedule_tiles_needed_now = true;
+
         let hard_memory_limit = MemoryUsage::new(
             self.global_state_.hard_memory_limit_in_bytes,
             self.global_state_.num_resources_limit,
@@ -2863,266 +2763,107 @@ impl<B: TileManagerTypes> TileManager<B> {
             self.global_state_.soft_memory_limit_in_bytes,
             self.global_state_.num_resources_limit,
         );
-        let pool = context.ResourcePool(self.resource_pool_.unwrap());
-        let mut memory_usage = MemoryUsage::new(pool.memory_usage_bytes(), pool.resource_count());
-        let mut raster_priority_queue = context.BuildRasterQueue(
+        let initial_memory_usage = {
+            let pool = context.ResourcePool(self.resource_pool_.unwrap());
+            MemoryUsage::new(pool.memory_usage_bytes(), pool.resource_count())
+        };
+        let raster_priority_queue = context.BuildRasterQueue(
             self.client_,
             self.global_state_.tree_priority,
             super::raster_tile_priority_queue::Type::ALL,
         );
-        let mut eviction_priority_queue = None;
-        let mut work_to_schedule = PrioritizedWorkToSchedule::default();
-        let raster_occluded_tiles = self.ShouldRasterOccludedTiles();
-        while !raster_priority_queue.IsEmpty() {
-            let prioritized_tile = raster_priority_queue.Top();
-            let tile = prioritized_tile.tile_id().expect("source non-null tile");
-            let priority = *prioritized_tile.priority();
-            if self.TilePriorityViolatesMemoryPolicy(&priority) {
-                context.TraceInstant(
-                    "TileManager::AssignGpuMemory tile violates memory policy",
-                    || None,
-                );
-                break;
-            }
-            debug_assert!(!prioritized_tile.is_occluded() || raster_occluded_tiles);
-            if !context.TileById(tile).is_solid_color_analysis_performed()
-                && context.TileById(tile).use_picture_analysis()
-                && kUseColorEstimator
-            {
-                context
-                    .TileByIdMutable(tile)
-                    .set_solid_color_analysis_performed(true);
-                let mut color = crate::adapter::layer_tree_impl::Color4f::default();
-                const kMaxOpsToAnalyze: i32 = 5;
-                let is_solid_color = prioritized_tile
-                    .raster_source::<super::picture_layer_tiling::PictureLayerTiling<B>>(context)
-                    .as_ref()
-                    .expect("source raster_source")
-                    .PerformSolidColorAnalysis(
-                        context.TileById(tile).enclosing_layer_rect(),
-                        &mut color,
-                        kMaxOpsToAnalyze,
-                    );
-                if is_solid_color {
-                    context
-                        .TileByIdMutable(tile)
-                        .draw_info_mut()
-                        .set_solid_color(&color);
-                    context.NotifyTileStateChangedById(self.client_, tile, true, false);
-                    work_to_schedule.required_for_draw_tile_state_changed |=
-                        context.TileById(tile).required_for_draw();
-                    raster_priority_queue.Pop(context);
-                    continue;
-                }
-            }
-            if context.TileById(tile).is_prepaint() && prioritized_tile.is_process_for_images_only()
-            {
-                work_to_schedule
-                    .tiles_to_process_for_images
-                    .push(prioritized_tile.clone());
-                raster_priority_queue.Pop(context);
-                continue;
-            }
-            let content_color_usage =
-                GetContentColorUsageForPrioritizedTile(prioritized_tile, context);
-            let target_color_params =
-                context.GetTargetColorParams(self.client_, content_color_usage);
-            if !context.TileById(tile).draw_info().NeedsRaster() {
-                debug_assert!(context.TileById(tile).draw_info().is_checker_imaged());
-                debug_assert!(prioritized_tile.should_decode_checkered_images_for_tile());
-                self.AddCheckeredImagesToDecodeQueue(
-                    prioritized_tile,
-                    &target_color_params,
-                    DecodeType::kRaster,
-                    &mut work_to_schedule.checker_image_decode_queue,
-                    context,
-                );
-                raster_priority_queue.Pop(context);
-                continue;
-            }
-            if work_to_schedule.tiles_to_raster.len() >= self.scheduled_raster_task_limit_ {
-                self.all_tiles_that_need_to_be_rasterized_are_scheduled_ = false;
-                break;
-            }
-            debug_assert!(
-                context.TileById(tile).draw_info().mode() == super::tile_draw_info::Mode::OOM_MODE
-                    || !context.TileById(tile).draw_info().IsReadyToDraw()
-            );
-            let mut memory_required_by_tile_to_be_scheduled = MemoryUsage::default();
-            if context.TileById(tile).raster_task_.is_none() {
-                memory_required_by_tile_to_be_scheduled = MemoryUsage::FromConfig::<B>(
-                    &context.TileById(tile).desired_texture_size(),
-                    context.GetTileFormat(self.client_),
-                );
-            }
-            let tile_is_needed_now = priority.priority_bin == PriorityBin::NOW;
-            let tile_memory_limit = if tile_is_needed_now {
-                &hard_memory_limit
-            } else {
-                &soft_memory_limit
-            };
-            let scheduled_tile_memory_limit =
-                *tile_memory_limit - &memory_required_by_tile_to_be_scheduled;
-            eviction_priority_queue = self
-                .FreeTileResourcesWithLowerPriorityUntilUsageIsWithinLimit(
-                    eviction_priority_queue,
-                    &scheduled_tile_memory_limit,
-                    &priority,
-                    &mut memory_usage,
-                    &mut work_to_schedule.required_for_draw_tile_state_changed,
-                    context,
-                );
-            let memory_usage_is_within_limit = !memory_usage.Exceeds(&scheduled_tile_memory_limit);
-            if !memory_usage_is_within_limit {
-                if tile_is_needed_now {
-                    context.LogError(
-                        "WARNING: tile memory limits exceeded, some content may not draw",
-                    );
-                    had_enough_memory_to_schedule_tiles_needed_now = false;
-                }
-                self.all_tiles_that_need_to_be_rasterized_are_scheduled_ = false;
-                break;
-            }
-            if context.TileById(tile).HasRasterTask() {
-                if context
-                    .TileById(tile)
-                    .raster_task_scheduled_with_checker_images()
-                    && prioritized_tile.should_decode_checkered_images_for_tile()
-                {
-                    self.AddCheckeredImagesToDecodeQueue(
-                        prioritized_tile,
-                        &target_color_params,
-                        DecodeType::kRaster,
-                        &mut work_to_schedule.checker_image_decode_queue,
-                        context,
-                    );
-                }
-            } else {
-                let raster_task = self.CreateRasterTask(
-                    prioritized_tile,
-                    &target_color_params,
-                    &mut work_to_schedule,
-                    context,
-                );
-                let Some(raster_task) = raster_task else {
-                    raster_priority_queue.Pop(context);
-                    continue;
-                };
-                context.TileByIdMutable(tile).raster_task_ = Some(raster_task);
-                context.TileByIdMutable(tile).mark_used();
-            }
-            context.TileByIdMutable(tile).scheduled_priority_ = schedule_priority;
-            schedule_priority += 1;
-            memory_usage += &memory_required_by_tile_to_be_scheduled;
-            work_to_schedule
-                .tiles_to_raster
-                .push(prioritized_tile.clone());
-            raster_priority_queue.Pop(context);
-        }
-        eviction_priority_queue = self.FreeTileResourcesUntilUsageIsWithinLimit(
-            eviction_priority_queue,
-            &hard_memory_limit,
-            &mut memory_usage,
-            &mut work_to_schedule.required_for_draw_tile_state_changed,
+        let config = TileAssignmentConfig {
+            memory_limit_policy: self.global_state_.memory_limit_policy,
+            hard_memory_limit,
+            soft_memory_limit,
+            initial_memory_usage,
+            raster_task_limit: self.scheduled_raster_task_limit_,
+            has_checker_imaged_tiles: self.num_of_tiles_with_checker_images_ > 0,
+        };
+        let mut adapter = TileAssignmentAdapter {
+            manager: self,
             context,
-        );
-        if !had_enough_memory_to_schedule_tiles_needed_now
-            && self.num_of_tiles_with_checker_images_ > 0
-        {
-            while !raster_priority_queue.IsEmpty() {
-                let prioritized_tile = raster_priority_queue.Top();
-                if prioritized_tile.priority().priority_bin > PriorityBin::NOW {
-                    break;
-                }
-                if !prioritized_tile.should_decode_checkered_images_for_tile() {
-                    raster_priority_queue.Pop(context);
-                    continue;
-                }
-                let content_color_usage =
-                    GetContentColorUsageForPrioritizedTile(prioritized_tile, context);
-                let target_color_params =
-                    context.GetTargetColorParams(self.client_, content_color_usage);
-                let tile = prioritized_tile.tile_id().expect("source non-null tile");
-                if context.TileById(tile).draw_info().is_checker_imaged()
-                    || context
-                        .TileById(tile)
-                        .raster_task_scheduled_with_checker_images()
-                {
-                    self.AddCheckeredImagesToDecodeQueue(
-                        prioritized_tile,
-                        &target_color_params,
-                        DecodeType::kRaster,
-                        &mut work_to_schedule.checker_image_decode_queue,
-                        context,
-                    );
-                }
-                raster_priority_queue.Pop(context);
-            }
-        }
-        self.did_oom_on_last_assign_ = !had_enough_memory_to_schedule_tiles_needed_now;
+            raster_priority_queue: Some(raster_priority_queue),
+            eviction_priority_queue: None,
+            work: PrioritizedWorkToSchedule::default(),
+        };
+        let outcome = AssignTileWork(&mut adapter, config);
+        let work_to_schedule = std::mem::take(&mut adapter.work);
+        let raster_priority_queue = adapter
+            .raster_priority_queue
+            .take()
+            .expect("assignment raster queue");
+        let eviction_priority_queue = adapter.eviction_priority_queue.take();
+        drop(adapter);
+
+        self.all_tiles_that_need_to_be_rasterized_are_scheduled_ =
+            outcome.all_tiles_scheduled;
+        self.did_oom_on_last_assign_ = !outcome.had_enough_memory_for_needed_tiles;
         if context.ShouldRecordSubsampledMetric(self.metrics_sampling_rate_) {
             if !self.running_on_renderer_process_ {
                 context.HistogramBoolean(
                     "Compositing.TileManager.EnoughMemory.Browser",
-                    had_enough_memory_to_schedule_tiles_needed_now,
+                    outcome.had_enough_memory_for_needed_tiles,
                 );
-                if had_enough_memory_to_schedule_tiles_needed_now {
+                if outcome.had_enough_memory_for_needed_tiles {
                     context.HistogramMemoryMB(
                         "Compositing.TileManager.MemoryUsageWhenEnoughMemory.Browser",
-                        memory_usage.memory_bytes() / (1024 * 1024),
+                        outcome.final_memory_usage.memory_bytes() / (1024 * 1024),
                     );
                 }
                 if self.did_oom_on_last_assign_ {
-                    let memory_limit = hard_memory_limit.memory_bytes() / (1024 * 1024);
                     context.HistogramMemoryMB(
                         "Compositing.TileManager.LimitWhenNotEnoughMemory.Browser",
-                        memory_limit,
+                        hard_memory_limit.memory_bytes() / (1024 * 1024),
                     );
                 }
             } else {
                 context.HistogramBoolean(
                     "Compositing.TileManager.EnoughMemory.Renderer",
-                    had_enough_memory_to_schedule_tiles_needed_now,
+                    outcome.had_enough_memory_for_needed_tiles,
                 );
-                if had_enough_memory_to_schedule_tiles_needed_now {
+                if outcome.had_enough_memory_for_needed_tiles {
                     context.HistogramMemoryMB(
                         "Compositing.TileManager.MemoryUsageWhenEnoughMemory.Renderer",
-                        memory_usage.memory_bytes() / (1024 * 1024),
+                        outcome.final_memory_usage.memory_bytes() / (1024 * 1024),
                     );
                 }
                 if self.did_oom_on_last_assign_ {
-                    let memory_limit = hard_memory_limit.memory_bytes() / (1024 * 1024);
                     context.HistogramMemoryMB(
                         "Compositing.TileManager.LimitWhenNotEnoughMemory.Renderer",
-                        memory_limit,
+                        hard_memory_limit.memory_bytes() / (1024 * 1024),
                     );
                 }
             }
         }
         self.memory_stats_from_last_assign_.total_budget_in_bytes =
             self.global_state_.hard_memory_limit_in_bytes;
-        self.memory_stats_from_last_assign_.total_bytes_used = memory_usage.memory_bytes();
+        self.memory_stats_from_last_assign_.total_bytes_used =
+            outcome.final_memory_usage.memory_bytes();
         debug_assert!(self.memory_stats_from_last_assign_.total_bytes_used >= 0);
         self.memory_stats_from_last_assign_.had_enough_memory =
-            had_enough_memory_to_schedule_tiles_needed_now;
+            outcome.had_enough_memory_for_needed_tiles;
+
         context.TraceEndWithState(|| {
             let mut trace_args = TracedValueJSON::default();
             trace_args.SetBoolean(
                 "all_tiles_that_need_to_be_rasterized_are_scheduled",
-                self.all_tiles_that_need_to_be_rasterized_are_scheduled_,
+                outcome.all_tiles_scheduled,
             );
             trace_args.SetBoolean(
                 "had_enough_memory_to_schedule_tiles_needed_now",
-                had_enough_memory_to_schedule_tiles_needed_now,
+                outcome.had_enough_memory_for_needed_tiles,
             );
             trace_args
         });
         context
             .ImageController(self.image_controller_)
             .RecordCacheStats();
-        // Both native queue owners remain alive through the final metrics/cache
-        // operations. They release here, in reverse local declaration order.
+
+        // Native queue owners stay alive through the final metrics/cache calls.
+        // They release in reverse declaration order, matching the source locals.
         drop(eviction_priority_queue);
+        drop(raster_priority_queue);
         work_to_schedule
     }
 }
@@ -3252,20 +2993,25 @@ impl<B: TileManagerTypes> TileManager<B> {
             .as_ref()
             .expect("source live notifier")
             .Schedule();
-        let wait_for_all_required_tiles = self.global_state_.tree_priority
-            == super::tile_priority::TreePriority::SMOOTHNESS_TAKES_PRIORITY
-            || self.global_state_.memory_limit_policy
-                == super::tile_priority::TileMemoryLimitPolicy::ALLOW_NOTHING;
-        let should_skip_wait = context.FeatureEnabled(TileManagerFeature::TileOOMFreezeMitigation)
-            && self.did_oom_on_last_assign_;
-        if wait_for_all_required_tiles && !should_skip_wait {
-            if !self.all_tiles_that_need_to_be_rasterized_are_scheduled_ {
-                self.more_tiles_need_prepare_check_notifier_
-                    .as_ref()
-                    .expect("source live notifier")
-                    .Schedule();
+        match DecideNoRasterWorkAction(
+            self.global_state_.tree_priority,
+            self.global_state_.memory_limit_policy,
+            context.FeatureEnabled(TileManagerFeature::TileOOMFreezeMitigation),
+            self.did_oom_on_last_assign_,
+            self.all_tiles_that_need_to_be_rasterized_are_scheduled_,
+        ) {
+            NoRasterWorkAction::WaitForRequiredTiles {
+                schedule_another_prepare,
+            } => {
+                if schedule_another_prepare {
+                    self.more_tiles_need_prepare_check_notifier_
+                        .as_ref()
+                        .expect("source live notifier")
+                        .Schedule();
+                }
+                return;
             }
-            return;
+            NoRasterWorkAction::MarkRequiredTilesOutOfMemory => {}
         }
         let required_for_activation = context.BuildRasterQueue(
             self.client_,

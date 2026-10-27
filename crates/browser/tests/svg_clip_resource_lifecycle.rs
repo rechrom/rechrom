@@ -5,7 +5,7 @@ mod native_test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
+    fragment_tree::FragmentPaintData,
     internal::{
         layout_input::FontFace, layout_object::LayoutObject,
         layout_pass_scope::LayoutObjectFactoryScope,
@@ -138,7 +138,7 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     panic!("missing native layout object {name}")
 }
 
-fn find_fragment(node: &FragmentNode, wanted: u64) -> Option<&FragmentNode> {
+fn find_fragment(node: &FragmentPaintData, wanted: u64) -> Option<&FragmentPaintData> {
     if node.node_id == wanted {
         Some(node)
     } else {
@@ -148,7 +148,7 @@ fn find_fragment(node: &FragmentNode, wanted: u64) -> Option<&FragmentNode> {
     }
 }
 
-fn fragment<'a>(page: &'a Page, name: &str) -> &'a FragmentNode {
+fn fragment<'a>(page: &'a Page, name: &str) -> &'a FragmentPaintData {
     find_fragment(&page.CurrentFrame().unwrap().fragments, id(page, name))
         .unwrap_or_else(|| panic!("missing published fragment {name}"))
 }
@@ -467,7 +467,7 @@ fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
             applied = engine.ApplyMutation(mutation);
         }));
         assert!(applied);
-        assert!(engine.ExportTargetedPaintOnly());
+        assert!(engine.RefreshTargetedPaintData());
         let result = find_fragment(engine.GetLayoutResult().unwrap(), target_id).unwrap();
         assert!(std::sync::Arc::ptr_eq(
             &graph,
@@ -847,7 +847,7 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
             owner.GetDocument().SVGResources().unwrap()
         ));
         assert!(owner.EmitPaintInputs(label_id, &Default::default(), |m| engine.ApplyMutation(m)));
-        assert!(engine.ExportTargetedPaintInputs());
+        assert!(engine.RefreshTargetedPaintInputs());
         let current = engine.GetLayoutResult().unwrap();
         let text = find_fragment(current, text_id).unwrap();
         assert_eq!(text.paint.style.color.blue, 1.0);
@@ -875,7 +875,7 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
             .unwrap();
         owner.UpdateSVGResources();
         assert!(owner.EmitPaintInputs(label_id, &Default::default(), |m| engine.ApplyMutation(m)));
-        assert!(engine.ExportTargetedPaintInputs());
+        assert!(engine.RefreshTargetedPaintInputs());
         let retained = engine.GetLayoutResult().unwrap().clone();
         let text = find_fragment(&retained, text_id).unwrap();
         assert!(
@@ -888,7 +888,7 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
                     .any(|decoration| decoration.underline)
         );
         assert!(text.paint.glyph_runs == glyphs);
-        assert!(engine.ExportPaintOnly());
+        assert!(engine.PopulatePaintData());
         let exported = find_fragment(engine.GetLayoutResult().unwrap(), text_id).unwrap();
         assert!(exported.paint.style == text.paint.style);
         assert_eq!(

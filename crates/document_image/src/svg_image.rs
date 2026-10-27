@@ -17,8 +17,7 @@ use image_resource::{
     DocumentImageMutation, ImageId, IntrinsicSize, MutationCause,
 };
 use layoutng_assembly::layout_assembly::LayoutAssembly;
-use style::media_queries::media_query_backend::ParseMediaQuerySet;
-use style::media_queries::media_query_evaluator::MediaQueryEvaluator;
+use style::media_queries::media_query_backend::{ForMediaValues, ParseMediaQuerySet};
 use style::media_queries::{MediaValuesCached, MediaValuesCachedData};
 use style::PreferredColorScheme;
 
@@ -826,8 +825,7 @@ impl SVGDocumentAnimation {
             .engine
             .TakePaintOutput()
             .ok_or_else(|| io::Error::other("animated SVG layout produced no fragments"))?;
-        self.paint_engine
-            .Paint(layout_output.Fragments(), Default::default());
+        self.paint_engine.Paint(&layout_output, Default::default());
         let paint_output = self.paint_engine.CommitPaintResult();
         let (_fragments, artifact) = self.engine.CommitPaint(layout_output, paint_output, None);
         let intrinsic_size = EffectiveIntrinsicSize(
@@ -1156,10 +1154,11 @@ fn CollectAnimations(
     for sheet in document.ActiveStyleSheets() {
         for rule in &sheet.keyframes {
             keyframe_rule_count += 1;
-            if rule.media_conditions.iter().all(|condition| {
-                MediaQueryEvaluator::ForMediaValues(environment)
-                    .Eval(&ParseMediaQuerySet(condition))
-            }) {
+            if rule
+                .media_conditions
+                .iter()
+                .all(|condition| ForMediaValues(environment).Eval(&ParseMediaQuerySet(condition)))
+            {
                 definitions.insert(rule.name.clone(), ExpandKeyframes(rule));
             }
         }
@@ -1185,8 +1184,7 @@ fn CollectAnimations(
         for sheet in document.ActiveStyleSheets() {
             for rule in &sheet.rules {
                 if !rule.media_conditions.iter().all(|condition| {
-                    MediaQueryEvaluator::ForMediaValues(environment)
-                        .Eval(&ParseMediaQuerySet(condition))
+                    ForMediaValues(environment).Eval(&ParseMediaQuerySet(condition))
                 }) || !selector_service
                     .Matches(document, index, &rule.selector_text)
                     .map_err(|error| {

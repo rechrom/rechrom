@@ -12,8 +12,8 @@ use super::{
     property_types::{MaskFilterInfo, PropertyPath, ViewTransitionElementResourceId},
 };
 use crate::cc::trees::{property_tree::PropertyTrees, viewport_property_ids::ViewportPropertyIds};
+pub use compositor_draw::ViewTransitionToken;
 use std::collections::BTreeSet;
-pub type ViewTransitionToken = [u64; 2];
 pub trait DrawTransform: PropertyTreeTransform {
     fn InverseOrIdentity(&self) -> Self;
     fn MapRectInt(&self, rect: Rect) -> Rect;
@@ -196,34 +196,6 @@ pub fn MatchesToken(
     tokens: &BTreeSet<ViewTransitionToken>,
 ) -> bool {
     !id.for_scope_snapshot && id.transition_token.is_some_and(|t| tokens.contains(&t))
-}
-
-// Source dependency: ui/gfx/geometry/rect_f.h:219-226.
-impl RectF {
-    pub fn Scale(&mut self, x_scale: f32, y_scale: f32) {
-        *self = Self::new(
-            self.x() * x_scale,
-            self.y() * y_scale,
-            self.width() * x_scale,
-            self.height() * y_scale,
-        );
-    }
-    // Source dependency: ui/gfx/geometry/rect_f.cc:99-116.
-    pub fn Intersect(&mut self, rect: Self) {
-        if self.IsEmpty() || rect.IsEmpty() {
-            *self = Self::default();
-            return;
-        }
-        let rx = super::geometry::cpp_max(self.x(), rect.x());
-        let ry = super::geometry::cpp_max(self.y(), rect.y());
-        let rr = super::geometry::cpp_min(self.right(), rect.right());
-        let rb = super::geometry::cpp_min(self.bottom(), rect.bottom());
-        if rx >= rr || ry >= rb {
-            *self = Self::default();
-            return;
-        }
-        *self = Self::new(rx, ry, rr - rx, rb - ry);
-    }
 }
 
 /// Narrow live geometry consumed by source LayerVisibleRect (cc:1648-1725).

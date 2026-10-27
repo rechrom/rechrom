@@ -136,9 +136,10 @@ pub(crate) fn LayoutWithSystemFontsAtStage(
     constraints: &mut ConstraintSpace,
     fonts: &mut SystemFontSession,
     purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
-) {
+) -> bool {
+    let mut updated = false;
     loop {
-        super::persistent_layout::LayoutDocumentWithEngineAtStage(
+        updated |= super::persistent_layout::LayoutDocumentWithEngineAtStage(
             layout,
             document,
             interaction,
@@ -154,6 +155,7 @@ pub(crate) fn LayoutWithSystemFontsAtStage(
         // the same typed style inputs, so only geometry needs another pass.
         document.InvalidateLayoutGeometry();
     }
+    updated
 }
 
 #[cfg(test)]
@@ -265,7 +267,7 @@ mod tests {
             let final_result = layout
                 .TakeLayoutResult()
                 .expect("only settled layout returned");
-            fn selected(node: &layoutng_assembly::fragment_tree::FragmentNode) -> bool {
+            fn selected(node: &layoutng_assembly::fragment_tree::FragmentPaintData) -> bool {
                 node.paint
                     .glyph_runs
                     .iter()

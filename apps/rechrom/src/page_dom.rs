@@ -6,11 +6,8 @@ use std::io;
 pub(crate) fn find_id(page: &Page, name: &str) -> Option<u64> {
     let owner = page.Document();
     let document = owner.GetDocument();
-    fn visit(
-        document: &dom::persistent_document::PersistentDocument,
-        index: usize,
-        name: &str,
-    ) -> Option<u64> {
+    let mut pending = vec![document.Root()];
+    while let Some(index) = pending.pop() {
         let node = document.Node(index);
         if node
             .FindAttribute("id")
@@ -18,13 +15,11 @@ pub(crate) fn find_id(page: &Page, name: &str) -> Option<u64> {
         {
             return Some(node.Id());
         }
-        node.Children()
-            .iter()
-            .find_map(|&child| visit(document, child, name))
+        pending.extend(node.Children().iter().rev().copied());
     }
     // InnerHTML leaves detached arena nodes alive; only the connected tree is
     // the current chrome. An old tab label may have the same element id.
-    visit(document, document.Root(), name)
+    None
 }
 pub(crate) fn chrome_hover_chain(page: &Page, target: Option<u64>) -> Vec<u64> {
     let owner = page.Document();

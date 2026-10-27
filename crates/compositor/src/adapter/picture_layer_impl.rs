@@ -3,9 +3,10 @@
 //! canonical translated owner, with no retained owner or service backpointer.
 use super::{
     image_animation::PaintImageId,
-    layer_tree_impl::{Color4f, LayerTreeTypes},
+    layer_tree_impl::{Color4f, LayerTreeTypes, ResourceId},
     paint_worklet::PaintWorkletTypes,
     picture_layer_tiling::{PictureLayerTilingTypes, TilingRasterSource},
+    tile::TileTypes,
     tile_based_layer_impl::TileBasedLayerImplTypes,
 };
 use std::sync::Arc;
@@ -22,7 +23,7 @@ pub trait PictureLayerImplTypes:
             <Self as PaintWorkletTypes>::Input,
             Self::PaintRecord,
         >,
-    >
+    > + TileTypes<ResourceId = ResourceId>
 {
     type PaintRecord: Clone;
     type PictureTargetColorParams: PartialEq;
@@ -284,19 +285,6 @@ impl<B: PictureLayerImplTypes> PictureLayerImplContext<'_, B> {
             tree: self.tree,
             services: self.services,
         }
-    }
-}
-
-// Source dependencies: ui/gfx/geometry/vector2d_f.h:35,45-53,70-73;
-// ui/gfx/geometry/vector2d_f.cc:25-27,46-49. Native value primitives only.
-impl super::geometry::Vector2dF {
-    pub fn SetToMin(&mut self, other: Self) {
-        self.set_x(super::geometry::cpp_min(self.x(), other.x()));
-        self.set_y(super::geometry::cpp_min(self.y(), other.y()));
-    }
-    pub fn SetToMax(&mut self, other: Self) {
-        self.set_x(super::geometry::cpp_max(self.x(), other.x()));
-        self.set_y(super::geometry::cpp_max(self.y(), other.y()));
     }
 }
 

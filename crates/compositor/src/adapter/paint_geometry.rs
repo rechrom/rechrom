@@ -2,7 +2,7 @@
 //! The Paint owner supplies its resident transform nodes and canonical mapper;
 //! compositor does not clone the property tree or implement another mapper.
 
-use super::geometry::RectF;
+use super::geometry::{RectF, Vector2dF};
 /// Exact external gfx value primitives consumed by native FloatClipRect.
 pub trait FloatClipRectTransform {
     fn IsIdentityOr2dTranslation(&self) -> bool;
@@ -44,80 +44,12 @@ pub trait MaskGeometryMapper {
     );
 }
 
-use super::geometry::Vector2dF;
+pub use compositor_layerize::paint_geometry::{ChunkGeometryMapper, RasterEffectOutset};
 
-/// PaintChunk's source-owned raster outset value crossing the direct
-/// PaintArtifact boundary. The Paint adapter maps its canonical enum without
-/// copying any property-tree state.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RasterEffectOutset {
-    #[default]
-    kNone,
-    kHalfPixel,
-    kWholePixel,
-}
-
-/// Live Paint GeometryMapper operations used by ChunkToLayerMapper. State
-/// values contain the Paint owner's canonical node handles; this interface
-/// performs geometry against those resident nodes and never materializes a
-/// second property tree.
-pub trait ChunkGeometryMapper {
-    type PropertyTreeState: Clone + PartialEq;
-    type Transform: Clone;
-    type FloatClipRect: Clone;
-
-    fn MakeTranslation(&self, offset: Vector2dF) -> Self::Transform;
-    /// C++ default construction of `FloatClipRect`, which represents an
-    /// infinite clip until a concrete clip is mapped into it.
-    fn MakeDefaultClipRect(&self) -> Self::FloatClipRect;
-    fn MakeFloatClipRect(&self, rect: RectF) -> Self::FloatClipRect;
-    fn InfiniteLooseFloatClipRect(&self) -> Self::FloatClipRect;
-
-    fn SameTransformNode(
-        &self,
-        first: &Self::PropertyTreeState,
-        second: &Self::PropertyTreeState,
-    ) -> bool;
-    fn SameClipNode(
-        &self,
-        first: &Self::PropertyTreeState,
-        second: &Self::PropertyTreeState,
-    ) -> bool;
-    fn SameNearestPixelMovingFilterClip(
-        &self,
-        first: &Self::PropertyTreeState,
-        second: &Self::PropertyTreeState,
-    ) -> bool;
-    fn SourceToDestinationProjection(
-        &self,
-        source: &Self::PropertyTreeState,
-        destination: &Self::PropertyTreeState,
-        output: &mut Self::Transform,
-    ) -> bool;
-    fn PostTranslate(&self, transform: &mut Self::Transform, offset: Vector2dF);
-    fn MakeIdentity(&self, transform: &mut Self::Transform);
-    fn ScaleToZero(&self, transform: &mut Self::Transform);
-    fn MapRect(&self, transform: &Self::Transform, rect: RectF) -> RectF;
-
-    fn LocalToAncestorClipRect(
-        &self,
-        local: &Self::PropertyTreeState,
-        ancestor: &Self::PropertyTreeState,
-    ) -> Self::FloatClipRect;
-    fn LocalToAncestorVisualRect(
-        &self,
-        local: &Self::PropertyTreeState,
-        ancestor: &Self::PropertyTreeState,
-        rect: &mut Self::FloatClipRect,
-    );
-    fn ClipIsInfinite(&self, clip: &Self::FloatClipRect) -> bool;
-    fn ClipRect(&self, clip: &Self::FloatClipRect) -> RectF;
-    fn MoveClip(&self, clip: &mut Self::FloatClipRect, offset: Vector2dF);
-}
-
-/// Direct view of one resident PaintChunk in PaintArtifact.
+/// Facade-owned projection of an external Paint chunk. Keeping this trait in
+/// the facade permits native Paint types to implement it without orphan-rule
+/// coupling between the responsibility packages.
 pub trait PaintChunkView<M: ChunkGeometryMapper + ?Sized> {
-    // The returned handle retains actual Paint node Arcs, never copied nodes.
     fn properties_unalias(&self) -> M::PropertyTreeState;
     fn raster_effect_outset(&self) -> RasterEffectOutset;
 }

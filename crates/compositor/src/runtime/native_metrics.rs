@@ -219,7 +219,9 @@ impl NativeReportingController<NativeCompositorTypes> for CpuNativeReportingCont
         self.state.lock().expect("reporting state").visible = visible;
     }
 }
-impl CompositorFrameReportingController for CpuNativeReportingController {
+impl CompositorFrameReportingController<crate::adapter::scheduler_host::FacadeSchedulerTypes>
+    for CpuNativeReportingController
+{
     fn OnFinishImplFrame(&self, frame_id: BeginFrameId, waiting_for_main: bool) {
         self.Emit(format!(
             "finish_impl_frame {frame_id:?} waiting_for_main={waiting_for_main}"

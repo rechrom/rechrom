@@ -5,7 +5,7 @@ mod native_test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
+    fragment_tree::FragmentPaintData,
     internal::{
         layout_input::FontFace, layout_object::LayoutObject,
         layout_pass_scope::LayoutObjectFactoryScope,
@@ -122,7 +122,7 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     panic!("missing native layout object {name}")
 }
 
-fn find_fragment(node: &FragmentNode, wanted: u64) -> Option<&FragmentNode> {
+fn find_fragment(node: &FragmentPaintData, wanted: u64) -> Option<&FragmentPaintData> {
     if node.node_id == wanted {
         Some(node)
     } else {
@@ -132,7 +132,7 @@ fn find_fragment(node: &FragmentNode, wanted: u64) -> Option<&FragmentNode> {
     }
 }
 
-fn fragment<'a>(page: &'a Page, name: &str) -> &'a FragmentNode {
+fn fragment<'a>(page: &'a Page, name: &str) -> &'a FragmentPaintData {
     find_fragment(&page.CurrentFrame().unwrap().fragments, id(page, name))
         .unwrap_or_else(|| panic!("missing published fragment {name}"))
 }

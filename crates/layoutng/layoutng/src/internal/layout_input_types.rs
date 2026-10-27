@@ -1,20 +1,7 @@
-// cpp: layoutng/internal/layout_input_types.h:10-17
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Color {
-    pub red: f32,
-    pub green: f32,
-    pub blue: f32,
-    pub alpha: f32,
-}
+pub use foundation::PaintColor as Color;
 
 // cpp: layoutng/internal/layout_input_types.h:19-23
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct IntSize {
-    pub width: i32,
-    pub height: i32,
-}
+pub use foundation::LayoutIntSize as IntSize;
 
 // cpp: layoutng/internal/layout_input_types.h:25-37
 #[repr(C)]

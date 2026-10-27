@@ -1,8 +1,6 @@
-use foundation::TextOffsetMap;
+//! Compatibility facade for inline text-transform state.
 
-// cpp: layoutng/internal/variable_length_transform_result.h:26-29
-#[derive(Clone)]
-pub struct VariableLengthTransformResult {
-    pub original_length: u32,
-    pub offset_map: TextOffsetMap,
-}
+#[path = "../../../layout_algo_inline/src/native_variable_length_transform_result.rs"]
+mod layout_algo_inline_native_variable_length_transform_result;
+
+pub use layout_algo_inline_native_variable_length_transform_result::*;

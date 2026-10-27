@@ -4,19 +4,7 @@
 /// Opaque 128-bit Viz identity. Empty tags explicitly mean "no tag"; the host
 /// supplies nonempty tokens allocated by its Viz owner rather than cc creating
 /// a second tag allocator.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OffsetTag(u128);
-impl OffsetTag {
-    pub const fn FromToken(token: u128) -> Self {
-        Self(token)
-    }
-    pub const fn IsEmpty(self) -> bool {
-        self.0 == 0
-    }
-    pub const fn token(self) -> u128 {
-        self.0
-    }
-}
+pub use compositor_input::offset_tag::OffsetTag;
 
 /// Source-owned classes/services not yet translated in this slice. Associated
 /// types preserve object identity, borrowing and ownership without fabricated

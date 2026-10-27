@@ -75,9 +75,13 @@ pub mod hash_containers;
 pub mod hash_functions;
 pub mod heap_hash_containers;
 pub mod heap_vector;
+pub mod identity_hash;
 pub mod image_animation_enum;
 pub mod infinite_int_rect;
 pub mod keywords;
+pub mod layout_boundary_geometry;
+pub mod layout_boundary_style;
+pub mod layout_boundary_transform;
 pub mod length;
 pub mod length_box;
 pub mod length_functions;
@@ -115,9 +119,9 @@ pub use gc_heap::{
     CollectLayoutHeapIncrementally, FreeLayoutBacking, IsLayoutHeapCollectionRequested,
     IsLayoutHeapSweepingOnOwningThread, IsManagedLayoutAddress,
     LayoutHeapAllocationCountForTesting, LayoutHeapMemoryDiagnostics, LayoutHeapScope,
-    LayoutObjectSize, LivenessBroker, MakeGarbageCollected,
-    MakeGarbageCollectedWithAdditionalBytes, Persistent, RequestLayoutHeapCollection,
-    TraceIfNeeded, Traceable, Visitor, WeakPersistent,
+    LayoutObjectSize, LivenessBroker, MakeGarbageCollected, MakeGarbageCollectedDefault,
+    MakeGarbageCollectedWithAdditionalBytes, Persistent, PrepareLayoutHeapForPointerQueries,
+    RequestLayoutHeapCollection, TraceIfNeeded, Traceable, Visitor, WeakPersistent,
 };
 pub use gc_member::{kMemberDeletedValue, Member, ReferenceKind, UntracedMember, WeakMember};
 pub use graphics_enums::InterpolationQuality::kInterpolationNone;
@@ -131,8 +135,17 @@ pub use heap_hash_containers::{
     WeakHeapHashMap,
 };
 pub use heap_vector::{BasicHeapVector, GCedHeapVector, HeapVector};
+pub use identity_hash::{TrustedIdentityHashMap, TrustedIdentityHashSet, TrustedIdentityHasher};
 pub use image_animation_enum::ImageAnimationEnum;
 pub use infinite_int_rect::InfiniteIntRect;
+pub use layout_boundary_geometry::{
+    LayoutIntSize, LayoutOffset, LayoutOverscrollType, LayoutSize, LayoutViewportGeometry,
+};
+pub use layout_boundary_style::{
+    AppearanceValue, BorderLineStyle, FontSmoothing, FontVariation, FormControlType, LayoutEdges,
+    LayoutPaintWritingMode, PaintColor,
+};
+pub use layout_boundary_transform::TransformMatrix;
 pub use length::{Length, LengthType, LengthValueRange, PixelsAndPercent};
 pub use length_box::LengthBox;
 pub use length_functions::{

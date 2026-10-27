@@ -270,7 +270,7 @@ fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
 }
 
 fn first_svg_data(
-    node: &layoutng_assembly::fragment_tree::FragmentNode,
+    node: &layoutng_assembly::fragment_tree::FragmentPaintData,
 ) -> Option<&layoutng_assembly::fragment_tree::SvgTextPaintData> {
     if let Some(svg) = node.paint.svg_text.as_deref() {
         return Some(svg);

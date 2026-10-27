@@ -183,7 +183,7 @@ impl TracedValue for NativeLayerTraceValue {
     }
 }
 
-impl PropertyTrace for NativeLayerTraceValue {
+impl compositor_tree::property_types::PropertyTrace for NativeLayerTraceValue {
     fn BeginDictionaryUnnamed(&mut self) {
         self.value.BeginDictionaryUnnamed()
     }
@@ -195,6 +195,11 @@ impl PropertyTrace for NativeLayerTraceValue {
     }
     fn AppendString(&mut self, value: &str) {
         self.value.AppendString(value)
+    }
+}
+impl compositor_tile::tile_priority::TilePriorityTrace for NativeLayerTraceValue {
+    fn SetTileString(&mut self, name: &str, value: &str) {
+        self.value.SetString(name, value)
     }
 }
 

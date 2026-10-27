@@ -31,6 +31,7 @@ use crate::{
         },
     },
     engine::{CompositorError, CompositorMainThreadEffect, CompositorViewportState},
+    performance::{CompositorPackage, Span},
     third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor,
     NativeCompositorFrame, NativeCompositorFrameSubmission,
 };
@@ -185,15 +186,23 @@ impl NativeEngineCore {
         viewport: CompositorViewportState,
         features: &dyn PropertyTreeFeatures,
     ) -> Result<(), CompositorError> {
-        let profile_started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
-            .then(std::time::Instant::now);
         viewport.Validate()?;
         if self.ready_commit.is_some() {
             return Err(CompositorError::NotReady {
                 stage: "previous main commit awaits scheduler",
             });
         }
+        let mut layerize_trace = Span(
+            CompositorPackage::Layerize,
+            "Compositor.Layerize.PaintArtifact",
+        );
+        layerize_trace.set("sequence", self.sequence as f64);
+        layerize_trace.set("display_items", artifact.display_items.len() as f64);
+        layerize_trace.set("chunks", artifact.chunks.len() as f64);
+        layerize_trace.set(
+            "image_dependencies",
+            artifact.image_dependencies.image_ids().count() as f64,
+        );
         // Validate all producer metadata before changing resident owner state.
         self.paint.PrepareInput(artifact.clone())?;
         let surface_parameters = (viewport.size, viewport.device_scale_factor.to_bits());
@@ -236,13 +245,17 @@ impl NativeEngineCore {
             )?;
         }
         self.previous_artifact = Some(artifact.clone());
-        let pac_done = profile_started.map(|_| std::time::Instant::now());
+        drop(layerize_trace);
+
+        let mut tree_trace = Span(CompositorPackage::Tree, "Compositor.Tree.BuildCommit");
+        tree_trace.set(
+            "property_owner_sequence",
+            self.property_owner_sequence as f64,
+        );
         self.main
             .UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
-        let layers_done = profile_started.map(|_| std::time::Instant::now());
         self.main
             .WillCommit(self.paint.as_ref(), self.paint.as_ref());
-        let will_commit_done = profile_started.map(|_| std::time::Instant::now());
         let property_owner = PropertyTreesOwnerId::FromOwnerValue(self.property_owner_sequence);
         self.property_owner_sequence = self
             .property_owner_sequence
@@ -250,18 +263,7 @@ impl NativeEngineCore {
             .expect("native property-tree identity exhausted");
         self.ready_commit = Some(self.main.ActivateCommitState(property_owner));
         self.ready_commit_notified = false;
-        if let (Some(started), Some(pac), Some(layers), Some(will_commit)) =
-            (profile_started, pac_done, layers_done, will_commit_done)
-        {
-            eprintln!(
-                "compositor-prepare-profile pac_ms={:.3} update_layers_ms={:.3} will_commit_ms={:.3} activate_ms={:.3} total_ms={:.3}",
-                (pac - started).as_secs_f64() * 1000.0,
-                (layers - pac).as_secs_f64() * 1000.0,
-                (will_commit - layers).as_secs_f64() * 1000.0,
-                will_commit.elapsed().as_secs_f64() * 1000.0,
-                started.elapsed().as_secs_f64() * 1000.0,
-            );
-        }
+        drop(tree_trace);
         // Source: cc/trees/layer_tree_host.cc:487. Persistent source frame
         // numbering advances after the activated commit has taken its value.
         self.main.pending_commit_state_mut().source_frame_number += 1;
@@ -278,6 +280,7 @@ impl NativeEngineCore {
     /// Called only for Scheduler's COMMIT action. The live main synchronization
     /// context borrows the very same resident ThreadUnsafeCommitState.
     pub(crate) fn Commit(&mut self) {
+        let _trace = Span(CompositorPackage::Tree, "Compositor.Tree.Commit");
         assert!(self.ready_commit_notified);
         let mut state = self
             .ready_commit
@@ -316,6 +319,7 @@ impl NativeEngineCore {
             });
     }
     pub(crate) fn Activate(&mut self) {
+        let _trace = Span(CompositorPackage::Tree, "Compositor.Tree.Activate");
         self.host
             .as_mut()
             .unwrap()
@@ -325,6 +329,7 @@ impl NativeEngineCore {
             });
     }
     pub(crate) fn PrepareTiles(&mut self) {
+        let _trace = Span(CompositorPackage::Tile, "Compositor.Tile.Prepare");
         self.host
             .as_mut()
             .unwrap()
@@ -378,18 +383,40 @@ impl NativeEngineCore {
         let mut result = DrawResult::kAbortedCantDraw;
         let can_draw = host.CanDraw(&context);
         if can_draw {
+            let mut trace = Span(CompositorPackage::Draw, "Compositor.Draw.Prepare");
+            trace.set("forced", forced as u8 as f64);
             result = host.PrepareToDraw(&mut frame, false, &mut context);
+            trace.set("result", result as i32 as f64);
             draw_frame = forced || result == DrawResult::kSuccess;
         }
         if draw_frame {
+            let mut trace = Span(CompositorPackage::Frame, "Compositor.Frame.Build");
+            trace.set("forced", forced as u8 as f64);
             if let Some(mut submit) = host.DrawLayers(&mut frame, &mut context) {
                 scheduler.DidSubmitCompositorFrame(&mut submit);
+                trace.set("submitted", 1.0);
+            } else {
+                trace.set("submitted", 0.0);
             }
             result = DrawResult::kSuccess;
         }
-        host.DidDrawAllLayers(&frame, &mut context);
-        host.UpdateAnimationState(draw_frame, &mut context);
+        {
+            let _trace = Span(CompositorPackage::Draw, "Compositor.Draw.Finalize");
+            host.DidDrawAllLayers(&frame, &mut context);
+        }
+        {
+            let mut trace = Span(
+                CompositorPackage::Animation,
+                "Compositor.Animation.UpdateState",
+            );
+            trace.set("drew_frame", draw_frame as u8 as f64);
+            host.UpdateAnimationState(draw_frame, &mut context);
+        }
         if host.pending_tree().is_some() {
+            let _trace = Span(
+                CompositorPackage::Draw,
+                "Compositor.Draw.UpdatePendingProperties",
+            );
             host.WithPendingTree(&mut context, |tree, c| {
                 tree.UpdateDrawProperties(true, true, None, c);
             });
@@ -397,6 +424,8 @@ impl NativeEngineCore {
         result
     }
     pub(crate) fn ReclaimResources(&mut self, resources: Vec<RasterReturnedResource>) {
+        let mut trace = Span(CompositorPackage::Resource, "Compositor.Resource.Reclaim");
+        trace.set("resources", resources.len() as f64);
         self.host.as_mut().unwrap().BaseMutable().ReclaimResources(
             resources,
             &mut HostImplContext {
@@ -405,6 +434,7 @@ impl NativeEngineCore {
         );
     }
     pub(crate) fn TakeFrame(&self) -> Option<NativeCompositorFrameSubmission> {
+        let _trace = Span(CompositorPackage::Frame, "Compositor.Frame.TakeSubmission");
         self.frame_sink
             .lock()
             .expect("native frame sink")
@@ -447,6 +477,7 @@ impl NativeEngineCore {
 // on each call, matching Proxy's synchronous source callbacks without retaining
 // a Host/client pointer in Scheduler or external services.
 impl crate::cc::scheduler::scheduler::SchedulerClient for NativeEngineCore {
+    type Types = crate::adapter::scheduler_host::FacadeSchedulerTypes;
     fn WillBeginImplFrame(&mut self, args: &BeginFrameArgs, scheduler: &mut Scheduler) -> bool {
         let _query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
         let redraw_sequence = self.lifecycle.redraw_sequence();

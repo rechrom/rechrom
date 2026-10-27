@@ -13,30 +13,15 @@ use crate::cc::layers::layer::LayerRef;
 use std::hash::Hash;
 use std::sync::Arc;
 
+pub use compositor_layerize::pending_layer_policy::{
+    LcdTextPreference, PendingMappedVisualRect, PendingUpcastResult,
+};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PendingChunkBackgroundColor {
     pub color: Color4f,
     pub area: f32,
     pub is_solid_color: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LcdTextPreference {
-    kStronglyPreferred,
-    kWeaklyPreferred,
-    kIgnored,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PendingUpcastResult<S> {
-    pub upcasted_state: S,
-    pub scroll_range_dependent: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PendingMappedVisualRect {
-    pub rect: RectF,
-    pub is_tight: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

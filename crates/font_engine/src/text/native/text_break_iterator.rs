@@ -7,6 +7,7 @@ use foundation::String;
 
 use super::character::Character;
 use super::character_break_iterator::{kTextBreakDone, CharacterBreakIterator};
+use super::fast_line_break_data::{kFastLineBreakMaxChar, kFastLineBreakMinChar, GetFastLineBreak};
 use super::layout_locale::{LayoutLocale, LineBreakStrictness};
 use super::line_break_rule_engine::NextLineBreakRuleBoundary;
 use super::line_break_tailoring_data::kBreakAll;
@@ -28,6 +29,56 @@ const U_GC_M_MASK: u32 = (1 << 6) | (1 << 7) | (1 << 8);
 const U_GC_N_MASK: u32 = (1 << 9) | (1 << 10) | (1 << 11);
 
 use icu_bidi::native as icu_api;
+
+// cpp: third_party/blink/renderer/platform/text/text_break_iterator.cc:186-260
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FastBreakResult {
+    kNoBreak,
+    kCanBreak,
+    kUnknown,
+}
+
+#[inline]
+fn IsAsciiAlphanumeric(ch: u16) -> bool {
+    (u16::from(b'0')..=u16::from(b'9')).contains(&ch)
+        || (u16::from(b'A')..=u16::from(b'Z')).contains(&ch)
+        || (u16::from(b'a')..=u16::from(b'z')).contains(&ch)
+}
+
+#[inline]
+fn ShouldBreakFast(
+    previous_previous: u16,
+    previous: u16,
+    current: u16,
+    disable_soft_hyphen: bool,
+) -> FastBreakResult {
+    if previous < kFastLineBreakMinChar || current < kFastLineBreakMinChar {
+        return FastBreakResult::kNoBreak;
+    }
+    if previous == u16::from(b'-') {
+        if current <= 0x7F {
+            if (u16::from(b'0')..=u16::from(b'9')).contains(&current) {
+                return if IsAsciiAlphanumeric(previous_previous) {
+                    FastBreakResult::kCanBreak
+                } else {
+                    FastBreakResult::kNoBreak
+                };
+            }
+        } else {
+            return FastBreakResult::kUnknown;
+        }
+    }
+    if previous <= kFastLineBreakMaxChar && current <= kFastLineBreakMaxChar {
+        if !GetFastLineBreak(previous, current) {
+            return FastBreakResult::kNoBreak;
+        }
+        if disable_soft_hyphen && previous == K_SOFT_HYPHEN as u16 {
+            return FastBreakResult::kNoBreak;
+        }
+        return FastBreakResult::kCanBreak;
+    }
+    FastBreakResult::kUnknown
+}
 
 // cpp: font_engine/text/native/text_break_iterator.h:81-104
 #[repr(u8)]
@@ -141,7 +192,12 @@ impl LazyLineBreakIterator {
             string_: string.clone(),
             locale_: locale,
             character_iterator_: RefCell::new(None),
-            rule_boundaries_: RefCell::new(vec![0]),
+            // Chromium does not create the native iterator until the fast
+            // line-break path cannot decide.  Keep the translated rule cache
+            // empty for the same reason: `start_offset_` is the implicit
+            // initial boundary, so a one-element allocation here is both
+            // redundant and eager.
+            rule_boundaries_: RefCell::new(Vec::new()),
             start_offset_: 0,
             break_type_: break_type,
             break_space_: BreakSpaceType::kAfterSpaceRun,
@@ -168,7 +224,7 @@ impl LazyLineBreakIterator {
         self.start_offset_ = 0;
         self.SetLocale(locale);
         self.character_iterator_.replace(None);
-        self.rule_boundaries_.replace(vec![0]);
+        self.rule_boundaries_.get_mut().clear();
     }
 
     pub fn StartOffset(&self) -> u32 {
@@ -179,7 +235,7 @@ impl LazyLineBreakIterator {
         assert!(offset <= self.string_.length());
         self.start_offset_ = offset;
         self.character_iterator_.replace(None);
-        self.rule_boundaries_.replace(vec![offset]);
+        self.rule_boundaries_.get_mut().clear();
     }
 
     pub fn Locale(&self) -> *const LayoutLocale {
@@ -220,7 +276,7 @@ impl LazyLineBreakIterator {
         if self.strictness_ != strictness {
             self.strictness_ = strictness;
             self.character_iterator_.replace(None);
-            self.rule_boundaries_.replace(vec![self.start_offset_]);
+            self.rule_boundaries_.get_mut().clear();
         }
     }
 
@@ -265,6 +321,118 @@ impl LazyLineBreakIterator {
         }
     }
 
+    // Chromium instantiates LazyLineBreakIterator::NextBreakablePosition for
+    // the StringImpl storage width.  Keep Latin-1 text on the same compact
+    // byte path instead of projecting every query through UTF-16 code-point
+    // and surrogate-boundary helpers.
+    // cpp: third_party/blink/renderer/platform/text/text_break_iterator.cc:276-381
+    fn NextBreakablePosition8(&self, pos: u32, len: u32) -> u32 {
+        let bytes = self
+            .string_
+            .Span8()
+            .expect("8-bit line-break text has Latin-1 storage");
+        for i in pos..len {
+            if i <= self.start_offset_ {
+                continue;
+            }
+            let previous = u32::from(bytes[i as usize - 1]);
+            let current = u32::from(bytes[i as usize]);
+            let previous_previous = if i > self.start_offset_ + 1 {
+                u32::from(bytes[i as usize - 2])
+            } else {
+                0
+            };
+            let previous_space = Self::IsBreakableSpace(previous as u16);
+            let current_space = Self::IsBreakableSpace(current as u16);
+            if self.break_space_ == BreakSpaceType::kAfterSpaceRun {
+                if current_space {
+                    continue;
+                }
+                if previous_space {
+                    return i;
+                }
+            } else {
+                if previous_space || Character::IsOtherSpaceSeparator(previous as i32) {
+                    return i;
+                }
+                if (current_space || Character::IsOtherSpaceSeparator(current as i32))
+                    && i + 1 < len
+                {
+                    return i + 1;
+                }
+            }
+
+            let fast_break_result = ShouldBreakFast(
+                previous_previous as u16,
+                previous as u16,
+                current as u16,
+                self.disable_soft_hyphen_,
+            );
+            if fast_break_result == FastBreakResult::kCanBreak {
+                return i;
+            }
+
+            if self.break_type_ == LineBreakType::kBreakAll {
+                let previous_class = LineBreakProperty(previous);
+                let current_class = LineBreakProperty(current);
+                if (self.strictness_ == LineBreakStrictness::kLoose
+                    && (current == K_HYPHEN || current == K_EN_DASH)
+                    && (previous_class == U_LB_NUMERIC
+                        || previous_class == U_LB_ALPHABETIC
+                        || previous_class == U_LB_COMPLEX_CONTEXT
+                        || previous_class == U_LB_IDEOGRAPHIC))
+                    || ShouldBreakAfterBreakAll(
+                        previous_class,
+                        current_class,
+                        current,
+                        self.strictness_,
+                    )
+                {
+                    return i;
+                }
+            } else if self.break_type_ == LineBreakType::kKeepAll
+                && ShouldKeepAfterKeepAll(previous_previous, previous, current)
+            {
+                continue;
+            }
+            if fast_break_result == FastBreakResult::kNoBreak {
+                continue;
+            }
+
+            // The Unicode fallback is uncommon for Latin-1. Acquire and grow
+            // its cached rule boundaries only when the fast table cannot
+            // decide, matching Chromium's lazy GetIterator() path.
+            let mut rule_boundaries = self.rule_boundaries_.borrow_mut();
+            while rule_boundaries
+                .last()
+                .copied()
+                .unwrap_or(self.start_offset_)
+                < i
+            {
+                let boundary = rule_boundaries
+                    .last()
+                    .copied()
+                    .unwrap_or(self.start_offset_);
+                let next = NextLineBreakRuleBoundary(
+                    &self.string_,
+                    boundary,
+                    self.string_.length(),
+                    self.strictness_,
+                );
+                assert!(next > boundary);
+                rule_boundaries.push(next);
+            }
+            let mut is_break = rule_boundaries.binary_search(&i).is_ok();
+            if self.disable_soft_hyphen_ && previous == K_SOFT_HYPHEN {
+                is_break = false;
+            }
+            if is_break {
+                return i;
+            }
+        }
+        len
+    }
+
     // cpp: font_engine/text/native/text_break_iterator.cc:227-306
     pub fn NextBreakablePosition(&self, pos: u32, len: u32) -> u32 {
         if self.string_.IsNull() {
@@ -284,7 +452,11 @@ impl LazyLineBreakIterator {
                 len,
             );
         }
+        if self.string_.Is8Bit() {
+            return self.NextBreakablePosition8(pos, len);
+        }
         let mut rule_boundaries = self.rule_boundaries_.borrow_mut();
+        let units = self.string_.Span16().expect("non-null line-break text");
         for i in pos..=len {
             if i == len {
                 return len;
@@ -317,6 +489,72 @@ impl LazyLineBreakIterator {
                     return current_end;
                 }
             }
+
+            let previous_unit = units[i as usize - 1];
+            let current_unit = units[i as usize];
+            let previous_previous_unit = if i > self.start_offset_ + 1 {
+                units[i as usize - 2]
+            } else {
+                0
+            };
+            let fast_break_result = ShouldBreakFast(
+                previous_previous_unit,
+                previous_unit,
+                current_unit,
+                self.disable_soft_hyphen_,
+            );
+            if fast_break_result == FastBreakResult::kCanBreak {
+                return i;
+            }
+
+            if self.break_type_ == LineBreakType::kBreakAll {
+                let mut previous_class = LineBreakProperty(previous);
+                let mut scan = previous_begin;
+                while previous_class == U_LB_COMBINING_MARK && scan > self.start_offset_ {
+                    let mut earlier = 0;
+                    previous_class = LineBreakProperty(CodePointBefore(
+                        &self.string_,
+                        scan,
+                        self.start_offset_,
+                        &mut earlier,
+                    ));
+                    scan = earlier;
+                }
+                let current_class = LineBreakProperty(current);
+                if (self.strictness_ == LineBreakStrictness::kLoose
+                    && (current == K_HYPHEN || current == K_EN_DASH)
+                    && (previous_class == U_LB_NUMERIC
+                        || previous_class == U_LB_ALPHABETIC
+                        || previous_class == U_LB_COMPLEX_CONTEXT
+                        || previous_class == U_LB_IDEOGRAPHIC))
+                    || ShouldBreakAfterBreakAll(
+                        previous_class,
+                        current_class,
+                        current,
+                        self.strictness_,
+                    )
+                {
+                    return i;
+                }
+            } else if self.break_type_ == LineBreakType::kKeepAll {
+                let mut previous_previous = 0;
+                if previous_begin > self.start_offset_ {
+                    let mut ignored = 0;
+                    previous_previous = CodePointBefore(
+                        &self.string_,
+                        previous_begin,
+                        self.start_offset_,
+                        &mut ignored,
+                    );
+                }
+                if ShouldKeepAfterKeepAll(previous_previous, previous, current) {
+                    continue;
+                }
+            }
+            if fast_break_result == FastBreakResult::kNoBreak {
+                continue;
+            }
+
             while rule_boundaries
                 .last()
                 .copied()
@@ -337,50 +575,6 @@ impl LazyLineBreakIterator {
                 rule_boundaries.push(next);
             }
             let mut is_break = rule_boundaries.binary_search(&i).is_ok();
-            if self.break_type_ == LineBreakType::kBreakAll {
-                let mut previous_class = LineBreakProperty(previous);
-                let mut scan = previous_begin;
-                while previous_class == U_LB_COMBINING_MARK && scan > self.start_offset_ {
-                    let mut earlier = 0;
-                    previous_class = LineBreakProperty(CodePointBefore(
-                        &self.string_,
-                        scan,
-                        self.start_offset_,
-                        &mut earlier,
-                    ));
-                    scan = earlier;
-                }
-                let current_class = LineBreakProperty(current);
-                is_break |= ShouldBreakAfterBreakAll(
-                    previous_class,
-                    current_class,
-                    current,
-                    self.strictness_,
-                );
-                if self.strictness_ == LineBreakStrictness::kLoose
-                    && (current == K_HYPHEN || current == K_EN_DASH)
-                    && (previous_class == U_LB_NUMERIC
-                        || previous_class == U_LB_ALPHABETIC
-                        || previous_class == U_LB_COMPLEX_CONTEXT
-                        || previous_class == U_LB_IDEOGRAPHIC)
-                {
-                    is_break = true;
-                }
-            } else if self.break_type_ == LineBreakType::kKeepAll && is_break {
-                let mut previous_previous = 0;
-                if previous_begin > self.start_offset_ {
-                    let mut ignored = 0;
-                    previous_previous = CodePointBefore(
-                        &self.string_,
-                        previous_begin,
-                        self.start_offset_,
-                        &mut ignored,
-                    );
-                }
-                if ShouldKeepAfterKeepAll(previous_previous, previous, current) {
-                    is_break = false;
-                }
-            }
             if self.disable_soft_hyphen_ && previous == K_SOFT_HYPHEN {
                 is_break = false;
             }
@@ -405,11 +599,18 @@ impl LazyLineBreakIterator {
     // cpp: font_engine/text/native/text_break_iterator.cc:320-332
     pub fn PreviousBreakOpportunity(&self, offset: u32, min: u32) -> u32 {
         let mut pos = offset.min(self.string_.length());
-        let end = self.string_.length();
+        // Chromium includes only enough look-ahead to decide whether `pos`
+        // itself is a break. After a miss the next query ends at the previous
+        // position. Scanning to string_.length() here turns the backwards
+        // search performed for every shaped line into repeated suffix scans.
+        let mut end = pos.saturating_add(2).min(self.string_.length());
         while pos > min {
             if self.NextBreakablePosition(pos, end) == pos {
                 return pos;
             }
+            // There are no break opportunities at `pos` or after within the
+            // decision window, matching LazyLineBreakIterator in Blink.
+            end = pos;
             pos -= 1;
             while pos > min && !IsCodePointBoundary(&self.string_, pos) {
                 pos -= 1;

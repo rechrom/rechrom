@@ -38,30 +38,8 @@ use crate::{
         },
     },
 };
+pub use compositor_draw::render_surface_policy::RenderSurfacePropertyChangedFlags;
 use std::{cell::Cell, collections::BTreeSet};
-// Source: cc/layers/render_surface_impl.h:42-53.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RenderSurfacePropertyChangedFlags {
-    pub self_changed: bool,
-    pub ancestor_changed: bool,
-}
-impl RenderSurfacePropertyChangedFlags {
-    // Source: cc/layers/render_surface_impl.h:45-46.
-    pub fn new(self_changed: bool, ancestor_changed: bool) -> Self {
-        Self {
-            self_changed,
-            ancestor_changed,
-        }
-    }
-    // Source: cc/layers/render_surface_impl.h:47.
-    pub fn self_changed(&self) -> bool {
-        self.self_changed
-    }
-    // Source: cc/layers/render_surface_impl.h:48.
-    pub fn ancestor_changed(&self) -> bool {
-        self.ancestor_changed
-    }
-}
 // Source: cc/layers/render_surface_impl.h:337-372; cc/layers/render_surface_impl.cc:75,77.
 struct DrawProperties<T> {
     draw_opacity: f32,
@@ -628,28 +606,25 @@ impl<B: RenderSurfaceTypes> RenderSurfaceImpl<B> {
                 .Union(c.LayerVisibleDrawableContentRect(layer));
         }
         self.deferred_contributing_layers_.clear();
-        let mut rect = self.CalculateClippedAccumulatedContentRect(c);
+        let rect = self.CalculateClippedAccumulatedContentRect(c);
         #[cfg(debug_assertions)]
         if self.IsViewTransitionElementForQueries(c) {
             debug_assert!(rect.width <= max_texture_size);
             debug_assert!(rect.height <= max_texture_size);
         }
-        if rect.width > max_texture_size || rect.height > max_texture_size {
-            c.LogMaxTextureExceeded(max_texture_size, rect.width, rect.height);
+        let unclamped_width = rect.width;
+        let unclamped_height = rect.height;
+        let (rect, capture_rect, exceeded) =
+            compositor_draw::render_surface_policy::ClampSurfaceContentRects(
+                rect,
+                self.view_transition_capture_content_rect_,
+                max_texture_size,
+            );
+        if exceeded {
+            c.LogMaxTextureExceeded(max_texture_size, unclamped_width, unclamped_height);
         }
-        rect.set_width(rect.width.min(max_texture_size));
-        rect.set_height(rect.height.min(max_texture_size));
         self.SetContentRect(rect);
-        self.view_transition_capture_content_rect_.set_width(
-            self.view_transition_capture_content_rect_
-                .width
-                .min(max_texture_size),
-        );
-        self.view_transition_capture_content_rect_.set_height(
-            self.view_transition_capture_content_rect_
-                .height
-                .min(max_texture_size),
-        );
+        self.view_transition_capture_content_rect_ = capture_rect;
     }
     // Source: cc/layers/render_surface_impl.h:172; cc/layers/render_surface_impl.cc:346-353.
     pub fn SetContentRectToViewport<C: RenderSurfaceContext<B> + ?Sized>(&mut self, c: &C) {
@@ -690,18 +665,29 @@ impl<B: RenderSurfaceTypes> RenderSurfaceImpl<B> {
     ) {
         debug_assert!(c.LayerDrawsContent(layer));
         debug_assert_eq!(self.EffectTreeIndex(), c.LayerRenderTarget(layer, c));
-        if self.render_targetForQueries(c) == Some(self.EffectTreeIndex()) {
-            return;
-        }
-        if c.LayerViewTransitionResourceId(layer).IsValid() {
-            if !c.LayerViewTransitionResourceId(layer).MatchesToken(tokens) {
+        let target_is_self = self.render_targetForQueries(c) == Some(self.EffectTreeIndex());
+        let (resource_is_valid, resource_matches_token) = if target_is_self {
+            (false, true)
+        } else {
+            let resource = c.LayerViewTransitionResourceId(layer);
+            let valid = resource.IsValid();
+            (valid, !valid || resource.MatchesToken(tokens))
+        };
+        match compositor_draw::render_surface_policy::ClassifyContributingLayer(
+            target_is_self,
+            resource_is_valid,
+            resource_matches_token,
+        ) {
+            compositor_draw::render_surface_policy::ContributingLayerDisposition::Ignore => {}
+            compositor_draw::render_surface_policy::ContributingLayerDisposition::Defer => {
                 self.deferred_contributing_layers_.push(layer);
             }
-        } else {
-            self.accumulated_content_rect_
-                .Union(c.LayerVisibleDrawableContentRect(layer));
-            self.view_transition_capture_content_rect_
-                .Union(c.LayerVisibleDrawableContentRect(layer));
+            compositor_draw::render_surface_policy::ContributingLayerDisposition::Accumulate => {
+                self.accumulated_content_rect_
+                    .Union(c.LayerVisibleDrawableContentRect(layer));
+                self.view_transition_capture_content_rect_
+                    .Union(c.LayerVisibleDrawableContentRect(layer));
+            }
         }
     }
     // Source: cc/layers/render_surface_impl.h:186-189; cc/layers/render_surface_impl.cc:396-434.
@@ -733,26 +719,31 @@ impl<B: RenderSurfaceTypes> RenderSurfaceImpl<B> {
             Some(self.EffectTreeIndex()),
             surface.render_targetForQueries(c)
         );
-        if self.render_targetForQueries(c) == Some(self.EffectTreeIndex()) {
-            return;
-        }
-        if surface.IsViewTransitionElementForQueries(c)
-            && !surface
+        let target_is_self = self.render_targetForQueries(c) == Some(self.EffectTreeIndex());
+        let is_view_transition = !target_is_self && surface.IsViewTransitionElementForQueries(c);
+        let resource_matches_token = !is_view_transition
+            || surface
                 .ViewTransitionElementResourceIdForQueries(c)
-                .MatchesToken(tokens)
+                .MatchesToken(tokens);
+        let disposition = compositor_draw::render_surface_policy::ClassifyContributingSurface(
+            target_is_self,
+            is_view_transition,
+            resource_matches_token,
+        );
+        if disposition
+            == compositor_draw::render_surface_policy::ContributingSurfaceDisposition::Ignore
         {
             return;
         }
+        let drawable = surface.DrawableContentRectForQueries(c);
         self.accumulated_content_rect_
-            .Union(ToEnclosingRectIgnoringError(
-                surface.DrawableContentRectForQueries(c),
-                f32::EPSILON,
-            ));
-        if surface.IsViewTransitionElementForQueries(c) {
-            return;
+            .Union(ToEnclosingRectIgnoringError(drawable, f32::EPSILON));
+        if disposition
+            == compositor_draw::render_surface_policy::ContributingSurfaceDisposition::AccumulateNormalAndCapture
+        {
+            self.view_transition_capture_content_rect_
+                .Union(ToEnclosedRect(drawable));
         }
-        self.view_transition_capture_content_rect_
-            .Union(ToEnclosedRect(surface.DrawableContentRectForQueries(c)));
     }
     // Source: cc/layers/render_surface_impl.h:259; cc/layers/render_surface_impl.cc:436-441.
     pub fn SurfacePropertyChanged(&self) -> bool {

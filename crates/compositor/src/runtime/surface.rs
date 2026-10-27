@@ -114,39 +114,14 @@ impl<B: RenderSurfaceTypes> DrawSurface<B::Transform> for RenderSurfaceImpl<B> {
 }
 
 use crate::adapter::{
-    damage_context::{DamageEffectNode, DamageFilters, DamageSurface},
+    damage_context::{DamageFilters, DamageSurface},
     input_types::ElementId,
-    occlusion::{OcclusionEffectNode, OcclusionFilters, OcclusionRenderSurface, SkBlendMode},
+    occlusion::{OcclusionFilters, OcclusionRenderSurface, SkBlendMode, SkMatrix},
     property_types::{FilterOperations, PropertyPath, ViewTransitionElementResourceId},
 };
 use crate::cc::trees::effect_node::EffectNode;
-impl<F: FilterOperations, P: PropertyPath> DamageEffectNode for EffectNode<F, P> {
-    fn target_id(&self) -> i32 {
-        self.target_id
-    }
-    fn transform_id(&self) -> i32 {
-        self.transform_id
-    }
-    fn view_transition_element_resource_id(&self) -> ViewTransitionElementResourceId {
-        self.view_transition_element_resource_id
-    }
-}
-impl<F: FilterOperations, P: PropertyPath> OcclusionEffectNode for EffectNode<F, P> {
-    fn screen_space_opacity(&self) -> f32 {
-        self.screen_space_opacity
-    }
-    fn view_transition_element_resource_id_is_valid(&self) -> bool {
-        self.view_transition_element_resource_id.IsValid()
-    }
-    fn HasRenderSurface(&self) -> bool {
-        self.HasRenderSurface()
-    }
-    fn blend_mode(&self) -> SkBlendMode {
-        self.blend_mode
-    }
-}
 impl<B: RenderSurfaceTypes> DamageSurface<B::Transform, i32> for RenderSurfaceImpl<B> {
-    type Types = B;
+    type Trees = PropertyTreesFor<B>;
     fn id(&self) -> ElementId {
         self.id()
     }
@@ -157,15 +132,24 @@ impl<B: RenderSurfaceTypes> DamageSurface<B::Transform, i32> for RenderSurfaceIm
     fn EffectTreeIndex(&self) -> i32 {
         self.EffectTreeIndex()
     }
-    fn OwningEffectNode<'a>(&self, trees: &'a PropertyTreesFor<B>) -> &'a dyn DamageEffectNode {
+    fn ViewTransitionElementResourceId(
+        &self,
+        trees: &PropertyTreesFor<B>,
+    ) -> ViewTransitionElementResourceId {
         self.OwningEffectNodeForPropertyTrees(trees)
             .expect("source owning effect")
+            .view_transition_element_resource_id
     }
-    fn BackdropFilters<'a>(&self, trees: &'a PropertyTreesFor<B>) -> &'a dyn DamageFilters {
-        self.BackdropFiltersForPropertyTrees(trees)
+    fn BackdropFiltersMovePixels(&self, trees: &PropertyTreesFor<B>) -> bool {
+        DamageFilters::HasFilterThatMovesPixels(self.BackdropFiltersForPropertyTrees(trees))
     }
-    fn Filters<'a>(&self, trees: &'a PropertyTreesFor<B>) -> &'a dyn DamageFilters {
-        self.FiltersForPropertyTrees(trees)
+    fn MapFiltersRect(
+        &self,
+        rect: Rect,
+        transform: &SkMatrix,
+        trees: &PropertyTreesFor<B>,
+    ) -> Rect {
+        DamageFilters::MapRect(self.FiltersForPropertyTrees(trees), rect, transform)
     }
     fn intersects_damage_under(&self) -> bool {
         self.intersects_damage_under()
@@ -196,7 +180,7 @@ impl<B: RenderSurfaceTypes> OcclusionRenderSurface<B::Transform, i32> for Render
 where
     B::Filters: OcclusionFilters,
 {
-    type Types = B;
+    type Trees = PropertyTreesFor<B>;
     fn screen_space_transform(&self) -> &B::Transform {
         self.screen_space_transform()
     }
@@ -210,9 +194,16 @@ where
         self.render_targetForPropertyTrees(trees)
             .expect("source target surface")
     }
-    fn OwningEffectNode<'a>(&self, trees: &'a PropertyTreesFor<B>) -> &'a dyn OcclusionEffectNode {
+    fn screen_space_opacity(&self, trees: &PropertyTreesFor<B>) -> f32 {
         self.OwningEffectNodeForPropertyTrees(trees)
             .expect("source owning effect")
+            .screen_space_opacity
+    }
+    fn view_transition_element_resource_id_is_valid(&self, trees: &PropertyTreesFor<B>) -> bool {
+        self.OwningEffectNodeForPropertyTrees(trees)
+            .expect("source owning effect")
+            .view_transition_element_resource_id
+            .IsValid()
     }
     fn CopyOfOutputRequired(&self, trees: &PropertyTreesFor<B>) -> bool {
         self.CopyOfOutputRequiredForPropertyTrees(trees)
@@ -226,11 +217,21 @@ where
     fn BlendMode(&self, trees: &PropertyTreesFor<B>) -> SkBlendMode {
         self.BlendModeForPropertyTrees(trees)
     }
-    fn Filters<'a>(&self, trees: &'a PropertyTreesFor<B>) -> &'a dyn OcclusionFilters {
+    fn FiltersAffectOpacity(&self, trees: &PropertyTreesFor<B>) -> bool {
         self.FiltersForPropertyTrees(trees)
+            .HasFilterThatAffectsOpacity()
     }
-    fn BackdropFilters<'a>(&self, trees: &'a PropertyTreesFor<B>) -> &'a dyn OcclusionFilters {
+    fn BackdropFiltersMovePixels(&self, trees: &PropertyTreesFor<B>) -> bool {
+        OcclusionFilters::HasFilterThatMovesPixels(self.BackdropFiltersForPropertyTrees(trees))
+    }
+    fn MapBackdropFilterRectReverse(
+        &self,
+        rect: Rect,
+        transform: &SkMatrix,
+        trees: &PropertyTreesFor<B>,
+    ) -> Rect {
         self.BackdropFiltersForPropertyTrees(trees)
+            .MapRectReverse(rect, transform)
     }
     fn is_clipped(&self) -> bool {
         self.is_clipped()

@@ -5,13 +5,11 @@
 //! backend and owns the resulting resources. It has no render-pass, window, swap or
 //! presentation responsibilities.
 
-mod basic_replay;
 pub mod convert;
 mod png;
 mod reflection_mask;
 pub mod svg_filter_graph;
 
-pub use basic_replay::{RasterizeDisplayItemList, WriteDisplayItemListPng};
 pub use png::EncodeRgbaPng;
 pub use reflection_mask::CompileReflectionMaskLayers;
 

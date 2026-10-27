@@ -9,7 +9,6 @@ use interaction::{
     ownership::{InteractionDOMMutationEmitter, InteractionDocument},
     Interaction,
 };
-use layoutng_assembly::fragment_tree::FragmentNode;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -164,13 +163,12 @@ impl Fixture {
                 if r.get() && v.event.r#type == EventType::kBlur {
                     r.set(false);
                     let engine = s.borrow().as_ref().unwrap().clone();
-                    engine.Dispatch(
+                    engine.DispatchTargeted(
                         &InputEvent::Focus(FocusEvent {
                             target_node_id: ids["range"],
                             ..Default::default()
                         }),
                         doc,
-                        &FragmentNode::default(),
                     );
                 }
                 if u.get() && v.event.r#type == EventType::kBeforeInput {
@@ -277,8 +275,7 @@ impl Fixture {
     }
     fn run(&self, name: &str, input: InputEvent) {
         self.output.borrow_mut().push_str(&format!("CASE {name}\n"));
-        self.engine
-            .Dispatch(&input, &self.doc, &FragmentNode::default());
+        self.engine.DispatchTargeted(&input, &self.doc);
         let s = self.engine.State();
         self.output.borrow_mut().push_str(&format!(
             "S {} {} {} {} {} {} {} {} {} {} {}\n",
@@ -436,13 +433,12 @@ fn native_byte_offset_can_produce_invalid_utf8_after_beforeinput_value_change() 
     f.run("setup", f.focus("text"));
     f.unicode.set(true);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        f.engine.Dispatch(
+        f.engine.DispatchTargeted(
             &InputEvent::TextInput(TextInputEvent {
                 text: "X".into(),
                 target_node_id: Some(f.n["text"]),
             }),
             &f.doc,
-            &FragmentNode::default(),
         )
     }));
     assert!(

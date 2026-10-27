@@ -5,7 +5,6 @@ use interaction::{
     ownership::{InteractionDOMMutationEmitter, InteractionDocument},
     Interaction,
 };
-use layoutng_assembly::fragment_tree::FragmentNode;
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
 struct Fixture {
@@ -63,7 +62,7 @@ impl Fixture {
     }
 
     fn click_summary(&self) {
-        self.interaction.Dispatch(
+        self.interaction.DispatchTargeted(
             &InputEvent::Mouse(MouseEvent {
                 r#type: MouseEventType::kClick,
                 button: MouseButton::kPrimary,
@@ -71,7 +70,6 @@ impl Fixture {
                 ..Default::default()
             }),
             &self.document,
-            &FragmentNode::default(),
         );
     }
 

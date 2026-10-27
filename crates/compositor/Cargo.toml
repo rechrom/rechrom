@@ -9,6 +9,17 @@ default = []
 chromeos = []
 
 [dependencies]
+browser_tracing = { path = "../tracing" }
+compositor_layerize = { path = "compositor_layerize" }
+compositor_tree = { path = "compositor_tree" }
+compositor_tile = { path = "compositor_tile" }
+compositor_raster = { path = "compositor_raster" }
+compositor_draw = { path = "compositor_draw" }
+compositor_frame = { path = "compositor_frame" }
+compositor_resource = { path = "compositor_resource" }
+compositor_scheduler = { path = "compositor_scheduler" }
+compositor_input = { path = "compositor_input" }
+compositor_animation = { path = "compositor_animation" }
 paint = { path = "../paint", features = ["translation_in_progress"] }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 skia = { path = "../skia" }

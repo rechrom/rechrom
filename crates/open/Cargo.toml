@@ -12,7 +12,7 @@ html = { path = "../html" }
 interaction = { path = "../interaction" }
 javascript = { path = "../javascript" }
 resource = { path = "../resource" }
-style = { path = "../style" }
+style = { path = "../style/style" }
 url_loader = { path = "../url_loader" }
 url = "2"
 webapi = { path = "../webapi" }

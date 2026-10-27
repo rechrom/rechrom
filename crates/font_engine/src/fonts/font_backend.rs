@@ -1,14 +1,9 @@
 // C++: font_engine/fonts/font_backend.h. FontVariation is the shared
-// layout input record from layoutng/internal/layout_input.h. Defining it at
-// this boundary lets the font port accept variations without a Cargo cycle.
+// Layout/Paint boundary record from layoutng/internal/layout_input.h.
 use std::sync::Arc;
 
 // cpp: layoutng/internal/layout_input.h:1018-1023
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct FontVariation {
-    pub tag: u32,
-    pub value: f32,
-}
+pub use foundation::FontVariation;
 
 // cpp: font_engine/fonts/font_backend.h:13-23
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

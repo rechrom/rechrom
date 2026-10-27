@@ -872,24 +872,21 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
             offset: Offset { x: 0.0, y: 3.0 },
         }))
         .unwrap();
-        assert!(!Rc::ptr_eq(
-            &snapshot,
-            &page.CurrentFrame().unwrap().fragments
-        ));
-        assert_eq!(
+        assert!(snapshot.PtrEq(&page.CurrentFrame().unwrap().fragments));
+        assert_ne!(
             old_pixels,
             raster::RasterizePaintArtifactTransparent(
                 &paint::paint_engine::Paint(&snapshot),
                 160,
                 96
             ),
-            "retained measurement snapshot must stay immutable"
+            "a fragment handle is a live pointer view, not a copied snapshot"
         );
         let after_caret = page.Caret().expect("scroll must retain caret paint state");
         assert!(after_caret.visible);
         assert_eq!(before_caret.rect.y - after_caret.rect.y, 3.0);
         drop(snapshot);
-        let retained = Rc::as_ptr(&page.CurrentFrame().unwrap().fragments);
+        let retained = page.CurrentFrame().unwrap().fragments.RootPointer();
         page.Apply(PageMutation::ScrollMutation(ScrollMutation {
             target_node_id: find(&page, "s"),
             offset: Offset { x: 0.0, y: 6.0 },
@@ -897,7 +894,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         .unwrap();
         assert_eq!(
             retained,
-            Rc::as_ptr(&page.CurrentFrame().unwrap().fragments),
+            page.CurrentFrame().unwrap().fragments.RootPointer(),
             "engine and measurement ownership must not force a fragment tree copy on scroll"
         );
         assert_eq!(

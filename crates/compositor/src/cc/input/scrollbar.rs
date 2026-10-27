@@ -6,31 +6,12 @@
 use crate::adapter::{
     geometry::{Rect, Size},
     scrollbar::{Color4f, Insets},
-    time::TimeDelta,
 };
 
-// Source: cc/input/scrollbar.h:15-27
-pub const kAutoscrollMultiplier: f32 = 20.;
-pub const kInitialAutoscrollTimerDelay: TimeDelta = TimeDelta::Milliseconds(250);
-pub const kOffSideMultiplier: i32 = 8;
-pub const kDefaultWinScrollbarThickness: i32 = 17;
-
-// Source: cc/input/scrollbar.h:31
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollbarOrientation {
-    kHorizontal,
-    kVertical,
-}
-// Source: cc/input/scrollbar.h:33-40
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollbarPart {
-    kThumb,
-    kBackButton,
-    kForwardButton,
-    kBackTrack,
-    kForwardTrack,
-    kNoPart,
-}
+pub use compositor_input::scrollbar::{
+    kAutoscrollMultiplier, kDefaultWinScrollbarThickness, kInitialAutoscrollTimerDelay,
+    kOffSideMultiplier, ScrollbarOrientation, ScrollbarPart,
+};
 
 // Source: cc/input/scrollbar.h:42-130
 // The caller retains this source-refcounted scrollbar through its typed handle.

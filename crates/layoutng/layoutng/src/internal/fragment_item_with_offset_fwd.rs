@@ -1,4 +1,4 @@
-use layoutng_fragment_tree::fragment_items_builder::FragmentItemWithOffset;
+use layout_fragment::fragment_items_builder::FragmentItemWithOffset;
 
 // cpp: layoutng/internal/fragment_item_with_offset_fwd.h:8-10
 // HeapVector's inline capacity is an allocation detail; callers can reserve it.

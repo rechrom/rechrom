@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 struct C;
 impl PageClient for C {}
 fn walk(
-    n: &layoutng_assembly::fragment_tree::FragmentNode,
+    n: &layoutng_assembly::fragment_tree::FragmentPaintData,
     p: layoutng_assembly::internal::layout_input::Offset,
 ) {
     let a = layoutng_assembly::internal::layout_input::Offset {

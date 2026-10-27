@@ -710,8 +710,9 @@ fn OffsetRect(rect: Rect, offset: Vector2d) -> Rect {
 }
 
 // Native Tile supplies the actual resident values to the Tiling concept.
-impl<B: crate::adapter::tile::TileTypes> TileBasedTile
-    for crate::cc::tiles::tile::Tile<B>
+impl<B> TileBasedTile for crate::cc::tiles::tile::Tile<B>
+where
+    B: crate::adapter::tile::TileTypes<ResourceId = crate::adapter::layer_tree_impl::ResourceId>,
 {
     fn draw_mode(&self) -> Mode {
         self.draw_mode()

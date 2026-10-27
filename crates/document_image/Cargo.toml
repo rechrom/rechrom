@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
-style = { path = "../style" }
+style = { path = "../style/style" }
 cssom = { path = "../cssom" }
 dom = { path = "../dom" }
 html = { path = "../html" }

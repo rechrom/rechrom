@@ -1,0 +1,16 @@
+[package]
+name = "paint_record"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+font_engine = { path = "../../font_engine" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+image_resource = { path = "../../image_resource" }
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+layoutng_style = { path = "../../layoutng/layoutng_style" }
+paint_chunk = { path = "../paint_chunk" }
+paint_model = { path = "../paint_model" }
+paint_reuse = { path = "../paint_reuse" }
+prepaint = { path = "../prepaint" }

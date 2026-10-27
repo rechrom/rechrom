@@ -21,6 +21,9 @@ use crate::{
     },
     engine::CompositorExecutor,
 };
+use compositor_raster::worker_dispatch::{
+    DispatchRasterWorkerLanes, RunRasterWorkerUntilIdle, ScheduleRasterTaskGraph,
+};
 use std::{
     collections::VecDeque,
     sync::{
@@ -183,18 +186,20 @@ impl<C: 'static> ExecutorTaskGraphRunner<C> {
         if !self.needs_drain.swap(false, Ordering::AcqRel) {
             return;
         }
-        for _ in 0..self.worker_limit {
+        let trace_context = browser_tracing::context();
+        DispatchRasterWorkerLanes(self.worker_limit, |_| {
             let native = self.native.clone();
             let commands = self.commands.clone();
             self.executor.Execute(Box::new(move || {
+                let _context = browser_tracing::scope(trace_context);
                 // TaskGraphWorkQueue marks a task running before releasing its
                 // queue mutex, so independent executor lanes can drain the
                 // same graph just like Chromium's raster worker pool. Owner
                 // callbacks still return through the typed command queue.
-                native.RunUntilIdle();
+                RunRasterWorkerUntilIdle(|| native.RunUntilIdle());
                 commands.Push(EngineTask::RasterWorkCompleted);
             }));
-        }
+        });
     }
 }
 impl<C: 'static> TaskGraphRunner<C> for ExecutorTaskGraphRunner<C> {
@@ -206,7 +211,9 @@ impl<C: 'static> TaskGraphRunner<C> for ExecutorTaskGraphRunner<C> {
         // the cc origin sequence and the injected raster executor. Holding a
         // second lock through RunOnWorkerThread would turn asynchronous raster
         // into a synchronous input-thread stall.
-        self.native.ScheduleTasks(token, graph);
+        ScheduleRasterTaskGraph(graph.nodes.len(), graph.edges.len(), || {
+            self.native.ScheduleTasks(token, graph)
+        });
         self.needs_drain.store(true, Ordering::Release);
     }
     fn ExternalDependencyCompletedForTask(&self, token: NamespaceToken, task: TaskRef<C>) {

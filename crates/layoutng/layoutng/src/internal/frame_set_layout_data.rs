@@ -1,12 +1,5 @@
-use foundation::LayoutUnit;
+//! Compatibility facade for fragment-owned frame-set layout data.
 
-// cpp: layoutng/internal/frame_set_layout_data.h:13-27
-#[derive(Clone)]
-pub struct FrameSetLayoutData {
-    pub col_sizes: Vec<LayoutUnit>,
-    pub row_sizes: Vec<LayoutUnit>,
-    pub col_allow_border: Vec<bool>,
-    pub row_allow_border: Vec<bool>,
-    pub border_thickness: i32,
-    pub has_border_color: bool,
-}
+#[path = "../../../layout_fragment/src/native_frame_set_layout_data.rs"]
+mod layout_fragment_native_frame_set_layout_data;
+pub use layout_fragment_native_frame_set_layout_data::*;

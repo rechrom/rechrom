@@ -23,6 +23,7 @@ pub type GCedHeapVector<T, const INLINE_CAPACITY: usize = 0> =
     BasicHeapVector<T, INLINE_CAPACITY, true>;
 
 impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
+    #[inline(always)]
     pub fn new() -> Self {
         Self {
             elements: SmallVec::new(),
@@ -47,6 +48,7 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
         vector
     }
 
+    #[inline(always)]
     pub fn size(&self) -> WtfSizeT {
         WtfSizeT::try_from(self.elements.len()).expect("WTF vector size exceeds 32 bits")
     }
@@ -70,10 +72,12 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
     }
 
     // cpp: foundation/blink_base/wtf/vector.h:1541
+    #[inline(always)]
     pub fn empty(&self) -> bool {
         self.elements.is_empty()
     }
 
+    #[inline(always)]
     pub fn ReserveInitialCapacity(&mut self, capacity: WtfSizeT) {
         if self.elements.capacity() < capacity as usize {
             self.elements
@@ -81,6 +85,7 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
         }
     }
 
+    #[inline(always)]
     pub fn push_back(&mut self, value: T) {
         assert!(
             self.elements.len() < WtfSizeT::MAX as usize,
@@ -90,6 +95,7 @@ impl<T, const N: usize, const GCED: bool> BasicHeapVector<T, N, GCED> {
     }
 
     // cpp: foundation/blink_base/wtf/vector.h:1698-1723,2491
+    #[inline(always)]
     pub fn emplace_back(&mut self, value: T) -> &mut T {
         self.push_back(value);
         self.elements.last_mut().expect("just appended an element")
@@ -187,12 +193,14 @@ impl<T: Eq, const N: usize, const GCED: bool> Eq for BasicHeapVector<T, N, GCED>
 
 impl<T, const N: usize, const GCED: bool> Deref for BasicHeapVector<T, N, GCED> {
     type Target = SmallVec<[T; N]>;
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.elements
     }
 }
 
 impl<T, const N: usize, const GCED: bool> DerefMut for BasicHeapVector<T, N, GCED> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.elements
     }

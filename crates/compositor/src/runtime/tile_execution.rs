@@ -182,6 +182,8 @@ impl Drop for RasterTraceScope {
     }
 }
 impl TileManagerTraceScope for RasterTraceScope {}
+impl compositor_raster::completion_task::RasterWorkerTaskTraceScope for RasterTraceScope {}
+impl compositor_raster::tile_task_graph::TileTaskGraphTraceScope for RasterTraceScope {}
 impl TaskGraphTraceScope for RasterTraceScope {}
 impl TileTaskManagerTraceScope for RasterTraceScope {}
 impl TaskGraphScheduleTrace for RasterTraceScope {
@@ -209,10 +211,15 @@ impl TraceTaskIdProvider for TileDiagnostics {
             .expect("native raster trace id exhausted")
     }
 }
-impl TileManagerWorkerDiagnostics for TileDiagnostics {
-    fn TraceWorkerTask(&self, event: &'static str) -> Box<dyn TileManagerTraceScope> {
+impl compositor_raster::completion_task::RasterWorkerTaskDiagnostics for TileDiagnostics {
+    fn TraceWorkerTask(
+        &self,
+        event: &'static str,
+    ) -> Box<dyn compositor_raster::completion_task::RasterWorkerTaskTraceScope> {
         Box::new(self.Scope(event))
     }
+}
+impl TileManagerWorkerDiagnostics for TileDiagnostics {
     fn CalledOnOriginThread(&self) -> bool {
         self.origin.RunsTasksInCurrentSequence()
     }
@@ -293,7 +300,7 @@ impl TileManagerGraphTrace for TileDiagnostics {
         &self,
         category: u16,
         dependencies: usize,
-    ) -> Box<dyn TileManagerTraceScope> {
+    ) -> Box<dyn compositor_raster::tile_task_graph::TileTaskGraphTraceScope> {
         self.events.Emit(
             "compositor.raster",
             format!("node category={category} dependencies={dependencies}"),

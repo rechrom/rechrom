@@ -1,0 +1,11 @@
+[package]
+name = "layout_commit"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+layout_fragment = { path = "../layout_fragment" }
+
+[lib]
+path = "src/lib.rs"

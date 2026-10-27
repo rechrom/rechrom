@@ -36,18 +36,18 @@ fn id(page: &Page, name: &str) -> u64 {
         .unwrap()
 }
 fn fragment<'a>(
-    root: &'a layoutng_assembly::fragment_tree::FragmentNode,
+    root: &'a layoutng_assembly::fragment_tree::FragmentPaintData,
     id: u64,
-) -> &'a layoutng_assembly::fragment_tree::FragmentNode {
+) -> &'a layoutng_assembly::fragment_tree::FragmentPaintData {
     if root.node_id == id {
         return root;
     }
     root.children.iter().find_map(|c| find(c, id)).unwrap()
 }
 fn find(
-    root: &layoutng_assembly::fragment_tree::FragmentNode,
+    root: &layoutng_assembly::fragment_tree::FragmentPaintData,
     id: u64,
-) -> Option<&layoutng_assembly::fragment_tree::FragmentNode> {
+) -> Option<&layoutng_assembly::fragment_tree::FragmentPaintData> {
     if root.node_id == id {
         Some(root)
     } else {

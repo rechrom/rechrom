@@ -9,6 +9,7 @@ pub mod layout_unit_diffuser;
 pub mod logical_offset;
 pub mod logical_rect;
 pub mod logical_size;
+pub mod min_max_sizes;
 pub mod overflow_clip_axes;
 pub mod physical_rect;
 pub mod physical_size_string;

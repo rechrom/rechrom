@@ -274,9 +274,9 @@ impl<B> NativeDamageContext for DamageContext<'_, B>
 where
     B: RenderSurfaceTypes<RenderSurface = RenderSurfaceImpl<B>>
         + super::frame::ViewTransitionGeometry<FrameTransform = B::Transform>,
-    B::Layer: DamageLayer<B::Transform, i32, Types = B>,
+    B::Layer: DamageLayer<B::Transform, i32, Trees = PropertyTreesFor<B>>,
 {
-    type Types = B;
+    type Trees = PropertyTreesFor<B>;
     type Transform = B::Transform;
     type Surface = i32;
     type Layer = i32;
@@ -303,10 +303,33 @@ where
     fn GetRenderSurface(&self, effect: i32) -> Option<i32> {
         self.tree.GetRenderSurface(effect).map(|_| effect)
     }
-    fn layer(&self, id: i32) -> &dyn DamageLayer<B::Transform, i32, Types = B> {
+    fn LowestCommonAncestorWithRenderSurface(&self, first: i32, second: i32) -> i32 {
+        self.tree
+            .property_trees()
+            .effect_tree()
+            .LowestCommonAncestorWithRenderSurface(first, second)
+    }
+    fn EffectTargetId(&self, effect_id: i32) -> i32 {
+        self.tree
+            .property_trees()
+            .effect_tree()
+            .Node(effect_id)
+            .target_id
+    }
+    fn EffectTransformId(&self, effect_id: i32) -> i32 {
+        self.tree
+            .property_trees()
+            .effect_tree()
+            .Node(effect_id)
+            .transform_id
+    }
+    fn layer(&self, id: i32) -> &dyn DamageLayer<B::Transform, i32, Trees = PropertyTreesFor<B>> {
         self.tree.LayerById(id).expect("source live layer id")
     }
-    fn surface(&self, id: i32) -> &dyn DamageSurface<B::Transform, i32, Types = B> {
+    fn surface(
+        &self,
+        id: i32,
+    ) -> &dyn DamageSurface<B::Transform, i32, Trees = PropertyTreesFor<B>> {
         self.tree
             .GetRenderSurface(id)
             .expect("source live surface id")
@@ -339,23 +362,35 @@ impl<B> NativeOcclusionContext for OcclusionContext<'_, B>
 where
     B: RenderSurfaceTypes<RenderSurface = RenderSurfaceImpl<B>>,
     B::Filters: crate::adapter::occlusion::OcclusionFilters,
-    B::Layer: OcclusionLayer<B::Transform, i32, Types = B>,
+    B::Layer: OcclusionLayer<B::Transform, i32, Trees = PropertyTreesFor<B>>,
 {
-    type Types = B;
+    type Trees = PropertyTreesFor<B>;
     type Transform = B::Transform;
     type Surface = i32;
     type Layer = i32;
     fn property_trees(&self) -> &PropertyTreesFor<B> {
         self.trees
     }
-    fn surface(&self, id: i32) -> &dyn OcclusionRenderSurface<B::Transform, i32, Types = B> {
+    fn surface(
+        &self,
+        id: i32,
+    ) -> &dyn OcclusionRenderSurface<B::Transform, i32, Trees = PropertyTreesFor<B>> {
         self.trees
             .effect_tree()
             .GetRenderSurface(id)
             .expect("source live surface id")
     }
-    fn layer(&self, id: i32) -> &dyn OcclusionLayer<B::Transform, i32, Types = B> {
+    fn layer(
+        &self,
+        id: i32,
+    ) -> &dyn OcclusionLayer<B::Transform, i32, Trees = PropertyTreesFor<B>> {
         self.layers.LayerById(id).expect("source live layer id")
+    }
+    fn EffectHasRenderSurface(&self, id: i32) -> bool {
+        self.trees.effect_tree().Node(id).HasRenderSurface()
+    }
+    fn EffectBlendMode(&self, id: i32) -> crate::adapter::occlusion::SkBlendMode {
+        self.trees.effect_tree().Node(id).blend_mode
     }
 }
 impl<B: RenderSurfaceTypes<RenderSurface = RenderSurfaceImpl<B>>> OcclusionLayerTree<i32>

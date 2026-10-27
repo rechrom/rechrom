@@ -267,18 +267,43 @@ URL/input
   invalidation gates before publishing fragments.
   Inline still owns item analysis, bidi, line breaking and boundary reshaping.
 - `layoutng`: input is `LayoutMutation` (constraints, tree/style/text/editing or
-  scroll changes) containing Style's canonical result; output is a retained,
-  immutable `FragmentNode` paint output and borrowed `LayoutOutput` access to
-  resident geometry. Synchronous geometry queries read the retained native
-  fragments through this output interface; they must not materialize or cache
-  a parallel document-wide measurement tree. Native object ownership stays
-  private. It owns the resident LayoutObject tree and translated LayoutNG algorithms. It does not
-  parse CSS, fetch resources, record final paint commands, raster, or present.
-- `paint`: input is the immutable fragment snapshot plus `PaintMutation` or
+  scroll changes) containing Style's canonical result; output is a retained
+  `LayoutResultHandle` and borrowed `LayoutOutput` access to resident geometry.
+  Paint and Interaction traverse native `PhysicalFragment`/`FragmentItems`
+  pointers through cursors; fragment-local Paint data stays attached to those
+  native owners. Synchronous geometry queries read the same resident fragments
+  and must not materialize or cache a parallel document-wide tree. Native
+  LayoutObject ownership stays private. It owns the resident LayoutObject tree
+  and translated LayoutNG algorithms. It does not parse CSS, fetch resources,
+  record final paint commands, raster, or present.
+- `paint`: input is the retained native layout result plus `PaintMutation` or
   immutable resource snapshots; output is an immutable, revisioned
   `PaintArtifact` containing display items, paint chunks, property state, and
   resource-dependency indices. It does not own network, DOM/Layout mutation,
   tiles, raster resources, or a render target.
+  Paint's frame execution flows from `prepaint` into a `paint_walk` that invokes
+  `paint_reuse`, `paint_record`, and `paint_chunk`, then into `paint_commit`,
+  with `paint` as the compatibility facade and lifecycle orchestrator.
+  This execution order is not a dependency chain: `paint_model` is the shared
+  dependency root; `prepaint`, `paint_reuse`, and `paint_chunk` depend toward
+  that root; `paint_record` consumes their typed outputs; `paint_walk` drives
+  `paint_record`; and `paint_commit` consumes completed record/chunk values.
+  `paint_model` owns shared property-tree, coordinate, path, low-level paint
+  values, and the layer
+  classification needed while PrePaint builds its retained tree;
+  `prepaint` owns property/coordinate/invalidation preparation; `paint_walk`
+  owns traversal-order execution plus phase and culling decisions;
+  `paint_reuse` owns cache and retained-state proofs; `paint_record` produces
+  concrete backend-neutral PaintOps; `paint_chunk` groups semantic DisplayItems;
+  and `paint_commit` freezes completed values into the published artifact.
+  Dependencies point
+  toward model packages and never back into the `paint` facade.
+  Each stage owns a typed per-frame metrics value and a same-named trace
+  category (`prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
+  `paint_chunk`, `paint_commit`). Keep hot algorithms and their counters in
+  the owning package so CPU profiles, trace duration, and work-volume ratios
+  identify the stage before lower-level investigation. The facade may aggregate
+  those values, but must not collapse them into one opaque Paint timer.
 - `raster`: input is immutable raster work selected by Compositor from its
   resident picture layers and tiles; output is immutable raster resources and
   typed completion values. It owns Skia replay and tile pixel resources. It
@@ -302,6 +327,13 @@ URL/input
   is typed raster work, lifecycle effects, and a `CompositorFrame`. It owns
   active/pending frame scheduling and compositor scrolling, but not raster
   playback, surface aggregation, or platform presentation. Typed
+  implementation is partitioned into `compositor_layerize`, `compositor_tree`,
+  `compositor_tile`, `compositor_raster`, `compositor_draw`, `compositor_frame`,
+  `compositor_resource`, `compositor_scheduler`, `compositor_input`, and
+  `compositor_animation`, with `compositor` as the Page-facing facade. Each
+  package boundary is also a performance-attribution boundary: traces use the
+  matching `compositor.<package>` category and package owners report their own
+  work counts instead of the facade reconstructing private state. Typed
   main-thread effects carry wheel disposition and acknowledged impl-scroll
   deltas; Page returns a completed frame's acknowledgement. Main-frame
   completion and pending-tree activation gate commits without blocking impl

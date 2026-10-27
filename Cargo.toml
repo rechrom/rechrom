@@ -13,27 +13,59 @@ members = [
     "crates/font_engine",
     "crates/layoutng/layoutng_geometry",
     "crates/layoutng/layoutng_style",
+    "crates/layoutng/layout_invalidation",
+    "crates/layoutng/layout_reuse",
+    "crates/layoutng/layout_fragment",
+    "crates/layoutng/layout_commit",
     "crates/layoutng/layoutng_assembly",
-    "crates/layoutng/layoutng_inline_assembly",
-    "crates/layoutng/layoutng_block",
-    "crates/layoutng/layoutng_multicol",
-    "crates/layoutng/layoutng_flex",
-    "crates/layoutng/layoutng_grid",
-    "crates/layoutng/layoutng_table",
-    "crates/layoutng/layoutng_float",
-    "crates/layoutng/layoutng_forms",
-    "crates/layoutng/layoutng_replaced",
-    "crates/layoutng/layoutng_mathml",
-    "crates/layoutng/layoutng_svg",
+    "crates/layoutng/layout_algo_inline_assembly",
+    "crates/layoutng/layout_algo_block",
+    "crates/layoutng/layout_algo_fragmentation",
+    "crates/layoutng/layout_algo_multicol",
+    "crates/layoutng/layout_algo_flex",
+    "crates/layoutng/layout_algo_grid",
+    "crates/layoutng/layout_algo_table",
+    "crates/layoutng/layout_algo_float",
+    "crates/layoutng/layout_algo_forms",
+    "crates/layoutng/layout_algo_replaced",
+    "crates/layoutng/layout_algo_sizing",
+    "crates/layoutng/layout_algo_mathml",
+    "crates/layoutng/layout_algo_svg",
     "crates/icu_bidi",
-    "crates/layoutng/layoutng_inline",
-    "crates/layoutng/layoutng_list",
-    "crates/layoutng/layoutng_out_of_flow",
+    "crates/layoutng/layout_algo_inline",
+    "crates/layoutng/layout_algo_list",
+    "crates/layoutng/layout_algo_out_of_flow",
     "crates/cssom",
-    "crates/style",
-    "crates/layoutng/layoutng_custom",
+    "crates/style/style_model",
+    "crates/style/style_parser",
+    "crates/style/style_rules",
+    "crates/style/style_invalidation",
+    "crates/style/style_walk",
+    "crates/style/style_match",
+    "crates/style/style_resolve",
+    "crates/style/style_diff",
+    "crates/style/style_commit",
+    "crates/style/style",
+    "crates/layoutng/layout_algo_custom",
+    "crates/paint/paint_model",
+    "crates/paint/paint_walk",
+    "crates/paint/paint_reuse",
+    "crates/paint/paint_record",
+    "crates/paint/paint_chunk",
+    "crates/paint/prepaint",
+    "crates/paint/paint_commit",
     "crates/paint",
     "crates/raster",
+    "crates/compositor/compositor_layerize",
+    "crates/compositor/compositor_tree",
+    "crates/compositor/compositor_tile",
+    "crates/compositor/compositor_raster",
+    "crates/compositor/compositor_draw",
+    "crates/compositor/compositor_frame",
+    "crates/compositor/compositor_resource",
+    "crates/compositor/compositor_scheduler",
+    "crates/compositor/compositor_input",
+    "crates/compositor/compositor_animation",
     "crates/compositor",
     "crates/viz",
     "crates/renderer",
@@ -61,10 +93,17 @@ members = [
     "crates/browser",
     "apps/rechrom",
 ]
-# These source trees have reciprocal C++ dependencies and compile through
-# layoutng_assembly. They remain source modules rather than standalone builds.
-exclude = ["crates/layoutng/layoutng", "crates/layoutng/layoutng_fragment_tree", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d"]
+# The remaining LayoutNG core source tree has reciprocal translated C++
+# dependencies and compiles through layoutng_assembly.
+exclude = ["crates/layoutng/layoutng", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d"]
 resolver = "2"
+
+[profile.release]
+# Chromium's release build optimizes across component boundaries.  Keep the
+# Rust engine crates as architectural boundaries while allowing equivalent
+# cross-crate optimization in the shipped binary.
+lto = "fat"
+codegen-units = 1
 
 [patch.crates-io]
 rav1d = { path = "vendor/rav1d" }

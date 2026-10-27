@@ -27,7 +27,7 @@ unsafe extern "Rust" {
         context: &InlineChildLayoutContext,
     ) -> &foundation::HeapVector<foundation::Member<crate::break_token::BreakToken>>;
 }
-pub use layoutng_inline::offset_mapping::OffsetMapping;
+pub use layout_algo_inline::offset_mapping::OffsetMapping;
 pub enum TextDiffRange {}
 
 // cpp: layoutng/internal/inline_item_result.h:31

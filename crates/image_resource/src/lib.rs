@@ -357,6 +357,90 @@ pub struct DocumentImageFrame {
     pub record: Arc<dyn DocumentPaintRecord>,
 }
 
+/// Immutable image snapshot shared by Layout, Paint, and the compositor.
+/// Resource identity remains stable while `revision` and frame content move.
+// cpp: layoutng/internal/layout_input.h:1054-1064
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaintImage {
+    pub id: u64,
+    /// cc::PaintImage::Id, allocated once for the immutable image value.
+    pub paint_image_id: PaintImageId,
+    pub compositor_metadata: Result<PaintImageMetadata, PaintImageMetadataUnavailable>,
+    pub revision: u64,
+    pub width: u32,
+    pub height: u32,
+    pub resolution_scale: f64,
+    /// Pixels remain in storage order; each CSS use decides whether to honor
+    /// the encoded orientation.
+    pub orientation: ImageOrientation,
+    pub document_container_key: Option<ContainerKey>,
+    pub content: PaintImageContent,
+}
+
+impl Default for PaintImage {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            paint_image_id: PaintImageId::default(),
+            compositor_metadata: Err(PaintImageMetadataUnavailable::ProducerFactsNotPublished),
+            revision: 0,
+            width: 0,
+            height: 0,
+            resolution_scale: 1.0,
+            orientation: ImageOrientation::default(),
+            document_container_key: None,
+            content: PaintImageContent::default(),
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+impl PaintImage {
+    /// Update producer facts without changing the immutable transport kind.
+    pub fn UpdateDocumentFrameMetadata(&mut self, frame: &DocumentImageFrame) {
+        if let Ok(metadata) = &mut self.compositor_metadata {
+            metadata.animation = PaintImageAnimationMetadata::Known(frame.animation_info);
+            metadata.completion_state = frame.completion_state;
+        }
+    }
+
+    pub fn CompositorMetadata(
+        &self,
+    ) -> Result<&PaintImageMetadata, &PaintImageMetadataUnavailable> {
+        self.compositor_metadata.as_ref()
+    }
+
+    pub fn ShouldAnimate(&self) -> Result<bool, &PaintImageMetadataUnavailable> {
+        match &self.CompositorMetadata()?.animation {
+            PaintImageAnimationMetadata::Known(info) => Ok(info.should_animate()),
+            PaintImageAnimationMetadata::Unavailable(error) => Err(error),
+        }
+    }
+
+    pub fn IsLazyGenerated(&self) -> bool {
+        matches!(&self.content, PaintImageContent::Document(_))
+    }
+
+    pub fn IsComplete(&self) -> Result<bool, &PaintImageMetadataUnavailable> {
+        Ok(self.CompositorMetadata()?.completion_state == PaintImageCompletionState::Done)
+    }
+
+    pub fn IsMultipart(&self) -> Result<bool, &PaintImageMetadataUnavailable> {
+        Ok(self.CompositorMetadata()?.is_multipart)
+    }
+
+    pub fn BitmapPixels(&self) -> Option<&Arc<Vec<u8>>> {
+        match &self.content {
+            PaintImageContent::Bitmap(pixels) => Some(pixels),
+            PaintImageContent::Document(_) => None,
+        }
+    }
+
+    pub fn IsDocumentImage(&self) -> bool {
+        matches!(self.content, PaintImageContent::Document(_))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageResourceChange {
     Content {
@@ -440,5 +524,16 @@ mod tests {
         assert!(downcast_document_paint_record::<Record>(&record).is_some());
         let nested: Arc<dyn DocumentPaintRecord> = Arc::new(Arc::new(Record));
         assert!(downcast_document_paint_record::<Record>(&nested).is_some());
+    }
+
+    #[test]
+    fn paint_image_default_keeps_resource_facts_unpublished() {
+        let image = PaintImage::default();
+        assert_eq!(image.paint_image_id, PaintImageId::INVALID);
+        assert_eq!(
+            image.CompositorMetadata(),
+            Err(&PaintImageMetadataUnavailable::ProducerFactsNotPublished)
+        );
+        assert!(image.BitmapPixels().is_some());
     }
 }

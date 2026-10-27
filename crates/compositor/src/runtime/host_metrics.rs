@@ -4,7 +4,9 @@
 use crate::adapter::layer_tree_host_impl::*;
 
 pub trait NativeReportingController<B: HostImplTypes>:
-    crate::adapter::scheduler_host::CompositorFrameReportingController
+    crate::adapter::scheduler_host::CompositorFrameReportingController<
+    crate::adapter::scheduler_host::FacadeSchedulerTypes,
+>
 {
     fn ReportingSetScrollJankOsReporter(&self, owner: HostImplWeak);
     fn ReportingSetFrameSorter(&self, sorter: &mut B::FrameSorter);

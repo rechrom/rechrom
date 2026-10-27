@@ -2,7 +2,11 @@
 
 use layoutng_style::style::appearance::AppearanceValue;
 use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
-use layoutng_style::style::computed_style_base::{ComputedStyleBase, FieldDifference};
+
+pub use foundation::{
+    BorderLineStyle, LayoutEdges as Edges, LayoutOffset as Offset, LayoutSize as Size,
+    TransformMatrix,
+};
 
 use super::form_control_types::{AutofillState, FormControlType};
 use super::layout_input_types::{Color, ControlThemeMetrics, IntSize, ScrollbarThemeMetrics};
@@ -131,13 +135,7 @@ pub enum TextDirection {
     kLtr,
     kRtl,
 }
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WritingMode {
-    kHorizontalTb,
-    kVerticalRl,
-    kVerticalLr,
-}
+pub use foundation::LayoutPaintWritingMode as WritingMode;
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Position {
@@ -155,15 +153,6 @@ pub enum FloatSide {
     kRight,
     kInlineStart,
     kInlineEnd,
-}
-
-// cpp: layoutng/internal/layout_input.h:59-64
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Edges {
-    pub top: f64,
-    pub right: f64,
-    pub bottom: f64,
-    pub left: f64,
 }
 
 // cpp: layoutng/internal/layout_input.h:66-74
@@ -826,29 +815,9 @@ pub struct GridTrackListInput {
     pub repeaters: Vec<GridTrackRepeater>,
     pub line_names: Vec<GridNamedLineInput>,
 }
-impl GridTrackListInput {
-    pub fn from_tracks(tracks: &[GridTrack]) -> Self {
-        let mut result = Self::default();
-        if !tracks.is_empty() {
-            result.repeaters.push(GridTrackRepeater {
-                tracks: tracks.to_vec(),
-                ..GridTrackRepeater::default()
-            });
-        }
-        result
-    }
-    pub fn empty(&self) -> bool {
-        self.repeaters.is_empty()
-    }
-    pub fn clear(&mut self) {
-        self.repeaters.clear();
-    }
-}
-impl From<Vec<GridTrack>> for GridTrackListInput {
-    fn from(tracks: Vec<GridTrack>) -> Self {
-        Self::from_tracks(&tracks)
-    }
-}
+
+#[path = "../../../layout_algo_grid/src/native_grid_track_list_input.rs"]
+mod layout_algo_grid_native_grid_track_list_input;
 
 // cpp: layoutng/internal/layout_input.h:380-397
 #[repr(i32)]
@@ -1328,28 +1297,6 @@ impl FrameDimension {
     }
 }
 
-// cpp: layoutng/internal/layout_input.h:635-639
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Offset {
-    pub x: f64,
-    pub y: f64,
-}
-
-// cpp: layoutng/internal/layout_input.h:641-653
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BorderLineStyle {
-    kNone,
-    kHidden,
-    kSolid,
-    kDashed,
-    kDotted,
-    kDouble,
-    kGroove,
-    kRidge,
-    kInset,
-    kOutset,
-}
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectFit {
@@ -1413,21 +1360,6 @@ impl Default for TextDecorationPaint {
             underline_offset: 0.0,
             underline_offset_auto: true,
             skip_ink: true,
-        }
-    }
-}
-
-// cpp: layoutng/internal/layout_input.h:679-685
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TransformMatrix {
-    pub values: [f64; 16],
-}
-impl Default for TransformMatrix {
-    fn default() -> Self {
-        Self {
-            values: [
-                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            ],
         }
     }
 }
@@ -1565,29 +1497,9 @@ pub struct PaintStyle {
 }
 
 // cpp: layoutng/internal/layout_input.h:756-767
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OverscrollType {
-    kNone,
-    kTransform,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ViewportGeometry {
-    pub size: IntSize,
-    pub root_scroller_visible_size: Option<IntSize>,
-    pub transition_snapshot_size: Option<IntSize>,
-    pub overscroll_type: OverscrollType,
-}
-impl Default for ViewportGeometry {
-    fn default() -> Self {
-        Self {
-            size: IntSize::default(),
-            root_scroller_visible_size: None,
-            transition_snapshot_size: None,
-            overscroll_type: OverscrollType::kNone,
-        }
-    }
-}
+pub use foundation::{
+    LayoutOverscrollType as OverscrollType, LayoutViewportGeometry as ViewportGeometry,
+};
 
 // cpp: layoutng/internal/layout_input.h:769-778
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1703,7 +1615,8 @@ pub struct ElementData {
     pub svg_text_path: Option<SvgTextPathData>,
     pub svg_length_adjust: SvgLengthAdjust,
     pub custom_layout_name: String,
-    pub custom_layout: Option<std::sync::Arc<dyn layoutng_custom::custom_layout_api::CustomLayout>>,
+    pub custom_layout:
+        Option<std::sync::Arc<dyn layout_algo_custom::custom_layout_api::CustomLayout>>,
     pub form_control_type: Option<FormControlType>,
     pub select_uses_menu_list: Option<bool>,
     pub control_checked: bool,
@@ -1730,90 +1643,9 @@ pub struct ElementData {
     pub marquee_horizontal: bool,
     pub document_role: DocumentRole,
 }
-impl PartialEq for ElementData {
-    fn eq(&self, other: &Self) -> bool {
-        (self.used_canvas_transform == other.used_canvas_transform)
-            && (self.content_lock == other.content_lock)
-            && (self.remembered_inline_size == other.remembered_inline_size)
-            && (self.remembered_block_size == other.remembered_block_size)
-            && (self.nowrap_attribute == other.nowrap_attribute)
-            && (self.image_map_area == other.image_map_area)
-            && (self.html_image == other.html_image)
-            && (self.html_ordered_or_unordered_list == other.html_ordered_or_unordered_list)
-            && (self.first_letter_pseudo == other.first_letter_pseudo)
-            && (self.viewport_defining == other.viewport_defining)
-            && (self.root_editable == other.root_editable)
-            && (self.implicit_anchor_id == other.implicit_anchor_id)
-            && (self.scroll_offset == other.scroll_offset)
-            && (self.root_scroller_visible_size == other.root_scroller_visible_size)
-            && (self.natural_width == other.natural_width)
-            && (self.natural_height == other.natural_height)
-            && (self.natural_aspect_ratio == other.natural_aspect_ratio)
-            && (self.image_device_pixel_ratio == other.image_device_pixel_ratio)
-            && (self.replaced_respects_css_overflow == other.replaced_respects_css_overflow)
-            && (self.row_span == other.row_span)
-            && (self.column_span == other.column_span)
-            && (self.stretchy == other.stretchy)
-            && (self.symmetric == other.symmetric)
-            && (self.large_op == other.large_op)
-            && (self.movable_limits == other.movable_limits)
-            && (self.accent == other.accent)
-            && (self.accent_under == other.accent_under)
-            && (self.math_token_kind == other.math_token_kind)
-            && (self.math_operator_form == other.math_operator_form)
-            && (self.frame_rows == other.frame_rows)
-            && (self.frame_columns == other.frame_columns)
-            && (self.frame_row_deltas == other.frame_row_deltas)
-            && (self.frame_column_deltas == other.frame_column_deltas)
-            && (self.frame_border_thickness == other.frame_border_thickness)
-            && (self.frame_border == other.frame_border)
-            && (self.frame_no_resize == other.frame_no_resize)
-            && (self.frame_has_border_color == other.frame_has_border_color)
-            && (self.svg_use == other.svg_use)
-            && (self.svg_x == other.svg_x)
-            && (self.svg_y == other.svg_y)
-            && (self.svg_dx == other.svg_dx)
-            && (self.svg_dy == other.svg_dy)
-            && (self.svg_rotate == other.svg_rotate)
-            && (self.svg_shape == other.svg_shape)
-            && (self.svg_view_box == other.svg_view_box)
-            && (self.svg_viewport == other.svg_viewport)
-            && (self.svg_text_length == other.svg_text_length)
-            && (self.svg_text_path == other.svg_text_path)
-            && (self.svg_length_adjust == other.svg_length_adjust)
-            && (self.custom_layout_name == other.custom_layout_name)
-            && (match (&self.custom_layout, &other.custom_layout) {
-                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            })
-            && (self.form_control_type == other.form_control_type)
-            && (self.select_uses_menu_list == other.select_uses_menu_list)
-            && (self.control_checked == other.control_checked)
-            && (self.control_indeterminate == other.control_indeterminate)
-            && (self.control_disabled == other.control_disabled)
-            && (self.control_read_only == other.control_read_only)
-            && (self.control_hovered == other.control_hovered)
-            && (self.control_active == other.control_active)
-            && (self.control_focused == other.control_focused)
-            && (self.control_value_ratio == other.control_value_ratio)
-            && (self.supports_base_appearance == other.supports_base_appearance)
-            && (self.selected_file_count == other.selected_file_count)
-            && (self.file_no_file_label == other.file_no_file_label)
-            && (self.file_upload_button == other.file_upload_button)
-            && (self.text_field_sizing == other.text_field_sizing)
-            && (self.text_area_sizing == other.text_area_sizing)
-            && (self.text_control_inner_editor == other.text_control_inner_editor)
-            && (self.text_control_container == other.text_control_container)
-            && (self.text_control_spin_button == other.text_control_spin_button)
-            && (self.text_control_placeholder == other.text_control_placeholder)
-            && (self.autofill_state == other.autofill_state)
-            && (self.range_value_ratio == other.range_value_ratio)
-            && (self.control_host_ancestor == other.control_host_ancestor)
-            && (self.marquee_horizontal == other.marquee_horizontal)
-            && (self.document_role == other.document_role)
-    }
-}
+
+#[path = "../../../layout_invalidation/src/native_element_data_equivalence.rs"]
+mod layout_invalidation_native_element_data_equivalence;
 
 impl Default for ElementData {
     // cpp: layoutng/internal/layout_input.h:791-942
@@ -1954,121 +1786,9 @@ pub struct ComputedStyle {
     pub extended: Option<std::sync::Arc<ExtendedStyle>>,
     pub paint: PaintStyle,
 }
-impl PartialEq for ComputedStyle {
-    fn eq(&self, other: &Self) -> bool {
-        self.native_style == other.native_style
-            && self.paint == other.paint
-            && self.GeometryInputsEqual(other)
-    }
-}
-impl ComputedStyle {
-    /// Compare the inputs consumed by layout. Paint data may require paint or
-    /// paint-property invalidation, but changing its value does not ordinarily
-    /// invalidate geometry. Keep the few transitions which change the native
-    /// box/containing-block model in this implementation.
-    pub fn LayoutEquivalent(&self, other: &Self) -> bool {
-        // Chromium ComputedStyle::VisualInvalidationDiff/ DiffNeedsFullLayout
-        // consume the generated FieldInvalidationDiff kLayout/kReshape bits. Native
-        // styles are canonical at this boundary; the minimal projection does
-        // not repeat every geometry property (for example text-align). Keep
-        // the translated invalidation owner in this comparison so retained
-        // LayoutObjects cannot mistake such changes for paint-only updates.
-        if self.native_style != other.native_style {
-            // Native styles are immutable and retained by the input owner for
-            // the layout tree update, just as in PrepareNativeStyle.
-            let (Some(old), Some(new)) = (unsafe { self.native_style.as_ref() }, unsafe {
-                other.native_style.as_ref()
-            }) else {
-                return false;
-            };
-            if ComputedStyleBase::FieldInvalidationDiff(old, new)
-                & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits())
-                != 0
-            {
-                return false;
-            }
-        }
-        // Adding/removing a background can change whether an inline needs a
-        // physical box fragment, even though its CSS dimensions are unchanged.
-        if (self.paint.background_color.alpha > 0.0) != (other.paint.background_color.alpha > 0.0) {
-            return false;
-        }
-        // `image-orientation` swaps the intrinsic axes for EXIF orientations
-        // 5..8. DOM metadata and LayoutReplaced recompute natural sizing on
-        // this transition, so it cannot be normalized away as paint-only.
-        if self.paint.respect_image_orientation != other.paint.respect_image_orientation {
-            return false;
-        }
-        // Blink treats ordinary transform changes, including adding/removing
-        // the transform property node, as paint-property updates. LayoutBox
-        // only escalates them to layout for anchor-positioning fragments whose
-        // propagated anchor geometry depends on the transform. Rechrom does
-        // not yet expose that anchor dependency, so making every transform
-        // animation establish/remove a layout boundary is both more
-        // conservative than Chromium and turns staggered animation completion
-        // into repeated full-document layouts.
-        //
-        // Filter presence still changes the native layer/containing-block
-        // model represented by this translated layout tree.
-        if self.paint.filters.is_empty() != other.paint.filters.is_empty()
-            || self.paint.backdrop_filters.is_empty() != other.paint.backdrop_filters.is_empty()
-            || self.paint.backdrop_filter_has_reference != other.paint.backdrop_filter_has_reference
-        {
-            return false;
-        }
-        self.GeometryInputsEqual(other)
-    }
 
-    // Published groups are immutable. Match base::ValuesEquivalent: identical
-    // shared storage proves equality, while distinct storage compares values.
-    fn GeometryInputsEqual(&self, other: &Self) -> bool {
-        let extended_equal = match (&self.extended, &other.extended) {
-            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b) || a == b,
-            (None, None) => true,
-            _ => false,
-        };
-        // Exhaustive destructuring forces new fields to enter this comparison.
-        macro_rules! same_inputs {
-            ($($field:ident),* $(,)?) => {{
-                let Self { native_style: _, paint: _, extended: _, $($field),* } = self;
-                $($field == &other.$field)&&*
-            }};
-        }
-        extended_equal
-            && same_inputs!(
-                svg_clip_resources,
-                display,
-                width,
-                height,
-                min_height,
-                max_height,
-                flex_basis,
-                flex_grow,
-                flex_shrink,
-                min_width,
-                max_width,
-                margin,
-                border,
-                border_styles,
-                padding,
-                gap,
-                flex_direction,
-                flex_wrap,
-                align_items,
-                direction,
-                writing_mode,
-                position,
-                left,
-                top,
-                right,
-                bottom,
-                css_clip,
-                floating,
-                column_count,
-                grid_template_columns,
-            )
-    }
-}
+#[path = "../../../layout_invalidation/src/native_computed_style_equivalence.rs"]
+mod layout_invalidation_native_computed_style_equivalence;
 
 #[cfg(test)]
 mod computed_style_layout_equivalence_tests {
@@ -2248,11 +1968,14 @@ pub struct NativeNodeConstructionData {
     pub id: u64,
     pub kind: NodeKind,
     pub style_generated: bool,
-    pub style: ComputedStyle,
+    /// Immutable Style -> Layout projection. Attached Node metadata and the
+    /// incremental tree index retain this same owner instead of copying the
+    /// complete projected style at each side of the boundary.
+    pub style: std::sync::Arc<ComputedStyle>,
     pub text: String,
     pub element: Option<ElementData>,
     pub debug_name: String,
-    pub first_line_style: Option<ComputedStyle>,
+    pub first_line_style: Option<std::sync::Arc<ComputedStyle>>,
 }
 impl Default for NodeKind {
     fn default() -> Self {
@@ -2260,108 +1983,12 @@ impl Default for NodeKind {
     }
 }
 
-// cpp: layoutng/internal/layout_input.h:1006-1010
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Size {
-    pub width: f64,
-    pub height: f64,
-}
-
 // Catalog types are owned by the platform-neutral font engine.
 pub use font_engine::resolver::{FontFace, FontUnicodeRange};
 pub use font_engine::{FontFallbackRole, FontVariation};
 
 // cpp: layoutng/internal/layout_input.h:1054-1064
-#[derive(Clone, Debug, PartialEq)]
-pub struct PaintImage {
-    pub id: u64,
-    /// cc::PaintImage::Id. This is allocated once when the image value is
-    /// created and remains stable while `revision` and frame content advance.
-    pub paint_image_id: image_resource::PaintImageId,
-    pub compositor_metadata:
-        Result<image_resource::PaintImageMetadata, image_resource::PaintImageMetadataUnavailable>,
-    pub revision: u64,
-    pub width: u32,
-    pub height: u32,
-    pub resolution_scale: f64,
-    /// Encoded bitmap orientation. Pixels remain in storage order; each CSS
-    /// use decides whether to respect it through `image-orientation`.
-    pub orientation: image_resource::ImageOrientation,
-    /// Concrete per-use environment of the currently published document
-    /// image recording. Bitmap resources leave this empty.
-    pub document_container_key: Option<image_resource::ContainerKey>,
-    /// Immutable bitmap pixels or a renderer-neutral document recording.
-    /// Layout reads only identity and intrinsic dimensions.
-    pub content: image_resource::PaintImageContent,
-}
-impl Default for PaintImage {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            paint_image_id: Default::default(),
-            compositor_metadata: Err(
-                image_resource::PaintImageMetadataUnavailable::ProducerFactsNotPublished,
-            ),
-            revision: 0,
-            width: 0,
-            height: 0,
-            resolution_scale: 1.0,
-            orientation: Default::default(),
-            document_container_key: None,
-            content: Default::default(),
-        }
-    }
-}
-impl PaintImage {
-    /// A document-frame mutation updates the same immutable resource value's
-    /// producer facts. The original transport classification remains intact.
-    pub fn UpdateDocumentFrameMetadata(&mut self, frame: &image_resource::DocumentImageFrame) {
-        if let Ok(metadata) = &mut self.compositor_metadata {
-            metadata.animation =
-                image_resource::PaintImageAnimationMetadata::Known(frame.animation_info);
-            metadata.completion_state = frame.completion_state;
-        }
-    }
-    pub fn CompositorMetadata(
-        &self,
-    ) -> Result<&image_resource::PaintImageMetadata, &image_resource::PaintImageMetadataUnavailable>
-    {
-        self.compositor_metadata.as_ref()
-    }
-    // Source: cc/paint/paint_image.cc:344-347.
-    pub fn ShouldAnimate(&self) -> Result<bool, &image_resource::PaintImageMetadataUnavailable> {
-        match &self.CompositorMetadata()?.animation {
-            image_resource::PaintImageAnimationMetadata::Known(info) => Ok(info.should_animate()),
-            image_resource::PaintImageAnimationMetadata::Unavailable(error) => Err(error),
-        }
-    }
-    // Source: cc/paint/paint_image.h:330-332. An actual eager bitmap has neither
-    // generator nor paint record; document content retains its PaintRecord.
-    pub fn IsLazyGenerated(&self) -> bool {
-        matches!(
-            &self.content,
-            image_resource::PaintImageContent::Document(_)
-        )
-    }
-    // Source: cc/paint/paint_image.h:312-313.
-    pub fn IsComplete(&self) -> Result<bool, &image_resource::PaintImageMetadataUnavailable> {
-        Ok(self.CompositorMetadata()?.completion_state
-            == image_resource::PaintImageCompletionState::Done)
-    }
-    pub fn IsMultipart(&self) -> Result<bool, &image_resource::PaintImageMetadataUnavailable> {
-        Ok(self.CompositorMetadata()?.is_multipart)
-    }
-    pub fn BitmapPixels(&self) -> Option<&std::sync::Arc<Vec<u8>>> {
-        match &self.content {
-            image_resource::PaintImageContent::Bitmap(pixels) => Some(pixels),
-            image_resource::PaintImageContent::Document(_) => None,
-        }
-    }
-
-    pub fn IsDocumentImage(&self) -> bool {
-        matches!(self.content, image_resource::PaintImageContent::Document(_))
-    }
-}
+pub use image_resource::PaintImage;
 
 // cpp: layoutng/internal/layout_input.h:1066-1075
 #[allow(non_snake_case)]

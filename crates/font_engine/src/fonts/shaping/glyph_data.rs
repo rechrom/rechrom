@@ -33,6 +33,7 @@ impl HarfBuzzRunGlyphData {
     pub const kMaxCharacterIndex: u32 = Self::kMaxCharacters - 1;
     pub const kMaxGlyphs: u32 = Self::kMaxCharacters;
 
+    #[inline(always)]
     pub fn new(
         glyph: u32,
         character_index: u32,
@@ -47,10 +48,12 @@ impl HarfBuzzRunGlyphData {
         }
     }
 
+    #[inline(always)]
     pub fn glyph(&self) -> u32 {
         self.packed_glyph_and_index & 0xffff
     }
 
+    #[inline(always)]
     pub fn character_index(&self) -> u32 {
         (self.packed_glyph_and_index >> 16) & Self::kMaxCharacterIndex
     }
@@ -63,6 +66,7 @@ impl HarfBuzzRunGlyphData {
             | ((index & Self::kMaxCharacterIndex) << 16);
     }
 
+    #[inline(always)]
     pub fn SafeToBreakBefore(&self) -> SafeToBreak {
         if self.packed_glyph_and_index & (1 << 31) == 0 {
             SafeToBreak::kSafe
@@ -71,6 +75,7 @@ impl HarfBuzzRunGlyphData {
         }
     }
 
+    #[inline(always)]
     pub fn IsSafeToBreakBefore(&self) -> bool {
         IsSafeToBreak(self.SafeToBreakBefore())
     }

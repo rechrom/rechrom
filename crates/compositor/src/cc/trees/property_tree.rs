@@ -2,308 +2,83 @@
 // Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-// Source: cc/trees/property_tree.h:1-60,64-70,149,161,167-170;
-//         cc/trees/property_tree.cc:1-43,63-72,154-158.
-// Rust modules/imports replace includes, namespaces and export guards. The
-// source non-owning owner pointer becomes a typed owner identity resolved only
-// through explicit live sibling contexts, with no self-reference or snapshot.
-use super::clip_node::ClipNode;
-use super::effect_node::EffectNode;
-use super::property_ids::{
-    kContentsRootPropertyNodeId, kInvalidPropertyNodeId, kRootPropertyNodeId,
+
+use super::{
+    clip_node::ClipNode,
+    effect_node::EffectNode,
+    property_ids::{kContentsRootPropertyNodeId, kInvalidPropertyNodeId, kRootPropertyNodeId},
+    scroll_node::ScrollNode,
+    transform_node::TransformNode,
 };
-use super::scroll_node::ScrollNode;
-use super::transform_node::TransformNode;
-use crate::adapter::input_types::ElementId;
-use crate::adapter::property_tree::PropertyTreesOwnerId;
-use crate::adapter::property_types::{
-    FilterOperations, PropertyPath, PropertyTrace, PropertyTransform, TracedValueJSON,
+use crate::adapter::{
+    input_types::ElementId,
+    property_tree::PropertyTreesOwnerId,
+    property_types::{
+        FilterOperations, PropertyPath, PropertyTrace, PropertyTransform, TracedValueJSON,
+    },
+};
+use compositor_input::scroll_decision::DecideScrollBy;
+use compositor_tree::effect_node::{
+    EffectiveOpacity as EffectiveOpacityPolicy,
+    PropagateEffectChanged as PropagateEffectChangedPolicy, SurfaceContentsScaleInputs,
+    UpdateEffectNodeInheritedState as UpdateEffectNodeInheritedStatePolicy,
+    UpdateEffectSurfaceContentsScale as UpdateEffectSurfaceContentsScalePolicy,
+};
+use compositor_tree::effect_tree_update::EffectNodeUpdateResult;
+use compositor_tree::render_surface_lifecycle::PlanRenderSurfaceLifecycle;
+pub use compositor_tree::property_tree::{
+    AnchorPositionScrollData, AnimationScaleData, ClipTree, DrawTransformData, DrawTransforms,
+    PropertyNode, PropertyTree, PropertyTreesCachedData, PropertyTreesState,
+    RunTransformUpdatePasses, StickyPositionNodeData, TransformUpdateStats,
+    UpdateAnimationScaleData, UpdateTransformsData,
+};
+use compositor_tree::property_tree::{
+    CombineInversesBetween as CombineInversesBetweenPolicy,
+    CombineTransformsBetween as CombineTransformsBetweenPolicy,
+    ComposeLocalTransform as ComposeLocalTransformPolicy,
+    ComputeAnchorPositionOffset as ComputeAnchorPositionOffsetPolicy,
+    ComputeOverscrollUndo as ComputeOverscrollUndoPolicy,
+    ComputeStickyPositionOffset as ComputeStickyPositionOffsetPolicy, ElasticOverscrollTransform,
+    LocalTransformInputs, MarkTransformsNeedingLocalUpdate,
+    PropagateTransformChanged as PropagateTransformChangedPolicy,
+    TransformAnchorOffset as TransformAnchorOffsetPolicy, TransformTreeRead, UndoTransformSnapping,
+    UpdateAnimationProperties as UpdateAnimationPropertiesPolicy,
+    UpdateNodeAndAncestorsAreAnimatedOrInvertible as UpdateAnimatedOrInvertiblePolicy,
+    UpdateNodeOrAncestorsWillChangeTransform as UpdateWillChangePolicy,
+    UpdateRootScaleAndTransform as UpdateRootScaleAndTransformPolicy,
+    UpdateScreenSpaceTransform as UpdateScreenSpaceTransformPolicy,
+    UpdateTransformSnapping as UpdateTransformSnappingPolicy,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-// Rust's generic node field projection replaces C++ template member lookup.
-// These accessors operate on the canonical resident node types, not projections.
-pub trait PropertyNode: Default + Clone + PartialEq {
-    fn id(&self) -> i32;
-    fn set_id(&mut self, id: i32);
-    fn parent_id(&self) -> i32;
-    fn set_parent_id(&mut self, id: i32);
-    fn AsValueInto(&self, value: &mut impl PropertyTrace);
-}
-macro_rules! property_node_fields {
-    () => {
-        fn id(&self) -> i32 {
-            self.id
-        }
-        fn set_id(&mut self, id: i32) {
-            self.id = id;
-        }
-        fn parent_id(&self) -> i32 {
-            self.parent_id
-        }
-        fn set_parent_id(&mut self, id: i32) {
-            self.parent_id = id;
-        }
-    };
-}
-impl<T: PropertyTransform> PropertyNode for TransformNode<T> {
-    property_node_fields!();
-    fn AsValueInto(&self, value: &mut impl PropertyTrace) {
-        TransformNode::AsValueInto(self, value);
-    }
-}
-impl PropertyNode for ClipNode {
-    property_node_fields!();
-    fn AsValueInto(&self, value: &mut impl PropertyTrace) {
-        ClipNode::AsValueInto(self, value);
-    }
-}
-impl<F: FilterOperations, P: PropertyPath> PropertyNode for EffectNode<F, P> {
-    property_node_fields!();
-    fn AsValueInto(&self, value: &mut impl PropertyTrace) {
-        EffectNode::AsValueInto(self, value);
-    }
-}
 impl PropertyNode for ScrollNode {
-    property_node_fields!();
+    fn id(&self) -> i32 {
+        self.id
+    }
+    fn set_id(&mut self, id: i32) {
+        self.id = id;
+    }
+    fn parent_id(&self) -> i32 {
+        self.parent_id
+    }
+    fn set_parent_id(&mut self, id: i32) {
+        self.parent_id = id;
+    }
     fn AsValueInto(&self, value: &mut impl PropertyTrace) {
         ScrollNode::AsValueInto(self, value);
     }
 }
 
-// Source: cc/trees/property_tree.h:66-75,150-159,162-169.
-// C++ deletes copy construction while permitting assignment; Rust similarly
-// exposes explicit AssignFrom without deriving Clone for this owner.
-pub struct PropertyTree<T: PropertyNode> {
-    nodes_: Vec<T>,
-    element_id_to_node_index_: BTreeMap<ElementId, i32>,
-    needs_update_: bool,
-    property_trees_: Option<PropertyTreesOwnerId>,
-}
-impl<T: PropertyNode> PropertyTree<T> {
-    // Source: cc/trees/property_tree.h:150; cc/trees/property_tree.cc:55-62.
-    pub fn new(property_trees: Option<PropertyTreesOwnerId>) -> Self {
-        let mut result = Self {
-            nodes_: vec![T::default()],
-            element_id_to_node_index_: BTreeMap::new(),
-            needs_update_: false,
-            property_trees_: property_trees,
-        };
-        result.MutableBack().unwrap().set_id(kRootPropertyNodeId);
-        result
-            .MutableBack()
-            .unwrap()
-            .set_parent_id(kInvalidPropertyNodeId);
-        result
-    }
-    // Source: cc/trees/property_tree.h:75; cc/trees/property_tree.cc:70-72.
-    pub fn AssignFrom(&mut self, other: &Self) {
-        self.nodes_.clone_from(&other.nodes_);
-        self.element_id_to_node_index_
-            .clone_from(&other.element_id_to_node_index_);
-        self.needs_update_ = other.needs_update_;
-        self.property_trees_ = other.property_trees_;
-    }
-    // Source: cc/trees/property_tree.h:82; cc/trees/property_tree.cc:91-100.
-    pub fn Insert(&mut self, tree_node: &T, parent_id: i32) -> i32 {
-        debug_assert!(!self.nodes_.is_empty());
-        self.nodes_.push(tree_node.clone());
-        let node_id = self.nodes_.len() as i32 - 1;
-        let node = self.nodes_.last_mut().unwrap();
-        node.set_parent_id(parent_id);
-        node.set_id(node_id);
-        node_id
-    }
-    // Source: cc/trees/property_tree.h:84-85; cc/trees/property_tree.cc:101-111.
-    pub fn RemoveNodes(&mut self, n: usize) {
-        assert!(n <= self.nodes_.len());
-        self.nodes_.truncate(self.nodes_.len() - n);
-        let upper_bound = i32::try_from(self.nodes_.len()).expect("checked node count");
-        self.element_id_to_node_index_
-            .retain(|_, index| *index < upper_bound);
-    }
-    // Source: cc/trees/property_tree.h:87-91.
-    pub fn Node(&self, i: i32) -> &T {
-        assert!(i < self.nodes_.len() as i32);
-        assert!(i > kInvalidPropertyNodeId);
-        &self.nodes_[i as usize]
-    }
-    // Source: cc/trees/property_tree.h:93-97.
-    pub fn MutableNode(&mut self, i: i32) -> &mut T {
-        assert!(i < self.nodes_.len() as i32);
-        assert!(i > kInvalidPropertyNodeId);
-        &mut self.nodes_[i as usize]
-    }
-    // Source: cc/trees/property_tree.h:99-101.
-    pub fn HasParent(&self, t: &T) -> bool {
-        t.parent_id() != kInvalidPropertyNodeId
-    }
-    // Source: cc/trees/property_tree.h:103.
-    pub fn parent(&self, t: &T) -> &T {
-        self.Node(t.parent_id())
-    }
-    // Source: cc/trees/property_tree.h:105.
-    pub fn MutableParent(&mut self, t: &T) -> &mut T {
-        self.MutableNode(t.parent_id())
-    }
-    // Source: cc/trees/property_tree.h:107.
-    pub fn MutableBack(&mut self) -> Option<&mut T> {
-        self.nodes_.last_mut()
-    }
-    // Source: cc/trees/property_tree.h:108.
-    pub fn back(&self) -> Option<&T> {
-        self.nodes_.last()
-    }
-    // Source: cc/trees/property_tree.h:110-112.
-    pub fn SetElementIdForNodeId(&mut self, node_id: i32, element_id: ElementId) {
-        self.element_id_to_node_index_.insert(element_id, node_id);
-    }
-    // Source: cc/trees/property_tree.h:113-120.
-    pub fn MutableFindNodeFromElementId(&mut self, id: ElementId) -> Option<&mut T> {
-        let index = *self.element_id_to_node_index_.get(&id)?;
-        if index == kInvalidPropertyNodeId {
-            return None;
-        }
-        Some(self.MutableNode(index))
-    }
-    // Source: cc/trees/property_tree.h:121-128.
-    pub fn FindNodeFromElementId(&self, id: ElementId) -> Option<&T> {
-        let index = *self.element_id_to_node_index_.get(&id)?;
-        if index == kInvalidPropertyNodeId {
-            return None;
-        }
-        Some(self.Node(index))
-    }
-    // Source: cc/trees/property_tree.h:130; cc/trees/property_tree.cc:112-126.
-    pub fn clear(&mut self) {
-        self.needs_update_ = false;
-        self.nodes_.clear();
-        self.nodes_.push(T::default());
-        self.MutableBack().unwrap().set_id(kRootPropertyNodeId);
-        self.MutableBack()
-            .unwrap()
-            .set_parent_id(kInvalidPropertyNodeId);
-        self.element_id_to_node_index_.clear();
-        #[cfg(debug_assertions)]
-        {
-            let tree = Self::new(None);
-            debug_assert!(tree == *self);
-        }
-    }
-    // Source: cc/trees/property_tree.h:131.
-    pub fn size(&self) -> usize {
-        self.nodes_.len()
-    }
-    // Source: cc/trees/property_tree.h:133-134.
-    pub fn set_needs_update(&mut self, value: bool) {
-        self.needs_update_ = value;
-    }
-    pub fn needs_update(&self) -> bool {
-        self.needs_update_
-    }
-    // Source: cc/trees/property_tree.h:136-137.
-    pub fn nodes_mut(&mut self) -> &mut Vec<T> {
-        &mut self.nodes_
-    }
-    pub fn nodes(&self) -> &Vec<T> {
-        &self.nodes_
-    }
-    // Source: cc/trees/property_tree.h:139.
-    pub fn next_available_id(&self) -> i32 {
-        self.size() as i32
-    }
-    // Source: cc/trees/property_tree.h:141.
-    pub fn property_trees(&self) -> Option<PropertyTreesOwnerId> {
-        self.property_trees_
-    }
-    // Source: cc/trees/property_tree.h:143; cc/trees/property_tree.cc:142-153.
-    pub fn AsValueInto(&self, value: &mut impl PropertyTrace) {
-        value.BeginArray("nodes");
-        for node in &self.nodes_ {
-            value.BeginDictionaryUnnamed();
-            node.AsValueInto(value);
-            value.EndDictionary();
-        }
-        value.EndArray();
-        value.SetBoolean("needs_update", self.needs_update_);
-    }
-    // Source: cc/trees/property_tree.h:145-147.
-    pub fn element_id_to_node_index(&self) -> &BTreeMap<ElementId, i32> {
-        &self.element_id_to_node_index_
-    }
-    // Source: cc/trees/property_tree.h:162-164.
-    fn SetPropertyTrees(&mut self, property_trees: Option<PropertyTreesOwnerId>) {
-        self.property_trees_ = property_trees;
-    }
-    // Source: cc/trees/property_tree.h:77-80; cc/trees/property_tree.cc:134-140.
-    #[cfg(debug_assertions)]
-    pub fn ToString(&self) -> String {
-        let mut value = TracedValueJSON::default();
-        self.AsValueInto(&mut value);
-        value.ToFormattedJSON()
-    }
-}
-// Source: cc/trees/property_tree.h:77-80; cc/trees/property_tree.cc:127-133.
-#[cfg(debug_assertions)]
-impl<T: PropertyNode> PartialEq for PropertyTree<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.nodes() == other.nodes()
-            && self.needs_update() == other.needs_update()
-            && self.element_id_to_node_index() == other.element_id_to_node_index()
-    }
-}
-
+use super::damage_reason::DamageReason;
 use super::transform_node::TransformCachedNodeData;
+use super::viewport_property_ids::ViewportPropertyIds;
 use crate::adapter::geometry::{PointF, Rect, RectF, Size, SizeF, Vector2d, Vector2dF};
 use crate::adapter::property_tree::PropertyTreeTransform;
-use std::cell::RefCell;
-// Source: cc/trees/mutator_host.h:43.
-const kInvalidScale: f32 = 0.0;
-use super::damage_reason::DamageReason;
-use super::sticky_position_constraint::StickyPositionConstraint;
-use super::viewport_property_ids::ViewportPropertyIds;
 use crate::cc::base::math_util::MathUtil;
 use crate::cc::base::synced_property::{AdditionGroup, SyncedProperty};
+use std::cell::RefCell;
 // Source: cc/trees/property_tree.h:61-62.
 pub type SyncedScrollOffset = SyncedProperty<AdditionGroup<PointF, Vector2dF>>;
-
-// Source: cc/trees/property_tree.h:414-427; cc/trees/property_tree.cc:44-51.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct AnchorPositionScrollData {
-    pub adjustment_container_ids: Vec<ElementId>,
-    pub accumulated_scroll_origin: Vector2d,
-    pub needs_scroll_adjustment_in_x: bool,
-    pub needs_scroll_adjustment_in_y: bool,
-}
-// Source: cc/trees/property_tree.h:429-454; cc/trees/property_tree.cc:52-54.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StickyPositionNodeData {
-    pub x_scroll_ancestor: i32,
-    pub y_scroll_ancestor: i32,
-    pub constraints: StickyPositionConstraint,
-    pub nearest_node_shifting_sticky_box: i32,
-    pub nearest_node_shifting_containing_block: i32,
-    pub total_sticky_box_sticky_offset: Vector2dF,
-    pub total_containing_block_sticky_offset: Vector2dF,
-}
-impl Default for StickyPositionNodeData {
-    fn default() -> Self {
-        Self {
-            x_scroll_ancestor: kInvalidPropertyNodeId,
-            y_scroll_ancestor: kInvalidPropertyNodeId,
-            constraints: StickyPositionConstraint::default(),
-            nearest_node_shifting_sticky_box: kInvalidPropertyNodeId,
-            nearest_node_shifting_containing_block: kInvalidPropertyNodeId,
-            total_sticky_box_sticky_offset: Vector2dF::default(),
-            total_containing_block_sticky_offset: Vector2dF::default(),
-        }
-    }
-}
-// Source: cc/trees/property_tree.h:211-222; cc/trees/property_tree.cc:271-273.
-#[derive(Default)]
-pub struct UpdateTransformsData {
-    pub stale_forward_dependencies: BTreeSet<i32>,
-}
 
 // Source: cc/trees/property_tree.h:175-189,394-412.
 pub struct TransformTree<T: PropertyTreeTransform> {
@@ -331,117 +106,18 @@ impl<T: PropertyTreeTransform> std::ops::DerefMut for TransformTree<T> {
     }
 }
 
-// Source: cc/trees/property_tree.h:1007-1031.
-// Separate owner fields permit disjoint live borrows of the sibling trees.
-// These are the source owner fields, not a duplicated state projection.
-pub struct PropertyTreesState {
-    needs_rebuild_: bool,
-    changed_: bool,
-    full_tree_damaged_: bool,
-    is_main_thread_: bool,
-    is_active_: bool,
-    sequence_number_: i32,
-    inner_viewport_container_bounds_delta_: Vector2dF,
-    outer_viewport_container_bounds_delta_: Vector2dF,
-    transform_delta_by_safe_area_inset_bottom_: f32,
-}
-impl PropertyTreesState {
-    pub fn is_main_thread(&self) -> bool {
-        self.is_main_thread_
+impl<T: PropertyTreeTransform> TransformTreeRead<T> for TransformTree<T> {
+    fn TransformNode(&self, id: i32) -> &TransformNode<T> {
+        self.Node(id)
     }
-    pub fn is_active(&self) -> bool {
-        self.is_active_
+
+    fn ToScreen(&self, id: i32) -> &T {
+        TransformTree::ToScreen(self, id)
     }
-    pub fn set_changed(&mut self, value: bool) {
-        self.changed_ = value;
+
+    fn FromScreen(&self, id: i32) -> &T {
+        TransformTree::FromScreen(self, id)
     }
-    pub fn inner_viewport_container_bounds_delta(&self) -> Vector2dF {
-        self.inner_viewport_container_bounds_delta_
-    }
-}
-impl Default for PropertyTreesState {
-    fn default() -> Self {
-        Self {
-            needs_rebuild_: true,
-            changed_: false,
-            full_tree_damaged_: false,
-            is_main_thread_: true,
-            is_active_: false,
-            sequence_number_: 0,
-            inner_viewport_container_bounds_delta_: Vector2dF::default(),
-            outer_viewport_container_bounds_delta_: Vector2dF::default(),
-            transform_delta_by_safe_area_inset_bottom_: 0.0,
-        }
-    }
-}
-// Source: cc/trees/property_tree.h:798-818.
-pub const kInvalidUpdateNumber: i32 = -1;
-#[derive(Clone, Debug)]
-pub struct AnimationScaleData {
-    pub update_number: i32,
-    pub maximum_to_screen_scale: f32,
-    pub affected_by_animation_scale: bool,
-    pub affected_by_invalid_scale: bool,
-}
-impl Default for AnimationScaleData {
-    fn default() -> Self {
-        Self {
-            update_number: kInvalidUpdateNumber,
-            maximum_to_screen_scale: 0.0,
-            affected_by_animation_scale: false,
-            affected_by_invalid_scale: false,
-        }
-    }
-}
-// Source: cc/trees/property_tree.h:820-843.
-#[derive(Clone, Debug)]
-pub struct DrawTransforms<T: PropertyTreeTransform> {
-    pub might_be_invertible: bool,
-    pub from_valid: bool,
-    pub to_valid: bool,
-    pub from_target: T,
-    pub to_target: T,
-}
-impl<T: PropertyTreeTransform> DrawTransforms<T> {
-    pub fn new(from: T, to: T) -> Self {
-        Self {
-            might_be_invertible: true,
-            from_valid: false,
-            to_valid: false,
-            from_target: from,
-            to_target: to,
-        }
-    }
-}
-impl<T: PropertyTreeTransform> PartialEq for DrawTransforms<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.from_valid == other.from_valid
-            && self.to_valid == other.to_valid
-            && self.from_target == other.from_target
-            && self.to_target == other.to_target
-    }
-}
-// Source: cc/trees/property_tree.h:845-852.
-#[derive(Clone, Debug)]
-pub struct DrawTransformData<T: PropertyTreeTransform> {
-    pub update_number: i32,
-    pub effect_id: i32,
-    pub transforms: DrawTransforms<T>,
-}
-impl<T: PropertyTreeTransform> Default for DrawTransformData<T> {
-    fn default() -> Self {
-        Self {
-            update_number: kInvalidUpdateNumber,
-            effect_id: kInvalidPropertyNodeId,
-            transforms: DrawTransforms::new(T::default(), T::default()),
-        }
-    }
-}
-// Source: cc/trees/property_tree.h:854-861.
-pub struct PropertyTreesCachedData<T: PropertyTreeTransform> {
-    transform_tree_update_number: i32,
-    animation_scales: Vec<AnimationScaleData>,
-    draw_transforms: RefCell<Vec<Vec<DrawTransformData<T>>>>,
 }
 
 /// Borrow-only context replacing the source tree's owner backpointer. Every
@@ -573,7 +249,7 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
         &mut self,
         viewport_property_ids: &ViewportPropertyIds,
         context: &mut TransformTreeContext<'_, T>,
-    ) {
+    ) -> TransformUpdateStats {
         if !self.needs_update() {
             #[cfg(debug_assertions)]
             {
@@ -581,36 +257,23 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
                     debug_assert!(!self.Node(i).needs_local_transform_update);
                 }
             }
-            return;
+            return TransformUpdateStats::default();
         }
-        let mut update_data = UpdateTransformsData::default();
-        loop {
-            let last_num_stale_forward_dependencies = update_data.stale_forward_dependencies.len();
-            for i in kContentsRootPropertyNodeId..self.size() as i32 {
-                self.UpdateTransforms(
-                    i,
-                    Some(viewport_property_ids),
-                    Some(&mut update_data),
-                    context,
-                );
-            }
-            assert!(
-                last_num_stale_forward_dependencies == 0
-                    || update_data.stale_forward_dependencies.len()
-                        < last_num_stale_forward_dependencies
-            );
-            if update_data.stale_forward_dependencies.is_empty() {
-                break;
-            }
-        }
+        let node_count = self.size() as i32;
+        let stats = RunTransformUpdatePasses(
+            kContentsRootPropertyNodeId,
+            node_count,
+            |id, update_data| {
+                self.UpdateTransforms(id, Some(viewport_property_ids), Some(update_data), context);
+            },
+        );
         self.set_needs_update(false, context);
+        stats
     }
     // Source: cc/trees/property_tree.h:204-207; cc/trees/property_tree.cc:254-270.
     pub fn CopyFromPreservingNodes(&mut self, other: &Self) {
         self.base_.set_needs_update(other.needs_update());
-        self.base_
-            .element_id_to_node_index_
-            .clone_from(&other.base_.element_id_to_node_index_);
+        self.base_.CopyElementIdMapFrom(&other.base_);
         self.page_scale_factor_ = other.page_scale_factor_;
         self.device_scale_factor_ = other.device_scale_factor_;
         self.device_transform_scale_factor_ = other.device_transform_scale_factor_;
@@ -666,73 +329,13 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
         }
         debug_assert!(!self.Node(id).needs_local_transform_update);
     }
-    // Source: cc/trees/property_tree.h:374-376; cc/trees/property_tree.cc:310-318.
-    fn IsDescendant(&self, mut desc_id: i32, source_id: i32) -> bool {
-        while desc_id != source_id {
-            if desc_id == kInvalidPropertyNodeId {
-                return false;
-            }
-            desc_id = self.Node(desc_id).parent_id;
-        }
-        true
-    }
     // Source: cc/trees/property_tree.h:342-346; cc/trees/property_tree.cc:319-396.
     pub fn CombineTransformsBetween(&self, source_id: i32, dest_id: i32, transform: &mut T) {
-        debug_assert!(source_id > dest_id);
-        let current = self.Node(source_id);
-        let dest = self.Node(dest_id);
-        if dest.ancestors_are_invertible && dest.node_and_ancestors_are_flat {
-            transform.PostConcat(self.ToScreen(current.id));
-            transform.PostConcat(self.FromScreen(dest.id));
-            return;
-        }
-        let mut source_to_destination = vec![current.id];
-        let mut current_node = if self.HasParent(current) {
-            Some(self.parent(current))
-        } else {
-            None
-        };
-        while let Some(node) = current_node.filter(|node| node.id > dest_id) {
-            source_to_destination.push(node.id);
-            current_node = if self.HasParent(node) {
-                Some(self.parent(node))
-            } else {
-                None
-            };
-        }
-        let mut combined_transform = T::default();
-        let ancestor = current_node.expect("source/destination common ancestor");
-        if ancestor.id < dest_id {
-            debug_assert!(self.IsDescendant(dest_id, ancestor.id));
-            self.CombineInversesBetween(ancestor.id, dest_id, &mut combined_transform);
-        }
-        let source_to_destination_size = source_to_destination.len();
-        for i in 0..source_to_destination_size {
-            let index = source_to_destination_size - 1 - i;
-            let node = self.Node(source_to_destination[index]);
-            if node.flattens_inherited_transform {
-                combined_transform.Flatten();
-            }
-            combined_transform.PreConcat(&node.to_parent);
-        }
-        transform.PostConcat(&combined_transform);
+        CombineTransformsBetweenPolicy(self, source_id, dest_id, transform);
     }
     // Source: cc/trees/property_tree.h:348-353; cc/trees/property_tree.cc:397-424.
     pub fn CombineInversesBetween(&self, source_id: i32, dest_id: i32, transform: &mut T) -> bool {
-        debug_assert!(source_id < dest_id);
-        let current = self.Node(dest_id);
-        let dest = self.Node(source_id);
-        if current.ancestors_are_invertible && current.node_and_ancestors_are_flat {
-            transform.PreConcat(self.FromScreen(current.id));
-            transform.PreConcat(self.ToScreen(dest.id));
-            return true;
-        }
-        let mut dest_to_source = T::default();
-        self.CombineTransformsBetween(dest_id, source_id, &mut dest_to_source);
-        let mut source_to_dest = T::default();
-        let all_are_invertible = dest_to_source.GetInverse(&mut source_to_dest);
-        transform.PreConcat(&source_to_dest);
-        all_are_invertible
+        CombineInversesBetweenPolicy(self, source_id, dest_id, transform)
     }
     // Source: cc/trees/property_tree.h:363-364; cc/trees/property_tree.cc:425-436.
     pub fn SetDrawnElasticOverscroll(
@@ -871,20 +474,18 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
                     .set_y(ancestor.total_containing_block_sticky_offset.y());
             }
         }
-        let sticky_offset = constraint.StickyPositionOffset(
+        let computed = ComputeStickyPositionOffsetPolicy(
+            constraint,
             scroll_position,
             constraint_box_expansion,
             ancestor_sticky_box_offset,
             ancestor_containing_block_offset,
         );
-        // Read the independent immutable constraint field before the output
-        // fields are mutably borrowed; no node/constraint snapshot is created.
-        let pixel_snap_offset = constraint.pixel_snap_offset;
         let sticky_data = self.MutableStickyPositionData(node_id).unwrap();
-        sticky_data.total_sticky_box_sticky_offset = ancestor_sticky_box_offset + sticky_offset;
+        sticky_data.total_sticky_box_sticky_offset = computed.total_sticky_box_sticky_offset;
         sticky_data.total_containing_block_sticky_offset =
-            ancestor_sticky_box_offset + ancestor_containing_block_offset + sticky_offset;
-        crate::adapter::property_tree::RoundedVector2dF(sticky_offset + pixel_snap_offset)
+            computed.total_containing_block_sticky_offset;
+        computed.translated_offset
     }
     // Source: cc/trees/property_tree.h:340; cc/trees/property_tree.cc:614-625.
     pub fn EnsureAnchorPositionScrollData(
@@ -923,13 +524,11 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
         container_transform_id: i32,
         parent_id: i32,
     ) -> Vector2dF {
-        if offset.IsZero() {
-            return offset;
-        }
-        let mut mapper = self.ToScreen(container_transform_id).clone();
-        mapper.PostConcat(self.FromScreen(parent_id));
-        let transformed_offset = mapper.MapPoint(PointF::new(offset.x(), offset.y()));
-        transformed_offset - mapper.MapPoint(PointF::default())
+        TransformAnchorOffsetPolicy(
+            offset,
+            self.ToScreen(container_transform_id),
+            self.FromScreen(parent_id),
+        )
     }
     // Source: cc/trees/property_tree.h:380-383; cc/trees/property_tree.cc:637-713.
     fn AnchorPositionOffset(
@@ -995,18 +594,10 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
                     .insert(container_transform_id);
             }
         }
-        let data = self.GetAnchorPositionScrollData(node_id).unwrap();
-        let mut result = Vector2dF::new(
-            data.accumulated_scroll_origin.x as f32,
-            data.accumulated_scroll_origin.y as f32,
-        ) - accumulated_offset;
-        if !data.needs_scroll_adjustment_in_x {
-            result.set_x(0.0);
-        }
-        if !data.needs_scroll_adjustment_in_y {
-            result.set_y(0.0);
-        }
-        result
+        ComputeAnchorPositionOffsetPolicy(
+            self.GetAnchorPositionScrollData(node_id).unwrap(),
+            accumulated_offset,
+        )
     }
 
     // Source: cc/trees/property_tree.h:329-331; cc/trees/property_tree.cc:714-754.
@@ -1034,70 +625,15 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
         if overscroll_offset.IsZero() {
             return;
         }
-        *position_adjustment = *position_adjustment
-            + crate::cc::base::math_util::MathUtil::ScaleVectorByInverse(
-                overscroll_offset,
-                self.page_scale_factor(),
-            );
-        let clip_node = context.clip_tree.MutableNode(clip_id);
-        let mut outsets = crate::adapter::property_tree::OutsetsF::default();
-        if position_adjustment.x() < 0.0 {
-            outsets.left = -position_adjustment.x();
-        } else {
-            outsets.right = position_adjustment.x();
-        }
-        if position_adjustment.y() < 0.0 {
-            outsets.top = -position_adjustment.y();
-        } else {
-            outsets.bottom = position_adjustment.y();
-        }
-        clip_node.clip.Outset(outsets);
-        context.clip_tree.set_needs_update(true);
-    }
-    // Source: cc/trees/property_tree.cc:755-800.
-    fn ApplyElasticOverscrollStretch(
-        scroll_tree: &ScrollTree,
-        page_scale_factor: f32,
-        elastic_overscroll: &(ElementId, Vector2dF),
-        transform: &mut T,
-        state: &PropertyTreesState,
-    ) {
-        let Some(scroll_node) = scroll_tree.FindNodeFromElementId(elastic_overscroll.0) else {
-            return;
-        };
-        if scroll_tree
-            .container_bounds(scroll_node.id, state)
-            .IsEmpty()
-            || elastic_overscroll.1.IsZero()
-        {
-            return;
-        }
-        let scroller_size = scroll_tree.container_bounds(scroll_node.id, state);
-        let scale_factor = Vector2dF::new(
-            1.0 + elastic_overscroll.1.x().abs() / scroller_size.width() as f32,
-            1.0 + elastic_overscroll.1.y().abs() / scroller_size.height() as f32,
+        let undo = ComputeOverscrollUndoPolicy(
+            *position_adjustment,
+            overscroll_offset,
+            self.page_scale_factor(),
         );
-        let mut pivot = PointF::default();
-        if elastic_overscroll.1.x() > 0.0 {
-            pivot.set_x(scroller_size.width() as f32);
-        }
-        if elastic_overscroll.1.y() > 0.0 {
-            pivot.set_y(scroller_size.height() as f32);
-        }
-        if scroll_node.scrolls_inner_viewport {
-            pivot =
-                crate::cc::base::math_util::MathUtil::ScalePointByInverse(pivot, page_scale_factor);
-        }
-        transform.Translate(pivot.x(), pivot.y());
-        transform.Scale(scale_factor.x(), scale_factor.y());
-        transform.Translate(-pivot.x(), -pivot.y());
-    }
-    // Source: cc/trees/property_tree.cc:801-810.
-    fn ApplyElasticOverscrollTranslate(
-        elastic_overscroll: &(ElementId, Vector2dF),
-        transform: &mut T,
-    ) {
-        transform.Translate(-elastic_overscroll.1.x(), -elastic_overscroll.1.y());
+        *position_adjustment = undo.position_adjustment;
+        let clip_node = context.clip_tree.MutableNode(clip_id);
+        clip_node.clip.Outset(undo.clip_outsets);
+        context.clip_tree.set_needs_update(true);
     }
     // Source: cc/trees/property_tree.h:384-386; cc/trees/property_tree.cc:811-875.
     fn UpdateLocalTransform(
@@ -1107,13 +643,7 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
         mut update_data: Option<&mut UpdateTransformsData>,
         context: &mut TransformTreeContext<'_, T>,
     ) {
-        let mut transform = T::default();
         let node = self.Node(node_id);
-        transform.Translate3d(
-            node.post_translation.x() + node.origin.x(),
-            node.post_translation.y() + node.origin.y(),
-            node.origin.z(),
-        );
         let mut y_adjustment = 0.0;
         if node.moved_by_outer_viewport_bounds_delta_y {
             y_adjustment += context.state.outer_viewport_container_bounds_delta_.y();
@@ -1133,41 +663,57 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
                 );
             }
         }
-        transform.Translate(position_adjustment.x(), position_adjustment.y());
         let elastic_overscroll =
             self.FindDrawnElasticOverscrollFromTransformId(node_id, viewport_property_ids, context);
-        if !elastic_overscroll.1.IsZero() {
-            #[cfg(target_os = "android")]
-            Self::ApplyElasticOverscrollStretch(
-                context.scroll_tree,
-                self.page_scale_factor(),
-                &elastic_overscroll,
-                &mut transform,
-                context.state,
-            );
-            #[cfg(not(target_os = "android"))]
-            Self::ApplyElasticOverscrollTranslate(&elastic_overscroll, &mut transform);
-        }
-        let scroll_offset = self.Node(node_id).scroll_offset();
-        transform.Translate(-scroll_offset.x(), -scroll_offset.y());
+        #[cfg(not(target_os = "android"))]
+        let elastic_overscroll_transform = if elastic_overscroll.1.IsZero() {
+            ElasticOverscrollTransform::None
+        } else {
+            ElasticOverscrollTransform::Translate {
+                offset: elastic_overscroll.1,
+            }
+        };
+        #[cfg(target_os = "android")]
+        let elastic_overscroll_transform = context
+            .scroll_tree
+            .FindNodeFromElementId(elastic_overscroll.0)
+            .map_or(ElasticOverscrollTransform::None, |scroll_node| {
+                ElasticOverscrollTransform::Stretch {
+                    offset: elastic_overscroll.1,
+                    scroller_size: context
+                        .scroll_tree
+                        .container_bounds(scroll_node.id, context.state),
+                    scrolls_inner_viewport: scroll_node.scrolls_inner_viewport,
+                    page_scale_factor: self.page_scale_factor(),
+                }
+            });
         let sticky_offset = self.StickyPositionOffset(node_id, context);
-        transform.Translate(sticky_offset.x(), sticky_offset.y());
-        if self.Node(node_id).anchor_position_scroll_data_id >= 0 {
+        let has_anchor_offset = self.Node(node_id).anchor_position_scroll_data_id >= 0;
+        let anchor_offset = if has_anchor_offset {
             let mut visited = BTreeSet::new();
-            let anchor_offset = self.AnchorPositionOffset(
+            self.AnchorPositionOffset(
                 node_id,
                 node_id - 1,
                 update_data.as_deref_mut(),
                 &mut visited,
                 context,
-            );
-            transform.Translate(anchor_offset.x(), anchor_offset.y());
+            )
+        } else {
+            Vector2dF::default()
+        };
+        let transform = ComposeLocalTransformPolicy(
+            self.Node(node_id),
+            LocalTransformInputs {
+                position_adjustment,
+                elastic_overscroll: elastic_overscroll_transform,
+                sticky_offset,
+                anchor_offset,
+            },
+        );
+        if has_anchor_offset {
             self.MutableNode(node_id)
                 .SetTransformChanged(DamageReason::kUntracked);
         }
-        transform.PreConcat(&self.Node(node_id).local);
-        let origin = self.Node(node_id).origin;
-        transform.Translate3d(-origin.x(), -origin.y(), -origin.z());
         let node = self.MutableNode(node_id);
         node.set_to_parent(&transform);
         node.needs_local_transform_update = false;
@@ -1177,103 +723,55 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
     fn NodeAndParentMut(&mut self, id: i32) -> (&mut TransformNode<T>, &TransformNode<T>) {
         let parent_id = self.Node(id).parent_id;
         assert!(parent_id >= 0 && parent_id < id);
-        let (ancestors, current) = self.base_.nodes_.split_at_mut(id as usize);
+        let (ancestors, current) = self.base_.nodes_mut().split_at_mut(id as usize);
         (&mut current[0], &ancestors[parent_id as usize])
     }
     // Source: cc/trees/property_tree.h:387-388; cc/trees/property_tree.cc:876-895.
     fn UpdateScreenSpaceTransform(&mut self, id: i32) {
         let parent_id = self.Node(id).parent_id;
-        let mut to_screen_space_transform = self.ToScreen(parent_id).clone();
-        if self.Node(id).flattens_inherited_transform {
-            to_screen_space_transform.Flatten();
-        }
-        to_screen_space_transform.PreConcat(&self.Node(id).to_parent);
-        let (node, parent_node) = self.NodeAndParentMut(id);
-        node.ancestors_are_invertible = parent_node.ancestors_are_invertible;
-        node.node_and_ancestors_are_flat =
-            parent_node.node_and_ancestors_are_flat && node.to_parent.IsFlat();
-        self.SetToScreen(id, &to_screen_space_transform);
-        let mut from_screen = T::default();
-        if !self.ToScreen(id).GetInverse(&mut from_screen) {
-            self.MutableNode(id).ancestors_are_invertible = false;
-        }
-        self.SetFromScreen(id, &from_screen);
+        assert!(parent_id >= 0 && parent_id < id);
+        let (base, cached_data) = (&mut self.base_, &mut self.cached_data_);
+        let (ancestor_nodes, current_nodes) = base.nodes_mut().split_at_mut(id as usize);
+        let (ancestor_cache, current_cache) = cached_data.split_at_mut(id as usize);
+        UpdateScreenSpaceTransformPolicy(
+            &mut current_nodes[0],
+            &ancestor_nodes[parent_id as usize],
+            &ancestor_cache[parent_id as usize].to_screen,
+            &mut current_cache[0],
+        );
     }
     // Source: cc/trees/property_tree.h:389-390; cc/trees/property_tree.cc:896-904.
     fn UpdateAnimationProperties(&mut self, id: i32) {
         let (node, parent_node) = self.NodeAndParentMut(id);
-        let ancestor_is_animating = parent_node.to_screen_is_potentially_animated;
-        node.to_screen_is_potentially_animated =
-            node.has_potential_animation || ancestor_is_animating;
+        UpdateAnimationPropertiesPolicy(node, parent_node);
     }
     // Source: cc/trees/property_tree.h:391; cc/trees/property_tree.cc:905-912.
     fn UndoSnapping(&mut self, id: i32) {
-        let node = self.MutableNode(id);
-        node.to_parent
-            .Translate(-node.snap_amount.x(), -node.snap_amount.y());
-        node.snap_amount = Vector2dF::default();
+        UndoTransformSnapping(self.MutableNode(id));
     }
     // Source: cc/trees/property_tree.h:392; cc/trees/property_tree.cc:913-950.
     fn UpdateSnapping(&mut self, id: i32) {
-        let node = self.Node(id);
-        if !node.should_be_snapped
-            || node.to_screen_is_potentially_animated
-            || !self.ToScreen(id).IsScaleOrTranslation()
-            || !node.ancestors_are_invertible
-        {
-            return;
-        }
         debug_assert!(id < self.cached_data_.len() as i32);
-        let cached = &mut self.cached_data_[id as usize];
-        cached.to_screen.Round2dTranslationComponents();
-        let mut delta = cached.from_screen.clone();
-        delta.MultiplyAssign(&cached.to_screen);
-        const kTolerance: f32 = 1e-4;
-        debug_assert!(delta.IsApproximatelyIdentityOrTranslation(kTolerance));
-        let translation = delta.To2dTranslation();
-        self.MutableNode(id).snap_amount = translation;
-        if translation.IsZero() {
-            return;
-        }
-        self.cached_data_[id as usize]
-            .from_screen
-            .PostTranslate(Vector2dF::new(-translation.x(), -translation.y()));
-        let node = self.MutableNode(id);
-        node.to_parent.Translate(translation.x(), translation.y());
-        if node
-            .to_parent
-            .IsApproximatelyIdentityOrIntegerTranslation(kTolerance)
-        {
-            node.to_parent.RoundToIdentityOrIntegerTranslation();
-        }
+        let (base, cached_data) = (&mut self.base_, &mut self.cached_data_);
+        UpdateTransformSnappingPolicy(
+            &mut base.nodes_mut()[id as usize],
+            &mut cached_data[id as usize],
+        );
     }
     // Source: cc/trees/property_tree.h:229-230; cc/trees/property_tree.cc:951-957.
     pub fn UpdateTransformChanged(&mut self, id: i32) {
         let (node, parent_node) = self.NodeAndParentMut(id);
-        if parent_node.transform_changed() {
-            node.CopyTransformChangedFrom(parent_node);
-        }
+        PropagateTransformChangedPolicy(node, parent_node);
     }
     // Source: cc/trees/property_tree.h:231-233; cc/trees/property_tree.cc:958-975.
     pub fn UpdateNodeAndAncestorsAreAnimatedOrInvertible(&mut self, id: i32) {
         let (node, parent_node) = self.NodeAndParentMut(id);
-        if !parent_node.node_and_ancestors_are_animated_or_invertible {
-            node.node_and_ancestors_are_animated_or_invertible = false;
-            return;
-        }
-        let mut is_invertible = node.is_invertible;
-        if !node.ancestors_are_invertible && parent_node.ancestors_are_invertible {
-            is_invertible = false;
-        }
-        node.node_and_ancestors_are_animated_or_invertible =
-            node.has_potential_animation || is_invertible;
+        UpdateAnimatedOrInvertiblePolicy(node, parent_node);
     }
     // Source: cc/trees/property_tree.h:234-236; cc/trees/property_tree.cc:976-983.
     pub fn UpdateNodeOrAncestorsWillChangeTransform(&mut self, id: i32) {
         let (node, parent_node) = self.NodeAndParentMut(id);
-        node.node_or_ancestors_will_change_transform = node.will_change_transform;
-        node.node_or_ancestors_will_change_transform |=
-            parent_node.node_or_ancestors_will_change_transform;
+        UpdateWillChangePolicy(node, parent_node);
     }
 
     // Source: cc/trees/property_tree.h:261-262; cc/trees/property_tree.cc:984-1025.
@@ -1284,30 +782,17 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
         context: &mut TransformTreeContext<'_, T>,
     ) {
         self.device_scale_factor_ = device_scale_factor;
-        let components = device_transform.ComputeTransform2dScaleComponents(1.0);
-        self.device_transform_scale_factor_ = if components.x() < components.y() {
-            components.y()
-        } else {
-            components.x()
+        let update = {
+            let (base, cached_data) = (&mut self.base_, &mut self.cached_data_);
+            UpdateRootScaleAndTransformPolicy(
+                device_scale_factor,
+                device_transform,
+                &mut cached_data[kRootPropertyNodeId as usize],
+                base.MutableNode(kContentsRootPropertyNodeId),
+            )
         };
-        let mut transform = device_transform.clone();
-        transform.Scale(device_scale_factor, device_scale_factor);
-        let screen_space_scale = transform.ComputeTransform2dScaleComponents(device_scale_factor);
-        debug_assert!(screen_space_scale.x() != 0.0);
-        debug_assert!(screen_space_scale.y() != 0.0);
-        let mut root_to_screen = T::default();
-        root_to_screen.Scale(screen_space_scale.x(), screen_space_scale.y());
-        let root_from_screen = root_to_screen.GetCheckedInverse();
-        if root_to_screen != *self.ToScreen(kRootPropertyNodeId) {
-            self.SetToScreen(kRootPropertyNodeId, &root_to_screen);
-            self.SetFromScreen(kRootPropertyNodeId, &root_from_screen);
-            self.set_needs_update(true, context);
-        }
-        transform.PostConcat(&root_from_screen);
-        let node = self.MutableNode(kContentsRootPropertyNodeId);
-        if node.local != transform {
-            node.local = transform;
-            node.needs_local_transform_update = true;
+        self.device_transform_scale_factor_ = update.device_transform_scale_factor;
+        if update.root_transform_changed || update.contents_transform_changed {
             self.set_needs_update(true, context);
         }
     }
@@ -1323,10 +808,10 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
             return;
         }
         self.set_needs_update(true, context);
-        for index in 0..self.nodes_affected_by_outer_viewport_bounds_delta_.len() {
-            let id = self.nodes_affected_by_outer_viewport_bounds_delta_[index];
-            self.MutableNode(id).needs_local_transform_update = true;
-        }
+        MarkTransformsNeedingLocalUpdate(
+            self.base_.nodes_mut(),
+            &self.nodes_affected_by_outer_viewport_bounds_delta_,
+        );
     }
     // Source: cc/trees/property_tree.h:272; cc/trees/property_tree.cc:1035-1038.
     pub fn AddNodeAffectedByOuterViewportBoundsDelta(&mut self, id: i32) {
@@ -1347,10 +832,10 @@ impl<T: PropertyTreeTransform> TransformTree<T> {
             return;
         }
         self.set_needs_update(true, context);
-        for index in 0..self.nodes_affected_by_safe_area_inset_bottom_.len() {
-            let id = self.nodes_affected_by_safe_area_inset_bottom_[index];
-            self.MutableNode(id).needs_local_transform_update = true;
-        }
+        MarkTransformsNeedingLocalUpdate(
+            self.base_.nodes_mut(),
+            &self.nodes_affected_by_safe_area_inset_bottom_,
+        );
     }
     // Source: cc/trees/property_tree.h:287; cc/trees/property_tree.cc:1054-1057.
     pub fn AddNodeAffectedBySafeAreaInsetBottom(&mut self, id: i32) {
@@ -1511,13 +996,11 @@ pub trait TransformTreeTargetAssociations {
     fn SetContentTargetId(&mut self, node_id: i32, content_target_id: i32);
 }
 
-use super::effect_node::RenderSurfaceReason;
 use super::property_ids::kViewportPropertyNodeId;
 use crate::adapter::property_tree::{
     PropertyTreeCopyOutputRequest, PropertyTreeFeatures, PropertyTreeFilters,
     PropertyTreeRenderSurface, PropertyTreeRenderSurfaceFactory, RenderSurfacePropertyChangedFlags,
 };
-use crate::adapter::property_types::BlendMode;
 
 // Source: cc/trees/property_tree.h:472-603.
 // BTreeMap + per-key Vec is the ordered native multimap (including insertion
@@ -1644,148 +1127,35 @@ impl<
     }
     // Source: cc/trees/property_tree.cc:1155-1173.
     pub fn EffectiveOpacity(&self, node: &EffectNode<F, P>) -> f32 {
-        Self::EffectiveOpacityValue(node)
+        EffectiveOpacityPolicy(node)
     }
-    fn EffectiveOpacityValue(node: &EffectNode<F, P>) -> f32 {
-        if node.subtree_hidden {
-            0.0
-        } else {
-            node.opacity
-        }
-    }
-    fn UpdateOpacities(node: &mut EffectNode<F, P>, parent: Option<&EffectNode<F, P>>) {
-        node.screen_space_opacity = Self::EffectiveOpacityValue(node);
-        if let Some(parent) = parent {
-            node.screen_space_opacity *= parent.screen_space_opacity;
-        }
-    }
-    fn UpdateSubtreeHidden(node: &mut EffectNode<F, P>, parent: Option<&EffectNode<F, P>>) {
-        if let Some(parent) = parent {
-            node.subtree_hidden |= parent.subtree_hidden;
-        }
-    }
-    // Source: cc/trees/property_tree.cc:1175-1200.
-    fn UpdateIsDrawn(
-        node: &mut EffectNode<F, P>,
-        parent: Option<&EffectNode<F, P>>,
-        state: &PropertyTreesState,
-    ) {
-        if node.has_copy_request || node.cache_render_surface || node.subtree_capture_id.is_valid()
-        {
-            node.is_drawn = true;
-        } else if Self::EffectiveOpacityValue(node) == 0.0
-            && (!node.has_potential_opacity_animation || state.is_active_)
-            && node.backdrop_filters.IsEmpty()
-        {
-            node.is_drawn = false;
-        } else if let Some(parent) = parent {
-            node.is_drawn = parent.is_drawn;
-        } else {
-            node.is_drawn = true;
-        }
-    }
-    // Source: cc/trees/property_tree.cc:1201-1225.
     pub fn UpdateEffectChanged(node: &mut EffectNode<F, P>, parent: Option<&EffectNode<F, P>>) {
-        if parent.is_some_and(|parent| parent.effect_changed) {
-            node.effect_changed = true;
-        }
-    }
-    pub fn UpdateHasFilters(node: &mut EffectNode<F, P>, parent: Option<&EffectNode<F, P>>) {
-        node.lcd_text_disallowed_by_filter =
-            node.has_potential_filter_animation || !node.filters.AllowsLCDText();
-        if let Some(parent) = parent {
-            node.lcd_text_disallowed_by_filter |= parent.lcd_text_disallowed_by_filter;
-        }
-    }
-    pub fn UpdateHasFastRoundedCorner(
-        node: &mut EffectNode<F, P>,
-        parent: Option<&EffectNode<F, P>>,
-    ) {
-        node.node_or_ancestor_has_fast_rounded_corner = node.is_fast_rounded_corner;
-        if let Some(parent) = parent {
-            node.node_or_ancestor_has_fast_rounded_corner |=
-                parent.node_or_ancestor_has_fast_rounded_corner;
-        }
-    }
-    // Source: cc/trees/property_tree.cc:1227-1241.
-    fn UpdateBackfaceVisibility<T: PropertyTreeTransform>(
-        node: &mut EffectNode<F, P>,
-        parent: Option<&EffectNode<F, P>>,
-        transforms: &TransformTree<T>,
-    ) {
-        if parent.is_some_and(|parent| parent.hidden_by_backface_visibility) {
-            node.hidden_by_backface_visibility = true;
-            return;
-        }
-        if node.double_sided {
-            node.hidden_by_backface_visibility = false;
-            return;
-        }
-        node.hidden_by_backface_visibility =
-            transforms.cached_data_[node.transform_id as usize].is_showing_backface;
-    }
-    // Source: cc/trees/property_tree.cc:1243-1251.
-    fn UpdateHasMaskingChild(node: &mut EffectNode<F, P>, parent: Option<&mut EffectNode<F, P>>) {
-        node.has_masking_child = false;
-        if node.blend_mode == BlendMode::kDstIn {
-            if let Some(parent) = parent {
-                parent.has_masking_child = true;
-            }
-        }
-    }
-    // Source: cc/trees/property_tree.cc:1253-1265.
-    fn UpdateOnlyDrawsVisibleContent(
-        node: &mut EffectNode<F, P>,
-        parent: Option<&EffectNode<F, P>>,
-    ) {
-        node.only_draws_visible_content = !node.has_copy_request
-            && !node.subtree_capture_id.is_valid()
-            && !node.view_transition_element_resource_id.IsValid();
-        if let Some(parent) = parent {
-            node.only_draws_visible_content &= parent.only_draws_visible_content;
-        }
-        if !node.backdrop_filters.IsEmpty() {
-            node.only_draws_visible_content &= !node.backdrop_filters.HasZoomFilter();
-        }
+        PropagateEffectChangedPolicy(node, parent);
     }
     // Source: cc/trees/property_tree.cc:1267-1322.
     pub fn UpdateSurfaceContentsScale<T: PropertyTreeTransform>(
         node: &mut EffectNode<F, P>,
         context: &mut EffectTreeContext<'_, T>,
-    ) {
-        if !node.HasRenderSurface() {
-            node.surface_contents_scale = Vector2dF::new(1.0, 1.0);
-            return;
-        }
+    ) -> bool {
         let transforms = context.transform_tree;
-        let mut layer_scale_factor =
-            transforms.device_scale_factor() * transforms.device_transform_scale_factor();
         let transform_node = transforms.Node(node.transform_id);
-        if transform_node.in_subtree_of_page_scale_layer {
-            layer_scale_factor *= transforms.page_scale_factor();
-        }
-        let old_scale = node.surface_contents_scale;
-        node.surface_contents_scale = transforms
-            .ToScreen(transform_node.id)
-            .ComputeTransform2dScaleComponents(layer_scale_factor);
-        if node.id != kContentsRootPropertyNodeId
-            && context.features.SizeOopifEffectSurfacesAtExternalScale()
-        {
-            node.surface_contents_scale
-                .Scale(transforms.external_page_scale_factor());
-        }
-        if node.render_surface_reason
-            == RenderSurfaceReason::k2DScaleTransformWithCompositedDescendants
-        {
-            node.surface_contents_scale
-                .set_x(node.surface_contents_scale.x().abs().ceil());
-            node.surface_contents_scale
-                .set_y(node.surface_contents_scale.y().abs().ceil());
-        }
-        if old_scale != node.surface_contents_scale {
+        let changed = UpdateEffectSurfaceContentsScalePolicy(
+            node,
+            SurfaceContentsScaleInputs {
+                to_screen: transforms.ToScreen(transform_node.id),
+                device_scale_factor: transforms.device_scale_factor(),
+                device_transform_scale_factor: transforms.device_transform_scale_factor(),
+                page_scale_factor: transforms.page_scale_factor(),
+                external_page_scale_factor: transforms.external_page_scale_factor(),
+                transform_in_page_scale_subtree: transform_node.in_subtree_of_page_scale_layer,
+                size_at_external_scale: context.features.SizeOopifEffectSurfacesAtExternalScale(),
+            },
+        );
+        if changed {
             context.clip_tree.set_needs_update(true);
             context.cached_data.UpdateTransformTreeUpdateNumber();
         }
+        changed
     }
     // Source: cc/trees/property_tree.cc:1324-1338.
     pub fn OnOpacityAnimated(
@@ -1849,37 +1219,26 @@ impl<
         &mut self,
         id: i32,
         context: &mut EffectTreeContext<'_, T>,
-    ) {
+    ) -> EffectNodeUpdateResult {
         let parent_id = self.Node(id).parent_id;
-        let (node, mut parent) = if parent_id == kInvalidPropertyNodeId {
-            (&mut self.base_.nodes_[id as usize], None)
+        let transform_id = self.Node(id).transform_id;
+        let transform_is_showing_backface =
+            context.transform_tree.cached_data_[transform_id as usize].is_showing_backface;
+        let (node, parent) = if parent_id == kInvalidPropertyNodeId {
+            (&mut self.base_.nodes_mut()[id as usize], None)
         } else {
             debug_assert!(parent_id < id);
-            let (parents, nodes) = self.base_.nodes_.split_at_mut(id as usize);
+            let (parents, nodes) = self.base_.nodes_mut().split_at_mut(id as usize);
             (&mut nodes[0], Some(&mut parents[parent_id as usize]))
         };
-        Self::UpdateOpacities(node, parent.as_deref());
-        Self::UpdateSubtreeHidden(node, parent.as_deref());
-        Self::UpdateIsDrawn(node, parent.as_deref(), context.state);
-        Self::UpdateEffectChanged(node, parent.as_deref());
-        Self::UpdateHasFilters(node, parent.as_deref());
-        Self::UpdateHasFastRoundedCorner(node, parent.as_deref());
-        Self::UpdateBackfaceVisibility(node, parent.as_deref(), context.transform_tree);
-        Self::UpdateHasMaskingChild(node, parent.as_deref_mut());
-        Self::UpdateOnlyDrawsVisibleContent(node, parent.as_deref());
-        Self::UpdateClosestAncestorSharedElement(node, parent.as_deref());
-        Self::UpdateSurfaceContentsScale(node, context);
-    }
-    // Source: cc/trees/property_tree.cc:1392-1401.
-    fn UpdateClosestAncestorSharedElement(
-        node: &mut EffectNode<F, P>,
-        parent: Option<&EffectNode<F, P>>,
-    ) {
-        if node.view_transition_element_resource_id.IsValid() {
-            node.closest_ancestor_with_shared_element_id = node.id;
-        } else if let Some(parent) = parent {
-            node.closest_ancestor_with_shared_element_id =
-                parent.closest_ancestor_with_shared_element_id;
+        UpdateEffectNodeInheritedStatePolicy(
+            node,
+            parent,
+            context.state.is_active_,
+            transform_is_showing_backface,
+        );
+        EffectNodeUpdateResult {
+            surface_contents_scale_changed: Self::UpdateSurfaceContentsScale(node, context),
         }
     }
     // Source: cc/trees/property_tree.cc:1403-1413.
@@ -1992,7 +1351,7 @@ impl<
         !self.copy_requests_.is_empty()
     }
     pub fn ClearCopyRequests(&mut self) {
-        for node in &mut self.base_.nodes_ {
+        for node in self.base_.nodes_mut() {
             node.subtree_has_copy_request = false;
             node.has_copy_request = false;
             node.closest_ancestor_with_copy_request_id = kInvalidPropertyNodeId;
@@ -2116,7 +1475,7 @@ impl<
     // Source: cc/trees/property_tree.cc:1567-1578.
     pub fn ResetChangeTracking(&mut self) {
         for id in kContentsRootPropertyNodeId as usize..self.size() {
-            self.base_.nodes_[id].effect_changed = false;
+            self.base_.nodes_mut()[id].effect_changed = false;
             if id < self.render_surfaces_.len() {
                 if let Some(surface) = self.render_surfaces_[id].as_mut() {
                     surface.ResetPropertyChangedFlags();
@@ -2138,63 +1497,54 @@ impl<
         old_surfaces: &mut Vec<Option<Box<R>>>,
         factory: &mut impl PropertyTreeRenderSurfaceFactory<R>,
     ) -> bool {
-        let mut stable_id_node_id_list = Vec::new();
+        let mut required_surfaces = Vec::new();
         for id in kContentsRootPropertyNodeId as usize..self.size() {
-            let node = &self.base_.nodes_[id];
+            let node = &self.base_.nodes()[id];
             if node.HasRenderSurface() {
-                stable_id_node_id_list.push((node.element_id, node.id));
+                required_surfaces.push((node.element_id, node.id));
             }
         }
-        stable_id_node_id_list.sort();
-        old_surfaces.sort_by_key(|surface| {
-            surface
-                .as_ref()
-                .expect("source requires non-null old surface")
-                .id()
-        });
-        let mut changed = false;
-        let mut surface_index = 0;
-        let mut id_index = 0;
-        while surface_index < old_surfaces.len() && id_index < stable_id_node_id_list.len() {
-            let old_id = old_surfaces[surface_index].as_ref().unwrap().id();
-            let (stable_id, new_node_id) = stable_id_node_id_list[id_index];
-            if old_id == stable_id {
-                self.render_surfaces_[new_node_id as usize] = old_surfaces[surface_index].take();
-                self.render_surfaces_[new_node_id as usize]
-                    .as_mut()
-                    .unwrap()
-                    .set_effect_tree_index(new_node_id);
-                surface_index += 1;
-                id_index += 1;
-                continue;
-            }
-            changed = true;
-            if stable_id < old_id {
-                self.render_surfaces_[new_node_id as usize] =
-                    Some(factory.CreateRenderSurface(stable_id));
-                self.render_surfaces_[new_node_id as usize]
-                    .as_mut()
-                    .unwrap()
-                    .set_effect_tree_index(new_node_id);
-                id_index += 1;
-            } else {
-                surface_index += 1;
-            }
+        let old_stable_ids: Vec<_> = old_surfaces
+            .iter()
+            .map(|surface| {
+                surface
+                    .as_ref()
+                    .expect("source requires non-null old surface")
+                    .id()
+            })
+            .collect();
+        let plan = PlanRenderSurfaceLifecycle(&old_stable_ids, &required_surfaces);
+
+        let mut sorted_old_surfaces: Vec<Option<Box<R>>> =
+            std::iter::repeat_with(|| None).take(old_surfaces.len()).collect();
+        for (sorted_index, original_index) in plan
+            .sorted_old_original_indices
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            sorted_old_surfaces[sorted_index] = old_surfaces[original_index].take();
         }
-        if surface_index != old_surfaces.len() || id_index != stable_id_node_id_list.len() {
-            changed = true;
+        *old_surfaces = sorted_old_surfaces;
+
+        for action in plan.reuse {
+            self.render_surfaces_[action.new_node_id as usize] =
+                old_surfaces[action.sorted_old_index].take();
+            self.render_surfaces_[action.new_node_id as usize]
+                .as_mut()
+                .unwrap()
+                .set_effect_tree_index(action.new_node_id);
         }
-        while id_index < stable_id_node_id_list.len() {
-            let (stable_id, new_node_id) = stable_id_node_id_list[id_index];
+        for action in plan.create {
+            let new_node_id = action.new_node_id;
             self.render_surfaces_[new_node_id as usize] =
-                Some(factory.CreateRenderSurface(stable_id));
+                Some(factory.CreateRenderSurface(action.stable_id));
             self.render_surfaces_[new_node_id as usize]
                 .as_mut()
                 .unwrap()
                 .set_effect_tree_index(new_node_id);
-            id_index += 1;
         }
-        changed
+        plan.changed
     }
     // Source: cc/trees/property_tree.cc:1655-1667.
     pub fn ClippedHitTestRegionIsRectangle<T: PropertyTreeTransform>(
@@ -2255,54 +1605,6 @@ impl<
         C: PropertyTreeCopyOutputRequest,
     > PartialEq for EffectTree<F, P, R, C>
 {
-    fn eq(&self, other: &Self) -> bool {
-        self.base_ == other.base_
-    }
-}
-
-// Source: cc/trees/property_tree.h:456-470; cc/trees/property_tree.cc:1690-1714.
-pub struct ClipTree {
-    base_: PropertyTree<ClipNode>,
-}
-impl std::ops::Deref for ClipTree {
-    type Target = PropertyTree<ClipNode>;
-    fn deref(&self) -> &Self::Target {
-        &self.base_
-    }
-}
-impl std::ops::DerefMut for ClipTree {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.base_
-    }
-}
-impl ClipTree {
-    pub fn new(owner: Option<PropertyTreesOwnerId>) -> Self {
-        Self {
-            base_: PropertyTree::new(owner),
-        }
-    }
-    pub fn AssignFrom(&mut self, from: &Self) -> &mut Self {
-        self.base_.AssignFrom(&from.base_);
-        self
-    }
-    pub fn SetViewportClip(&mut self, viewport_rect: RectF) {
-        if self.size() < 2 {
-            return;
-        }
-        let node = self.MutableNode(1);
-        if viewport_rect == node.clip {
-            return;
-        }
-        node.clip = viewport_rect;
-        self.set_needs_update(true);
-    }
-    pub fn ViewportClip(&self) -> RectF {
-        debug_assert!(self.size() > 1);
-        self.Node(kViewportPropertyNodeId).clip
-    }
-}
-#[cfg(debug_assertions)]
-impl PartialEq for ClipTree {
     fn eq(&self, other: &Self) -> bool {
         self.base_ == other.base_
     }
@@ -2666,26 +1968,6 @@ impl ScrollTree {
         }
         offset
     }
-    // Source: cc/trees/property_tree.cc:2021-2049.
-    fn PullDeltaForMainThread(
-        offset: &mut SyncedScrollOffset,
-        fractional: bool,
-        next_bmf: bool,
-        state: &PropertyTreesState,
-    ) -> Vector2dF {
-        debug_assert!(state.is_active_);
-        if fractional {
-            return offset.PullDeltaForMainThread(next_bmf);
-        }
-        let current = offset.Current(true);
-        let rounded = PointF::new(current.x().round(), current.y().round());
-        let active = offset.ActiveBase();
-        let diff = active - PointF::new(active.x().round(), active.y().round());
-        offset.SetCurrent(rounded + diff);
-        let delta = offset.PullDeltaForMainThread(next_bmf);
-        offset.SetCurrent(current);
-        delta
-    }
     // Source: cc/trees/property_tree.cc:2051-2100.
     pub fn CollectScrollDeltas(
         &self,
@@ -2698,33 +1980,32 @@ impl ScrollTree {
         state: &PropertyTreesState,
     ) {
         debug_assert!(!state.is_main_thread_);
-        for (id, offset) in &self.synced_scroll_offset_map_ {
-            let mut delta = Vector2dF::default();
-            let clobber = mutator.is_some_and(|host| host.ScrollOffsetAnimationWasInterrupted(*id));
-            if !clobber {
-                delta = Self::PullDeltaForMainThread(
-                    &mut offset.borrow_mut(),
-                    fractional,
-                    next_bmf,
-                    state,
-                );
-            }
-            let snap = snapped.get(id).cloned();
-            if !delta.IsZero() || snap.is_some() {
-                let update = ScrollUpdateInfo::new(*id, delta, snap);
-                if *id == inner {
-                    commit.inner_viewport_scroll = update;
-                } else {
-                    commit.scrolls.push(update);
-                }
+        debug_assert!(state.is_active_);
+        let (updates, _) = compositor_tree::scroll_delta_collection::CollectScrollDeltas(
+            &self.synced_scroll_offset_map_,
+            inner,
+            fractional,
+            snapped,
+            |id| mutator.is_some_and(|host| host.ScrollOffsetAnimationWasInterrupted(id)),
+            next_bmf,
+        );
+        for update in updates {
+            let commit_update =
+                ScrollUpdateInfo::new(update.element_id, update.scroll_delta, update.snap_target);
+            if update.is_inner_viewport {
+                commit.inner_viewport_scroll = commit_update;
+            } else {
+                commit.scrolls.push(commit_update);
             }
         }
     }
     // Source: cc/trees/property_tree.cc:2102-2107.
     pub fn CollectScrollDeltasForTesting(&self, fractional: bool, state: &PropertyTreesState) {
-        for offset in self.synced_scroll_offset_map_.values() {
-            Self::PullDeltaForMainThread(&mut offset.borrow_mut(), fractional, false, state);
-        }
+        debug_assert!(state.is_active_);
+        compositor_tree::scroll_delta_collection::PullAllScrollDeltasForTesting(
+            &self.synced_scroll_offset_map_,
+            fractional,
+        );
     }
     // Source: cc/trees/property_tree.cc:2109-2172.
     pub fn PushScrollUpdatesFromMainThread<T: PropertyTreeTransform>(
@@ -3010,25 +2291,19 @@ impl ScrollTree {
         context: &mut ScrollTreeMutationContext<'_, T>,
     ) -> Vector2dF {
         let node = access.Resolve(self);
-        let mut adjusted = *scroll;
-        if !node.user_scrollable_horizontal {
-            adjusted.set_x(0.0);
-        }
-        if !node.user_scrollable_vertical {
-            adjusted.set_y(0.0);
-        }
         let old = self.current_scroll_offset(node.element_id, context.state);
-        let new = self.ClampScrollOffsetToLimits(
-            old + adjusted,
-            node,
-            context.transform_tree,
-            context.state,
+        let decision = DecideScrollBy(
+            old,
+            *scroll,
+            self.MaxScrollOffset(node.id, context.transform_tree, context.state),
+            node.user_scrollable_horizontal,
+            node.user_scrollable_vertical,
         );
         let element_id = node.element_id;
-        if self.SetScrollOffset(element_id, &new, context.state) {
+        if self.SetScrollOffset(element_id, &decision.new_offset, context.state) {
             layer_tree.DidUpdateScrollOffset(element_id, false, self, context);
         }
-        old + *scroll - new
+        decision.unused_delta
     }
     // Source: cc/trees/property_tree.cc:2397-2403.
     pub fn ClampScrollOffsetToLimits<T: PropertyTreeTransform>(
@@ -3138,22 +2413,6 @@ use super::property_animation_state::PropertyAnimationState;
 use super::target_property::{
     PropertyToElementIdMap, Type as TargetProperty, ALL_TARGET_PROPERTIES,
 };
-// Source: cc/trees/property_tree.cc:2429-2434.
-impl<T: PropertyTreeTransform> Default for PropertyTreesCachedData<T> {
-    fn default() -> Self {
-        Self {
-            transform_tree_update_number: 0,
-            animation_scales: Vec::new(),
-            draw_transforms: RefCell::new(Vec::new()),
-        }
-    }
-}
-impl<T: PropertyTreeTransform> PropertyTreesCachedData<T> {
-    // Source: cc/trees/property_tree.cc:3054-3056.
-    pub fn UpdateTransformTreeUpdateNumber(&mut self) {
-        self.transform_tree_update_number += 1;
-    }
-}
 // Source: cc/trees/property_tree.h:864-1040.
 pub struct PropertyTrees<
     T: PropertyTreeTransform,
@@ -3562,9 +2821,13 @@ impl<
         for id in kContentsRootPropertyNodeId..self.effect_tree_.size() as i32 {
             let parent_id = self.effect_tree_.Node(id).parent_id;
             let (node, parent) = if parent_id == kInvalidPropertyNodeId {
-                (&mut self.effect_tree_.base_.nodes_[id as usize], None)
+                (&mut self.effect_tree_.base_.nodes_mut()[id as usize], None)
             } else {
-                let (parents, nodes) = self.effect_tree_.base_.nodes_.split_at_mut(id as usize);
+                let (parents, nodes) = self
+                    .effect_tree_
+                    .base_
+                    .nodes_mut()
+                    .split_at_mut(id as usize);
                 (&mut nodes[0], Some(&parents[parent_id as usize]))
             };
             EffectTree::<F, P, R, C>::UpdateEffectChanged(node, parent);
@@ -3674,8 +2937,7 @@ impl<
     // Source: cc/trees/property_tree.cc:2785-2804.
     pub fn AnimationScaleCacheIsInvalid(&self, id: i32) -> bool {
         debug_assert!(!self.is_main_thread());
-        assert!(id >= 0 && (id as usize) < self.cached_data_.animation_scales.len());
-        self.cached_data_.animation_scales[id as usize].update_number == kInvalidUpdateNumber
+        self.cached_data_.AnimationScaleCacheIsInvalid(id)
     }
     pub fn MaximumAnimationToScreenScale(&mut self, id: i32) -> f32 {
         self.GetAnimationScaleData(id).maximum_to_screen_scale
@@ -3686,14 +2948,12 @@ impl<
     // Source: cc/trees/property_tree.cc:2806-2878.
     fn GetAnimationScaleData(&mut self, id: i32) -> &AnimationScaleData {
         debug_assert!(!self.is_main_thread());
-        assert!(id >= 0 && (id as usize) < self.cached_data_.animation_scales.len());
-        if self.cached_data_.animation_scales[id as usize].update_number
-            == self.cached_data_.transform_tree_update_number
-        {
-            return &self.cached_data_.animation_scales[id as usize];
+        assert!(id >= 0 && (id as usize) < self.cached_data_.animation_scales().len());
+        let update_number = self.cached_data_.transform_tree_update_number();
+        if self.cached_data_.animation_scales()[id as usize].update_number == update_number {
+            return &self.cached_data_.animation_scales()[id as usize];
         }
-        self.cached_data_.animation_scales[id as usize].update_number =
-            self.cached_data_.transform_tree_update_number;
+        self.cached_data_.animation_scales_mut()[id as usize].update_number = update_number;
         let parent_id = self.transform_tree_.Node(id).parent_id;
         if parent_id != kInvalidPropertyNodeId {
             self.GetAnimationScaleData(parent_id);
@@ -3701,40 +2961,23 @@ impl<
         // Source recursive parent scale lookup is complete before taking these
         // disjoint resident cache references. No copied animation cache records.
         let (current, parent) = if parent_id == kInvalidPropertyNodeId {
-            (&mut self.cached_data_.animation_scales[id as usize], None)
+            (
+                &mut self.cached_data_.animation_scales_mut()[id as usize],
+                None,
+            )
         } else {
-            let (parents, nodes) = self.cached_data_.animation_scales.split_at_mut(id as usize);
+            let (parents, nodes) = self
+                .cached_data_
+                .animation_scales_mut()
+                .split_at_mut(id as usize);
             (&mut nodes[0], Some(&parents[parent_id as usize]))
         };
         let node = self.transform_tree_.Node(id);
-        let ancestor_affected = parent.is_some_and(|scale| scale.affected_by_animation_scale);
-        let node_affected = node.has_potential_animation && node.maximum_animation_scale != 1.0;
-        current.affected_by_animation_scale = node_affected || ancestor_affected;
-        current.affected_by_invalid_scale = parent
-            .is_some_and(|scale| scale.affected_by_invalid_scale)
-            || node.to_parent.HasPerspective()
-            || (node.has_potential_animation && node.maximum_animation_scale == kInvalidScale);
-        let failed_for_multiple = ancestor_affected && node_affected;
-        let mut local_maximum = 1.0;
-        if current.affected_by_invalid_scale || failed_for_multiple {
-        } else if !node.to_screen_is_potentially_animated {
-            let scales = self
-                .transform_tree_
+        UpdateAnimationScaleData(current, node, parent, update_number, || {
+            self.transform_tree_
                 .ToScreen(id)
-                .ComputeTransform2dScaleComponents(kInvalidScale);
-            current.maximum_to_screen_scale = scales.x().max(scales.y());
-            return current;
-        } else if !node.has_potential_animation {
-            let scales = node.local.ComputeTransform2dScaleComponents(1.0);
-            local_maximum = scales.x().max(scales.y());
-        } else {
-            debug_assert_ne!(node.maximum_animation_scale, kInvalidScale);
-            local_maximum = node.maximum_animation_scale;
-        }
-        current.maximum_to_screen_scale = local_maximum;
-        if let Some(parent) = parent {
-            current.maximum_to_screen_scale *= parent.maximum_to_screen_scale;
-        }
+                .ComputeTransform2dScaleComponents(0.0)
+        });
         current
     }
     // Source: cc/trees/property_tree.cc:2880-2890.
@@ -3744,11 +2987,12 @@ impl<
         scale: f32,
         invalid: bool,
     ) {
-        assert!(id >= 0 && (id as usize) < self.cached_data_.animation_scales.len());
-        let current = &mut self.cached_data_.animation_scales[id as usize];
+        assert!(id >= 0 && (id as usize) < self.cached_data_.animation_scales().len());
+        let update_number = self.cached_data_.transform_tree_update_number();
+        let current = &mut self.cached_data_.animation_scales_mut()[id as usize];
         current.maximum_to_screen_scale = scale;
         current.affected_by_invalid_scale = invalid;
-        current.update_number = self.cached_data_.transform_tree_update_number;
+        current.update_number = update_number;
     }
     // Source: cc/trees/property_tree.cc:2892-2912.
     pub fn GetToTarget(&self, transform_id: i32, effect_id: i32, out: &mut T) -> bool {
@@ -3834,21 +3078,8 @@ impl<
     }
     // Source: cc/trees/property_tree.cc:3038-3052.
     pub fn ResetCachedData(&mut self) {
-        self.cached_data_.transform_tree_update_number = 0;
         let count = self.transform_tree_.size();
-        self.cached_data_
-            .animation_scales
-            .resize_with(count, AnimationScaleData::default);
-        for scale in &mut self.cached_data_.animation_scales {
-            scale.update_number = kInvalidUpdateNumber;
-        }
-        let entries = self.cached_data_.draw_transforms.get_mut();
-        entries.resize_with(count, || vec![DrawTransformData::default()]);
-        for values in entries {
-            values.resize_with(1, DrawTransformData::default);
-            values[0].update_number = kInvalidUpdateNumber;
-            values[0].effect_id = kInvalidPropertyNodeId;
-        }
+        self.cached_data_.ResetForTransformCount(count);
     }
     // Source: cc/trees/property_tree.cc:3054-3056.
     pub fn UpdateTransformTreeUpdateNumber(&mut self) {
@@ -3944,22 +3175,7 @@ fn FetchDrawTransformsDataFromCacheCore<T: PropertyTreeTransform>(
     transform_id: i32,
     effect_id: i32,
 ) -> RefMut<'_, DrawTransformData<T>> {
-    let mut all = cache.draw_transforms.borrow_mut();
-    assert!(transform_id >= 0 && (transform_id as usize) < all.len());
-    let entries = &mut all[transform_id as usize];
-    let index = if let Some(index) = entries
-        .iter()
-        .position(|data| data.effect_id == effect_id || data.effect_id == kInvalidPropertyNodeId)
-    {
-        index
-    } else {
-        entries.push(DrawTransformData::default());
-        let index = entries.len() - 1;
-        entries[index].update_number = kInvalidUpdateNumber;
-        entries[index].effect_id = effect_id;
-        index
-    };
-    RefMut::map(all, |all| &mut all[transform_id as usize][index])
+    cache.FetchDrawTransformsData(transform_id, effect_id)
 }
 // Source: cc/trees/property_tree.cc:2981-3036.
 fn GetDrawTransformsCore<
@@ -3980,10 +3196,10 @@ fn GetDrawTransformsCore<
     let dest = node.transform_id;
     let mut data = FetchDrawTransformsDataFromCacheCore(cache, transform_id, effect_id);
     debug_assert!(
-        data.update_number != cache.transform_tree_update_number
+        data.update_number != cache.transform_tree_update_number()
             || data.effect_id != kInvalidPropertyNodeId
     );
-    if data.update_number == cache.transform_tree_update_number {
+    if data.update_number == cache.transform_tree_update_number() {
         return RefMut::map(data, |data| &mut data.transforms);
     }
     let mut target = T::default();
@@ -4024,7 +3240,7 @@ fn GetDrawTransformsCore<
     if !already_computed_inverse {
         data.transforms.to_valid = true;
     }
-    data.update_number = cache.transform_tree_update_number;
+    data.update_number = cache.transform_tree_update_number();
     data.effect_id = effect_id;
     data.transforms.from_target = from;
     data.transforms.to_target = target;

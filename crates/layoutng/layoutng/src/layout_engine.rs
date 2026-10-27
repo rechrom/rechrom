@@ -1,16 +1,15 @@
 #![allow(non_snake_case)]
 
 use foundation::{
-    DynamicTo, InitStringStatics, LayoutHeapScope, Length, TextEmphasisMark, UnsupportedLayout,
+    DynamicTo, InitStringStatics, LayoutHeapScope, Length, PrepareLayoutHeapForPointerQueries,
+    UnsupportedLayout,
 };
-use layoutng_fragment_tree::fragment_tree::pre_paint_revision::PrePaintRevisionTracker;
-use layoutng_fragment_tree::fragment_tree::FragmentNode;
-use layoutng_fragment_tree::layout_result::EStatus;
-use std::{
-    collections::{HashMap, HashSet},
-    rc::Rc,
-    sync::Arc,
+use layout_fragment::fragment_tree::pre_paint_revision::{
+    FlatPrePaintInput, PrePaintRevisionTracker,
 };
+use layout_fragment::fragment_tree::{FragmentPaintData, LayoutResultHandle};
+use layout_fragment::layout_result::EStatus;
+use std::{collections::HashSet, rc::Rc, sync::Arc};
 
 use crate::internal::layout_object_builder::LayoutObjectTree;
 use crate::{caret::FrameCaret, editing_state::LayoutEditingState};
@@ -18,24 +17,31 @@ use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 
 use crate::internal::block_node::BlockNode;
 use crate::internal::boundary::layout_boundary::{
-    RefreshCompatibleNodeInputCache, RefreshCompatiblePaintCache, ResolveLogicalParentOccurrences,
-    ScrollPaintPropertyIndex,
+    RefreshCompatibleNodeInputCache, RefreshCompatiblePaintCache, ScrollPaintPropertyIndex,
 };
 use crate::internal::layout_algorithm_set::LayoutAlgorithmSet;
 use crate::internal::layout_box::LayoutBox;
-use crate::internal::layout_input::{ConstraintSpace, NodeKind};
+use crate::internal::layout_input::{ConstraintSpace, Offset};
 use crate::internal::layout_object::LayoutObject;
 use crate::internal::layout_object_factory_set::LayoutObjectFactorySet;
 use crate::internal::layout_pass_scope::{LayoutObjectFactoryScope, LayoutPassScope};
 use crate::layout_assembly::LayoutAssembly;
 use crate::layout_boundary_support::{LayoutBoundarySupport, LayoutUpdateKind};
+pub use layout_commit::{PaintClientCommit, PaintCommitOutput};
+
+#[path = "../../layout_invalidation/src/native_tree_facts.rs"]
+mod layout_invalidation_native_tree_facts;
+use layout_invalidation_native_tree_facts::{collect_layout_tree_facts, LayoutTreeFacts};
 
 #[path = "layout_tree_update.rs"]
 mod layout_tree_update;
 pub use layout_tree_update::LayoutTreeUpdate;
 #[path = "layout_output.rs"]
 mod layout_output;
-pub use layout_output::{LayoutMetric, LayoutNode, LayoutOutput, LayoutRect, LayoutScrollRange};
+pub use layout_output::{
+    LayoutMetric, LayoutNode, LayoutOutput, LayoutRect, LayoutScrollRange, NativeFragmentCursor,
+    NativePaintFragmentCursor,
+};
 
 // Rust panic payloads retain the two standard C++ failure categories emitted
 // by this entry point; unsupported modules use foundation::UnsupportedLayout.
@@ -45,281 +51,38 @@ pub enum LayoutEngineError {
     RuntimeError(&'static str),
 }
 
-fn UpdateFragmentPaintStyle(
-    fragment: &mut FragmentNode,
-    node_id: u64,
-    style: &crate::internal::layout_input::PaintStyle,
-    found: &mut bool,
-) {
-    if fragment.node_id == node_id {
-        let mut current = style.clone();
-        if let Some(clip) = current
-            .clip_path
-            .as_mut()
-            .filter(|clip| clip.reference_target_id.is_some())
-        {
-            let Some(previous) = fragment.paint.style.clip_path.as_ref().filter(|previous| {
-                previous.reference_target_id == clip.reference_target_id
-                    && previous.reference_scope == clip.reference_scope
-            }) else {
-                // A newly selected resource needs the ordinary native export
-                // to establish its own viewport, even if box geometry is clean.
-                return;
-            };
-            clip.reference_viewport = previous.reference_viewport;
-        }
-        for (index, layer) in current.mask_images.iter_mut().enumerate() {
-            let Some(reference) = layer
-                .svg_reference
-                .as_mut()
-                .filter(|r| r.target_id.is_some())
-            else {
-                continue;
-            };
-            let Some(previous) = fragment
-                .paint
-                .style
-                .mask_images
-                .get(index)
-                .and_then(|l| l.svg_reference.as_ref())
-                .filter(|p| {
-                    p.target_id == reference.target_id
-                        && p.scope == reference.scope
-                        && p.id == reference.id
-                })
-            else {
-                return;
-            };
-            reference.viewport = previous.viewport;
-        }
-        fragment.paint.style = current;
-        *found = true;
-    }
-    for child in &mut fragment.children {
-        UpdateFragmentPaintStyle(child, node_id, style, found);
-    }
-}
-
-fn SameOptionalArc<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn SameImageGeometry(
-    a: &crate::internal::layout_input::PaintImage,
-    b: &crate::internal::layout_input::PaintImage,
-) -> bool {
-    a.id == b.id
-        && a.paint_image_id == b.paint_image_id
-        && a.width == b.width
-        && a.height == b.height
-        && a.resolution_scale == b.resolution_scale
-        && a.orientation == b.orientation
-        && a.document_container_key == b.document_container_key
-}
-
-fn SameImageCatalogGeometry(
-    a: &[crate::internal::layout_input::PaintImage],
-    b: &[crate::internal::layout_input::PaintImage],
-) -> bool {
-    a.len() == b.len()
-        && a.iter().all(|left| {
-            b.iter()
-                .find(|right| right.id == left.id)
-                .is_some_and(|right| SameImageGeometry(left, right))
-        })
-}
-
-/// ConstraintSpace carries both geometry and shared host services. DOM emits
-/// the resolved value before every layout pass, so compare it with the
-/// resident value before invalidating a retained fragment snapshot. Provider
-/// identity is part of the comparison: replacing a service is a real input
-/// change even when its current answer happens to match.
-fn SameConstraintScalars(a: &ConstraintSpace, b: &ConstraintSpace) -> bool {
-    a.available_size == b.available_size
-        && a.fragmentainer_block_size == b.fragmentainer_block_size
-        && a.compatibility_mode == b.compatibility_mode
-        && a.printing == b.printing
-        && a.vertical_scroll_enforced == b.vertical_scroll_enforced
-        && a.scrollbar_theme == b.scrollbar_theme
-        && a.minimum_font_physical_size == b.minimum_font_physical_size
-        && a.device_pixel_ratio == b.device_pixel_ratio
-        && a.preferred_color_scheme == b.preferred_color_scheme
-        && a.document_image_container == b.document_image_container
-        && a.layout_zoom_factor == b.layout_zoom_factor
-        && a.canvas_draw_element_enabled == b.canvas_draw_element_enabled
-        && a.prefer_non_composited_scrolling_enabled == b.prefer_non_composited_scrolling_enabled
-        && a.viewport == b.viewport
-        && a.control_theme == b.control_theme
-}
-
-fn SameConstraints(a: &ConstraintSpace, b: &ConstraintSpace) -> bool {
-    SameConstraintScalars(a, b)
-        && SameOptionalArc(&a.hyphenation, &b.hyphenation)
-        && SameOptionalArc(&a.phrase_break, &b.phrase_break)
-        && SameOptionalArc(&a.text_transform, &b.text_transform)
-        && SameOptionalArc(&a.font_backend_factory, &b.font_backend_factory)
-        && a.font_queries == b.font_queries
-        && a.fonts == b.fonts
-        // Decoded pixels, animation metadata and revision are Paint resource
-        // inputs. Chromium invalidates layout only when intrinsic image
-        // geometry changes; Page publishes content-only mutations separately.
-        && SameImageCatalogGeometry(&a.images, &b.images)
-}
-
-fn CountFragmentNode(node: &FragmentNode, node_id: u64, count: &mut usize) {
-    *count += usize::from(node.node_id == node_id);
-    for child in &node.children {
-        CountFragmentNode(child, node_id, count);
-    }
-}
-
-fn MaxFragmentInstance(node: &FragmentNode) -> u64 {
-    node.children
-        .iter()
-        .map(MaxFragmentInstance)
-        .fold(node.fragment_instance_id, u64::max)
-}
-
-fn MaxFragmentainerInstance(node: &FragmentNode) -> u64 {
-    node.children
-        .iter()
-        .map(MaxFragmentainerInstance)
-        .fold(node.fragmentainer_instance_id, u64::max)
-}
-
-fn SameFragmentIdentity(a: &FragmentNode, b: &FragmentNode) -> bool {
-    a.node_id == b.node_id
-        && a.kind == b.kind
-        && a.text_start == b.text_start
-        && a.text_end == b.text_end
-}
-
-fn AdoptRetainedFragmentIds(
-    old: &FragmentNode,
-    new: &mut FragmentNode,
-    ids: &mut HashMap<u64, u64>,
-    next_fragment: &mut u64,
-    next_fragmentainer: &mut u64,
-) {
-    let exported_id = new.fragment_instance_id;
-    if SameFragmentIdentity(old, new) {
-        new.fragment_instance_id = old.fragment_instance_id;
-        new.fragmentainer_instance_id = old.fragmentainer_instance_id;
-        new.paint.logical_tree_order = old.paint.logical_tree_order;
-    } else {
-        new.fragment_instance_id = *next_fragment;
-        *next_fragment = next_fragment.saturating_add(1);
-        if new.fragmentainer_instance_id != 0 {
-            new.fragmentainer_instance_id = *next_fragmentainer;
-            *next_fragmentainer = next_fragmentainer.saturating_add(1);
-        }
-    }
-    ids.insert(exported_id, new.fragment_instance_id);
-
-    let mut claimed = vec![false; old.children.len()];
-    for (index, child) in new.children.iter_mut().enumerate() {
-        let old_index = old
-            .children
-            .get(index)
-            .filter(|old_child| SameFragmentIdentity(old_child, child))
-            .map(|_| index)
-            .or_else(|| {
-                old.children
-                    .iter()
-                    .enumerate()
-                    .position(|(old_index, old_child)| {
-                        !claimed[old_index] && SameFragmentIdentity(old_child, child)
-                    })
-            });
-        if let Some(old_index) = old_index {
-            claimed[old_index] = true;
-            AdoptRetainedFragmentIds(
-                &old.children[old_index],
-                child,
-                ids,
-                next_fragment,
-                next_fragmentainer,
-            );
-        } else {
-            AssignFreshFragmentIds(child, ids, next_fragment, next_fragmentainer);
-        }
-    }
-}
-
-fn AssignFreshFragmentIds(
-    node: &mut FragmentNode,
-    ids: &mut HashMap<u64, u64>,
-    next_fragment: &mut u64,
-    next_fragmentainer: &mut u64,
-) {
-    let exported_id = node.fragment_instance_id;
-    node.fragment_instance_id = *next_fragment;
-    *next_fragment = next_fragment.saturating_add(1);
-    if node.fragmentainer_instance_id != 0 {
-        node.fragmentainer_instance_id = *next_fragmentainer;
-        *next_fragmentainer = next_fragmentainer.saturating_add(1);
-    }
-    ids.insert(exported_id, node.fragment_instance_id);
-    for child in &mut node.children {
-        AssignFreshFragmentIds(child, ids, next_fragment, next_fragmentainer);
-    }
-}
-
-fn RemapLogicalParents(node: &mut FragmentNode, ids: &HashMap<u64, u64>) {
-    if let Some(parent) = node.paint.logical_parent_fragment_instance_id {
-        if let Some(remapped) = ids.get(&parent) {
-            node.paint.logical_parent_fragment_instance_id = Some(*remapped);
-        }
-    }
-    for child in &mut node.children {
-        RemapLogicalParents(child, ids);
-    }
-}
-
-fn ReplaceFragmentNode(
-    node: &mut FragmentNode,
-    node_id: u64,
-    replacement: &mut FragmentNode,
-    next_fragment: &mut u64,
-    next_fragmentainer: &mut u64,
-) -> bool {
-    if node.node_id == node_id {
-        let old_offset = node.offset;
-        let old_logical_parent_node = node.paint.logical_parent_node_id;
-        let old_logical_parent_fragment = node.paint.logical_parent_fragment_instance_id;
-        let mut ids = HashMap::new();
-        AdoptRetainedFragmentIds(
-            node,
-            replacement,
-            &mut ids,
-            next_fragment,
-            next_fragmentainer,
-        );
-        RemapLogicalParents(replacement, &ids);
-        replacement.offset = old_offset;
-        replacement.paint.logical_parent_node_id = old_logical_parent_node;
-        replacement.paint.logical_parent_fragment_instance_id = old_logical_parent_fragment;
-        *node = std::mem::take(replacement);
-        return true;
-    }
-    for child in &mut node.children {
-        if ReplaceFragmentNode(
-            child,
-            node_id,
-            replacement,
-            next_fragment,
-            next_fragmentainer,
-        ) {
-            return true;
-        }
-    }
-    false
-}
-
+#[path = "../../layout_fragment/src/native_prepaint_input_update.rs"]
+mod layout_fragment_native_prepaint_input_update;
+use layout_fragment_native_prepaint_input_update::{
+    UpdateFragmentPaintStyle, UpdateNativePrePaintInputs, VisitNativePaintInputsMut,
+};
+#[path = "../../layout_fragment/src/native_engine_paint_update.rs"]
+mod layout_fragment_native_engine_paint_update;
+use layout_fragment_native_engine_paint_update::NativeEnginePaintUpdate;
+#[path = "../../layout_fragment/src/native_engine_scroll_refresh.rs"]
+mod layout_fragment_native_engine_scroll_refresh;
+#[path = "../../layout_fragment/src/native_layout_paint_output.rs"]
+mod layout_fragment_native_layout_paint_output;
+#[path = "../../layout_fragment/src/native_sticky_layout_commit.rs"]
+mod layout_fragment_native_sticky_layout_commit;
+#[path = "../../layout_invalidation/src/native_constraint_equivalence.rs"]
+mod layout_invalidation_native_constraint_equivalence;
+use layout_invalidation_native_constraint_equivalence::{
+    SameConstraintScalars, SameConstraints, SameImageCatalogGeometry, SameOptionalArc,
+    SameShapeImageCatalog,
+};
+#[path = "../../layout_invalidation/src/native_engine_mutation.rs"]
+mod layout_invalidation_native_engine_mutation;
+use layout_invalidation_native_engine_mutation::NativeEngineMutation;
+#[path = "../../layout_commit/src/native_engine_paint_commit.rs"]
+mod layout_commit_native_engine_paint_commit;
+use layout_commit_native_engine_paint_commit::NativePaintCommit;
+#[path = "../../layout_commit/src/native_container_query_sizes.rs"]
+mod layout_commit_native_container_query_sizes;
+#[path = "../../layout_commit/src/native_engine_layout_publish.rs"]
+mod layout_commit_native_engine_layout_publish;
+#[path = "../../layout_reuse/src/native_engine_output_reuse.rs"]
+mod layout_reuse_native_engine_output_reuse;
 // cpp: layoutng/layout_engine.h:19-31
 /// Mutations of the engine-owned input tree. TreeUpdate reconciles one complete
 /// DOM projection using the existing native insert/style/text/remove logic;
@@ -387,77 +150,85 @@ pub struct ContainerQuerySizeSnapshot {
     pub height: f64,
 }
 
-/// Move-only access to Layout's resident fragment result for one Paint pass.
-/// Moving this value transfers only an `Rc`; it never clones the fragment tree.
+/// Move-only access to Layout's resident native result. Geometry and topology
+/// come directly from LayoutResult; Paint data stays on each native owner.
 pub struct LayoutPaintOutput {
-    fragments: Rc<FragmentNode>,
+    fragments: LayoutResultHandle,
 }
 
 impl LayoutPaintOutput {
-    pub fn Fragments(&self) -> &FragmentNode {
-        &self.fragments
+    /// Canonical pointer-preserving LayoutNG output.
+    pub fn NativeRoot(&self) -> &layout_fragment::physical_fragment::PhysicalFragment {
+        layout_output::NativeRootForHandle(&self.fragments)
     }
 
-    /// Page-level resource preparation may update the resident fragment value
-    /// before Paint consumes it. Copy-on-write occurs only when a genuinely
-    /// older published frame still retains the same tree.
-    pub fn FragmentsMut(&mut self) -> &mut Rc<FragmentNode> {
+    pub fn NativeCursor(&self) -> NativeFragmentCursor<'_> {
+        NativeFragmentCursor::Physical {
+            fragment: self.NativeRoot(),
+            offset: foundation::PhysicalOffset::default(),
+        }
+    }
+
+    pub fn PaintCursor(&self) -> NativePaintFragmentCursor<'_> {
+        self.NativeCursor()
+            .ForPaint()
+            .expect("layout paint output has no native paint input")
+    }
+
+    pub fn PaintCullRectHasScrolledEnough(&self, id: u64, offset: Offset) -> bool {
+        layout_fragment_native_layout_paint_output::paint_cull_rect_has_scrolled_enough(
+            self, id, offset,
+        )
+    }
+
+    pub fn VisitPaintInputsMut(&mut self, visitor: impl FnMut(&mut FragmentPaintData)) {
+        layout_fragment_native_layout_paint_output::visit_paint_inputs_mut(self, visitor)
+    }
+
+    #[doc(hidden)]
+    pub fn ResultHandleMut(&mut self) -> &mut LayoutResultHandle {
         &mut self.fragments
     }
 }
 
-/// Opaque client set produced by Paint after its artifact is complete.
-/// Layout consumes it to advance native DisplayItemClient state.
-pub struct PaintClientCommit {
-    used_clients: HashSet<u64>,
-}
-
-impl PaintClientCommit {
-    pub fn FromClientSet(used_clients: HashSet<u64>) -> Self {
-        Self { used_clients }
-    }
-}
-
-/// Interface implemented by a Paint engine output. It lets Layout consume the
-/// opaque commit receipt without depending on the Paint crate or its artifact.
-pub trait PaintCommitOutput {
-    type Artifact;
-
-    fn IntoLayoutCommit(self) -> (Self::Artifact, PaintClientCommit);
-}
-
-#[derive(Clone, Copy)]
-struct LayoutTreeFacts {
-    object_count: usize,
-    contains_annotations: bool,
-    has_floating_object: bool,
-    has_form_control: bool,
-}
-
-/// Owns the resident native input tree, its constraints and exported result.
+/// Owns the resident native input tree, its constraints and published result.
 /// DOM adapters provide mutations; Paint consumes only the fragment output.
 pub struct LayoutEngine {
     /// Rust boundary output, populated by a successful Layout(). The native
     /// layout algorithm and LayoutObject lifetime remain unchanged.
-    fragments: Option<Rc<FragmentNode>>,
+    fragments: Option<LayoutResultHandle>,
+    /// Last committed native result after its geometry was invalidated. Keep
+    /// the owner alive while LayoutNG may reuse child PhysicalFragments.
+    /// This is never exposed as current output or used as paint geometry.
+    invalidated_fragments_: Option<LayoutResultHandle>,
     output_kind: LayoutUpdateKind,
     tree_: Option<LayoutObjectTree>,
     constraints_: ConstraintSpace,
     pre_paint_inputs_: PrePaintRevisionTracker,
     scroll_paint_index_: Option<ScrollPaintPropertyIndex>,
+    // Chromium retains FragmentData/property directories across lifecycle
+    // updates. A stale directory is never queried, but its allocation storage
+    // can seed the replacement built after the next successful layout.
+    scroll_paint_index_spare_: Option<ScrollPaintPropertyIndex>,
     pending_scroll_ids_: HashSet<u64>,
     pending_paint_ids_: HashSet<u64>,
     pending_inline_ink_ids_: HashSet<u64>,
-    // A single Element::RebuildLayoutTree root may reuse the rest of the
-    // exported fragment tree after native layout. Multiple or unrelated
-    // mutations clear this proof and take the ordinary complete export.
-    pending_subtree_export_id_: Option<u64>,
+    // A single Element::RebuildLayoutTree root can retain the rest of the
+    // native LayoutObject tree. Multiple or unrelated mutations clear this
+    // local-layout hint.
+    pending_subtree_layout_id_: Option<u64>,
     algorithms_: LayoutAlgorithmSet,
     objects_: LayoutObjectFactorySet,
     boundary_: LayoutBoundarySupport,
-    boundary_export_cache_: crate::layout_boundary_support::LayoutBoundaryExportCache,
+    boundary_cache_: crate::layout_boundary_support::LayoutBoundaryCache,
     tree_facts_: Option<LayoutTreeFacts>,
     tree_relations_dirty_: bool,
+    // ShapeOutsideInfo and document-image SVG containers observe external
+    // resource inputs. Chromium invalidates them when those inputs change;
+    // keep the same dirty boundary instead of scanning every LayoutObject on
+    // an unrelated viewport-only layout.
+    shape_image_inputs_dirty_: bool,
+    document_image_container_dirty_: bool,
     targeted_font_objects_: Option<Vec<*mut LayoutObject>>,
 }
 
@@ -465,346 +236,77 @@ impl LayoutEngine {
     fn CachedScrollIndexObjects(
         &self,
     ) -> Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)> {
-        (!self.boundary_export_cache_.source_objects.is_empty()).then(|| {
+        (!self.boundary_cache_.source_objects.is_empty()).then(|| {
             (
-                Arc::clone(&self.boundary_export_cache_.source_objects),
-                Arc::clone(&self.boundary_export_cache_.sticky_objects),
+                Arc::clone(&self.boundary_cache_.source_objects),
+                Arc::clone(&self.boundary_cache_.sticky_objects),
             )
         })
     }
 
     // cpp: layoutng/layout_engine.h:21-23
     pub fn new(assembly: &LayoutAssembly) -> Self {
+        assembly.algorithms.validate_performance_ownership();
         Self {
             fragments: None,
+            invalidated_fragments_: None,
             output_kind: LayoutUpdateKind::Paint,
             tree_: None,
             constraints_: ConstraintSpace::default(),
             pre_paint_inputs_: PrePaintRevisionTracker::new(),
             scroll_paint_index_: None,
+            scroll_paint_index_spare_: None,
             pending_scroll_ids_: HashSet::new(),
             pending_paint_ids_: HashSet::new(),
             pending_inline_ink_ids_: HashSet::new(),
-            pending_subtree_export_id_: None,
+            pending_subtree_layout_id_: None,
             algorithms_: assembly.algorithms,
             objects_: assembly.objects,
             boundary_: assembly.boundary,
-            boundary_export_cache_: Default::default(),
+            boundary_cache_: Default::default(),
             tree_facts_: None,
             tree_relations_dirty_: true,
+            shape_image_inputs_dirty_: true,
+            document_image_container_dirty_: true,
             targeted_font_objects_: None,
         }
     }
 
+    /// Move Page's published fragment owner back to Layout before a full
+    /// lifecycle. Chromium has one resident FragmentData graph shared by the
+    /// lifecycle and compositor; this transfers the published pointer/lifetime
+    /// handle so a constraint-only layout can update resident state in place.
+    pub fn AdoptPublishedLayoutResult(&mut self, fragments: LayoutResultHandle) {
+        if let Some(resident) = self.fragments.take() {
+            debug_assert!(
+                resident.PtrEq(&fragments),
+                "published Page frame must match LayoutEngine output"
+            );
+        } else if let Some(invalidated) = self.invalidated_fragments_.take() {
+            debug_assert!(
+                invalidated.PtrEq(&fragments),
+                "published Page frame must match invalidated LayoutEngine output"
+            );
+        }
+        self.fragments = Some(fragments);
+    }
+
     /// A clean resident tree may prove that an attribute changed no geometry.
     /// Uses the same canonical style and metadata admission as paint updates,
-    /// without changing native objects or exported paint/resource bindings.
+    /// without changing native objects or fragment-local paint/resource data.
     pub fn GeometryInputMatches(
         &self,
         id: u64,
         style: &crate::internal::layout_input::ComputedStyle,
         element: &Option<crate::internal::layout_input::ElementData>,
     ) -> bool {
-        self.tree_.as_ref().is_some_and(|tree| {
-            !tree.Root().NeedsLayout() && tree.GeometryInputMatches(id, style, element)
-        })
+        NativeEngineMutation::geometry_input_matches(self, id, style, element)
     }
 
     /// Apply input changes without running layout. Native synchronization
     /// preserves client identities and invalidates layout exactly as before.
     pub fn ApplyMutation(&mut self, mutation: LayoutMutation<'_>) -> bool {
-        // EmitConstraints is deliberately unconditional at the DOM boundary:
-        // compatibility mode is resolved there. Do not let an identical
-        // value erase a valid local-layout export proof on every frame.
-        if let LayoutMutation::Constraints(space) = &mutation {
-            let same = SameConstraints(&self.constraints_, space);
-            let mut trace = browser_tracing::span("layout", "LayoutEngine.Constraints");
-            trace.set("same", same as u8 as f64);
-            trace.set(
-                "scalars_same",
-                SameConstraintScalars(&self.constraints_, space) as u8 as f64,
-            );
-            trace.set(
-                "fonts_same",
-                (self.constraints_.fonts == space.fonts) as u8 as f64,
-            );
-            trace.set(
-                "font_queries_same",
-                (self.constraints_.font_queries == space.font_queries) as u8 as f64,
-            );
-            trace.set(
-                "image_geometry_same",
-                SameImageCatalogGeometry(&self.constraints_.images, &space.images) as u8 as f64,
-            );
-            trace.set(
-                "providers_same",
-                (SameOptionalArc(&self.constraints_.hyphenation, &space.hyphenation)
-                    && SameOptionalArc(&self.constraints_.phrase_break, &space.phrase_break)
-                    && SameOptionalArc(&self.constraints_.text_transform, &space.text_transform)
-                    && SameOptionalArc(
-                        &self.constraints_.font_backend_factory,
-                        &space.font_backend_factory,
-                    )) as u8 as f64,
-            );
-            if same {
-                return true;
-            }
-        }
-        // Invalidation follows the mutation result below. Compatible SetStyle
-        // updates keep native object identities, and rejected/no-op attachment
-        // transactions must not discard their retained export state.
-        if !matches!(&mutation, LayoutMutation::PaintInput { .. }) {
-            self.pending_paint_ids_.clear();
-            self.pending_inline_ink_ids_.clear();
-        }
-        if !matches!(
-            &mutation,
-            LayoutMutation::ScrollOffset { .. }
-                | LayoutMutation::PaintStyle { .. }
-                | LayoutMutation::PaintInput { .. }
-        ) {
-            self.scroll_paint_index_ = None;
-            self.pending_scroll_ids_.clear();
-        }
-        if !matches!(
-            &mutation,
-            LayoutMutation::SubtreeUpdate { .. }
-                | LayoutMutation::SelectionPaint { .. }
-                | LayoutMutation::EditingState(_)
-        ) {
-            self.pending_subtree_export_id_ = None;
-        }
-        match mutation {
-            LayoutMutation::Constraints(space) => {
-                self.constraints_ = space.clone();
-                self.fragments = None;
-                true
-            }
-            LayoutMutation::TreeUpdate(update) => {
-                let mut trace = browser_tracing::span("layout", "LayoutEngine.TreeUpdate");
-                self.fragments = None;
-                // DOM projection has always used a deferred construction font
-                // resolver. Layout's boundary installs the current resources;
-                // do not build a duplicate font catalog while creating inputs.
-                let tree = self.tree_.get_or_insert_with(|| {
-                    LayoutObjectTree::new_with_factories(
-                        &ConstraintSpace::default(),
-                        &self.objects_,
-                    )
-                });
-                tree.Update(|tree| {
-                    let mut attachment = LayoutTreeUpdate::new(tree);
-                    update(&mut attachment);
-                });
-                let stats = tree.UpdateStats();
-                trace.set("created", stats.created as f64);
-                trace.set("reused", stats.reused as f64);
-                trace.set("updated", stats.updated as f64);
-                trace.set("removed", stats.removed as f64);
-                trace.set("moved", stats.moved as f64);
-                self.boundary_export_cache_.Clear();
-                self.tree_facts_ = None;
-                self.tree_relations_dirty_ = true;
-                self.targeted_font_objects_ = None;
-                true
-            }
-            LayoutMutation::RetainTree => {
-                let mut trace = browser_tracing::span("layout", "LayoutEngine.RetainTree");
-                let retained = self.tree_.as_ref().is_some_and(|tree| tree.HasRoot());
-                trace.set("retained", retained as u8 as f64);
-                retained
-            }
-            LayoutMutation::SubtreeUpdate {
-                node_id,
-                parent_id,
-                update,
-            } => {
-                let mut trace = browser_tracing::span("layout", "LayoutEngine.SubtreeUpdate");
-                trace.set("node_id", node_id as f64);
-                trace.set("had_fragments", self.fragments.is_some() as u8 as f64);
-                let applied = self.tree_.as_mut().is_some_and(|tree| {
-                    tree.UpdateSubtree(node_id, parent_id, |tree, parent| {
-                        update(&mut LayoutTreeUpdate::new(tree), parent);
-                    })
-                });
-                if applied {
-                    self.pending_subtree_export_id_ =
-                        match (self.pending_subtree_export_id_, self.fragments.is_some()) {
-                            (None, true) => Some(node_id),
-                            (Some(previous), true) if previous == node_id => Some(node_id),
-                            _ => {
-                                self.fragments = None;
-                                None
-                            }
-                        };
-                    let stats = self.tree_.as_ref().unwrap().UpdateStats();
-                    trace.set("created", stats.created as f64);
-                    trace.set("reused", stats.reused as f64);
-                    trace.set("updated", stats.updated as f64);
-                    trace.set("removed", stats.removed as f64);
-                    trace.set("moved", stats.moved as f64);
-                    if stats.created != 0
-                        || stats.updated != 0
-                        || stats.removed != 0
-                        || stats.moved != 0
-                    {
-                        self.boundary_export_cache_.Clear();
-                        self.tree_facts_ = None;
-                        self.tree_relations_dirty_ = true;
-                        self.targeted_font_objects_ = None;
-                    }
-                }
-                trace.set(
-                    "pending_export",
-                    self.pending_subtree_export_id_.is_some() as u8 as f64,
-                );
-                trace.set("applied", applied as u8 as f64);
-                applied
-            }
-            LayoutMutation::NodeInput {
-                node_id,
-                style,
-                element,
-            } => {
-                let mut trace = browser_tracing::span("layout", "LayoutEngine.NodeInput");
-                trace.set("node_id", node_id as f64);
-                let update = self
-                    .tree_
-                    .as_mut()
-                    .and_then(|tree| tree.UpdateNodeInput(node_id, style, element));
-                if let Some(update) = update.as_ref() {
-                    RefreshCompatibleNodeInputCache(&mut self.boundary_export_cache_, update);
-                    self.tree_facts_ = None;
-                    self.fragments = None;
-                    self.tree_relations_dirty_ |= update.relations_changed;
-                    if let Some(targeted) = &mut self.targeted_font_objects_ {
-                        for change in &update.objects {
-                            if !targeted.contains(&change.object) {
-                                targeted.push(change.object);
-                            }
-                        }
-                    }
-                }
-                let applied = update.is_some();
-                trace.set("applied", applied as u8 as f64);
-                applied
-            }
-            LayoutMutation::PaintStyle {
-                node_id,
-                style,
-                projected,
-                clip_resource_version,
-            } => {
-                let mut trace = browser_tracing::span("layout", "LayoutEngine.PaintStyle");
-                trace.set(
-                    "cached_objects_before",
-                    self.boundary_export_cache_.objects.len() as f64,
-                );
-                let binding = self
-                    .tree_
-                    .as_mut()
-                    .and_then(|tree| tree.UpdatePaintStyle(node_id, style, clip_resource_version));
-                if let Some(binding) = binding.as_ref() {
-                    RefreshCompatiblePaintCache(&mut self.boundary_export_cache_);
-                    self.tree_facts_ = None;
-                    if let Some(fragments) = &mut self.fragments {
-                        let mut found = false;
-                        let paint_style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
-                                style,
-                                binding.image_resource_id,
-                                projected,
-                                &binding.svg_clip_resources,
-                            );
-                        UpdateFragmentPaintStyle(
-                            Rc::make_mut(fragments),
-                            node_id,
-                            &paint_style,
-                            &mut found,
-                        );
-                        if !found {
-                            self.fragments = None;
-                            return false;
-                        }
-                    }
-                }
-                trace.set(
-                    "cached_objects_after",
-                    self.boundary_export_cache_.objects.len() as f64,
-                );
-                binding.is_some()
-            }
-            LayoutMutation::PaintInput {
-                node_id,
-                style,
-                element,
-            } => {
-                let mut trace = browser_tracing::span("layout", "LayoutEngine.PaintInput");
-                trace.set(
-                    "cached_objects_before",
-                    self.boundary_export_cache_.objects.len() as f64,
-                );
-                if self.fragments.is_none() {
-                    return false;
-                }
-                let update = self
-                    .tree_
-                    .as_mut()
-                    .and_then(|tree| tree.UpdatePaintInput(node_id, style, element));
-                if let Some(update) = update {
-                    RefreshCompatiblePaintCache(&mut self.boundary_export_cache_);
-                    self.tree_facts_ = None;
-                    self.pending_paint_ids_.extend(update.sources);
-                    self.pending_inline_ink_ids_
-                        .extend(update.inline_ink_changes);
-                    trace.set(
-                        "cached_objects_after",
-                        self.boundary_export_cache_.objects.len() as f64,
-                    );
-                    true
-                } else {
-                    false
-                }
-            }
-            LayoutMutation::ReplaceTree(tree) => {
-                self.boundary_export_cache_.Clear();
-                self.tree_facts_ = None;
-                self.fragments = None;
-                self.pre_paint_inputs_.invalidate();
-                self.tree_ = Some(tree);
-                self.tree_relations_dirty_ = true;
-                self.targeted_font_objects_ = None;
-                true
-            }
-            LayoutMutation::ScrollOffset { node_id, offset } => {
-                self.fragments = None;
-                let applied = self
-                    .tree_
-                    .as_mut()
-                    .is_some_and(|tree| tree.UpdateScrollOffset(node_id, offset));
-                if applied {
-                    self.pending_scroll_ids_.insert(node_id);
-                }
-                applied
-            }
-            LayoutMutation::Editing { node_id } => {
-                self.fragments = None;
-                self.tree_
-                    .as_mut()
-                    .is_some_and(|tree| tree.InvalidateEditing(node_id))
-            }
-            LayoutMutation::SelectionPaint { node_id } => self
-                .tree_
-                .as_mut()
-                .is_some_and(|tree| tree.InvalidateSelectionPaint(node_id)),
-            LayoutMutation::EditingState(state) => {
-                if let Some(tree) = &mut self.tree_ {
-                    tree.SetEditingState(state);
-                    true
-                } else {
-                    false
-                }
-            }
-        }
+        NativeEngineMutation::apply_mutation(self, mutation)
     }
 
     /// Read-only access for native lifecycle consumers. The engine keeps sole
@@ -815,48 +317,13 @@ impl LayoutEngine {
 
     /// Chromium supplies laid-out content sizes to SizeContainerChanged.
     /// Native content boxes exclude borders, padding and scrollbars;
-    /// FragmentNode::content_size instead describes scrollable overflow.
+    /// FragmentPaintData::content_size instead describes scrollable overflow.
     pub fn ContainerQuerySizes(&self) -> Vec<ContainerQuerySizeSnapshot> {
-        let Some(tree) = self.tree_.as_ref() else {
-            return Vec::new();
-        };
-        // This traversal uses LayoutObject's translated virtual child dispatch
-        // through NextInPreOrder(). Keep the same installed object factories
-        // available here as during Layout(), including SVG root children.
-        let _object_factory_scope = LayoutObjectFactoryScope::new(&self.objects_);
-        let root = tree.Root() as *const LayoutObject;
-        let mut current = root as *mut LayoutObject;
-        let mut result = Vec::new();
-        while let Some(object) = unsafe { current.as_ref() } {
-            let real_element = unsafe { object.GetNode().as_ref() }
-                .is_some_and(|node| !node.InputIsStyleGenerated());
-            if real_element && object.StyleRef().ContainerType() & 3 != 0 && !object.NeedsLayout() {
-                let box_ = DynamicTo::<LayoutBox>(current);
-                if let Some(box_) =
-                    unsafe { box_.as_ref() }.filter(|b| b.PhysicalFragmentCount() != 0)
-                {
-                    let size = box_.PhysicalContentBoxRect().size;
-                    // style_engine.cc:3888-3890 adjusts layout's physical size
-                    // back to CSS pixels before evaluating container features.
-                    let zoom = object.StyleRef().EffectiveZoom() as f64;
-                    result.push(ContainerQuerySizeSnapshot {
-                        node_id: object.OwnerNodeIdDefault() as u64,
-                        width: size.width.ToDouble().max(0.0) / zoom,
-                        height: size.height.ToDouble().max(0.0) / zoom,
-                    });
-                }
-            }
-            current = object.NextInPreOrder(root);
-        }
-        result
+        layout_commit_native_container_query_sizes::collect_container_query_sizes(self)
     }
 
     pub fn GetConstraints(&self) -> &ConstraintSpace {
         &self.constraints_
-    }
-
-    pub fn HasPendingSubtreeExport(&self) -> bool {
-        self.pending_subtree_export_id_.is_some() && self.fragments.is_some()
     }
 
     fn RootPointer(&mut self) -> *mut LayoutObject {
@@ -866,16 +333,29 @@ impl LayoutEngine {
             .RootMut() as *mut LayoutObject
     }
 
-    /// Publish the owned fragment snapshot only after native layout and export
-    /// succeed. A rejected pass cannot leave the previous snapshot visible.
+    /// Publish the native result only after layout and Paint-data population
+    /// succeed. A rejected pass cannot leave the previous result visible.
     pub fn Layout(&mut self) {
         self.UpdateLayoutOutput(LayoutUpdateKind::Paint);
+    }
+
+    /// Advance Paint layout when native inputs are dirty. The boolean mirrors
+    /// LayoutView::UpdateLayout's lifecycle result for the host: `false` means
+    /// the resident native result and its committed Paint artifact still
+    /// describe the current inputs.
+    pub fn LayoutIfNeeded(&mut self) -> bool {
+        self.UpdateLayoutOutput(LayoutUpdateKind::Paint)
     }
 
     /// Flush native layout and publish only CSSOM geometry. This output has
     /// no paint certification and cannot enter retained paint update paths.
     pub fn UpdateLayout(&mut self) {
         self.UpdateLayoutOutput(LayoutUpdateKind::Layout);
+    }
+
+    /// Flush CSSOM geometry and report whether native layout/output advanced.
+    pub fn UpdateLayoutIfNeeded(&mut self) -> bool {
+        self.UpdateLayoutOutput(LayoutUpdateKind::Layout)
     }
     /// A borrow of resident output. Consumers receive values and scoped
     /// fragment access, never the engine's native object ownership.
@@ -890,144 +370,58 @@ impl LayoutEngine {
         (!box_.GetLayoutResults().is_empty()).then_some(LayoutOutput { engine: self })
     }
 
-    fn UpdateLayoutOutput(&mut self, purpose: LayoutUpdateKind) {
+    fn UpdateLayoutOutput(&mut self, purpose: LayoutUpdateKind) -> bool {
         let mut trace = browser_tracing::span("layout", "LayoutEngine.Layout");
-        self.scroll_paint_index_ = None;
-        self.pending_scroll_ids_.clear();
-        let root = self.RootPointer();
-        let subtree_id = (purpose == LayoutUpdateKind::Paint)
-            .then_some(self.pending_subtree_export_id_)
-            .flatten();
-        self.pending_subtree_export_id_ = None;
-        let mut retained_fragments = subtree_id.and_then(|_| self.fragments.take());
-        self.fragments = None;
-        self.output_kind = purpose;
+        // LayoutView::UpdateLayout returns immediately once Blink's lifecycle
+        // is layout-clean. Keep the same boundary here: a coalesced resize can
+        // deliver the already-active constraints again, and RetainTree leaves
+        // both the native result and its fragment-local Paint data current.
+        // Paint output is a strict superset of layout-only output, while the
+        // reverse still requires Paint-data population.
+        let has_current_output =
+            layout_reuse_native_engine_output_reuse::has_current_output(self, purpose);
+        if has_current_output {
+            trace.set("clean_output_reused", 1.0);
+            return false;
+        }
+        let preparation =
+            layout_commit_native_engine_layout_publish::begin_layout_output(self, purpose);
         trace.set(
             "measurement",
             (purpose == LayoutUpdateKind::Layout) as u8 as f64,
         );
-        // While layout/export runs, the engine has no certified input catalog.
+        // While layout and Paint-data population run, the engine has no
+        // certified input catalog.
         // Unwinding leaves it empty; a subsequent success receives fresh
         // globally unique revisions instead of reusing a failed pass's basis.
-        let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
-        let exported = retained_fragments.is_none();
+        // Chromium republishes the LayoutResult owner and keeps paint-local
+        // data on FragmentData. A targeted relayout cannot splice a copied
+        // Rust fragment subtree because no such tree exists.
+        trace.set(
+            "targeted_native_layout",
+            preparation.targeted_native_layout as u8 as f64,
+        );
         let constraints = self.constraints_.clone();
         let layout_result = self.RunLayout(
-            unsafe { &mut *root },
+            unsafe { &mut *preparation.root },
             &constraints,
-            purpose == LayoutUpdateKind::Paint && exported,
+            true,
             purpose,
         );
-        let mut fragments = if exported {
-            layout_result
-        } else if layout_result.is_none() {
-            let target = subtree_id.unwrap();
-            retained_fragments.take().and_then(|mut retained| {
-                if self.ReplaceExportedSubtree(root, target, Rc::make_mut(&mut retained)) {
-                    trace.set("targeted_subtree_export", 1.0);
-                    Some(Rc::try_unwrap(retained).unwrap_or_else(|shared| (*shared).clone()))
-                } else {
-                    trace.set("targeted_subtree_fallback", 1.0);
-                    let assembly = LayoutAssembly {
-                        algorithms: self.algorithms_,
-                        objects: self.objects_,
-                        boundary: self.boundary_,
-                    };
-                    Some(assembly.ExportFragments(
-                        unsafe { &mut *root },
-                        &self.constraints_,
-                        &mut self.boundary_export_cache_,
-                    ))
-                }
-            })
-        } else {
-            layout_result
-        };
-        if let Some(mut fragments) = fragments.take() {
-            if purpose == LayoutUpdateKind::Paint {
-                let _trace = browser_tracing::span("prepaint", "LayoutEngine.CertifyPaintInputs");
-                inputs.update(&mut fragments);
-            }
-            if purpose == LayoutUpdateKind::Paint {
-                self.scroll_paint_index_ = Some({
-                    let _trace = browser_tracing::span("layout", "LayoutEngine.BuildScrollIndex");
-                    // RunLayout's temporary pass has ended. Walking native SVG
-                    // children still needs this engine's real virtual factories.
-                    let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-                    ScrollPaintPropertyIndex::new(
-                        unsafe { &mut *root },
-                        &fragments,
-                        self.CachedScrollIndexObjects(),
-                    )
-                });
-            }
-            self.fragments = Some(Rc::new(fragments));
-            self.pre_paint_inputs_ = inputs;
+        if let Some(fragments) = layout_result {
+            layout_commit_native_engine_layout_publish::publish_layout_output(
+                self,
+                preparation.root,
+                purpose,
+                preparation.inputs,
+                fragments,
+            );
             trace.set("published", 1.0);
         }
+        true
     }
 
-    fn ReplaceExportedSubtree(
-        &mut self,
-        document_root: *mut LayoutObject,
-        node_id: u64,
-        retained: &mut FragmentNode,
-    ) -> bool {
-        let Some(tree) = self.tree_.as_mut() else {
-            return false;
-        };
-        let Some(object) = tree.OutputNodeMut(node_id) else {
-            return false;
-        };
-        let box_ = DynamicTo::<LayoutBox>(object as *mut LayoutObject);
-        if box_.is_null()
-            || unsafe { &*box_ }.GetLayoutResults().is_empty()
-            || unsafe { &*box_ }.GetLayoutResult(0).is_null()
-            || object.NeedsLayout()
-        {
-            return false;
-        }
-        let mut occurrences = 0usize;
-        CountFragmentNode(retained, node_id, &mut occurrences);
-        if occurrences != 1 {
-            return false;
-        }
-        let assembly = LayoutAssembly {
-            algorithms: self.algorithms_,
-            objects: self.objects_,
-            boundary: self.boundary_,
-        };
-        let mut replacement = unsafe {
-            assembly.ExportFragmentSubtree(
-                document_root,
-                object as *mut LayoutObject,
-                &self.constraints_,
-            )
-        };
-        let mut next_fragment = MaxFragmentInstance(retained).saturating_add(1);
-        let mut next_fragmentainer = MaxFragmentainerInstance(retained).saturating_add(1);
-        let replaced = ReplaceFragmentNode(
-            retained,
-            node_id,
-            &mut replacement,
-            &mut next_fragment,
-            &mut next_fragmentainer,
-        );
-        if replaced {
-            // ExportFragmentSubtree resolves logical parents only within its
-            // temporary subtree. Re-resolve every occurrence after insertion
-            // so retained and replacement nodes refer to instance ids in the
-            // same complete snapshot.
-            ResolveLogicalParentOccurrences(retained);
-            assembly.RebuildBoundaryObjectIndex(
-                unsafe { &mut *document_root },
-                &mut self.boundary_export_cache_,
-            );
-        }
-        replaced
-    }
-
-    /// Re-export paint inputs from the resident layout result without running
+    /// Refresh Paint inputs on the resident layout result without running
     /// layout. Blink's paint-only style path updates ObjectPaintProperties from
     /// the existing layout geometry; transform/opacity animation samples must
     /// not turn into a full layout solely to refresh the fragment snapshot.
@@ -1035,134 +429,39 @@ impl LayoutEngine {
     /// The DOM adapter may conservatively classify an update as paint-only.
     /// The native tree is the final guard: if synchronization marked any
     /// layout object dirty, reject this path and let the caller run Layout().
-    pub fn ExportPaintOnly(&mut self) -> bool {
-        let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportPaintOnly");
-        if self.tree_.is_none() {
-            trace.set("rejected", 1.0);
-            return false;
-        }
-        let root = self.RootPointer();
-        let root_box = DynamicTo::<LayoutBox>(root);
-        if root_box.is_null()
-            || unsafe { &*root }.NeedsLayout()
-            || unsafe { &*root_box }.GetLayoutResults().is_empty()
-            || unsafe { &*root_box }.GetLayoutResult(0).is_null()
-        {
-            trace.set("native_needs_layout", 1.0);
-            return false;
-        }
-        let assembly = LayoutAssembly {
-            algorithms: self.algorithms_,
-            objects: self.objects_,
-            boundary: self.boundary_,
-        };
-        let mut fragments = assembly.ExportFragments(
-            unsafe { &mut *root },
-            &self.constraints_,
-            &mut self.boundary_export_cache_,
-        );
-        let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
-        {
-            let _trace = browser_tracing::span("prepaint", "LayoutEngine.CertifyPaintInputs");
-            inputs.update(&mut fragments);
-        }
-        self.scroll_paint_index_ = Some({
-            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-            ScrollPaintPropertyIndex::new(
-                unsafe { &mut *root },
-                &fragments,
-                self.CachedScrollIndexObjects(),
-            )
-        });
-        self.pending_scroll_ids_.clear();
-        self.fragments = Some(Rc::new(fragments));
-        self.output_kind = LayoutUpdateKind::Paint;
-        self.pre_paint_inputs_ = inputs;
-        trace.set("published", 1.0);
-        true
+    pub fn PopulatePaintData(&mut self) -> bool {
+        NativeEnginePaintUpdate::populate_paint_data(self)
     }
 
     /// Publish paint-only values already applied to the retained fragment
     /// snapshot. Chromium updates FragmentData/ObjectPaintProperties in place;
     /// this immutable Rust boundary uses copy-on-write once per frame, then
     /// refreshes the same subtree revision proof consumed by PrePaint.
-    pub fn ExportTargetedPaintOnly(&mut self) -> bool {
-        if self.output_kind != LayoutUpdateKind::Paint {
-            return false;
-        }
-        let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportTargetedPaintOnly");
-        let Some(fragments) = &mut self.fragments else {
-            trace.set("rejected", 1.0);
-            return false;
-        };
-        let root = self
-            .tree_
-            .as_ref()
-            .map(LayoutObjectTree::Root)
-            .expect("targeted paint update requires a layout tree");
-        let root_box = DynamicTo::<LayoutBox>(root as *const _ as *mut LayoutObject);
-        if root_box.is_null()
-            || root.NeedsLayout()
-            || unsafe { &*root_box }.GetLayoutResults().is_empty()
-            || unsafe { &*root_box }.GetLayoutResult(0).is_null()
-        {
-            trace.set("native_needs_layout", 1.0);
-            return false;
-        }
-        self.pre_paint_inputs_.update(Rc::make_mut(fragments));
-        trace.set("published", 1.0);
-        true
+    pub fn RefreshTargetedPaintData(&mut self) -> bool {
+        NativeEnginePaintUpdate::refresh_targeted_paint_data(self)
     }
 
     /// Publish ordinary local paint updates from resident geometry. The
     /// boundary refreshes paint inputs only; shaped runs and fragment IDs stay
     /// owned by the last layout, like Blink's FragmentData/ObjectPaintProperties.
-    pub fn ExportTargetedPaintInputs(&mut self) -> bool {
-        if self.output_kind != LayoutUpdateKind::Paint {
-            return false;
-        }
-        let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportTargetedPaintInputs");
-        if self.tree_.is_none() {
-            return false;
-        }
-        let root = self.RootPointer();
-        if unsafe { &*root }.NeedsLayout() {
-            return false;
-        }
-        let Some(fragments) = &mut self.fragments else {
-            return false;
-        };
-        let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-        if !crate::internal::boundary::layout_boundary::RefreshRetainedPaintInputs(
-            unsafe { &mut *root },
-            Rc::make_mut(fragments),
-            &self.pending_paint_ids_,
-            &self.pending_inline_ink_ids_,
-        ) {
-            trace.set("rejected", 1.0);
-            return false;
-        }
-        self.pre_paint_inputs_.update(Rc::make_mut(fragments));
-        trace.set("updated_sources", self.pending_paint_ids_.len() as f64);
-        self.pending_paint_ids_.clear();
-        self.pending_inline_ink_ids_.clear();
-        trace.set("published", 1.0);
-        true
+    pub fn RefreshTargetedPaintInputs(&mut self) -> bool {
+        NativeEnginePaintUpdate::refresh_targeted_paint_inputs(self)
     }
 
-    /// The latest successful exported layout snapshot. Reading it does not
-    /// clone the tree or run layout.
-    pub fn GetLayoutResult(&self) -> Option<&Rc<FragmentNode>> {
+    /// The latest successful native layout result. Reading it does not clone
+    /// native fragments or run layout.
+    pub fn GetLayoutResult(&self) -> Option<&LayoutResultHandle> {
         self.fragments.as_ref()
     }
 
     /// Transfer the published snapshot for an exclusive Paint/scroll update.
     /// This does not clone fragments or mutate the native tree.
-    pub fn TakeLayoutResult(&mut self) -> Option<Rc<FragmentNode>> {
+    pub fn TakeLayoutResult(&mut self) -> Option<LayoutResultHandle> {
         self.fragments.take()
     }
 
-    /// Transfer the resident result into the zero-copy Layout -> Paint path.
+    /// Transfer the resident result into Paint. Moving this owner is
+    /// allocation-free; Paint traverses the native fragment cursor.
     pub fn TakePaintOutput(&mut self) -> Option<LayoutPaintOutput> {
         self.fragments
             .take()
@@ -1170,12 +469,11 @@ impl LayoutEngine {
     }
 
     /// Transfer Page's currently published frame back into the Layout -> Paint
-    /// path. The engine's matching retained `Rc` is dropped before mutation so
-    /// it cannot itself trigger fragment-tree copy-on-write.
-    pub fn TakePublishedPaintOutput(&mut self, fragments: Rc<FragmentNode>) -> LayoutPaintOutput {
+    /// path. The engine's matching retained owner is dropped before mutation.
+    pub fn TakePublishedPaintOutput(&mut self, fragments: LayoutResultHandle) -> LayoutPaintOutput {
         if let Some(resident) = self.fragments.take() {
             debug_assert!(
-                Rc::ptr_eq(&resident, &fragments),
+                resident.PtrEq(&fragments),
                 "published Page frame must match LayoutEngine output"
             );
         }
@@ -1183,35 +481,30 @@ impl LayoutEngine {
     }
 
     /// Commit one completed Paint output and republish the same fragment owner.
-    /// No fragment or artifact snapshot is created here; only `Rc`/`Arc`
-    /// handles cross the interface.
+    /// No fragment or artifact snapshot is created here; only native fragment
+    /// and artifact handles cross the interface.
     pub fn CommitPaint<P: PaintCommitOutput>(
         &mut self,
-        mut layout: LayoutPaintOutput,
+        layout: LayoutPaintOutput,
         paint: P,
         caret: Option<&FrameCaret>,
-    ) -> (Rc<FragmentNode>, P::Artifact) {
-        let (artifact, commit) = paint.IntoLayoutCommit();
-        if let Some(caret) = caret {
-            let caret_id = caret.display_item_client().Id();
-            if commit.used_clients.contains(&caret_id) {
-                caret.ValidateForCommittedPaint(caret_id);
-            }
-        }
-        if let Some(tree) = &self.tree_ {
-            tree.CommitPaintClientState(&commit.used_clients, &mut layout.fragments);
-        }
-        self.pre_paint_inputs_
-            .CommitClients(commit.used_clients.iter().copied());
-        self.output_kind = LayoutUpdateKind::Paint;
-        self.fragments = Some(layout.fragments.clone());
-        (layout.fragments, artifact)
+    ) -> (LayoutResultHandle, P::Artifact) {
+        layout_commit::CommitPaintResult(
+            &mut NativePaintCommit {
+                engine: self,
+                caret,
+            },
+            layout,
+            paint,
+        )
     }
 
-    /// Republish a zero-copy Layout output after Paint proved that its existing
-    /// display-item recording remains valid.
-    pub fn CommitRetainedPaint(&mut self, layout: LayoutPaintOutput) -> Rc<FragmentNode> {
+    /// Republish the same native/result owner after Paint proved that its
+    /// existing display-item recording remains valid. This fast path performs
+    /// no native-fragment walk.
+    pub fn CommitRetainedPaint(&mut self, layout: LayoutPaintOutput) -> LayoutResultHandle {
         self.output_kind = LayoutUpdateKind::Paint;
+        self.invalidated_fragments_ = None;
         self.fragments = Some(layout.fragments.clone());
         layout.fragments
     }
@@ -1219,37 +512,25 @@ impl LayoutEngine {
     /// Release the published result when its input/lifecycle has been replaced.
     pub fn ReleaseLayoutResult(&mut self) {
         self.fragments = None;
+        self.invalidated_fragments_ = None;
     }
 
     /// Return a successfully committed immutable Paint/scroll snapshot to the
     /// engine. The caller owns the lifecycle proof; publishing performs no walk.
-    pub fn PublishLayoutResult(&mut self, fragments: Rc<FragmentNode>) {
+    pub fn PublishLayoutResult(&mut self, fragments: LayoutResultHandle) {
         self.output_kind = LayoutUpdateKind::Paint;
+        self.invalidated_fragments_ = None;
         self.fragments = Some(fragments);
     }
 
     /// Internal retained-scroll path. The caller must already own fragments and
     /// prove that styles are unchanged. It compares the stored native result
-    /// before/after layout, then exports a changed result or refreshes the
-    /// retained snapshot's scroll paint properties. This method publishes no
-    /// snapshot and is not the ordinary Page layout entry point.
+    /// before/after layout, then publishes a changed result or refreshes the
+    /// retained result's scroll paint properties. This method publishes no
+    /// result and is not the ordinary Page layout entry point.
     #[doc(hidden)]
-    pub fn LayoutWithoutExport(&mut self) {
-        let _trace = browser_tracing::span("layout", "LayoutEngine.LayoutWithoutExport");
-        self.scroll_paint_index_ = None;
-        self.pending_scroll_ids_.clear();
-        let root = self.RootPointer();
-        self.fragments = None;
-        // Retained scroll refresh is owned by the caller and can mutate inputs
-        // without exporting. Its next ordinary layout must establish a basis.
-        self.pre_paint_inputs_.invalidate();
-        let constraints = self.constraints_.clone();
-        let _ = self.RunLayout(
-            unsafe { &mut *root },
-            &constraints,
-            false,
-            LayoutUpdateKind::Paint,
-        );
+    pub fn RunNativeLayoutWithoutPublication(&mut self) {
+        layout_commit_native_engine_layout_publish::run_layout_without_publication(self)
     }
 
     /// The caller admits only unchanged styles and known scroll owners. Keep
@@ -1258,7 +539,7 @@ impl LayoutEngine {
     #[doc(hidden)]
     pub fn UpdateScrollLayout(
         &mut self,
-        fragments: &mut FragmentNode,
+        fragments: &mut LayoutResultHandle,
         scroll_only: bool,
         refresh_cull_rect: bool,
     ) -> Option<ScrollLayoutUpdate> {
@@ -1285,40 +566,29 @@ impl LayoutEngine {
             boundary: self.boundary_,
         };
         if scroll_only && !unsafe { &*root }.NeedsLayout() && !before.is_null() {
-            if refresh_cull_rect {
-                if !self.RefreshScrollCullProjection(fragments) {
-                    return None;
-                }
-                trace.set("paint_projection_refreshed", 1.0);
-                return Some(ScrollLayoutUpdate::RefreshedLayout);
-            }
-            let mut heap = LayoutHeapScope::new();
-            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-            let refreshed = self.scroll_paint_index_.as_ref().is_some_and(|index| {
-                index.refresh(unsafe { &mut *root }, fragments, &self.pending_scroll_ids_)
-            });
-            trace.set("indexed_refresh", refreshed as u8 as f64);
-            if !refreshed {
-                assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
-                self.scroll_paint_index_ = Some(ScrollPaintPropertyIndex::new(
-                    unsafe { &mut *root },
+            let refreshed =
+                layout_fragment_native_engine_scroll_refresh::refresh_retained_scroll_geometry(
+                    self,
+                    root,
                     fragments,
-                    self.CachedScrollIndexObjects(),
-                ));
+                    refresh_cull_rect,
+                )?;
+            if let Some(indexed) = refreshed.indexed_refresh {
+                trace.set("indexed_refresh", indexed as u8 as f64);
+            } else {
+                trace.set("scroll_cull_data_refreshed", 1.0);
             }
-            self.pending_scroll_ids_.clear();
-            heap.DeferCollection();
             trace.set("retained_geometry", 1.0);
-            return Some(ScrollLayoutUpdate::RetainedGeometry);
+            return Some(refreshed.update);
         }
-        self.LayoutWithoutExport();
+        self.RunNativeLayoutWithoutPublication();
         let after = unsafe { &*box_ptr }.GetLayoutResult(0);
         trace.set("layout_result_changed", (before != after) as u8 as f64);
         if before != after {
-            *fragments = assembly.ExportFragments(
+            *fragments = assembly.PublishLayoutResult(
                 unsafe { &mut *root },
                 &self.constraints_,
-                &mut self.boundary_export_cache_,
+                &mut self.boundary_cache_,
             );
         } else {
             assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, false);
@@ -1330,61 +600,8 @@ impl LayoutEngine {
     /// native layout geometry. Page uses this both at a phased wheel boundary
     /// and as the correctness fallback when retained Paint coverage is spent.
     #[doc(hidden)]
-    pub fn RefreshScrollCullProjection(&mut self, fragments: &mut FragmentNode) -> bool {
-        let mut trace = browser_tracing::span("layout", "LayoutEngine.RefreshScrollCullProjection");
-        let Some(tree) = self.tree_.as_ref() else {
-            return false;
-        };
-        if !tree.HasRoot() {
-            return false;
-        }
-        let root = self.RootPointer();
-        let assembly = LayoutAssembly {
-            algorithms: self.algorithms_,
-            objects: self.objects_,
-            boundary: self.boundary_,
-        };
-        let indexed = {
-            let mut heap = LayoutHeapScope::new();
-            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-            // A coverage fallback can follow the ordinary indexed property
-            // update in the same frame. In that case there are deliberately no
-            // pending IDs left: the native and projected scroll properties are
-            // already current and only the cull projection needs refreshing.
-            let refreshed = self.pending_scroll_ids_.is_empty()
-                || self.scroll_paint_index_.as_ref().is_some_and(|index| {
-                    index.refresh(unsafe { &mut *root }, fragments, &self.pending_scroll_ids_)
-                });
-            heap.DeferCollection();
-            refreshed
-        };
-        trace.set("indexed_refresh", indexed as u8 as f64);
-        if !indexed {
-            assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
-        }
-        let retained = std::mem::take(fragments);
-        let mut exported = assembly.RefreshFragmentProjection(
-            unsafe { &mut *root },
-            &self.constraints_,
-            &mut self.boundary_export_cache_,
-            retained,
-        );
-        {
-            let _phase = browser_tracing::span("layout", "LayoutEngine.UpdatePrePaintInputs");
-            self.pre_paint_inputs_.update(&mut exported);
-        }
-        self.scroll_paint_index_ = Some({
-            let _phase = browser_tracing::span("layout", "LayoutEngine.BuildScrollPaintIndex");
-            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-            ScrollPaintPropertyIndex::new(
-                unsafe { &mut *root },
-                &exported,
-                self.CachedScrollIndexObjects(),
-            )
-        });
-        *fragments = exported;
-        self.pending_scroll_ids_.clear();
-        true
+    pub fn RefreshScrollCullData(&mut self, fragments: &mut LayoutResultHandle) -> bool {
+        NativeEnginePaintUpdate::refresh_scroll_cull_data(self, fragments)
     }
 
     // cpp: layoutng/layout_engine.h:24-25
@@ -1393,11 +610,11 @@ impl LayoutEngine {
         &mut self,
         root: &mut LayoutObject,
         space: &ConstraintSpace,
-        export: bool,
+        publish: bool,
         purpose: LayoutUpdateKind,
-    ) -> Option<FragmentNode> {
+    ) -> Option<LayoutResultHandle> {
         let mut trace = browser_tracing::span("layout", "LayoutEngine.RunLayout");
-        trace.set("export", export as u8 as f64);
+        trace.set("publish", publish as u8 as f64);
         let mut heap_scope = LayoutHeapScope::new();
         let reuse_candidate = !root.NeedsLayout();
         InitStringStatics();
@@ -1412,16 +629,17 @@ impl LayoutEngine {
                 "LayoutObject boundary is not installed",
             ));
         };
-        let export_tree = if export {
-            Some(self.boundary_.export_tree.unwrap_or_else(|| {
+        let publish_layout_result = if publish {
+            Some(self.boundary_.publish_layout_result.unwrap_or_else(|| {
                 std::panic::panic_any(LayoutEngineError::InvalidArgument(
-                    "fragment snapshot exporter is not installed",
+                    "layout-result publisher is not installed",
                 ));
             }))
         } else {
             None
         };
-        let mut environment = create_environment(root, space);
+        let transaction =
+            layout_commit::LayoutCommitTransaction::Begin(|| create_environment(root, space));
         let root_box = DynamicTo::<LayoutBox>(root as *mut LayoutObject);
         if root_box.is_null() {
             std::panic::panic_any(LayoutEngineError::InvalidArgument(
@@ -1456,31 +674,9 @@ impl LayoutEngine {
         // both of which invalidate tree_facts_ at the mutation boundary. A
         // viewport constraint update keeps that ownership stable, so do not
         // walk the entire resident tree before every incremental layout.
-        let facts = *self.tree_facts_.get_or_insert_with(|| {
-            // C++ virtual dispatch remains available while walking the tree
-            // before LayoutPassScope. Rust's explicit SVG vtable needs the
-            // same factory callbacks during this one-time scan.
-            let _object_factory_scope = LayoutObjectFactoryScope::new(&self.objects_);
-            let mut facts = LayoutTreeFacts {
-                object_count: 0,
-                contains_annotations: false,
-                has_floating_object: false,
-                has_form_control: false,
-            };
-            let mut object: *mut LayoutObject = root;
-            while !object.is_null() {
-                let current = unsafe { &*object };
-                facts.object_count += 1;
-                facts.has_floating_object |= current.IsFloating();
-                let node = current.GetNode();
-                facts.has_form_control |=
-                    !node.is_null() && unsafe { &*node }.InputKind() == NodeKind::kFormControl;
-                facts.contains_annotations |= current.IsInlineRubyText()
-                    || current.StyleRef().GetTextEmphasisMark() != TextEmphasisMark::kNone;
-                object = current.NextInPreOrder(root);
-            }
-            facts
-        });
+        let facts = *self
+            .tree_facts_
+            .get_or_insert_with(|| collect_layout_tree_facts(root, &self.objects_));
         trace.set("objects", facts.object_count as f64);
         if missing_float && facts.has_floating_object {
             std::panic::panic_any(UnsupportedLayout::new(
@@ -1494,26 +690,37 @@ impl LayoutEngine {
         }
 
         let root_node = root.GetNode();
-        let constraints = prepare_constraints(
-            unsafe { &*root_node }.InputStyle(),
-            space,
-            facts.contains_annotations,
-        );
+        let constraints = {
+            let _constraints = layout_invalidation::trace_span(
+                layout_invalidation::TracePhase::PrepareConstraints,
+            );
+            prepare_constraints(
+                unsafe { &*root_node }.InputStyle(),
+                space,
+                facts.contains_annotations,
+            )
+        };
         let _layout_pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-        let reuses_prepared_fonts = environment.ReusesPreparedFonts();
+        let reuses_prepared_fonts = transaction.Environment().ReusesPreparedFonts();
         trace.set("reuses_prepared_fonts", reuses_prepared_fonts as u8 as f64);
         trace.set(
             "tree_relations_dirty",
             self.tree_relations_dirty_ as u8 as f64,
         );
-        prepare_tree(
-            root,
-            space,
-            &constraints,
-            reuses_prepared_fonts,
-            self.tree_relations_dirty_,
-            self.targeted_font_objects_.as_deref(),
-        );
+        {
+            let _prepare =
+                layout_invalidation::trace_span(layout_invalidation::TracePhase::PrepareTree);
+            prepare_tree(
+                root,
+                space,
+                &constraints,
+                reuses_prepared_fonts,
+                self.tree_relations_dirty_,
+                self.shape_image_inputs_dirty_,
+                self.document_image_container_dirty_,
+                self.targeted_font_objects_.as_deref(),
+            );
+        }
         self.tree_relations_dirty_ = false;
         self.targeted_font_objects_ = Some(Vec::new());
         let native_root = BlockNode::new(root_box);
@@ -1525,10 +732,11 @@ impl LayoutEngine {
             "root_skips_layout_cache",
             unsafe { &*root_box }.ShouldSkipLayoutCache() as u8 as f64,
         );
-        let algorithm = browser_tracing::span("layout", "LayoutEngine.NativeLayout");
+        let mut algorithm = browser_tracing::span("layout", "LayoutEngine.AlgorithmDispatch");
+        let reuse_trace = layout_reuse::LayoutReuseTraceSession::begin(browser_tracing::enabled());
         // The extracted host publishes one complete root layout transaction.
         // Delay provisional scrollbar clamps until all nested relayouts settle,
-        // then resolve them before sticky properties and fragments are exported.
+        // then resolve them before sticky properties and the result are published.
         let clamp_scope = crate::internal::scroll_layout_scope::DelayScrollOffsetClampScope::new();
         let result = native_root.Layout(
             &constraints,
@@ -1537,7 +745,15 @@ impl LayoutEngine {
             std::ptr::null(),
         );
         drop(clamp_scope);
+        let reuse_stats = reuse_trace.finish();
+        algorithm.set("reuse_lookups", reuse_stats.lookups as f64);
+        algorithm.set("reuse_hits", reuse_stats.hits as f64);
+        algorithm.set("reuse_needs_layout", reuse_stats.needs_layout as f64);
+        algorithm.set("reuse_simplified", reuse_stats.simplified_layouts as f64);
+        algorithm.set("reuse_lines", reuse_stats.line_reuses as f64);
+        algorithm.set("reuse_lookup_us", reuse_stats.lookup_ns as f64 / 1_000.0);
         drop(algorithm);
+        PrepareLayoutHeapForPointerQueries();
         trace.set(
             "layout_result_reused",
             (result == previous_result) as u8 as f64,
@@ -1548,82 +764,37 @@ impl LayoutEngine {
             ));
         }
         // BlockNode stores the result on the LayoutBox; the tree owns its lifetime.
-        // Export uses the same assembly callbacks, font bindings and layout
-        // pass as the native result, before committing the environment.
-        let fragments = export_tree.map(|export_tree| {
-            let _trace = browser_tracing::span("layout", "LayoutEngine.ExportFragments");
-            export_tree(
+        // Publication uses the same assembly callbacks, font bindings and
+        // layout pass as the native result, before committing the environment.
+        let fragments = if let Some(publish_layout_result) = publish_layout_result {
+            Some(transaction.Publish(
                 root,
-                unsafe { &*result },
-                space,
-                &mut self.boundary_export_cache_,
-            )
-        });
-        if purpose == LayoutUpdateKind::Layout {
-            let mut objects = Vec::new();
-            let mut object = root as *mut LayoutObject;
-            while !object.is_null() {
-                objects.push(object);
-                object = unsafe { &*object }.NextInPreOrder(root);
-            }
-            crate::internal::boundary::layout_boundary::UpdateStickyOffsets(objects, false);
-        }
-        environment.Commit(root);
+                |root| {
+                    publish_layout_result(
+                        root,
+                        unsafe { &*result },
+                        space,
+                        &mut self.boundary_cache_,
+                    )
+                },
+                |root| {
+                    if purpose == LayoutUpdateKind::Layout {
+                        layout_fragment_native_sticky_layout_commit::update_sticky_offsets_after_layout(
+                            root,
+                        );
+                    }
+                },
+                |mut environment, root| environment.Commit(root),
+            ))
+        } else {
+            transaction.Commit(root, |mut environment, root| environment.Commit(root));
+            None
+        };
+        self.shape_image_inputs_dirty_ = false;
+        self.document_image_container_dirty_ = false;
         if reuse_candidate && result == previous_result {
             heap_scope.AllowUnchangedReuse();
         }
         fragments
-    }
-}
-
-#[cfg(test)]
-mod incremental_fragment_tests {
-    use super::*;
-
-    fn fragment(node_id: u64, instance_id: u64) -> FragmentNode {
-        let mut node = FragmentNode::default();
-        node.node_id = node_id;
-        node.fragment_instance_id = instance_id;
-        node.paint.has_source = true;
-        node.paint.establishes_paint_state = true;
-        node
-    }
-
-    #[test]
-    fn subtree_replacement_resolves_logical_parent_in_retained_tree() {
-        let mut root = fragment(1, 1);
-        let logical_parent = fragment(200, 20);
-        let mut old_target = fragment(300, 30);
-        let mut old_child = fragment(400, 40);
-        old_child.paint.logical_parent_node_id = Some(200);
-        old_child.paint.logical_parent_fragment_instance_id = Some(20);
-        old_target.children.push(old_child);
-        root.children = vec![logical_parent, old_target];
-
-        // A standalone subtree export cannot see its logical parent in the
-        // retained sibling and therefore carries a stale occurrence id.
-        let mut replacement = fragment(300, 1);
-        let mut replacement_child = fragment(400, 2);
-        replacement_child.paint.logical_parent_node_id = Some(200);
-        replacement_child.paint.logical_parent_fragment_instance_id = Some(999);
-        replacement.children.push(replacement_child);
-
-        let mut next_fragment = 41;
-        let mut next_fragmentainer = 1;
-        assert!(ReplaceFragmentNode(
-            &mut root,
-            300,
-            &mut replacement,
-            &mut next_fragment,
-            &mut next_fragmentainer,
-        ));
-        ResolveLogicalParentOccurrences(&mut root);
-
-        assert_eq!(
-            root.children[1].children[0]
-                .paint
-                .logical_parent_fragment_instance_id,
-            Some(20)
-        );
     }
 }

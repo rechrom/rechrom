@@ -1,0 +1,11 @@
+[package]
+name = "compositor_tile"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+compositor_draw = { path = "../compositor_draw" }
+compositor_raster = { path = "../compositor_raster" }
+compositor_tree = { path = "../compositor_tree" }

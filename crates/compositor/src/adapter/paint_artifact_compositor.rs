@@ -149,28 +149,7 @@ pub trait ArtifactDisplayItem<B: PaintArtifactCompositorTypes> {
     fn ScrollTranslation(&self) -> Option<B::TransformNode>;
     fn GetType(&self) -> ArtifactDisplayItemType;
 }
-#[derive(Clone, Copy)]
-pub enum CompositingReason {
-    OverflowScrolling,
-    FixedAttachmentBackground,
-    Caret,
-    Scrollbar,
-    Canvas,
-    DevToolsOverlay,
-    Plugin,
-    Video,
-    IFrame,
-    LinkHighlight,
-    Viewport,
-    ViewTransitionContent,
-    BackfaceVisibilityHidden,
-    Overlap,
-}
-pub trait CompositingReasons: Default + Clone {
-    fn empty(&self) -> bool;
-    fn Put(&mut self, reason: CompositingReason);
-    fn PutAll(&mut self, reasons: Self);
-}
+pub use compositor_layerize::{CompositingReason, CompositingReasons};
 pub trait ArtifactInvalidationTracking<B: PaintArtifactCompositorTypes> {
     fn AddToLayerDebugInfo(&self, info: &mut LayerDebugInfo<B::NodeId>);
     fn ClearInvalidations(&mut self);

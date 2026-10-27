@@ -1,0 +1,11 @@
+[package]
+name = "compositor_input"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+compositor_animation = { path = "../compositor_animation" }
+compositor_scheduler = { path = "../compositor_scheduler" }
+compositor_tree = { path = "../compositor_tree" }

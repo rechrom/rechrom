@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 executor = { path = "../executor" }
 animation = { path = "../animation" }
-style = { path = "../style" }
+style = { path = "../style/style" }
 browser_tracing = { path = "../tracing" }
 url = "2"
 document_loader = { path = "../document_loader" }
@@ -26,17 +26,18 @@ image_decoder = { path = "../image_decoder" }
 document_image = { path = "../document_image" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
-layoutng_block = { path = "../layoutng/layoutng_block", features = ["block_only_host", "replaced_extension"] }
-layoutng_multicol = { path = "../layoutng/layoutng_multicol" }
-layoutng_flex = { path = "../layoutng/layoutng_flex" }
-layoutng_grid = { path = "../layoutng/layoutng_grid" }
-layoutng_table = { path = "../layoutng/layoutng_table" }
-layoutng_float = { path = "../layoutng/layoutng_float" }
-layoutng_forms = { path = "../layoutng/layoutng_forms" }
-layoutng_replaced = { path = "../layoutng/layoutng_replaced" }
-layoutng_svg = { path = "../layoutng/layoutng_svg" }
-layoutng_list = { path = "../layoutng/layoutng_list" }
-layoutng_out_of_flow = { path = "../layoutng/layoutng_out_of_flow", optional = true }
+layout_fragment = { path = "../layoutng/layout_fragment" }
+layout_algo_block = { path = "../layoutng/layout_algo_block", features = ["block_only_host", "replaced_extension"] }
+layout_algo_multicol = { path = "../layoutng/layout_algo_multicol" }
+layout_algo_flex = { path = "../layoutng/layout_algo_flex" }
+layout_algo_grid = { path = "../layoutng/layout_algo_grid" }
+layout_algo_table = { path = "../layoutng/layout_algo_table" }
+layout_algo_float = { path = "../layoutng/layout_algo_float" }
+layout_algo_forms = { path = "../layoutng/layout_algo_forms" }
+layout_algo_replaced = { path = "../layoutng/layout_algo_replaced" }
+layout_algo_svg = { path = "../layoutng/layout_algo_svg" }
+layout_algo_list = { path = "../layoutng/layout_algo_list" }
+layout_algo_out_of_flow = { path = "../layoutng/layout_algo_out_of_flow", optional = true }
 paint = { path = "../paint" }
 url_loader = { path = "../url_loader" }
 renderer = { path = "../renderer" }
@@ -53,6 +54,6 @@ layoutng_style = { path = "../layoutng/layoutng_style" }
 
 [features]
 default = ["inline_layout", "production_raster"]
-inline_layout = ["layoutng_assembly/translation_in_progress", "layoutng_block/inline_extension", "dep:layoutng_out_of_flow"]
+inline_layout = ["layoutng_assembly/translation_in_progress", "layout_algo_block/inline_extension", "dep:layout_algo_out_of_flow"]
 source_paint = ["paint/translation_in_progress"]
 production_raster = ["source_paint"]

@@ -358,9 +358,9 @@ fn host_styles() -> Vec<cssom::CSSStyleSheet> {
     ]
 }
 fn find_fragment(
-    node: &layoutng_assembly::fragment_tree::FragmentNode,
+    node: &layoutng_assembly::fragment_tree::FragmentPaintData,
     wanted: u64,
-) -> Option<&layoutng_assembly::fragment_tree::FragmentNode> {
+) -> Option<&layoutng_assembly::fragment_tree::FragmentPaintData> {
     if node.node_id == wanted {
         Some(node)
     } else {

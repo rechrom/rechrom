@@ -328,7 +328,7 @@ impl Page {
             let mut targeted_wheel = wheel.clone();
             targeted_wheel.target_node_id = target_node_id;
             interaction::ComputeMainThreadScrollUpdates(
-                &frame.fragments,
+                NativePaintFragmentCursor::FromHandle(&frame.fragments),
                 &targeted_wheel,
                 viewport_height,
                 &current_offset,

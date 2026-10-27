@@ -339,7 +339,7 @@ fn equal_viewport_size_retains_the_published_layout() {
         let mut page = fixture("#fill{height:400px}", "<div id=fill></div>", false);
         let old = page.CurrentFrame().unwrap().fragments.clone();
         page.ResizeViewport(300.0, 200.0, 1.0).unwrap();
-        assert!(Rc::ptr_eq(&old, &page.CurrentFrame().unwrap().fragments));
+        assert!(old.PtrEq(&page.CurrentFrame().unwrap().fragments));
         dimensions(&mut page, 285, 200);
     });
 }

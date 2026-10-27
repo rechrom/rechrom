@@ -11,7 +11,6 @@ use crate::adapter::{
         ActiveFrameSequenceTrackers, BeginMainFrameReasons, BeginMainFrameTraceId,
         BeginMainFrameTraceIdProvider, MutatorEvents,
     },
-    scheduler::SchedulerFeatures,
 };
 use crate::cc::trees::compositor_commit_data::CompositorCommitData;
 
@@ -49,23 +48,4 @@ impl BeginMainFrameAndCommitState {
 
 // Source: cc/trees/proxy_common.h:45-48
 // Source: cc/trees/proxy_common.cc:19-59
-pub fn GetThrottlingFactor(
-    consecutive_no_damage_main_frames: i32,
-    features: &SchedulerFeatures,
-) -> i32 {
-    if !features.kThrottleRepeatedNoDamageFrames {
-        return 0;
-    }
-    let threshold1 = features.kThrottleRepeatedNoDamageFramesThreshold1;
-    let threshold2 = features.kThrottleRepeatedNoDamageFramesThreshold2;
-    let factor1 = features.kThrottleRepeatedNoDamageFramesIntervalFactor1;
-    let factor2 = features.kThrottleRepeatedNoDamageFramesIntervalFactor2;
-    let count = consecutive_no_damage_main_frames;
-    if count >= threshold1 + threshold2 {
-        return factor1 * factor2;
-    }
-    if count >= threshold1 {
-        return factor1;
-    }
-    0
-}
+pub use compositor_scheduler::GetThrottlingFactor;

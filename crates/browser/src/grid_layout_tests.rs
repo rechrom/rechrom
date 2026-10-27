@@ -1,5 +1,5 @@
 use layoutng_assembly::{
-    fragment_tree::{FragmentKind, FragmentNode},
+    fragment_tree::{FragmentKind, FragmentPaintData},
     internal::layout_input::{ConstraintSpace, FontFace, Size},
 };
 #[test]
@@ -69,7 +69,7 @@ fn run_matrix(smoke: bool) {
         },
     );
 
-    fn find(f: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+    fn find(f: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
         if f.node_id == id && f.kind == FragmentKind::kBox {
             return Some(f);
         }
@@ -136,13 +136,13 @@ fn run_matrix(smoke: bool) {
             o: &layoutng_assembly::internal::layout_object::LayoutObject,
             out: &mut std::collections::BTreeMap<
                 u64,
-                *const layoutng_grid::layout_grid::LayoutGrid,
+                *const layout_algo_grid::layout_grid::LayoutGrid,
             >,
         ) {
             if o.IsLayoutGrid() && !o.GetNode().is_null() {
                 out.insert(
                     unsafe { &*o.GetNode() }.InputId(),
-                    foundation::To::<layoutng_grid::layout_grid::LayoutGrid>(o),
+                    foundation::To::<layout_algo_grid::layout_grid::LayoutGrid>(o),
                 );
             }
             let mut c = o.SlowFirstChild();
@@ -159,7 +159,7 @@ fn run_matrix(smoke: bool) {
                 let fragments = engine
                     .TakeLayoutResult()
                     .expect("successful layout has fragments");
-                std::rc::Rc::try_unwrap(fragments).unwrap_or_else(|shared| (*shared).clone())
+                fragments
             } else {
                 use layoutng_assembly::internal::{
                     block_node::BlockNode, constraint_space::FragmentationType,
@@ -215,7 +215,7 @@ fn run_matrix(smoke: bool) {
                     assert!(!token.is_null(), "expected continuation token");
                     result = node.Layout(&grid_space, token, std::ptr::null(), std::ptr::null());
                 }
-                let fragments = assembly.boundary.export_tree.unwrap()(
+                let fragments = assembly.boundary.publish_layout_result.unwrap()(
                     unsafe { &mut *grid.cast() },
                     unsafe { &*result },
                     &space,

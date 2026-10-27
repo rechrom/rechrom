@@ -75,9 +75,7 @@ fn phase(category: &str, name: &str) -> Option<usize> {
         "Page.ResolveStyles" => 5,
         "LayoutEngine.TreeUpdate" | "Page.SynchronizeLayoutTree" => 6,
         "Host.MemoryCensus" => 17,
-        "LayoutEngine.ExportFragments"
-        | "LayoutEngine.ExportPaintOnly"
-        | "LayoutEngine.ExportTargetedPaintOnly" => 8,
+        "LayoutEngine.PopulatePaintData" | "LayoutEngine.RefreshTargetedPaintData" => 8,
         "NativeHeapCollection" => 15,
         "Page.PumpLoading"
         | "Page.ResolveStylesAndLoadResources"
@@ -87,6 +85,8 @@ fn phase(category: &str, name: &str) -> Option<usize> {
         | "Page.PollFonts"
         | "Page.FlushScriptTasks" => 4,
         "RasterWorkerWait" | "RasterTile" => return None,
+        _ if name.starts_with("layout_invalidation.") => 6,
+        _ if name.starts_with("layout_fragment.") || name.starts_with("layout_commit.") => 8,
         _ => match category {
             "owner_task" | "task" => 1,
             "owner_frame" | "frame" => 2,
@@ -157,6 +157,24 @@ impl Drop for PhaseGuard {
         let _ = PARENT.try_with(|p| p.set(self.parent));
         // owner restores the nearest enclosing structural phase after this drop.
         let _ = &self.owner;
+    }
+}
+
+#[cfg(test)]
+mod layout_package_phase_tests {
+    use super::phase;
+
+    #[test]
+    fn layout_package_prefixes_keep_stable_diagnostic_owners() {
+        assert_eq!(phase("layout", "layout_invalidation.PrepareTree"), Some(6));
+        assert_eq!(phase("layout", "layout_reuse.SlowLookup"), Some(7));
+        assert_eq!(phase("layout", "layout_algo_grid.Layout"), Some(7));
+        assert_eq!(phase("layout", "layout_fragment.ExportTree"), Some(8));
+        assert_eq!(phase("layout", "layout_commit.CommitEnvironment"), Some(8));
+        assert_eq!(
+            phase("prepaint", "layout_fragment.CertifyPaintInputs"),
+            Some(8)
+        );
     }
 }
 

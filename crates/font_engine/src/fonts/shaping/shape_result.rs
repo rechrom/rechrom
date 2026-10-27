@@ -16,7 +16,7 @@ use foundation::{
     HeapVector, IsLtr, IsRtl, LayoutUnit, MakeGarbageCollected, Member, TabSize, TextDirection,
     Traceable, Visitor,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, UnsafeCell};
 
 const HB_DIRECTION_LTR: u32 = 4;
 const HB_DIRECTION_RTL: u32 = 5;
@@ -43,6 +43,7 @@ pub struct OffsetWithSpacing {
 }
 
 impl ShapeResultCharacterData {
+    #[inline(always)]
     pub fn SetCachedData(
         &mut self,
         new_x_position: LayoutUnit,
@@ -54,14 +55,17 @@ impl ShapeResultCharacterData {
         self.safe_to_break_before = new_safe_to_break_before;
     }
 
+    #[inline(always)]
     pub fn x_position(&self) -> LayoutUnit {
         LayoutUnit::FromRawValue(self.position_or_advance_raw)
     }
 
+    #[inline(always)]
     pub fn advance(&self) -> TextRunLayoutUnit {
         TextRunLayoutUnit::FromRawValue(self.position_or_advance_raw)
     }
 
+    #[inline(always)]
     pub fn set_advance(&mut self, advance: TextRunLayoutUnit) {
         self.position_or_advance_raw = advance.RawValue();
     }
@@ -71,10 +75,43 @@ impl Traceable for ShapeResultCharacterData {
     fn Trace(&self, _visitor: &mut Visitor<'_>) {}
 }
 
+// C++ declares `character_position_` mutable and reads it directly after the
+// single document thread has populated it. `RefCell` added a runtime borrow
+// counter to every line-break lookup. UnsafeCell is the Rust representation of
+// that exact const-mutable field; ShapeResult is deliberately !Sync and all
+// mutation stays in the methods which build or recalculate this cache.
+pub(crate) struct CharacterPositionStorage(UnsafeCell<HeapVector<ShapeResultCharacterData>>);
+
+impl CharacterPositionStorage {
+    #[inline]
+    fn new() -> Self {
+        Self(UnsafeCell::new(HeapVector::new()))
+    }
+
+    #[inline]
+    pub(crate) fn get(&self) -> &HeapVector<ShapeResultCharacterData> {
+        // SAFETY: the document owner is single-threaded, and callers never
+        // retain this shared view across cache mutation.
+        unsafe { &*self.0.get() }
+    }
+
+    #[inline]
+    pub(crate) fn get_mut(&mut self) -> &mut HeapVector<ShapeResultCharacterData> {
+        self.0.get_mut()
+    }
+
+    #[inline]
+    pub(crate) unsafe fn get_mut_from_shared(&self) -> &mut HeapVector<ShapeResultCharacterData> {
+        // SAFETY: callers are the const-mutable cache construction methods and
+        // must not re-enter another cache access while this borrow is live.
+        unsafe { &mut *self.0.get() }
+    }
+}
+
 // C++: shape_result.h:130-551; shape_result_data.cc:37-61.
 // cpp: font_engine/fonts/shaping/shape_result.h:130-133,481-512
 pub struct ShapeResult {
-    pub(crate) character_position_: RefCell<HeapVector<ShapeResultCharacterData>>,
+    pub(crate) character_position_: CharacterPositionStorage,
     pub(crate) runs_: HeapVector<Member<ShapeResultRun>, 1>,
     pub(crate) width_: Cell<f32>,
     pub(crate) start_index_: u32,
@@ -118,7 +155,7 @@ impl Clone for ShapeResult {
             runs.push_back(Member::from_ptr(MakeGarbageCollected(run.clone())));
         }
         Self {
-            character_position_: RefCell::new(HeapVector::new()),
+            character_position_: CharacterPositionStorage::new(),
             runs_: runs,
             width_: Cell::new(self.width_.get()),
             start_index_: self.start_index_,
@@ -582,7 +619,7 @@ impl ShapeResult {
     // cpp: font_engine/fonts/shaping/shape_result_data.cc:37-42
     pub fn new(start_index: u32, num_characters: u32, direction: TextDirection) -> Self {
         Self {
-            character_position_: RefCell::new(HeapVector::new()),
+            character_position_: CharacterPositionStorage::new(),
             runs_: HeapVector::new(),
             width_: Cell::new(0.0),
             start_index_: start_index,
@@ -641,7 +678,7 @@ impl ShapeResult {
     // cpp: font_engine/fonts/shaping/shape_result_data.cc:58-61
     pub fn Trace(&self, visitor: &mut Visitor<'_>) {
         visitor.Trace(&self.runs_);
-        visitor.Trace(&*self.character_position_.borrow());
+        visitor.Trace(self.character_position_.get());
     }
 }
 

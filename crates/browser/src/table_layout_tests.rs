@@ -1,5 +1,5 @@
 use layoutng_assembly::{
-    fragment_tree::{FragmentKind, FragmentNode},
+    fragment_tree::{FragmentKind, FragmentPaintData},
     internal::layout_input::{ConstraintSpace, FontFace, Size},
 };
 #[test]
@@ -60,7 +60,7 @@ fn body() {
         },
     );
 
-    fn find(f: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+    fn find(f: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
         if f.node_id == id && f.kind == FragmentKind::kBox {
             return Some(f);
         }

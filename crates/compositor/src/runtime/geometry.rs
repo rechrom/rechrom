@@ -203,6 +203,28 @@ impl<R: RoundedRectTransformBackend> crate::adapter::property_tree::PropertyTree
         self.native.PostScale(x, y);
     }
 }
+impl<R: RoundedRectTransformBackend> compositor_draw::occlusion::OcclusionTransform
+    for Transform<R>
+{
+    fn InverseForOcclusion(&self, result: &mut Self) -> bool {
+        self.GetInverseNative(result)
+    }
+    fn MapEnclosingClippedRect(
+        &self,
+        rect: crate::adapter::geometry::Rect,
+    ) -> crate::adapter::geometry::Rect {
+        crate::cc::base::math_util::MathUtil::MapEnclosingClippedRect(self, rect)
+    }
+    fn ProjectEnclosingClippedRect(
+        &self,
+        rect: crate::adapter::geometry::Rect,
+    ) -> crate::adapter::geometry::Rect {
+        crate::cc::base::math_util::MathUtil::ProjectEnclosingClippedRect(self, rect)
+    }
+    fn OcclusionTransformToString(&self) -> String {
+        format!("{:?}", self.native)
+    }
+}
 impl<R: RoundedRectTransformBackend> crate::adapter::occlusion::OcclusionTransform
     for Transform<R>
 {
@@ -223,6 +245,19 @@ impl<R: RoundedRectTransformBackend> crate::adapter::scrollbar::ScrollbarTransfo
 {
     fn GetInverse(&self, result: &mut Self) -> bool {
         self.GetInverseNative(result)
+    }
+    fn ProjectPoint(
+        &self,
+        point: crate::adapter::geometry::PointF,
+        clipped: &mut bool,
+    ) -> crate::adapter::geometry::PointF {
+        crate::cc::base::math_util::MathUtil::ProjectPoint(self, point, clipped)
+    }
+    fn MapClippedRect(
+        &self,
+        rect: crate::adapter::geometry::RectF,
+    ) -> crate::adapter::geometry::RectF {
+        crate::cc::base::math_util::MathUtil::MapClippedRect(self, rect)
     }
 }
 impl<R: RoundedRectTransformBackend> crate::adapter::damage_context::DamageTransform

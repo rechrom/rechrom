@@ -7,7 +7,7 @@ mod native_test_thread;
 use browser::page::{Page, ScriptEnvironment};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use layoutng_assembly::fragment_tree::FragmentNode;
+use layoutng_assembly::fragment_tree::FragmentPaintData;
 use page_mutation::PageMutation;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
@@ -109,7 +109,7 @@ fn id(page: &Page, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("missing native DOM node {name}"))
 }
 
-fn find(root: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+fn find(root: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
     if root.node_id == id {
         Some(root)
     } else {

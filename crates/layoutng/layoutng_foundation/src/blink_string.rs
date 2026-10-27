@@ -4,37 +4,67 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+// WTF::String is one pointer to a shared StringImpl. Keep all Rust projections
+// behind the same sized owner so copying a String remains one pointer copy and
+// one reference-count update instead of copying three fat Arc slice handles.
+// The projections remain an implementation detail until all consumers use the
+// source's separate 8-bit/16-bit accessors directly.
+#[derive(Debug)]
+pub(crate) struct BlinkStringStorage {
+    pub(crate) units: Box<[u16]>,
+    pub(crate) latin1: Option<Box<[u8]>>,
+    projection: Box<str>,
+}
+
+fn empty_utf16_storage() -> Arc<BlinkStringStorage> {
+    static EMPTY: OnceLock<Arc<BlinkStringStorage>> = OnceLock::new();
+    EMPTY
+        .get_or_init(|| {
+            Arc::new(BlinkStringStorage {
+                units: Box::default(),
+                latin1: None,
+                projection: Box::default(),
+            })
+        })
+        .clone()
+}
+
+fn empty_latin1_storage() -> Arc<BlinkStringStorage> {
+    static EMPTY: OnceLock<Arc<BlinkStringStorage>> = OnceLock::new();
+    EMPTY
+        .get_or_init(|| {
+            Arc::new(BlinkStringStorage {
+                units: Box::default(),
+                latin1: Some(Box::default()),
+                projection: Box::default(),
+            })
+        })
+        .clone()
+}
 
 // cpp: foundation/blink_base/wtf/text/wtf_string.h:54-55,211-215
 #[derive(Clone, Debug)]
 pub struct BlinkString {
     // A null C++ String has no StringImpl; an empty String owns a zero-length
-    // StringImpl. Option preserves that distinction while Arc preserves cheap
-    // value copies and stable code-unit storage.
-    units: Option<Arc<[u16]>>,
-    // StringImpl can store Latin-1 directly. Keep the UTF-16 code-unit
-    // projection above for Rust callers that have not yet been width-mapped.
-    latin1: Option<Arc<[u8]>>,
-    // Rust host APIs consume UTF-8. This projection is never used for source
-    // equality, hashing, length, or offsets; unpaired surrogates remain in
-    // `units` even when the projection needs a replacement character.
-    projection: Arc<str>,
+    // StringImpl. Option<Arc<_>> is pointer-sized and preserves that distinction.
+    storage: Option<Arc<BlinkStringStorage>>,
 }
 
 impl Default for BlinkString {
     fn default() -> Self {
-        Self {
-            units: None,
-            latin1: None,
-            projection: Arc::from(""),
-        }
+        Self { storage: None }
     }
 }
 
 impl PartialEq for BlinkString {
     fn eq(&self, other: &Self) -> bool {
-        self.units == other.units
+        match (&self.storage, &other.storage) {
+            (None, None) => true,
+            (Some(left), Some(right)) => left.units == right.units,
+            _ => false,
+        }
     }
 }
 
@@ -42,7 +72,10 @@ impl Eq for BlinkString {}
 
 impl Hash for BlinkString {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.units.hash(state);
+        self.storage.is_some().hash(state);
+        if let Some(storage) = &self.storage {
+            storage.units.hash(state);
+        }
     }
 }
 
@@ -54,10 +87,17 @@ impl BlinkString {
 
     // cpp: foundation/blink_base/wtf/text/wtf_string.h:151-158
     pub fn from_utf16(units: &[u16]) -> Self {
+        let storage = if units.is_empty() {
+            empty_utf16_storage()
+        } else {
+            Arc::new(BlinkStringStorage {
+                units: units.into(),
+                latin1: None,
+                projection: std::string::String::from_utf16_lossy(units).into_boxed_str(),
+            })
+        };
         Self {
-            units: Some(Arc::from(units)),
-            latin1: None,
-            projection: Arc::from(std::string::String::from_utf16_lossy(units)),
+            storage: Some(storage),
         }
     }
 
@@ -66,10 +106,17 @@ impl BlinkString {
     pub fn from_latin1(bytes: &[u8]) -> Self {
         let units: Vec<u16> = bytes.iter().map(|&byte| u16::from(byte)).collect();
         let projection: std::string::String = bytes.iter().map(|&byte| char::from(byte)).collect();
+        let storage = if bytes.is_empty() {
+            empty_latin1_storage()
+        } else {
+            Arc::new(BlinkStringStorage {
+                units: units.into_boxed_slice(),
+                latin1: Some(bytes.into()),
+                projection: projection.into_boxed_str(),
+            })
+        };
         Self {
-            units: Some(Arc::from(units)),
-            latin1: Some(Arc::from(bytes)),
-            projection: Arc::from(projection),
+            storage: Some(storage),
         }
     }
 
@@ -89,16 +136,18 @@ impl BlinkString {
 
     // cpp: foundation/blink_base/wtf/text/wtf_string.h:208-215
     pub fn length(&self) -> u32 {
-        self.units.as_ref().map_or(0, |units| units.len() as u32)
+        self.storage
+            .as_ref()
+            .map_or(0, |storage| storage.units.len() as u32)
     }
 
     // cpp: foundation/blink_base/wtf/text/wtf_string.h:225-231
     // Source String::operator[] returns zero for null/out-of-range indices,
     // including indices produced by unsigned wraparound before offset zero.
     pub fn CodeUnitAt(&self, index: u32) -> u16 {
-        self.units
+        self.storage
             .as_ref()
-            .and_then(|units| units.get(index as usize))
+            .and_then(|storage| storage.units.get(index as usize))
             .copied()
             .unwrap_or(0)
     }
@@ -108,16 +157,20 @@ impl BlinkString {
     }
 
     pub fn IsNull(&self) -> bool {
-        self.units.is_none()
+        self.storage.is_none()
     }
 
     // cpp: foundation/blink_base/wtf/text/wtf_string.h:321-321,329-334
     pub fn Is8Bit(&self) -> bool {
-        self.latin1.is_some()
+        self.storage
+            .as_ref()
+            .is_some_and(|storage| storage.latin1.is_some())
     }
 
     pub fn Span8(&self) -> Option<&[u8]> {
-        self.latin1.as_deref()
+        self.storage
+            .as_ref()
+            .and_then(|storage| storage.latin1.as_deref())
     }
 
     // cpp: foundation/blink_base/wtf/text/wtf_string.h:84-90
@@ -134,20 +187,17 @@ impl BlinkString {
     // This also exposes the code-unit projection of an 8-bit string until
     // every Rust consumer can select Span8/Span16 like the C++ source.
     pub fn Span16(&self) -> Option<&[u16]> {
-        self.units.as_deref()
+        self.storage.as_ref().map(|storage| storage.units.as_ref())
     }
 
     // StringView retains the same StringImpl lifetime in Rust. Creating a
     // range must share storage rather than copy the whole source first.
-    pub(crate) fn SharedViewStorage(&self) -> (Arc<[u16]>, Option<Arc<[u8]>>) {
-        (
-            self.units.clone().unwrap_or_else(|| Arc::from([])),
-            self.latin1.clone(),
-        )
+    pub(crate) fn SharedViewStorage(&self) -> Option<Arc<BlinkStringStorage>> {
+        self.storage.clone()
     }
 
     pub fn Utf8(&self) -> std::string::String {
-        self.projection.to_string()
+        self.as_str().to_string()
     }
 
     /// Unicode default case folding, matching WTF String::FoldCase.
@@ -196,18 +246,20 @@ impl BlinkString {
     }
 
     pub fn as_str(&self) -> &str {
-        &self.projection
+        self.storage
+            .as_ref()
+            .map_or("", |storage| storage.projection.as_ref())
     }
 
     pub fn push_str(&mut self, value: &str) {
-        let mut units = self.units.as_deref().unwrap_or_default().to_vec();
+        let mut units = self.Span16().unwrap_or_default().to_vec();
         units.extend(value.encode_utf16());
         *self = Self::from_utf16(&units);
     }
 
     pub fn push_string(&mut self, value: &Self) {
-        let mut units = self.units.as_deref().unwrap_or_default().to_vec();
-        units.extend(value.units.as_deref().unwrap_or_default());
+        let mut units = self.Span16().unwrap_or_default().to_vec();
+        units.extend(value.Span16().unwrap_or_default());
         *self = Self::from_utf16(&units);
     }
 
@@ -240,19 +292,19 @@ impl From<&str> for BlinkString {
 impl Deref for BlinkString {
     type Target = str;
     fn deref(&self) -> &Self::Target {
-        &self.projection
+        self.as_str()
     }
 }
 
 impl AsRef<str> for BlinkString {
     fn as_ref(&self) -> &str {
-        &self.projection
+        self.as_str()
     }
 }
 
 impl fmt::Display for BlinkString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.projection)
+        f.write_str(self.as_str())
     }
 }
 

@@ -15,12 +15,16 @@ use std::sync::Arc;
 /// The canonical factory preserves the Classic/Headless/Webview/Slim source
 /// branch. No scheduler/client pointer is retained by an embedding wrapper.
 pub fn CreateScheduler(
-    client: &mut dyn SchedulerClient,
+    client: &mut dyn SchedulerClient<Types = crate::adapter::scheduler_host::FacadeSchedulerTypes>,
     settings: &SchedulerSettings,
     layer_tree_host_id: i32,
     host: Arc<dyn SchedulerHost>,
     timing_history: Arc<dyn CompositorTimingHistory>,
-    reporting: Arc<dyn CompositorFrameReportingController>,
+    reporting: Arc<
+        dyn CompositorFrameReportingController<
+            crate::adapter::scheduler_host::FacadeSchedulerTypes,
+        >,
+    >,
 ) -> Scheduler {
     Scheduler::new(
         client,
@@ -37,10 +41,14 @@ pub fn CreateScheduler(
 // the function pointer typed makes changes to native ownership/call-scoped
 // client signatures fail normal library compilation.
 const _: fn(
-    &mut dyn SchedulerClient,
+    &mut dyn SchedulerClient<Types = crate::adapter::scheduler_host::FacadeSchedulerTypes>,
     &SchedulerSettings,
     i32,
     Arc<dyn SchedulerHost>,
     Arc<dyn CompositorTimingHistory>,
-    Arc<dyn CompositorFrameReportingController>,
+    Arc<
+        dyn CompositorFrameReportingController<
+            crate::adapter::scheduler_host::FacadeSchedulerTypes,
+        >,
+    >,
 ) -> Scheduler = CreateScheduler;

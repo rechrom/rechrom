@@ -17,17 +17,9 @@ use crate::cc::{
         viewport_property_ids::ViewportPropertyIds,
     },
 };
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LayerTreeId(pub u64);
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LayerTreeHostId(pub u64);
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Color4f {
-    pub red: f32,
-    pub green: f32,
-    pub blue: f32,
-    pub alpha: f32,
-}
+pub use compositor_draw::Color4f;
+pub use compositor_tree::LayerTreeHostId;
+pub use compositor_tree::LayerTreeId;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UnguessableToken(pub [u64; 2]);
 impl UnguessableToken {
@@ -55,20 +47,7 @@ pub enum PropertyChangeForcesCommitCriteria {
     kTransform,
     kAny,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SelectionBoundType {
-    LEFT,
-    RIGHT,
-    CENTER,
-    HIDDEN,
-    #[default]
-    EMPTY,
-}
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Selection<T> {
-    pub start: T,
-    pub end: T,
-}
+pub use compositor_input::layer_selection_bound::{Selection, SelectionBoundType};
 pub trait LayerTreeSelectionBound {
     fn r#type(&self) -> SelectionBoundType;
     fn visible(&self) -> bool;
@@ -203,7 +182,7 @@ pub trait LayerTreeTypes: Sized + 'static {
         layer: &mut Self::Layer,
         callback: impl FnOnce(&mut Self::Layer, &mut Self::LayerContext<'_>) -> Output,
     ) -> Output;
-    type DamageContext<'a>: super::damage_context::DamageContext<Types = Self>
+    type DamageContext<'a>: super::damage_context::DamageContext<Trees = PropertyTreesFor<Self>>
     where
         Self: 'a;
     fn MakeDamageContext<'a>(
@@ -222,7 +201,7 @@ pub trait LayerTreeTypes: Sized + 'static {
     where
         Self: 'a;
     type OcclusionContext<'a>: super::occlusion::OcclusionContext<
-            Types = Self,
+            Trees = PropertyTreesFor<Self>,
             Transform = Self::Transform,
             Layer = i32,
             Surface = i32,
@@ -908,11 +887,7 @@ pub trait LayerTreeSynchronizer<B: LayerTreeTypes> {
     );
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ElementListType {
-    ACTIVE,
-    PENDING,
-}
+pub use compositor_animation::ElementListType;
 pub trait LayerTreeRenderSurface<B: LayerTreeTypes>: PropertyTreeRenderSurface {
     fn SetOcclusionInContentSpace(
         &mut self,
@@ -960,8 +935,7 @@ pub trait LayerTreeSurfaceTransform {
 pub use crate::cc::trees::layer_tree_settings::ScrollbarAnimator;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct UIResourceId(pub i32);
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct ResourceId(pub u32);
+pub use compositor_resource::ResourceId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UIResourceRequestType {
     kCreate,

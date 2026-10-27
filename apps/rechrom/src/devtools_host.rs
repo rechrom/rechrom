@@ -2,7 +2,7 @@
 //!
 //! Both hosts expose the same page commands and the same completed Renderer
 //! pixels. The transport remains the existing local HTTP control endpoint.
-use crate::engine::{Command, FrameMailbox};
+use crate::engine::{Command, FrameMailbox, ResizeRequest};
 use std::{
     io,
     sync::{mpsc, Arc},
@@ -78,7 +78,10 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
             return Err("device viewport exceeds render target limits".into());
         }
         resize_commands
-            .send(Command::Resize(viewport))
+            .send(Command::Resize(ResizeRequest::new(
+                viewport,
+                Instant::now(),
+            )))
             .map_err(|error| error.to_string())
     }));
     let navigate_commands = commands.clone();

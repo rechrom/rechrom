@@ -300,9 +300,14 @@ fn DocumentImagePattern<R: CpuSkiaBackend>(
     spacing_height: f64,
     values: Arc<dyn super::CpuPaintValueServices<R>>,
 ) -> Option<CpuPaintShader<R>> {
+    // Page may publish a provisional artifact while a document image's exact
+    // per-use container recording is still being produced. The frame marks
+    // that state and schedules a normal repaint when the resource arrives.
+    // Keep this draw empty for the provisional frame instead of turning a
+    // recoverable image miss into a compositor-thread panic.
     let image =
         CpuPaintImage::FromPaintResourceForContainer(source.record(), resource_id, container)
-            .expect("PaintInput validates the document image and exact container record");
+            .ok()?;
     let record_image = image.0.GetPaintRecord()?;
     if source_rect.width <= 0.
         || source_rect.height <= 0.

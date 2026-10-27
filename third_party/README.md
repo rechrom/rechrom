@@ -27,8 +27,8 @@ the source reference for the fallback iterator and shaping alignment.
 This notice records the identified upstream source and preserves its license;
 it does not assign a license to the entire Rechrom repository.
 
-The multi-column algorithm in `crates/layoutng/layoutng_multicol` and anonymous-column
-owner accessor corrections in `crates/layoutng/layoutng_fragment_tree` are translated
+The multi-column algorithm in `crates/layoutng/layout_algo_multicol` and anonymous-column
+owner accessor corrections in `crates/layoutng/layout_fragment` are translated
 from Chromium revision `6c1d401fcca5e1b0030563a90c2f2bba168e0c15`:
 
 - https://github.com/chromium/chromium/blob/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/layout/column_layout_algorithm.cc
@@ -42,8 +42,8 @@ well.
 
 The nested SVG viewport producer, SVG-container traversal, viewport length
 resolution, viewBox transforms and paint geometry integration in
-`crates/layoutng/layoutng_svg`, `crates/dom`, `crates/layoutng/layoutng`,
-`crates/layoutng/layoutng_assembly`, `crates/layoutng/layoutng_fragment_tree` and `crates/paint`
+`crates/layoutng/layout_algo_svg`, `crates/dom`, `crates/layoutng/layoutng`,
+`crates/layoutng/layoutng_assembly`, `crates/layoutng/layout_fragment` and `crates/paint`
 reference Chromium revision `6c1d401fcca5e1b0030563a90c2f2bba168e0c15`.
 `NOTICE.chromium-svg` retains the original copyright and license notices,
 with a pinned official URL for each referenced source file.

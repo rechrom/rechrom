@@ -24,7 +24,7 @@ use std::{
 };
 
 #[cfg(test)]
-use layoutng_assembly::{fragment_tree::FragmentNode, internal::layout_input::Offset};
+use layoutng_assembly::{fragment_tree::FragmentPaintData, internal::layout_input::Offset};
 #[cfg(test)]
 use std::{
     cell::Cell,
@@ -38,6 +38,33 @@ pub struct Viewport {
     pub width: u32,
     pub height: u32,
     pub scale: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ResizeRequest {
+    pub viewport: Viewport,
+    pub queued_at: Instant,
+    pub samples: usize,
+}
+impl ResizeRequest {
+    pub fn new(viewport: Viewport, queued_at: Instant) -> Self {
+        Self {
+            viewport,
+            queued_at,
+            samples: 1,
+        }
+    }
+    pub fn with_viewport(self, viewport: Viewport) -> Self {
+        Self { viewport, ..self }
+    }
+    pub fn merge(&mut self, next: Self) {
+        self.viewport = next.viewport;
+        self.queued_at = self.queued_at.min(next.queued_at);
+        self.samples = self.samples.saturating_add(next.samples);
+    }
+    pub fn trace_id(self) -> u64 {
+        browser_tracing::instant_id(self.queued_at)
+    }
 }
 impl Viewport {
     pub fn toolbar_pixels(self) -> u32 {
@@ -154,7 +181,7 @@ const OPEN_ENGINE_WAKE: EngineWakeToken = EngineWakeToken(1);
 #[derive(Clone)]
 pub enum Command {
     Navigate(String),
-    Resize(Viewport),
+    Resize(ResizeRequest),
     VSyncDisplayChanged(u32),
     Redraw,
     Input(InputEvent),

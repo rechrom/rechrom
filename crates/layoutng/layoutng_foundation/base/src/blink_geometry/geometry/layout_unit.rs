@@ -13,6 +13,10 @@ pub trait FixedStorage: Copy + Debug + Eq + Ord {
     fn from_i128_wrapping(value: i128) -> Self;
     fn to_i128(self) -> i128;
     fn to_unsigned_wrapping(self) -> Self::Unsigned;
+    fn saturating_add(self, rhs: Self) -> Self;
+    fn saturating_sub(self, rhs: Self) -> Self;
+    fn saturating_mul_i32(self, rhs: i32) -> Self;
+    fn saturating_neg(self) -> Self;
 }
 
 impl FixedStorage for i32 {
@@ -32,6 +36,26 @@ impl FixedStorage for i32 {
     fn to_unsigned_wrapping(self) -> Self::Unsigned {
         self as u32
     }
+
+    #[inline(always)]
+    fn saturating_add(self, rhs: Self) -> Self {
+        self.saturating_add(rhs)
+    }
+
+    #[inline(always)]
+    fn saturating_sub(self, rhs: Self) -> Self {
+        self.saturating_sub(rhs)
+    }
+
+    #[inline(always)]
+    fn saturating_mul_i32(self, rhs: i32) -> Self {
+        self.saturating_mul(rhs)
+    }
+
+    #[inline(always)]
+    fn saturating_neg(self) -> Self {
+        self.saturating_neg()
+    }
 }
 
 impl FixedStorage for i64 {
@@ -50,6 +74,26 @@ impl FixedStorage for i64 {
 
     fn to_unsigned_wrapping(self) -> Self::Unsigned {
         self as u64
+    }
+
+    #[inline(always)]
+    fn saturating_add(self, rhs: Self) -> Self {
+        self.saturating_add(rhs)
+    }
+
+    #[inline(always)]
+    fn saturating_sub(self, rhs: Self) -> Self {
+        self.saturating_sub(rhs)
+    }
+
+    #[inline(always)]
+    fn saturating_mul_i32(self, rhs: i32) -> Self {
+        self.saturating_mul(i64::from(rhs))
+    }
+
+    #[inline(always)]
+    fn saturating_neg(self) -> Self {
+        self.saturating_neg()
     }
 }
 
@@ -144,6 +188,7 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage> FixedPoint<FRACTIONAL_BI
     }
 
     // C++: FromRawValue and FromRawValueWithClamp.
+    #[inline(always)]
     pub fn FromRawValue(raw_value: Storage) -> Self {
         Self { value_: raw_value }
     }
@@ -201,9 +246,21 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage> FixedPoint<FRACTIONAL_BI
     }
 
     // C++: To<Target> and ToCeil<Target>.
+    #[inline(always)]
     pub fn To<const TARGET_BITS: u32, TargetStorage: FixedStorage>(
         &self,
     ) -> FixedPoint<TARGET_BITS, TargetStorage> {
+        // C++ selects the exact-fractional-bits FromFixed(Storage) overload
+        // for widening conversions. That overload is a raw integer move; it
+        // does not pass through the saturating i128 conversion used by the
+        // lossy overloads. Keep that distinction here because glyph advances
+        // convert TextRunLayoutUnit (i32.16) to InlineLayoutUnit (i64.16) in
+        // the innermost line-breaking loops.
+        if TARGET_BITS == FRACTIONAL_BITS && TargetStorage::BITS >= Storage::BITS {
+            return FixedPoint::<TARGET_BITS, TargetStorage>::FromRawValue(
+                TargetStorage::from_i128_wrapping(self.RawValue().to_i128()),
+            );
+        }
         FixedPoint::<TARGET_BITS, TargetStorage>::FromFixed::<FRACTIONAL_BITS>(
             self.RawValue().to_i128(),
         )
@@ -227,6 +284,7 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage> FixedPoint<FRACTIONAL_BI
         Storage::from_i128_wrapping(self.value_.to_i128() / Self::kFixedPointDenominator)
     }
 
+    #[inline(always)]
     pub fn ToFloat(&self) -> f32 {
         self.value_.to_i128() as f32 / Self::kFixedPointDenominator as f32
     }
@@ -242,11 +300,14 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage> FixedPoint<FRACTIONAL_BI
 
     // C++: operator++(int) returns the incremented value.
     pub fn PostIncrement(&mut self) -> Self {
-        self.value_ = Self::ClampRawValue(self.value_.to_i128() + Self::kFixedPointDenominator);
+        self.value_ = self
+            .value_
+            .saturating_add(Storage::from_i128_wrapping(Self::kFixedPointDenominator));
         *self
     }
 
     // C++: RawValue and both SetRawValue overloads.
+    #[inline(always)]
     pub fn RawValue(&self) -> Storage {
         self.value_
     }
@@ -547,7 +608,7 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage> Mul<i32>
     type Output = Self;
 
     fn mul(self, rhs: i32) -> Self::Output {
-        Self::FromRawValueWithClamp(self.RawValue().to_i128() * rhs as i128)
+        Self::FromRawValue(self.RawValue().saturating_mul_i32(rhs))
     }
 }
 
@@ -674,7 +735,8 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage, SourceStorage: FixedStor
 
     fn add(self, rhs: FixedPoint<FRACTIONAL_BITS, SourceStorage>) -> Self::Output {
         debug_assert!(SourceStorage::BITS <= Storage::BITS);
-        Self::FromRawValueWithClamp(self.RawValue().to_i128() + rhs.RawValue().to_i128())
+        let rhs = Storage::from_i128_wrapping(rhs.RawValue().to_i128());
+        Self::FromRawValue(self.RawValue().saturating_add(rhs))
     }
 }
 
@@ -744,7 +806,7 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage> Sub
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        Self::FromRawValueWithClamp(self.RawValue().to_i128() - rhs.RawValue().to_i128())
+        Self::FromRawValue(self.RawValue().saturating_sub(rhs.RawValue()))
     }
 }
 
@@ -812,7 +874,7 @@ impl<const FRACTIONAL_BITS: u32, Storage: FixedStorage> Neg
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        Self::FromRawValueWithClamp(-self.RawValue().to_i128())
+        Self::FromRawValue(self.RawValue().saturating_neg())
     }
 }
 

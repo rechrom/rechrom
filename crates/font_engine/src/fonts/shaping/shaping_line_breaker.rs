@@ -689,17 +689,22 @@ impl<'a> ShapingLineBreaker<'a> {
         line_start_result: *const ShapeResult,
         line_end_result: *const ShapeResult,
     ) -> *const ShapeResultView {
-        let mut segments = Vec::with_capacity(3);
+        let mut segments = [Segment::default(); 3];
+        let mut count = 0usize;
         if !line_start_result.is_null() {
-            segments.push(Segment::from_result(line_start_result, 0, u32::MAX));
+            segments[count] = Segment::from_result(line_start_result, 0, u32::MAX);
+            count += 1;
         }
         if last_safe > first_safe {
-            segments.push(Segment::from_result(self.result_, first_safe, last_safe));
+            segments[count] = Segment::from_result(self.result_, first_safe, last_safe);
+            count += 1;
         }
         if !line_end_result.is_null() {
-            segments.push(Segment::from_result(line_end_result, last_safe, u32::MAX));
+            segments[count] = Segment::from_result(line_end_result, last_safe, u32::MAX);
+            count += 1;
         }
-        let line_result = ShapeResultView::Create(&segments);
+        debug_assert!(count > 0);
+        let line_result = ShapeResultView::Create(&segments[..count]);
         debug_assert_eq!(end - start, unsafe { &*line_result }.NumCharacters());
         line_result
     }

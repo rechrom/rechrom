@@ -16,10 +16,10 @@ layoutng_style = { path = "../layoutng/layoutng_style" }
 
 [dev-dependencies]
 html = { path = "../html" }
-style = { path = "../style" }
+style = { path = "../style/style" }
 # Standalone DOM tests link the assembly dispatch's real replaced-object
 # provider; browser executables already supply it through their layout bundle.
-layoutng_replaced = { path = "../layoutng/layoutng_replaced" }
-layoutng_block = { path = "../layoutng/layoutng_block", features = ["block_only_host", "replaced_extension"] }
+layout_algo_replaced = { path = "../layoutng/layout_algo_replaced" }
+layout_algo_block = { path = "../layoutng/layout_algo_block", features = ["block_only_host", "replaced_extension"] }
 
 layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }

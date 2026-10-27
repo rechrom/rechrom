@@ -1,11 +1,11 @@
 // C++: foundation/blink_base/heap/{heap.h,heap.cc,visitor.h,persistent.h,garbage_collected.h}.
 // This is the single-thread-owned layout heap. Marking is atomic outside engine
 // scopes; the Page host schedules incremental sweeping on the same owner.
-use crate::{kMemberDeletedValue, Member, UntracedMember, WeakMember};
-use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
+use crate::{kMemberDeletedValue, Member, TrustedIdentityHashMap, UntracedMember, WeakMember};
+use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
-use std::hash::{BuildHasherDefault, Hasher};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
@@ -149,44 +149,233 @@ struct TraceWorkItem {
 struct Allocation {
     address: NonNull<u8>,
     layout: Layout,
+    pooled: Option<PooledSlot>,
     trace: Option<TraceFn>,
     destroy: Option<DestroyFn>,
     marked: bool,
     strongly_marked: bool,
 }
 
-// Managed addresses are allocator-produced, aligned, process-local values.
-// Hashing all of their bytes with RandomState on every traced edge is wasted
-// work; cppgc likewise resolves a heap address directly through page metadata.
-// Keep an ordered size index only for the uncommon interior-pointer lookup.
-#[derive(Default)]
-struct AddressHasher(u64);
+// Owns raw storage until a completely initialized payload has been published
+// in HeapState.  This is the Rust RAII equivalent of cppgc's allocation guard;
+// it keeps unwind cleanup without putting catch_unwind on every allocation.
+struct PendingAllocation<T> {
+    address: NonNull<u8>,
+    layout: Layout,
+    pooled: Option<PooledSlot>,
+    initialized: bool,
+    marker: std::marker::PhantomData<T>,
+}
 
-impl Hasher for AddressHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        let mut value = 0u64;
-        for (shift, byte) in bytes.iter().take(8).enumerate() {
-            value |= u64::from(*byte) << (shift * 8);
+impl<T> Drop for PendingAllocation<T> {
+    fn drop(&mut self) {
+        unsafe {
+            if self.initialized {
+                std::ptr::drop_in_place(self.address.as_ptr() as *mut T);
+            }
+            if let Some(pooled) = self.pooled {
+                HEAP.with(|heap| heap.borrow_mut().allocator.release(self.address, pooled));
+            } else {
+                dealloc(self.address.as_ptr(), self.layout);
+            }
         }
-        self.0 = value;
-    }
-
-    fn write_usize(&mut self, value: usize) {
-        // Drop guaranteed allocation-alignment bits while retaining all
-        // entropy that distinguishes registered objects.
-        self.0 = (value >> 4) as u64;
     }
 }
 
-type AddressMap<V> = HashMap<usize, V, BuildHasherDefault<AddressHasher>>;
-
 impl Drop for Allocation {
     fn drop(&mut self) {
-        unsafe { dealloc(self.address.as_ptr(), self.layout) };
+        if self.pooled.is_none() {
+            unsafe { dealloc(self.address.as_ptr(), self.layout) };
+        }
+    }
+}
+
+// cppgc allocates regular objects from fixed-size pages and segregated free
+// lists. Keep the same pointer-stable ownership model here: objects retain
+// individual trace/finalizer metadata, while their storage comes from a page.
+const REGULAR_PAGE_SIZE: usize = 128 * 1024;
+const REGULAR_PAGE_ALIGNMENT: usize = 16;
+const REGULAR_SIZE_CLASSES: [usize; 31] = [
+    16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024,
+    1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3584, 4096, 4608,
+];
+
+struct RegularPage {
+    address: NonNull<u8>,
+    next_offset: usize,
+    object_indices: Vec<Option<usize>>,
+}
+
+impl Drop for RegularPage {
+    fn drop(&mut self) {
+        let layout = Layout::from_size_align(REGULAR_PAGE_SIZE, REGULAR_PAGE_SIZE).unwrap();
+        unsafe { dealloc(self.address.as_ptr(), layout) };
+    }
+}
+
+struct RegularSizeClass {
+    slot_size: usize,
+    pages: Vec<RegularPage>,
+    free: Vec<(NonNull<u8>, u32, u16)>,
+}
+
+#[derive(Clone, Copy)]
+struct PooledSlot {
+    class: u8,
+    slot: u16,
+    page: u32,
+}
+
+impl RegularSizeClass {
+    fn new(slot_size: usize) -> Self {
+        Self {
+            slot_size,
+            pages: Vec::new(),
+            free: Vec::new(),
+        }
+    }
+
+    fn allocate(&mut self) -> (NonNull<u8>, u32, u16, bool) {
+        if let Some((address, page, slot)) = self.free.pop() {
+            return (address, page, slot, false);
+        }
+        let needs_page = self
+            .pages
+            .last()
+            .is_none_or(|page| page.next_offset + self.slot_size > REGULAR_PAGE_SIZE);
+        if needs_page {
+            // cppgc regular pages are aligned, which lets an arbitrary managed
+            // address resolve its page before consulting per-slot metadata.
+            let layout = Layout::from_size_align(REGULAR_PAGE_SIZE, REGULAR_PAGE_SIZE).unwrap();
+            let address = NonNull::new(unsafe { alloc(layout) })
+                .unwrap_or_else(|| handle_alloc_error(layout));
+            self.pages.push(RegularPage {
+                address,
+                next_offset: 0,
+                object_indices: vec![None; REGULAR_PAGE_SIZE / self.slot_size],
+            });
+        }
+        let page_index = self.pages.len() - 1;
+        let page = self.pages.last_mut().unwrap();
+        let slot = page.next_offset / self.slot_size;
+        let address =
+            unsafe { NonNull::new_unchecked(page.address.as_ptr().add(page.next_offset)) };
+        page.next_offset += self.slot_size;
+        (
+            address,
+            u32::try_from(page_index).expect("too many regular pages"),
+            u16::try_from(slot).expect("too many slots in a regular page"),
+            needs_page,
+        )
+    }
+
+    fn release(&mut self, address: NonNull<u8>, page: u32, slot: u16) {
+        self.free.push((address, page, slot));
+    }
+}
+
+struct HeapAllocator {
+    regular: Vec<RegularSizeClass>,
+    regular_pages: TrustedIdentityHashMap<usize, (usize, usize)>,
+}
+
+enum PooledAddress {
+    NotPooled,
+    Vacant,
+    Object(usize),
+}
+
+impl HeapAllocator {
+    fn new() -> Self {
+        Self {
+            regular: REGULAR_SIZE_CLASSES
+                .into_iter()
+                .map(RegularSizeClass::new)
+                .collect(),
+            regular_pages: TrustedIdentityHashMap::default(),
+        }
+    }
+
+    fn allocate(&mut self, layout: Layout) -> (NonNull<u8>, Option<PooledSlot>) {
+        if layout.align() <= REGULAR_PAGE_ALIGNMENT {
+            // cppgc maps regular allocations to a segregated size class
+            // without walking every free list. Keep the ordered class table as
+            // the single source of truth and locate its lower bound directly.
+            let class = REGULAR_SIZE_CLASSES.partition_point(|&size| size < layout.size());
+            if class < self.regular.len() {
+                let (address, page, slot, new_page) = self.regular[class].allocate();
+                if new_page {
+                    let base = self.regular[class].pages[page as usize].address.as_ptr() as usize;
+                    debug_assert_eq!(base & (REGULAR_PAGE_SIZE - 1), 0);
+                    let old = self.regular_pages.insert(base, (class, page as usize));
+                    debug_assert!(old.is_none());
+                }
+                return (
+                    address,
+                    Some(PooledSlot {
+                        class: class as u8,
+                        slot,
+                        page,
+                    }),
+                );
+            }
+        }
+        let address =
+            NonNull::new(unsafe { alloc(layout) }).unwrap_or_else(|| handle_alloc_error(layout));
+        (address, None)
+    }
+
+    fn release(&mut self, address: NonNull<u8>, pooled: PooledSlot) {
+        let class = pooled.class as usize;
+        let size_class = &mut self.regular[class];
+        let page = &mut size_class.pages[pooled.page as usize];
+        debug_assert_eq!(
+            address.as_ptr() as usize,
+            page.address.as_ptr() as usize + pooled.slot as usize * size_class.slot_size
+        );
+        page.object_indices[pooled.slot as usize] = None;
+        size_class.release(address, pooled.page, pooled.slot);
+    }
+
+    fn bind(&mut self, pooled: PooledSlot, object_index: usize) {
+        let previous = self.regular[pooled.class as usize].pages[pooled.page as usize]
+            .object_indices[pooled.slot as usize]
+            .replace(object_index);
+        debug_assert!(previous.is_none());
+    }
+
+    fn clear_bindings(&mut self) {
+        for size_class in &mut self.regular {
+            for page in &mut size_class.pages {
+                page.object_indices.fill(None);
+            }
+        }
+    }
+
+    fn find_index(&self, address: usize, objects: &[Option<Allocation>]) -> PooledAddress {
+        let base = address & !(REGULAR_PAGE_SIZE - 1);
+        let Some(&(class, page_index)) = self.regular_pages.get(&base) else {
+            return PooledAddress::NotPooled;
+        };
+        let size_class = &self.regular[class];
+        let page = &size_class.pages[page_index];
+        let offset = address - base;
+        if offset >= page.next_offset {
+            return PooledAddress::Vacant;
+        }
+        let slot = offset / size_class.slot_size;
+        let Some(index) = page.object_indices[slot] else {
+            return PooledAddress::Vacant;
+        };
+        let Some(object) = objects.get(index).and_then(Option::as_ref) else {
+            return PooledAddress::Vacant;
+        };
+        let start = object.address.as_ptr() as usize;
+        if address.wrapping_sub(start) < object.layout.size() {
+            PooledAddress::Object(index)
+        } else {
+            PooledAddress::Vacant
+        }
     }
 }
 
@@ -228,6 +417,19 @@ struct PersistentRegion {
     nodes: Vec<PersistentNode>,
     free: Option<usize>,
     used: usize,
+}
+
+struct IndexMergeSource {
+    pending: bool,
+    position: usize,
+    end: usize,
+}
+
+struct IndexMergeState {
+    sources: Vec<IndexMergeSource>,
+    heap: BinaryHeap<Reverse<(usize, usize)>>,
+    output: Vec<(usize, usize, usize)>,
+    pending_count: usize,
 }
 impl PersistentRegion {
     fn allocate(&mut self, root: Weak<dyn RootSlot>) -> usize {
@@ -302,8 +504,17 @@ struct HeapState {
     // Revisited shared edges need not be among the four most recent intervals.
     // Exact-address hits are valid only within this collection; collisions miss.
     strong_marked_addresses: [usize; 1024],
-    objects: AddressMap<Allocation>,
-    object_ranges: BTreeMap<usize, usize>,
+    allocator: HeapAllocator,
+    objects: Vec<Option<Allocation>>,
+    // New objects are appended without touching an address map on the hot
+    // allocation path. A lifecycle boundary sorts only the new suffix into a
+    // run; collection can query the immutable runs directly. Sweeping merges
+    // them and removes tombstones once, after all finalizers have completed.
+    sorted_object_ranges: Vec<(usize, usize, usize)>,
+    pending_object_ranges: Vec<(usize, usize, usize)>,
+    pending_sorted_runs: Vec<(usize, usize)>,
+    pending_sorted_count: usize,
+    index_merge: Option<IndexMergeState>,
     roots: PersistentRegion,
     worklist: Vec<TraceWorkItem>,
     weak_slots: Vec<WeakSlot>,
@@ -332,8 +543,13 @@ impl HeapState {
             strong_marked_ranges: [(0, 0); 4],
             next_strong_marked_range: 0,
             strong_marked_addresses: [0; 1024],
-            objects: AddressMap::default(),
-            object_ranges: BTreeMap::new(),
+            allocator: HeapAllocator::new(),
+            objects: Vec::new(),
+            sorted_object_ranges: Vec::new(),
+            pending_object_ranges: Vec::new(),
+            pending_sorted_runs: Vec::new(),
+            pending_sorted_count: 0,
+            index_merge: None,
             roots: PersistentRegion::default(),
             worklist: Vec::new(),
             weak_slots: Vec::new(),
@@ -344,24 +560,220 @@ impl HeapState {
         }
     }
 
-    fn find(&self, pointer: *const u8) -> Option<usize> {
+    fn find_index(&self, pointer: *const u8) -> Option<usize> {
         let address = pointer as usize;
-        if self.objects.contains_key(&address) {
-            return Some(address);
+        match self.allocator.find_index(address, &self.objects) {
+            PooledAddress::Object(index) => return Some(index),
+            PooledAddress::Vacant => return None,
+            PooledAddress::NotPooled => {}
         }
-        let (&start, &size) = self.object_ranges.range(..=address).next_back()?;
-        (address.wrapping_sub(start) < size).then_some(start)
+        for &(start, size, index) in self.pending_object_ranges[self.pending_sorted_count..]
+            .iter()
+            .rev()
+        {
+            if address.wrapping_sub(start) < size && self.objects[index].is_some() {
+                return Some(index);
+            }
+        }
+        for &(begin, end) in self.pending_sorted_runs.iter().rev() {
+            if let Some(index) =
+                self.find_in_sorted_ranges(&self.pending_object_ranges[begin..end], address)
+            {
+                return Some(index);
+            }
+        }
+        self.find_in_sorted_ranges(&self.sorted_object_ranges, address)
     }
 
+    fn find_in_sorted_ranges(
+        &self,
+        ranges: &[(usize, usize, usize)],
+        address: usize,
+    ) -> Option<usize> {
+        let mut position = ranges.partition_point(|&(start, _, _)| start <= address);
+        while position != 0 {
+            position -= 1;
+            let (start, size, index) = ranges[position];
+            if address.wrapping_sub(start) >= size {
+                return None;
+            }
+            if self.objects[index].is_some() {
+                return Some(index);
+            }
+            // A freed backing can be followed by a live allocation at the
+            // same reused address. Continue only through that duplicate group.
+        }
+        None
+    }
+
+    fn find(&self, pointer: *const u8) -> Option<usize> {
+        self.find_index(pointer)
+            .map(|index| self.objects[index].as_ref().unwrap().address.as_ptr() as usize)
+    }
+
+    fn object(&self, address: usize) -> Option<&Allocation> {
+        let index = self.find_index(address as *const u8)?;
+        let object = self.objects[index].as_ref()?;
+        (object.address.as_ptr() as usize == address).then_some(object)
+    }
+
+    fn object_mut(&mut self, address: usize) -> Option<&mut Allocation> {
+        let index = self.find_index(address as *const u8)?;
+        let object = self.objects[index].as_mut()?;
+        (object.address.as_ptr() as usize == address).then_some(object)
+    }
+
+    fn object_count(&self) -> usize {
+        self.objects
+            .iter()
+            .filter(|object| object.is_some())
+            .count()
+    }
+
+    #[inline(always)]
     fn insert_object(&mut self, start: usize, object: Allocation) {
-        let previous_range = self.object_ranges.insert(start, object.layout.size());
-        let previous_object = self.objects.insert(start, object);
-        assert!(previous_range.is_none() && previous_object.is_none());
+        assert_eq!(start, object.address.as_ptr() as usize);
+        debug_assert!(self.find(start as *const u8).is_none());
+        let size = object.layout.size();
+        let pooled = object.pooled;
+        let index = self.objects.len();
+        self.objects.push(Some(object));
+        if let Some(pooled) = pooled {
+            self.allocator.bind(pooled, index);
+        } else {
+            self.pending_object_ranges.push((start, size, index));
+        }
     }
 
     fn remove_object(&mut self, start: usize) -> Option<Allocation> {
-        self.object_ranges.remove(&start);
-        self.objects.remove(&start)
+        let index = self.find_index(start as *const u8)?;
+        if self.objects[index].as_ref()?.address.as_ptr() as usize != start {
+            return None;
+        }
+        self.objects[index].take()
+    }
+
+    fn prepare_pointer_queries(&mut self) {
+        let begin = self.pending_sorted_count;
+        let end = self.pending_object_ranges.len();
+        if begin == end {
+            return;
+        }
+        self.pending_object_ranges[begin..end].sort_unstable_by_key(|range| range.0);
+        self.pending_sorted_runs.push((begin, end));
+        self.pending_sorted_count = end;
+    }
+
+    fn rebuild_object_ranges(&mut self) {
+        self.objects.retain(|object| object.is_some());
+        self.allocator.clear_bindings();
+        self.sorted_object_ranges.clear();
+        for (index, object) in self.objects.iter().enumerate() {
+            let object = object.as_ref().unwrap();
+            if let Some(pooled) = object.pooled {
+                self.allocator.bind(pooled, index);
+            } else {
+                self.sorted_object_ranges.push((
+                    object.address.as_ptr() as usize,
+                    object.layout.size(),
+                    index,
+                ));
+            }
+        }
+        self.sorted_object_ranges
+            .sort_unstable_by_key(|range| range.0);
+        self.pending_object_ranges.clear();
+        self.pending_sorted_runs.clear();
+        self.pending_sorted_count = 0;
+        self.index_merge = None;
+    }
+
+    fn indexed_range(&self, pending: bool, position: usize) -> (usize, usize, usize) {
+        if pending {
+            self.pending_object_ranges[position]
+        } else {
+            self.sorted_object_ranges[position]
+        }
+    }
+
+    fn prepare_collection_index_until(&mut self, deadline: Option<std::time::Instant>) -> bool {
+        let mut trace = browser_tracing::span("gc", "LayoutHeap.PrepareIndex");
+        self.prepare_pointer_queries();
+        if self.index_merge.is_none() {
+            if self.pending_object_ranges.is_empty() {
+                return true;
+            }
+            let pending_count = self.pending_object_ranges.len();
+            let mut sources = Vec::with_capacity(1 + self.pending_sorted_runs.len());
+            if !self.sorted_object_ranges.is_empty() {
+                sources.push(IndexMergeSource {
+                    pending: false,
+                    position: 0,
+                    end: self.sorted_object_ranges.len(),
+                });
+            }
+            sources.extend(
+                self.pending_sorted_runs
+                    .iter()
+                    .map(|&(begin, end)| IndexMergeSource {
+                        pending: true,
+                        position: begin,
+                        end,
+                    }),
+            );
+            let mut heap = BinaryHeap::with_capacity(sources.len());
+            for (source_id, source) in sources.iter().enumerate() {
+                let (start, _, _) = self.indexed_range(source.pending, source.position);
+                heap.push(Reverse((start, source_id)));
+            }
+            self.index_merge = Some(IndexMergeState {
+                sources,
+                heap,
+                output: Vec::with_capacity(self.sorted_object_ranges.len() + pending_count),
+                pending_count,
+            });
+        }
+        let mut state = self.index_merge.take().unwrap();
+        let output_start = state.output.len();
+        while deadline.is_none_or(|limit| std::time::Instant::now() < limit) {
+            let Some(Reverse((_, source_id))) = state.heap.pop() else {
+                break;
+            };
+            let source = &mut state.sources[source_id];
+            let range = self.indexed_range(source.pending, source.position);
+            if self.objects[range.2].is_some() {
+                state.output.push(range);
+            }
+            source.position += 1;
+            if source.position < source.end {
+                let next = self.indexed_range(source.pending, source.position);
+                state.heap.push(Reverse((next.0, source_id)));
+            }
+        }
+        trace.set("ranges", (state.output.len() - output_start) as f64);
+        if !state.heap.is_empty() {
+            trace.set("complete", 0.0);
+            self.index_merge = Some(state);
+            return false;
+        }
+
+        let consumed = state.pending_count;
+        self.sorted_object_ranges = state.output;
+        self.pending_object_ranges.drain(..consumed);
+        self.pending_sorted_runs = self
+            .pending_sorted_runs
+            .drain(..)
+            .filter_map(|(begin, end)| {
+                if end > consumed {
+                    Some((begin - consumed, end - consumed))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.pending_sorted_count -= consumed;
+        trace.set("complete", 1.0);
+        self.pending_object_ranges.is_empty()
     }
 
     fn alive(&self, pointer: *const u8) -> bool {
@@ -371,10 +783,10 @@ impl HeapState {
         if self.collecting && self.is_cached_strong_mark(pointer as usize) {
             return true;
         }
-        let start = self
-            .find(pointer)
+        let index = self
+            .find_index(pointer)
             .expect("liveness query reached another heap");
-        self.objects[&start].marked
+        self.objects[index].as_ref().unwrap().marked
     }
 
     fn strong_mark_address_slot(address: usize) -> usize {
@@ -411,10 +823,10 @@ impl HeapState {
         // Keep the interval lookup's Allocation instead of searching the same
         // BTree again by its base address. Interior pointers still mark the
         // whole allocation, and pointers beyond its end remain invalid.
-        let start = self
-            .find(pointer)
+        let index = self
+            .find_index(pointer)
             .expect("Trace reached an object outside the layout heap");
-        let object = self.objects.get_mut(&start).unwrap();
+        let object = self.objects[index].as_mut().unwrap();
         assert!(
             object.trace.is_some() && object.destroy.is_some(),
             "Trace reached an unfinished allocation"
@@ -459,7 +871,7 @@ impl HeapState {
         root_trace.set("live_cells", roots.len() as f64);
         drop(root_trace);
         let reset_trace = browser_tracing::span("gc", "LayoutHeap.ResetMarks");
-        for object in self.objects.values_mut() {
+        for object in self.objects.iter_mut().filter_map(Option::as_mut) {
             object.marked = false;
             object.strongly_marked = false;
         }
@@ -514,7 +926,7 @@ impl HeapState {
                 heap: &*visitor.heap,
             };
             for backing in &visitor.heap.weak_backings {
-                if !broker.heap.objects[&backing.address].strongly_marked {
+                if !broker.heap.object(backing.address).unwrap().strongly_marked {
                     (backing.callback)(&broker, backing.owner);
                 }
             }
@@ -539,15 +951,20 @@ impl HeapState {
             .heap
             .objects
             .iter()
-            .filter_map(|(&address, object)| (!object.marked).then_some(address))
+            .filter_map(Option::as_ref)
+            .filter_map(|object| (!object.marked).then_some(object.address.as_ptr() as usize))
             .collect();
         drop(dead_trace);
         if let Some(start) = profile {
             let elapsed = start.elapsed();
             eprintln!(
                 "layout-gc-mark-profile objects={} roots={} traced={} dead={} edges={} cache_hits={} roots_ms={:.3} trace_ms={:.3} weak_ms={:.3} dead_scan_ms={:.3} total_ms={:.3}",
-                visitor.heap.objects.len(), visitor.heap.roots.len(), traced_objects, dead.len(),
-                visitor.heap.profile_mark_edges, visitor.heap.profile_mark_cache_hits,
+                visitor.heap.object_count(),
+                visitor.heap.roots.len(),
+                traced_objects,
+                dead.len(),
+                visitor.heap.profile_mark_edges,
+                visitor.heap.profile_mark_cache_hits,
                 roots_done.unwrap().as_secs_f64() * 1000.0,
                 (trace_done.unwrap() - roots_done.unwrap()).as_secs_f64() * 1000.0,
                 (weak_done.unwrap() - trace_done.unwrap()).as_secs_f64() * 1000.0,
@@ -585,7 +1002,11 @@ fn start_collection() {
             heap.sweep.is_none(),
             "finish sweeping before starting another collection"
         );
-        trace.set("objects", heap.objects.len() as f64);
+        assert!(
+            heap.index_merge.is_none() && heap.pending_object_ranges.is_empty(),
+            "finish preparing the collection index before marking"
+        );
+        trace.set("objects", heap.object_count() as f64);
         trace.set("roots", heap.roots.used as f64);
         trace.set("root_slots", heap.roots.len() as f64);
         let before_bytes = heap.heap_bytes;
@@ -619,8 +1040,7 @@ fn sweep_until(deadline: Option<std::time::Instant>) {
             let address = state.dead[state.finalized];
             let destroy = HEAP.with(|heap| {
                 heap.borrow_mut()
-                    .objects
-                    .get_mut(&address)
+                    .object_mut(address)
                     .unwrap()
                     .destroy
                     .take()
@@ -642,6 +1062,9 @@ fn sweep_until(deadline: Option<std::time::Instant>) {
                     let address = state.dead[state.released];
                     let object = heap.remove_object(address).unwrap();
                     heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
+                    if let Some(pooled) = object.pooled {
+                        heap.allocator.release(object.address, pooled);
+                    }
                     drop(object);
                     state.released += 1;
                 }
@@ -652,6 +1075,7 @@ fn sweep_until(deadline: Option<std::time::Instant>) {
     HEAP.with(|heap| {
         let mut heap = heap.borrow_mut();
         if state.released == state.dead.len() {
+            heap.rebuild_object_ranges();
             heap.weak_slots.clear();
             heap.weak_roots.clear();
             heap.weak_backings.clear();
@@ -673,6 +1097,7 @@ fn collect() {
     if HEAP.with(|heap| heap.borrow().sweep.is_some()) {
         sweep_until(None);
     }
+    while !HEAP.with(|heap| heap.borrow_mut().prepare_collection_index_until(None)) {}
     start_collection();
     sweep_until(None);
 }
@@ -695,6 +1120,18 @@ pub fn CollectLayoutHeapIncrementally(budget: std::time::Duration) {
         if !requested {
             return;
         }
+        let prepared = HEAP.with(|heap| {
+            heap.borrow_mut()
+                .prepare_collection_index_until(Some(deadline))
+        });
+        if !prepared {
+            trace.set("pending", 1.0);
+            return;
+        }
+        // Marking is the atomic phase. Once its pointer index is ready, finish
+        // it even when this task's sweep budget has expired; sweep_until()
+        // observes the deadline and yields before running any finalizer. This
+        // also freezes the dead set before mutator work resumes, as cppgc does.
         start_collection();
     }
     sweep_until(Some(deadline));
@@ -751,9 +1188,11 @@ impl Drop for LayoutHeapScope {
             let mut heap = heap.borrow_mut();
             assert!(heap.scopes > 0);
             heap.scopes -= 1;
-            heap.scopes == 0
-                && !self.defer_collection
-                && (!self.reuse_unchanged_heap || heap.activity_since_collection)
+            if heap.scopes != 0 {
+                return false;
+            }
+            heap.prepare_pointer_queries();
+            !self.defer_collection && (!self.reuse_unchanged_heap || heap.activity_since_collection)
         });
         if collect_now {
             collect();
@@ -805,13 +1244,13 @@ impl Visitor<'_> {
             .find(backing as *const u8)
             .expect("weak backing belongs to another heap");
         assert_eq!(address, backing as usize);
-        self.heap.objects.get_mut(&address).unwrap().marked = true;
+        self.heap.object_mut(address).unwrap().marked = true;
         self.heap.weak_backings.push(WeakBacking {
             address,
             owner,
             callback,
         });
-        if !self.heap.objects[&address].strongly_marked {
+        if !self.heap.object(address).unwrap().strongly_marked {
             backing.Trace(self);
         }
     }
@@ -829,10 +1268,16 @@ impl LivenessBroker<'_> {
 
 // cpp: foundation/blink_base/heap/garbage_collected.h:34-70
 pub fn MakeGarbageCollected<T: Traceable + 'static>(value: T) -> *mut T {
+    unsafe { MakeGarbageCollectedWithAdditionalBytes(0, |pointer: *mut T| pointer.write(value)) }
+}
+
+/// Allocates and default-constructs a managed object directly in its final
+/// heap slot. This is the Rust equivalent of
+/// `MakeGarbageCollected<T>()`: large inline-capacity containers must not be
+/// materialized on the stack and then copied into the managed heap.
+pub fn MakeGarbageCollectedDefault<T: Traceable + Default + 'static>() -> *mut T {
     unsafe {
-        MakeGarbageCollectedWithAdditionalBytes::<T>(0, |pointer| {
-            pointer.write(value);
-        })
+        MakeGarbageCollectedWithAdditionalBytes(0, |pointer: *mut T| pointer.write(T::default()))
     }
 }
 
@@ -858,21 +1303,25 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
         .max(1);
     let layout = Layout::from_size_align(size, std::mem::align_of::<T>())
         .expect("invalid layout allocation");
+    #[cfg(debug_assertions)]
     HEAP.with(|heap| {
         let heap = heap.borrow();
-        assert!(
+        debug_assert!(
             heap.scopes > 0 && !heap.collecting,
             "layout allocation requires LayoutHeapScope"
         );
     });
-    let address = unsafe { alloc_zeroed(layout) };
-    let address = NonNull::new(address).unwrap_or_else(|| handle_alloc_error(layout));
+    let (address, pooled) = HEAP.with(|heap| heap.borrow_mut().allocator.allocate(layout));
     let pointer = address.as_ptr() as *mut T;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| init(pointer)));
-    if let Err(error) = result {
-        unsafe { dealloc(address.as_ptr(), layout) };
-        std::panic::resume_unwind(error);
-    }
+    let mut pending = PendingAllocation::<T> {
+        address,
+        layout,
+        pooled,
+        initialized: false,
+        marker: std::marker::PhantomData,
+    };
+    init(pointer);
+    pending.initialized = true;
     HEAP.with(|heap| {
         let mut heap = heap.borrow_mut();
         // Registration follows complete initialization. Collection cannot run
@@ -896,6 +1345,7 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
             Allocation {
                 address,
                 layout,
+                pooled,
                 trace: Some(trace_object::<T>),
                 destroy: Some(destroy_object::<T>),
                 marked: false,
@@ -904,6 +1354,7 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
         );
         heap.heap_bytes = heap.heap_bytes.saturating_add(layout.size());
     });
+    std::mem::forget(pending);
     pointer
 }
 
@@ -1059,12 +1510,19 @@ pub fn IsLayoutHeapSweepingOnOwningThread() -> bool {
 pub fn IsManagedLayoutAddress<T: ?Sized>(pointer: *const T) -> bool {
     HEAP.with(|heap| heap.borrow().find(pointer as *const u8).is_some())
 }
+
+/// Publish allocations made so far to the immutable pointer-query index by
+/// sorting only the newly appended suffix.
+pub fn PrepareLayoutHeapForPointerQueries() {
+    HEAP.with(|heap| heap.borrow_mut().prepare_pointer_queries());
+}
+
 pub fn LayoutObjectSize<T: ?Sized>(pointer: *const T) -> usize {
     HEAP.with(|heap| {
         let heap = heap.borrow();
         let address = pointer as *const u8 as usize;
         assert_eq!(heap.find(pointer as *const u8), Some(address));
-        heap.objects[&address].layout.size()
+        heap.object(address).unwrap().layout.size()
     })
 }
 pub fn FreeLayoutBacking<T: ?Sized>(pointer: *mut T) {
@@ -1075,8 +1533,7 @@ pub fn FreeLayoutBacking<T: ?Sized>(pointer: *mut T) {
         let mut heap = heap.borrow_mut();
         assert!(heap.scopes > 0 && !heap.collecting);
         let address = pointer as *mut u8 as usize;
-        heap.objects
-            .get_mut(&address)
+        heap.object_mut(address)
             .expect("backing belongs to another heap")
             .destroy
             .take()
@@ -1088,11 +1545,15 @@ pub fn FreeLayoutBacking<T: ?Sized>(pointer: *mut T) {
         let mut heap = heap.borrow_mut();
         if let Some(object) = heap.remove_object(pointer as *mut u8 as usize) {
             heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
+            if let Some(pooled) = object.pooled {
+                heap.allocator.release(object.address, pooled);
+            }
+            drop(object);
         }
     });
 }
 pub fn LayoutHeapAllocationCountForTesting() -> usize {
-    HEAP.with(|heap| heap.borrow().objects.len())
+    HEAP.with(|heap| heap.borrow().object_count())
 }
 pub fn CollectLayoutHeapForTesting() {
     collect();
@@ -1135,13 +1596,14 @@ mod interval_lookup_tests {
 
     fn allocate(heap: &mut HeapState, size: usize) -> usize {
         let layout = Layout::from_size_align(size, 8).unwrap();
-        let address = NonNull::new(unsafe { alloc_zeroed(layout) }).unwrap();
+        let address = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).unwrap();
         let start = address.as_ptr() as usize;
         heap.insert_object(
             start,
             Allocation {
                 address,
                 layout,
+                pooled: None,
                 trace: Some(|_, _| {}),
                 destroy: Some(|_| {}),
                 marked: false,
@@ -1156,10 +1618,10 @@ mod interval_lookup_tests {
         if pointer.is_null() || pointer as usize == kMemberDeletedValue {
             return;
         }
-        let start = heap
-            .find(pointer)
+        let index = heap
+            .find_index(pointer)
             .expect("Trace reached an object outside the layout heap");
-        let object = heap.objects.get_mut(&start).unwrap();
+        let object = heap.objects[index].as_mut().unwrap();
         assert!(
             object.trace.is_some() && object.destroy.is_some(),
             "Trace reached an unfinished allocation"
@@ -1178,14 +1640,10 @@ mod interval_lookup_tests {
         if pointer.is_null() || pointer as usize == kMemberDeletedValue {
             return true;
         }
-        heap.objects
-            .get(
-                &heap
-                    .find(pointer)
-                    .expect("liveness query reached another heap"),
-            )
-            .unwrap()
-            .marked
+        let index = heap
+            .find_index(pointer)
+            .expect("liveness query reached another heap");
+        heap.objects[index].as_ref().unwrap().marked
     }
 
     #[test]
@@ -1209,10 +1667,13 @@ mod interval_lookup_tests {
                 actual.mark(a_ptr);
                 reference_mark(&mut reference, b_ptr);
                 assert_eq!(actual.alive(a_ptr), reference_alive(&reference, b_ptr));
-                assert_eq!(actual.objects[&a].marked, reference.objects[&b].marked);
                 assert_eq!(
-                    actual.objects[&a].strongly_marked,
-                    reference.objects[&b].strongly_marked
+                    actual.object(a).unwrap().marked,
+                    reference.object(b).unwrap().marked
+                );
+                assert_eq!(
+                    actual.object(a).unwrap().strongly_marked,
+                    reference.object(b).unwrap().strongly_marked
                 );
                 assert_eq!(actual.worklist.len(), reference.worklist.len());
             }
@@ -1242,10 +1703,10 @@ mod interval_lookup_tests {
             let mut heap = HeapState::new();
             let start = allocate(&mut heap, 16);
             if !has_trace {
-                heap.objects.get_mut(&start).unwrap().trace = None;
+                heap.object_mut(start).unwrap().trace = None;
             }
             if !has_destroy {
-                heap.objects.get_mut(&start).unwrap().destroy = None;
+                heap.object_mut(start).unwrap().destroy = None;
             }
             for address in [start - 1, start + 16, start + 17] {
                 let pointer = address as *const u8;
@@ -1638,10 +2099,10 @@ mod worklist_dispatch_lifecycle_tests {
                 let heap = heap.borrow();
                 assert!(heap.collecting);
                 assert_eq!(heap.scopes, 0);
-                assert_eq!(heap.objects.len(), 2);
+                assert_eq!(heap.object_count(), 2);
                 assert_eq!(heap.worklist.len(), 1);
-                assert!(heap.objects[&(pending as usize)].strongly_marked);
-                assert!(heap.objects[&(pending as usize)].destroy.is_some());
+                assert!(heap.object(pending as usize).unwrap().strongly_marked);
+                assert!(heap.object(pending as usize).unwrap().destroy.is_some());
             });
             assert!(!SWEEPING.get());
             assert!(!root.Get().is_null());
@@ -1818,7 +2279,7 @@ pub fn LayoutHeapMemoryDiagnostics() -> LayoutHeapMemoryDiagnostics {
         let mut result = LayoutHeapMemoryDiagnostics {
             allocated_requested_bytes: h.heap_bytes,
             allocated_since_collection_bytes: h.allocated_bytes_since_collection,
-            allocations: h.objects.len(),
+            allocations: h.object_count(),
             root_registry_slots: h.roots.len(),
             root_registry_capacity_bytes: h.roots.capacity()
                 * std::mem::size_of::<PersistentNode>(),

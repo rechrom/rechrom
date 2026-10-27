@@ -1,4 +1,8 @@
 use crate::adapter::{geometry::TracedValue as _, property_types::PropertyTrace as _};
+use compositor_frame::swap_promise::{
+    BreakSwapPromises as BreakSwapPromisesPolicy, ClearSwapPromises as ClearSwapPromisesPolicy,
+    FinishSwapPromises as FinishSwapPromisesPolicy, PassSwapPromises as PassSwapPromisesPolicy,
+};
 // Translation status: complete
 // Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
@@ -1257,6 +1261,385 @@ impl<B: LayerTreeTypes> PropertyTreeRenderSurfaceFactory<B::RenderSurface>
     }
 }
 
+struct TreeCommitSyncAdapter<'a, 'context, 'main, 'main_context, B>
+where
+    B: LayerTreeTypes + 'main + 'main_context,
+    'main_context: 'main,
+{
+    tree: &'a mut LayerTreeImpl<B>,
+    commit: &'a mut B::CommitState,
+    unsafe_state: &'a B::UnsafeCommitState,
+    context: &'a mut LayerTreeContext<'context, B>,
+    main_context:
+        &'a mut <B::Synchronizer as LayerTreeSynchronizer<B>>::MainContext<'main, 'main_context>,
+}
+
+impl<'main, 'main_context, B> compositor_tree::commit_sync::CommitSyncContext
+    for TreeCommitSyncAdapter<'_, '_, 'main, 'main_context, B>
+where
+    B: LayerTreeTypes + 'main + 'main_context,
+    'main_context: 'main,
+{
+    fn begin_sync(&mut self) {
+        self.tree
+            .lifecycle_
+            .AdvanceTo(LifecycleState::kBeginningSync);
+    }
+
+    fn commit_forces_redraw(&self) -> bool {
+        self.commit.next_commit_forces_redraw()
+    }
+
+    fn force_redraw_next_activation(&mut self) {
+        self.tree.ForceRedrawNextActivation();
+    }
+
+    fn commit_forces_raster_scale_recalculation(&self) -> bool {
+        self.commit.next_commit_forces_recalculate_raster_scales()
+    }
+
+    fn force_raster_scale_recalculation(&mut self) {
+        self.tree.ForceRecalculateRasterScales();
+    }
+
+    fn transfer_presentation_callbacks(&mut self) {
+        self.tree
+            .AddPresentationCallbacks(self.commit.TakePresentationCallbacks());
+    }
+
+    fn transfer_successful_presentation_callbacks(&mut self) {
+        self.tree
+            .AddSuccessfulPresentationCallbacks(self.commit.TakeSuccessfulPresentationCallbacks());
+    }
+
+    fn needs_full_tree_sync(&self) -> bool {
+        self.commit.needs_full_tree_sync()
+    }
+
+    fn synchronize_full_tree(&mut self) {
+        B::Synchronizer::SynchronizeTrees(
+            self.commit,
+            self.unsafe_state,
+            self.tree,
+            self.context,
+            self.main_context,
+        );
+    }
+
+    fn should_clear_caches(&self) -> bool {
+        self.commit.clear_caches_on_next_commit()
+    }
+
+    fn clear_history_and_caches(&mut self) {
+        self.context.host.ClearHistory();
+        self.context.host.ClearCaches();
+    }
+
+    fn pull_property_trees(&mut self) {
+        self.tree
+            .PullPropertyTreesFrom(self.commit, self.unsafe_state, self.context);
+    }
+
+    fn mark_property_trees_synced(&mut self) {
+        self.tree
+            .lifecycle_
+            .AdvanceTo(LifecycleState::kSyncedPropertyTrees);
+    }
+
+    fn needs_surface_ranges_sync(&self) -> bool {
+        self.commit.needs_surface_ranges_sync()
+    }
+
+    fn synchronize_surface_ranges(&mut self) {
+        self.tree.ClearSurfaceRanges();
+        self.tree.SetSurfaceRanges(self.commit.SurfaceRanges());
+    }
+
+    fn push_layer_properties_and_scroll_updates(&mut self) {
+        let mut updater = DiscardableImageMapUpdater::new(self.tree, self.context);
+        let (tree, updates, context) = updater.split();
+        B::Synchronizer::PushLayerProperties(
+            self.commit,
+            self.unsafe_state,
+            tree,
+            context,
+            self.main_context,
+            updates,
+        );
+        tree.lifecycle_
+            .AdvanceTo(LifecycleState::kSyncedLayerProperties);
+        for id in self.commit.scrollers_clobbering_active_value() {
+            let (scroll, _, state) = tree.property_trees_.scroll_tree_read_context();
+            scroll.SetScrollOffsetClobberActiveValue(*id, state);
+        }
+        B::WithPictureLayersContext(tree, context.host, |layers, layer_context| {
+            for id in self.commit.picture_layer_ids_with_new_raster_source() {
+                layers
+                    .LayerByIdMut(*id)
+                    .unwrap()
+                    .AsPictureLayerMut()
+                    .unwrap()
+                    .CommitPendingRasterSource(updates, layer_context);
+            }
+        });
+        let fractional = context.host.settings().commit_fractional_scroll_deltas();
+        let (scroll, mut mutation) = tree.property_trees_.scroll_tree_mutation_context();
+        let mut facade = LayerTreeScrollFacade {
+            id: tree.id,
+            host: context.host,
+            layer_list: &mut LayerTreeWholeScrollStore::<B>(&mut tree.layer_list_),
+            scrollbar_ids: &tree.element_id_to_scrollbar_layer_ids_,
+            viewport: &tree.viewport_property_ids_,
+            page_scale: &tree.page_scale_factor_,
+            needs_update_draw_properties: &mut tree.needs_update_draw_properties_,
+            show_requests: &mut tree.show_scrollbar_requests_,
+        };
+        scroll.PushScrollUpdatesFromMainThread(
+            self.commit.property_trees().scroll_tree(),
+            &mut facade,
+            fractional,
+            &mut mutation,
+        );
+    }
+
+    fn pull_layer_tree_properties(&mut self) {
+        self.tree
+            .PullLayerTreePropertiesFrom(self.commit, self.context);
+    }
+
+    fn transfer_swap_promises(&mut self) {
+        self.tree
+            .PassSwapPromises(self.commit.TakeSwapPromises(), self.context);
+    }
+
+    fn transfer_event_metrics(&mut self) {
+        self.tree
+            .AppendEventsMetricsFromMainThread(self.commit.TakeEventMetrics());
+    }
+
+    fn transfer_ui_resource_requests(&mut self) {
+        self.tree
+            .set_ui_resource_request_queue(self.commit.ui_resource_request_queue(), self.context);
+    }
+
+    fn update_property_tree_animation(&mut self) {
+        self.tree
+            .UpdatePropertyTreeAnimationFromMainThread(self.context);
+    }
+
+    fn push_mutator_properties(&mut self) {
+        self.context
+            .host
+            .PushMutatorPropertiesFrom(self.unsafe_state, self.commit.property_trees());
+    }
+
+    fn move_change_tracking_to_layers(&mut self) {
+        self.tree.MoveChangeTrackingToLayers(self.context);
+    }
+
+    fn update_scrollbar_geometries(&mut self) {
+        self.tree.UpdateAllScrollbarGeometries(self.context);
+    }
+
+    fn finish_sync(&mut self) {
+        self.tree.lifecycle_.AdvanceTo(LifecycleState::kNotSyncing);
+    }
+}
+
+struct TreeCommitPropertyAdapter<'a, 'context, B: LayerTreeTypes> {
+    tree: &'a mut LayerTreeImpl<B>,
+    commit: &'a mut B::CommitState,
+    context: &'a mut LayerTreeContext<'context, B>,
+}
+
+impl<B: LayerTreeTypes> compositor_tree::commit_properties::CommitPropertyContext
+    for TreeCommitPropertyAdapter<'_, '_, B>
+{
+    fn trees_in_viz_client_process(&self) -> bool {
+        self.context.host.TreesInVizInClientProcess()
+    }
+
+    fn current_needs_full_tree_sync(&self) -> bool {
+        self.tree.needs_full_tree_sync_
+    }
+
+    fn commit_needs_full_tree_sync(&self) -> bool {
+        self.commit.needs_full_tree_sync()
+    }
+
+    fn set_needs_full_tree_sync(&mut self, value: bool) {
+        self.tree.set_needs_full_tree_sync(value);
+    }
+
+    fn update_hud_layer(&mut self) {
+        self.tree.hud_layer_ = if self.commit.hud_layer_id() != -1 {
+            self.tree
+                .LayerById(self.commit.hud_layer_id())
+                .map(|layer| layer.id())
+        } else {
+            None
+        };
+    }
+
+    fn pull_background_color(&mut self) {
+        self.tree
+            .set_background_color(self.commit.background_color());
+    }
+
+    fn pull_scroll_event_handler_state(&mut self) {
+        self.tree
+            .set_have_scroll_event_handlers(self.commit.have_scroll_event_handlers());
+    }
+
+    fn event_listener_class_count(&self) -> usize {
+        3
+    }
+
+    fn pull_event_listener_properties(&mut self, index: usize) {
+        let class = [
+            EventListenerClass::kTouchStartOrMove,
+            EventListenerClass::kMouseWheel,
+            EventListenerClass::kTouchEndOrCancel,
+        ][index];
+        self.tree
+            .set_event_listener_properties(class, self.commit.GetEventListenerProperties(class));
+    }
+
+    fn pull_property_change_commit_criteria(&mut self) {
+        self.tree.property_change_forces_commit_criteria_ =
+            self.commit.property_change_forces_commit_criteria();
+    }
+
+    fn pull_viewport_property_ids(&mut self) {
+        self.tree
+            .SetViewportPropertyIds(&self.commit.viewport_property_ids());
+    }
+
+    fn pull_selection(&mut self) {
+        self.tree.RegisterSelection(self.commit.selection());
+    }
+
+    fn pull_page_scale(&mut self) {
+        self.tree.PushPageScaleFromMainThread(
+            self.commit.page_scale_factor(),
+            self.commit.min_page_scale_factor(),
+            self.commit.max_page_scale_factor(),
+            self.commit.page_scale_factor_limits_set(),
+            self.context,
+        );
+    }
+
+    fn pull_browser_controls_params(&mut self) {
+        self.tree
+            .SetBrowserControlsParams(self.commit.browser_controls_params(), self.context);
+    }
+
+    fn pull_overscroll_behavior(&mut self) {
+        self.tree
+            .set_overscroll_behavior(&self.commit.overscroll_behavior());
+    }
+
+    fn pull_browser_controls_ratios(&mut self) {
+        self.tree.PushBrowserControlsFromMainThread(
+            self.commit.top_controls_shown_ratio(),
+            self.commit.bottom_controls_shown_ratio(),
+            self.context,
+        );
+    }
+
+    fn pull_display_color_spaces(&mut self) {
+        self.tree
+            .SetDisplayColorSpaces(self.commit.display_color_spaces());
+    }
+
+    fn pull_external_page_scale(&mut self) {
+        self.tree
+            .SetExternalPageScaleFactor(self.commit.external_page_scale_factor(), self.context);
+    }
+
+    fn pull_painted_device_scale(&mut self) {
+        self.tree
+            .set_painted_device_scale_factor(self.commit.painted_device_scale_factor());
+    }
+
+    fn pull_device_scale(&mut self) {
+        self.tree
+            .SetDeviceScaleFactor(self.commit.device_scale_factor(), self.context);
+    }
+
+    fn pull_device_viewport(&mut self) {
+        self.tree
+            .SetDeviceViewportRect(&self.commit.device_viewport_rect(), self.context);
+    }
+
+    fn pull_max_safe_area_inset(&mut self) {
+        self.tree
+            .SetMaxSafeAreaInsetBottom(self.commit.max_safe_area_inset_bottom());
+    }
+
+    fn commit_requests_new_local_surface_id(&self) -> bool {
+        self.commit.new_local_surface_id_request()
+    }
+
+    fn request_new_local_surface_id(&mut self) {
+        self.tree.RequestNewLocalSurfaceId();
+    }
+
+    fn commit_has_screenshot_destination(&self) -> bool {
+        !self.commit.screenshot_destination_token().is_empty()
+    }
+
+    fn pull_screenshot_destination(&mut self) {
+        self.tree
+            .SetScreenshotDestinationToken(self.commit.screenshot_destination_token());
+    }
+
+    fn pull_primary_main_frame_sequence(&mut self) {
+        self.tree.set_primary_main_frame_item_sequence_number(
+            self.commit.primary_main_frame_item_sequence_number(),
+        );
+    }
+
+    fn pull_parent_local_surface_id(&mut self) {
+        self.tree
+            .SetLocalSurfaceIdFromParent(self.commit.local_surface_id_from_parent());
+    }
+
+    fn pull_pending_page_scale_animation(&mut self) -> bool {
+        let Some(animation) = self.commit.TakePendingPageScaleAnimation() else {
+            return false;
+        };
+        self.tree.SetPendingPageScaleAnimation(Some(animation));
+        true
+    }
+
+    fn commit_requests_force_send_metadata(&self) -> bool {
+        self.commit.force_send_metadata_request()
+    }
+
+    fn request_force_send_metadata(&mut self) {
+        self.tree.RequestForceSendMetadata();
+    }
+
+    fn pull_display_transform_hint(&mut self) {
+        self.tree
+            .set_display_transform_hint(self.commit.display_transform_hint());
+    }
+
+    fn pull_delegated_ink_metadata(&mut self) {
+        self.tree.delegated_ink_metadata_ = self.commit.TakeDelegatedInkMetadata();
+    }
+
+    fn view_transition_request_count(&mut self) -> usize {
+        self.commit.ViewTransitionRequests().len()
+    }
+
+    fn pull_view_transition_request(&mut self, index: usize) {
+        let request = self.commit.ViewTransitionRequests()[index].take().unwrap();
+        self.tree.AddViewTransitionRequest(request, self.context);
+    }
+}
+
 impl<B: LayerTreeTypes> LayerTreeImpl<B> {
     // Source: cc/trees/layer_tree_impl.cc:739-828.
     pub fn PullPropertiesFrom(
@@ -1266,86 +1649,13 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         context: &mut LayerTreeContext<'_, B>,
         main_context: &mut <B::Synchronizer as LayerTreeSynchronizer<B>>::MainContext<'_, '_>,
     ) {
-        self.lifecycle_.AdvanceTo(LifecycleState::kBeginningSync);
-        if commit.next_commit_forces_redraw() {
-            self.ForceRedrawNextActivation();
-        }
-        if commit.next_commit_forces_recalculate_raster_scales() {
-            self.ForceRecalculateRasterScales();
-        }
-        self.AddPresentationCallbacks(commit.TakePresentationCallbacks());
-        self.AddSuccessfulPresentationCallbacks(commit.TakeSuccessfulPresentationCallbacks());
-        if commit.needs_full_tree_sync() {
-            B::Synchronizer::SynchronizeTrees(commit, unsafe_state, self, context, main_context);
-        }
-        if commit.clear_caches_on_next_commit() {
-            context.host.ClearHistory();
-            context.host.ClearCaches();
-        }
-        self.PullPropertyTreesFrom(commit, unsafe_state, context);
-        self.lifecycle_
-            .AdvanceTo(LifecycleState::kSyncedPropertyTrees);
-        if commit.needs_surface_ranges_sync() {
-            self.ClearSurfaceRanges();
-            self.SetSurfaceRanges(commit.SurfaceRanges());
-        }
-        {
-            let mut updater = DiscardableImageMapUpdater::new(self, context);
-            let (tree, updates, context) = updater.split();
-            B::Synchronizer::PushLayerProperties(
-                commit,
-                unsafe_state,
-                tree,
-                context,
-                main_context,
-                updates,
-            );
-            tree.lifecycle_
-                .AdvanceTo(LifecycleState::kSyncedLayerProperties);
-            for id in commit.scrollers_clobbering_active_value() {
-                let (scroll, _, state) = tree.property_trees_.scroll_tree_read_context();
-                scroll.SetScrollOffsetClobberActiveValue(*id, state);
-            }
-            B::WithPictureLayersContext(tree, context.host, |layers, layer_context| {
-                for id in commit.picture_layer_ids_with_new_raster_source() {
-                    layers
-                        .LayerByIdMut(*id)
-                        .unwrap()
-                        .AsPictureLayerMut()
-                        .unwrap()
-                        .CommitPendingRasterSource(updates, layer_context);
-                }
-            });
-            let fractional = context.host.settings().commit_fractional_scroll_deltas();
-            let (scroll, mut mutation) = tree.property_trees_.scroll_tree_mutation_context();
-            let mut facade = LayerTreeScrollFacade {
-                id: tree.id,
-                host: context.host,
-                layer_list: &mut LayerTreeWholeScrollStore::<B>(&mut tree.layer_list_),
-                scrollbar_ids: &tree.element_id_to_scrollbar_layer_ids_,
-                viewport: &tree.viewport_property_ids_,
-                page_scale: &tree.page_scale_factor_,
-                needs_update_draw_properties: &mut tree.needs_update_draw_properties_,
-                show_requests: &mut tree.show_scrollbar_requests_,
-            };
-            scroll.PushScrollUpdatesFromMainThread(
-                commit.property_trees().scroll_tree(),
-                &mut facade,
-                fractional,
-                &mut mutation,
-            );
-        }
-        self.PullLayerTreePropertiesFrom(commit, context);
-        self.PassSwapPromises(commit.TakeSwapPromises(), context);
-        self.AppendEventsMetricsFromMainThread(commit.TakeEventMetrics());
-        self.set_ui_resource_request_queue(commit.ui_resource_request_queue(), context);
-        self.UpdatePropertyTreeAnimationFromMainThread(context);
-        context
-            .host
-            .PushMutatorPropertiesFrom(unsafe_state, commit.property_trees());
-        self.MoveChangeTrackingToLayers(context);
-        self.UpdateAllScrollbarGeometries(context);
-        self.lifecycle_.AdvanceTo(LifecycleState::kNotSyncing);
+        compositor_tree::commit_sync::PullCommitIntoSyncTree(&mut TreeCommitSyncAdapter {
+            tree: self,
+            commit,
+            unsafe_state,
+            context,
+            main_context,
+        });
     }
     // Source: cc/trees/layer_tree_impl.cc:830-849.
     pub fn PullPropertyTreesFrom(
@@ -1374,73 +1684,11 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         commit: &mut B::CommitState,
         context: &mut LayerTreeContext<'_, B>,
     ) {
-        if context.host.TreesInVizInClientProcess() {
-            self.set_needs_full_tree_sync(
-                self.needs_full_tree_sync_ || commit.needs_full_tree_sync(),
-            );
-        } else {
-            self.set_needs_full_tree_sync(commit.needs_full_tree_sync());
-        }
-        self.hud_layer_ = if commit.hud_layer_id() != -1 {
-            self.LayerById(commit.hud_layer_id())
-                .map(|layer| layer.id())
-        } else {
-            None
-        };
-        self.set_background_color(commit.background_color());
-        self.set_have_scroll_event_handlers(commit.have_scroll_event_handlers());
-        for class in [
-            EventListenerClass::kTouchStartOrMove,
-            EventListenerClass::kMouseWheel,
-            EventListenerClass::kTouchEndOrCancel,
-        ] {
-            self.set_event_listener_properties(class, commit.GetEventListenerProperties(class));
-        }
-        self.property_change_forces_commit_criteria_ =
-            commit.property_change_forces_commit_criteria();
-        self.SetViewportPropertyIds(&commit.viewport_property_ids());
-        self.RegisterSelection(commit.selection());
-        self.PushPageScaleFromMainThread(
-            commit.page_scale_factor(),
-            commit.min_page_scale_factor(),
-            commit.max_page_scale_factor(),
-            commit.page_scale_factor_limits_set(),
+        compositor_tree::commit_properties::PullCommitProperties(&mut TreeCommitPropertyAdapter {
+            tree: self,
+            commit,
             context,
-        );
-        self.SetBrowserControlsParams(commit.browser_controls_params(), context);
-        self.set_overscroll_behavior(&commit.overscroll_behavior());
-        self.PushBrowserControlsFromMainThread(
-            commit.top_controls_shown_ratio(),
-            commit.bottom_controls_shown_ratio(),
-            context,
-        );
-        self.SetDisplayColorSpaces(commit.display_color_spaces());
-        self.SetExternalPageScaleFactor(commit.external_page_scale_factor(), context);
-        self.set_painted_device_scale_factor(commit.painted_device_scale_factor());
-        self.SetDeviceScaleFactor(commit.device_scale_factor(), context);
-        self.SetDeviceViewportRect(&commit.device_viewport_rect(), context);
-        self.SetMaxSafeAreaInsetBottom(commit.max_safe_area_inset_bottom());
-        if commit.new_local_surface_id_request() {
-            self.RequestNewLocalSurfaceId();
-        }
-        if !commit.screenshot_destination_token().is_empty() {
-            self.SetScreenshotDestinationToken(commit.screenshot_destination_token());
-        }
-        self.set_primary_main_frame_item_sequence_number(
-            commit.primary_main_frame_item_sequence_number(),
-        );
-        self.SetLocalSurfaceIdFromParent(commit.local_surface_id_from_parent());
-        if let Some(animation) = commit.TakePendingPageScaleAnimation() {
-            self.SetPendingPageScaleAnimation(Some(animation));
-        }
-        if commit.force_send_metadata_request() {
-            self.RequestForceSendMetadata();
-        }
-        self.set_display_transform_hint(commit.display_transform_hint());
-        self.delegated_ink_metadata_ = commit.TakeDelegatedInkMetadata();
-        for request in commit.ViewTransitionRequests() {
-            self.AddViewTransitionRequest(request.take().unwrap(), context);
-        }
+        });
     }
     // Source: cc/trees/layer_tree_impl.cc:939-978.
     pub fn PushPropertyTreesTo(
@@ -1531,134 +1779,624 @@ impl<B: LayerTreeTypes> Drop for DiscardableImageMapUpdater<'_, '_, B> {
     }
 }
 
-impl<B: LayerTreeTypes> LayerTreeImpl<B> {
-    // Source: cc/trees/layer_tree_impl.cc:989-1121.
-    pub fn PushPropertiesTo(&mut self, target: &mut Self, context: &mut LayerTreeContext<'_, B>) {
-        debug_assert!(self.ui_resource_request_queue_.is_empty());
-        self.PushSurfaceRangesTo(target);
-        {
-            let (scroll, mut mutation) = target.property_trees_.scroll_tree_mutation_context();
-            let mut facade = LayerTreeScrollFacade {
-                id: target.id,
-                host: context.host,
-                layer_list: &mut LayerTreeWholeScrollStore::<B>(&mut target.layer_list_),
-                scrollbar_ids: &target.element_id_to_scrollbar_layer_ids_,
-                viewport: &target.viewport_property_ids_,
-                page_scale: &target.page_scale_factor_,
-                needs_update_draw_properties: &mut target.needs_update_draw_properties_,
-                show_requests: &mut target.show_scrollbar_requests_,
-            };
-            scroll.PushScrollUpdatesFromPendingTree(
-                self.property_trees_.scroll_tree(),
-                self.property_trees_.state(),
-                &mut facade,
-                &mut mutation,
-            );
-        }
-        if self.next_activation_forces_redraw_ {
-            target.ForceRedrawNextActivation();
-            self.next_activation_forces_redraw_ = false;
-        }
-        target.PassSwapPromises(
-            std::mem::take(&mut self.swap_promise_list_)
+/// Resident-object adapter for the Tree-owned pending-to-active property push
+/// pipeline. Each method performs one named transfer and contains no
+/// cross-stage ordering.
+struct TreePropertyPushAdapter<'a, 'services, B: LayerTreeTypes> {
+    source: &'a mut LayerTreeImpl<B>,
+    target: &'a mut LayerTreeImpl<B>,
+    context: &'a mut LayerTreeContext<'services, B>,
+}
+
+impl<B: LayerTreeTypes> compositor_tree::property_push::PropertyPushContext
+    for TreePropertyPushAdapter<'_, '_, B>
+{
+    type ViewTransitionRequest = Box<B::ViewTransitionRequest>;
+
+    fn assert_source_ui_resource_queue_empty(&self) {
+        debug_assert!(self.source.ui_resource_request_queue_.is_empty());
+    }
+
+    fn push_surface_ranges(&mut self) {
+        self.source.PushSurfaceRangesTo(self.target);
+    }
+
+    fn push_pending_scroll_updates(&mut self) {
+        let (scroll, mut mutation) = self.target.property_trees_.scroll_tree_mutation_context();
+        let mut facade = LayerTreeScrollFacade {
+            id: self.target.id,
+            host: self.context.host,
+            layer_list: &mut LayerTreeWholeScrollStore::<B>(&mut self.target.layer_list_),
+            scrollbar_ids: &self.target.element_id_to_scrollbar_layer_ids_,
+            viewport: &self.target.viewport_property_ids_,
+            page_scale: &self.target.page_scale_factor_,
+            needs_update_draw_properties: &mut self.target.needs_update_draw_properties_,
+            show_requests: &mut self.target.show_scrollbar_requests_,
+        };
+        scroll.PushScrollUpdatesFromPendingTree(
+            self.source.property_trees_.scroll_tree(),
+            self.source.property_trees_.state(),
+            &mut facade,
+            &mut mutation,
+        );
+    }
+
+    fn take_force_redraw(&mut self) -> bool {
+        let value = self.source.next_activation_forces_redraw_;
+        self.source.next_activation_forces_redraw_ = false;
+        value
+    }
+
+    fn force_target_redraw(&mut self) {
+        self.target.ForceRedrawNextActivation();
+    }
+
+    fn transfer_swap_promises(&mut self) {
+        self.target.PassSwapPromises(
+            std::mem::take(&mut self.source.swap_promise_list_)
                 .into_iter()
                 .map(|promise| promise.expect("non-null swap promise"))
                 .collect(),
-            context,
+            self.context,
         );
-        self.swap_promise_list_.clear();
-        target.SetViewportPropertyIds(&self.viewport_property_ids_);
-        // Source: cc/trees/layer_tree_impl.cc:1028-1030. The source and target
-        // remain resident; the synchronous host call can reborrow the source.
-        let min_scale = self.min_page_scale_factor();
-        let max_scale = self.max_page_scale_factor();
-        let limits_set = self.page_scale_factor_limits_set_;
-        context.host.WithBorrowedTree(self, &mut |host| {
-            target.PushPageScaleFactorAndLimits(
-                None,
-                min_scale,
-                max_scale,
-                limits_set,
-                &mut LayerTreeContext { host },
-            );
-        });
-        target.SetExternalPageScaleFactor(self.external_page_scale_factor_, context);
-        let controls_params = self.browser_controls_params_;
-        context.host.WithBorrowedTree(self, &mut |host| {
-            target.SetBrowserControlsParams(&controls_params, &mut LayerTreeContext { host });
-        });
-        context.host.WithBorrowedTree(self, &mut |host| {
-            target.PushBrowserControls(None, None, &mut LayerTreeContext { host });
-        });
-        target.set_overscroll_behavior(&self.overscroll_behavior_);
-        target.SetDisplayColorSpaces(&self.display_color_spaces_);
-        target.set_painted_device_scale_factor(self.painted_device_scale_factor());
-        target.SetDeviceScaleFactor(self.device_scale_factor(), context);
-        target.SetDeviceViewportRect(&self.device_viewport_rect_, context);
-        target.SetMaxSafeAreaInsetBottom(self.max_safe_area_inset_bottom_);
-        if self.TakeNewLocalSurfaceIdRequest() {
-            target.RequestNewLocalSurfaceId();
+        self.source.swap_promise_list_.clear();
+    }
+
+    fn transfer_viewport_property_ids(&mut self) {
+        self.target
+            .SetViewportPropertyIds(&self.source.viewport_property_ids_);
+    }
+
+    fn transfer_page_scale_and_limits(&mut self) {
+        let min_scale = self.source.min_page_scale_factor();
+        let max_scale = self.source.max_page_scale_factor();
+        let limits_set = self.source.page_scale_factor_limits_set_;
+        self.context
+            .host
+            .WithBorrowedTree(self.source, &mut |host| {
+                self.target.PushPageScaleFactorAndLimits(
+                    None,
+                    min_scale,
+                    max_scale,
+                    limits_set,
+                    &mut LayerTreeContext { host },
+                );
+            });
+    }
+
+    fn transfer_external_page_scale(&mut self) {
+        self.target
+            .SetExternalPageScaleFactor(self.source.external_page_scale_factor_, self.context);
+    }
+
+    fn transfer_browser_controls_params(&mut self) {
+        let controls_params = self.source.browser_controls_params_;
+        self.context
+            .host
+            .WithBorrowedTree(self.source, &mut |host| {
+                self.target
+                    .SetBrowserControlsParams(&controls_params, &mut LayerTreeContext { host });
+            });
+    }
+
+    fn transfer_browser_controls_values(&mut self) {
+        self.context
+            .host
+            .WithBorrowedTree(self.source, &mut |host| {
+                self.target
+                    .PushBrowserControls(None, None, &mut LayerTreeContext { host });
+            });
+    }
+
+    fn transfer_overscroll_behavior(&mut self) {
+        self.target
+            .set_overscroll_behavior(&self.source.overscroll_behavior_);
+    }
+
+    fn transfer_display_color_spaces(&mut self) {
+        self.target
+            .SetDisplayColorSpaces(&self.source.display_color_spaces_);
+    }
+
+    fn transfer_painted_device_scale(&mut self) {
+        self.target
+            .set_painted_device_scale_factor(self.source.painted_device_scale_factor());
+    }
+
+    fn transfer_device_scale(&mut self) {
+        self.target
+            .SetDeviceScaleFactor(self.source.device_scale_factor(), self.context);
+    }
+
+    fn transfer_device_viewport(&mut self) {
+        self.target
+            .SetDeviceViewportRect(&self.source.device_viewport_rect_, self.context);
+    }
+
+    fn transfer_max_safe_area_inset(&mut self) {
+        self.target
+            .SetMaxSafeAreaInsetBottom(self.source.max_safe_area_inset_bottom_);
+    }
+
+    fn take_new_local_surface_id_request(&mut self) -> bool {
+        self.source.TakeNewLocalSurfaceIdRequest()
+    }
+
+    fn request_target_local_surface_id(&mut self) {
+        self.target.RequestNewLocalSurfaceId();
+    }
+
+    fn transfer_parent_local_surface_id(&mut self) {
+        self.target
+            .SetLocalSurfaceIdFromParent(self.source.local_surface_id_from_parent());
+    }
+
+    fn transfer_screenshot_destination(&mut self) -> bool {
+        let token = self.source.TakeScreenshotDestinationToken();
+        if token.is_empty() {
+            return false;
         }
-        target.SetLocalSurfaceIdFromParent(self.local_surface_id_from_parent());
-        let token = self.TakeScreenshotDestinationToken();
-        if !token.is_empty() {
-            target.SetScreenshotDestinationToken(token);
-        }
-        target.set_primary_main_frame_item_sequence_number(
-            self.primary_main_frame_item_sequence_number(),
+        self.target.SetScreenshotDestinationToken(token);
+        true
+    }
+
+    fn transfer_primary_item_sequence(&mut self) {
+        self.target.set_primary_main_frame_item_sequence_number(
+            self.source.primary_main_frame_item_sequence_number(),
         );
-        target.pending_page_scale_animation_ = self.pending_page_scale_animation_.take();
-        if self.TakeForceSendMetadataRequest() {
-            target.RequestForceSendMetadata();
-        }
-        target.RegisterSelection(&self.selection_);
-        target.set_source_frame_number(self.source_frame_number());
-        target.set_trace_id(self.trace_id());
-        target.set_background_color(self.background_color());
-        target.set_have_scroll_event_handlers(self.have_scroll_event_handlers());
-        target.did_raster_inducing_scroll_ = self.did_raster_inducing_scroll_;
+    }
+
+    fn transfer_pending_page_scale_animation(&mut self) -> bool {
+        let animation = self.source.pending_page_scale_animation_.take();
+        let transferred = animation.is_some();
+        self.target.pending_page_scale_animation_ = animation;
+        transferred
+    }
+
+    fn take_force_send_metadata_request(&mut self) -> bool {
+        self.source.TakeForceSendMetadataRequest()
+    }
+
+    fn request_target_force_send_metadata(&mut self) {
+        self.target.RequestForceSendMetadata();
+    }
+
+    fn transfer_selection(&mut self) {
+        self.target.RegisterSelection(&self.source.selection_);
+    }
+
+    fn transfer_frame_identity(&mut self) {
+        self.target
+            .set_source_frame_number(self.source.source_frame_number());
+        self.target.set_trace_id(self.source.trace_id());
+    }
+
+    fn transfer_background_and_event_state(&mut self) {
+        self.target
+            .set_background_color(self.source.background_color());
+        self.target
+            .set_have_scroll_event_handlers(self.source.have_scroll_event_handlers());
+        self.target.did_raster_inducing_scroll_ = self.source.did_raster_inducing_scroll_;
+    }
+
+    fn transfer_event_listener_properties(&mut self) {
         for class in [
             EventListenerClass::kTouchStartOrMove,
             EventListenerClass::kMouseWheel,
             EventListenerClass::kTouchEndOrCancel,
         ] {
-            target.set_event_listener_properties(class, self.event_listener_properties(class));
+            self.target
+                .set_event_listener_properties(class, self.source.event_listener_properties(class));
         }
-        target.hud_layer_ = self
+    }
+
+    fn transfer_hud_layer(&mut self) {
+        self.target.hud_layer_ = self
+            .source
             .hud_layer_
-            .and_then(|id| target.LayerById(id).map(|layer| layer.id()));
-        target.HandleTickmarksVisibilityChange(context);
-        target.UpdateAllScrollbarGeometries(context);
-        target.HandleScrollbarShowRequests(context);
-        target.AddPresentationCallbacks(std::mem::take(&mut self.presentation_callbacks_));
-        self.presentation_callbacks_.clear();
-        target.AddSuccessfulPresentationCallbacks(std::mem::take(
-            &mut self.successful_presentation_callbacks_,
-        ));
-        self.successful_presentation_callbacks_.clear();
-        if let Some(metadata) = self.delegated_ink_metadata_.take() {
-            context.host.TraceDelegatedInkMetadataPush(&metadata);
-            target.set_delegated_ink_metadata(Some(metadata));
-        } else if target.delegated_ink_metadata().is_some() {
-            target.clear_delegated_ink_metadata();
+            .and_then(|id| self.target.LayerById(id).map(|layer| layer.id()));
+    }
+
+    fn update_tickmark_visibility(&mut self) {
+        self.target.HandleTickmarksVisibilityChange(self.context);
+    }
+
+    fn update_scrollbar_geometries(&mut self) {
+        self.target.UpdateAllScrollbarGeometries(self.context);
+    }
+
+    fn handle_scrollbar_show_requests(&mut self) {
+        self.target.HandleScrollbarShowRequests(self.context);
+    }
+
+    fn transfer_presentation_callbacks(&mut self) {
+        self.target
+            .AddPresentationCallbacks(std::mem::take(&mut self.source.presentation_callbacks_));
+        self.source.presentation_callbacks_.clear();
+    }
+
+    fn transfer_successful_presentation_callbacks(&mut self) {
+        self.target
+            .AddSuccessfulPresentationCallbacks(std::mem::take(
+                &mut self.source.successful_presentation_callbacks_,
+            ));
+        self.source.successful_presentation_callbacks_.clear();
+    }
+
+    fn transfer_delegated_ink_metadata(&mut self) -> bool {
+        if let Some(metadata) = self.source.delegated_ink_metadata_.take() {
+            self.context.host.TraceDelegatedInkMetadataPush(&metadata);
+            self.target.set_delegated_ink_metadata(Some(metadata));
+            true
+        } else {
+            if self.target.delegated_ink_metadata().is_some() {
+                self.target.clear_delegated_ink_metadata();
+            }
+            false
         }
-        for request in self.TakeViewTransitionRequests(true) {
-            // A native unique request is transferred exactly once in this
-            // synchronous call, retaining the source's post-move null slot.
-            let mut request = Some(request);
-            context.host.WithBorrowedTree(self, &mut |host| {
-                target.AddViewTransitionRequest(
+    }
+
+    fn take_view_transition_requests(&mut self) -> Vec<Self::ViewTransitionRequest> {
+        self.source.TakeViewTransitionRequests(true)
+    }
+
+    fn push_view_transition_request(&mut self, request: Self::ViewTransitionRequest) {
+        let mut request = Some(request);
+        self.context
+            .host
+            .WithBorrowedTree(self.source, &mut |host| {
+                self.target.AddViewTransitionRequest(
                     request.take().unwrap(),
                     &mut LayerTreeContext { host },
                 );
             });
+    }
+
+    fn trees_in_viz_in_client_process(&self) -> bool {
+        self.context.host.TreesInVizInClientProcess()
+    }
+
+    fn move_change_tracking_to_layers(&mut self) {
+        self.target.MoveChangeTrackingToLayers(self.context);
+    }
+
+    fn update_property_tree_change_tracking(&mut self) {
+        self.target.property_trees_.UpdateChangeTracking();
+    }
+
+    fn transfer_created_begin_frame_args(&mut self) {
+        self.target
+            .SetCreatedBeginFrameArgs(std::mem::take(&mut self.source.created_begin_frame_args_));
+    }
+}
+
+struct DrawOcclusionWalkAdapter<'a, B: LayerTreeTypes> {
+    tree: &'a mut LayerTreeImpl<B>,
+    iterator: crate::cc::layers::effect_tree_layer_list_iterator::EffectTreeLayerListIterator,
+    tracker: super::occlusion_tracker::OcclusionTracker<B::Transform, i32, i32>,
+}
+
+impl<'a, B: LayerTreeTypes> DrawOcclusionWalkAdapter<'a, B> {
+    fn new(tree: &'a mut LayerTreeImpl<B>, minimum_tracking_size: Size) -> Self {
+        use crate::adapter::draw_property::DrawSurface;
+        let content_rect = DrawSurface::content_rect(tree.RootRenderSurface().unwrap());
+        let iterator =
+            crate::cc::layers::effect_tree_layer_list_iterator::EffectTreeLayerListIterator::new(
+                &*tree,
+            );
+        let mut tracker =
+            super::occlusion_tracker::OcclusionTracker::<B::Transform, i32, i32>::new(content_rect);
+        tracker.set_minimum_tracking_size(minimum_tracking_size);
+        Self {
+            tree,
+            iterator,
+            tracker,
         }
-        if !context.host.TreesInVizInClientProcess() {
-            target.MoveChangeTrackingToLayers(context);
-        } else {
-            target.property_trees_.UpdateChangeTracking();
+    }
+}
+
+impl<B: LayerTreeTypes> compositor_draw::occlusion_walk::OcclusionWalkContext
+    for DrawOcclusionWalkAdapter<'_, B>
+{
+    type Surface = i32;
+    type Layer = i32;
+
+    fn current_entry(
+        &mut self,
+    ) -> Option<compositor_draw::occlusion_walk::OcclusionWalkEntry<i32, i32>> {
+        use crate::adapter::occlusion::EffectTreeLayerListIteratorState as DrawState;
+        use crate::cc::layers::effect_tree_layer_list_iterator::State;
+        if self.iterator.state() == State::kEnd {
+            return None;
         }
-        target.SetCreatedBeginFrameArgs(std::mem::take(&mut self.created_begin_frame_args_));
+        let native = self.iterator.position(&*self.tree);
+        Some(compositor_draw::occlusion_walk::OcclusionWalkEntry {
+            position: crate::adapter::occlusion::EffectTreeLayerListIteratorPosition {
+                state: match native.state {
+                    State::kLayer => DrawState::kLayer,
+                    State::kTargetSurface => DrawState::kTargetSurface,
+                    State::kContributingSurface => DrawState::kContributingSurface,
+                    State::kEnd => unreachable!(),
+                },
+                target_render_surface: native.target_render_surface.unwrap(),
+                current_layer: native.current_layer,
+            },
+            current_render_surface: native.current_render_surface,
+        })
+    }
+
+    fn enter(
+        &mut self,
+        position: &crate::adapter::occlusion::EffectTreeLayerListIteratorPosition<i32, i32>,
+    ) {
+        let occlusion = B::MakeOcclusionContext(
+            &self.tree.layer_list_,
+            &self.tree.property_trees_,
+            &self.tree.render_surface_list_,
+        );
+        self.tracker.EnterLayer(position, &occlusion);
+    }
+
+    fn assign_layer_occlusion(&mut self, layer_id: i32) {
+        let transform = self
+            .tree
+            .layer_list_
+            .LayerById(layer_id)
+            .unwrap()
+            .DrawTransform(&self.tree.property_trees_);
+        let occlusion = self.tracker.GetCurrentOcclusionForLayer(&transform);
+        self.tree
+            .layer_list_
+            .LayerByIdMut(layer_id)
+            .unwrap()
+            .SetOcclusionInContentSpace(occlusion);
+    }
+
+    fn assign_contributing_surface_occlusion(&mut self, surface_id: i32) {
+        use crate::adapter::draw_property::DrawSurface;
+        let surface = self
+            .tree
+            .property_trees_
+            .effect_tree()
+            .GetRenderSurface(surface_id)
+            .unwrap();
+        let mut transform = B::Transform::default();
+        if let Some(occlusion_id) = self.tracker.OcclusionSurfaceForContributingSurface() {
+            let target = self
+                .tree
+                .property_trees_
+                .effect_tree()
+                .GetRenderSurface(occlusion_id)
+                .unwrap();
+            self.tree.property_trees_.GetToTarget(
+                DrawSurface::TransformTreeIndex(surface, &self.tree.property_trees_),
+                DrawSurface::EffectTreeIndex(target),
+                &mut transform,
+            );
+            let node = self
+                .tree
+                .property_trees_
+                .effect_tree()
+                .Node(DrawSurface::EffectTreeIndex(surface));
+            crate::cc::trees::draw_property_utils::ConcatInverseSurfaceContentsScale::<
+                B::DrawContext<'_>,
+            >(node, &mut transform);
+            crate::adapter::property_tree::PropertyTreeTransform::PostTranslate(
+                &mut transform,
+                DrawSurface::pixel_alignment_offset(target),
+            );
+        }
+        let occlusion = self
+            .tracker
+            .GetCurrentOcclusionForContributingSurface(&transform);
+        self.tree
+            .property_trees_
+            .effect_tree_mutable()
+            .GetRenderSurfaceMutable(surface_id)
+            .unwrap()
+            .SetOcclusionInContentSpace(occlusion);
+    }
+
+    fn leave(
+        &mut self,
+        position: &crate::adapter::occlusion::EffectTreeLayerListIteratorPosition<i32, i32>,
+    ) {
+        let occlusion = B::MakeOcclusionContext(
+            &self.tree.layer_list_,
+            &self.tree.property_trees_,
+            &self.tree.render_surface_list_,
+        );
+        self.tracker.LeaveLayer(position, &occlusion);
+    }
+
+    fn advance(&mut self) {
+        self.iterator.Increment(&*self.tree);
+    }
+
+    fn finish_visible_region(&mut self) {
+        let occlusion = B::MakeOcclusionContext(
+            &self.tree.layer_list_,
+            &self.tree.property_trees_,
+            &self.tree.render_surface_list_,
+        );
+        self.tree.unoccluded_screen_space_region_ = self
+            .tracker
+            .ComputeVisibleRegionInScreen::<B::RegionBackend>(&occlusion);
+    }
+}
+
+struct DrawTreeUpdateAdapter<'a, B: LayerTreeTypes> {
+    tree: &'a mut LayerTreeImpl<B>,
+    host: &'a mut dyn draw_host::LayerTreeDrawHost<B>,
+    output_updates: Option<&'a mut Vec<i32>>,
+}
+
+impl<B: LayerTreeTypes> compositor_draw::tree_draw_update::TreeDrawUpdateContext
+    for DrawTreeUpdateAdapter<'_, B>
+{
+    fn needs_draw_property_update(&self) -> bool {
+        self.tree.needs_update_draw_properties_
+    }
+
+    fn begin_draw_property_update(&mut self) {
+        self.tree.needs_update_draw_properties_ = false;
+        self.tree.needs_update_tiles_ = false;
+    }
+
+    fn has_frame_sink(&self) -> bool {
+        self.host.HasLayerTreeFrameSink()
+    }
+
+    fn clear_render_surface_list(&mut self) {
+        self.tree.render_surface_list_.clear();
+    }
+
+    fn layer_list_is_empty(&self) -> bool {
+        self.tree.layer_list_.is_empty()
+    }
+
+    fn calculate_draw_properties(&mut self) {
+        let tokens = self.tree.GetCaptureViewTransitionTokensWithHost(self.host);
+        let mut draw = B::MakeDrawContext(
+            LayerTreeDrawState {
+                layers: &mut self.tree.layer_list_,
+                viewport: &self.tree.viewport_property_ids_,
+                page_scale: &self.tree.page_scale_factor_,
+                device_scale: &self.tree.device_scale_factor_,
+                external_scale: &self.tree.external_page_scale_factor_,
+                device_viewport: &self.tree.device_viewport_rect_,
+                capture_tokens: &tokens,
+                tree_id: self.tree.id,
+                view_transition_requests: &self.tree.view_transition_requests_,
+            },
+            self.host,
+        );
+        crate::cc::trees::draw_property_utils::CalculateDrawProperties(
+            &mut draw,
+            &mut self.tree.property_trees_,
+            &mut self.tree.render_surface_list_,
+            self.output_updates.take(),
+        );
+    }
+
+    fn run_occlusion_walk(&mut self) {
+        compositor_draw::occlusion_walk::RunOcclusionWalk(&mut DrawOcclusionWalkAdapter::new(
+            self.tree,
+            self.host.settings().minimum_occlusion_tracking_size(),
+        ));
+    }
+
+    fn is_resourceless_software_draw(&self) -> bool {
+        self.host.IsResourcelessSoftwareDraw()
+    }
+
+    fn mark_tiles_need_update(&mut self) {
+        self.tree.needs_update_tiles_ = true;
+    }
+
+    fn update_tiles(&mut self) -> bool {
+        self.tree.UpdateTilesWithHost(self.host)
+    }
+
+    fn did_modify_tile_priorities(&mut self, deferred: bool) {
+        self.host.DidModifyTilePriorities(deferred);
+    }
+
+    fn has_image_animation_controller(&self) -> bool {
+        self.host.HasImageAnimationController()
+    }
+
+    fn update_image_animation_state(&mut self) {
+        assert!(!self.host.settings().trees_in_viz_in_viz_process());
+        self.host.UpdateImageAnimationStateFromDrivers(self.tree);
+    }
+
+    fn finish_draw_property_update(&mut self) {
+        self.tree.device_viewport_rect_changed_ = false;
+    }
+
+    fn assert_draw_properties_clean(&self) {
+        debug_assert!(
+            !self.tree.needs_update_draw_properties_,
+            "CalcDrawProperties should not set_needs_update_draw_properties()"
+        );
+    }
+}
+
+struct ResidentPictureLayerUpdateAdapter<'a, 'context, B>
+where
+    B: LayerTreeTypes + 'context,
+{
+    layer: &'a mut B::PictureLayer,
+    context: &'a mut B::PictureLayerContext<'context>,
+}
+
+impl<B: LayerTreeTypes> compositor_tile::picture_layer_update::PictureLayerUpdate
+    for ResidentPictureLayerUpdateAdapter<'_, '_, B>
+{
+    fn has_valid_tile_priorities(&self) -> bool {
+        self.layer.HasValidTilePriorities(self.context)
+    }
+
+    fn release_resources(&mut self) {
+        self.layer.ReleaseResources(self.context);
+    }
+
+    fn update_tiles(&mut self) -> bool {
+        self.layer.UpdateTiles(self.context)
+    }
+}
+
+struct TilePictureLayerUpdateAdapter<'a, B: LayerTreeTypes> {
+    tree: &'a mut LayerTreeImpl<B>,
+    host: &'a mut dyn draw_host::LayerTreeDrawHost<B>,
+}
+
+impl<B: LayerTreeTypes> compositor_tile::picture_layer_update::PictureLayerUpdateContext
+    for TilePictureLayerUpdateAdapter<'_, B>
+{
+    fn needs_tile_update(&self) -> bool {
+        self.tree.needs_update_tiles_
+    }
+
+    fn begin_tile_update(&mut self) {
+        self.tree.needs_update_tiles_ = false;
+    }
+
+    fn release_resources_for_hidden_layers(&self) -> bool {
+        self.host
+            .settings()
+            .release_tile_resources_for_hidden_layers()
+    }
+
+    fn visit_picture_layers(
+        &mut self,
+        visitor: &mut dyn FnMut(&mut dyn compositor_tile::picture_layer_update::PictureLayerUpdate),
+    ) {
+        B::WithPictureLayersContext(self.tree, self.host, |layers, layer_context| {
+            let _ = layers.ForEachPictureLayer(&mut |layer| {
+                visitor(&mut ResidentPictureLayerUpdateAdapter::<B> {
+                    layer,
+                    context: layer_context,
+                });
+                std::ops::ControlFlow::Continue(())
+            });
+        });
+    }
+
+    fn report_layers_updated(&mut self, count: usize) {
+        self.host.TraceLayersUpdatedCount(count);
+    }
+}
+
+impl<B: LayerTreeTypes> LayerTreeImpl<B> {
+    // Source: cc/trees/layer_tree_impl.cc:989-1121.
+    pub fn PushPropertiesTo(&mut self, target: &mut Self, context: &mut LayerTreeContext<'_, B>) {
+        compositor_tree::property_push::PushPropertiesToActive(&mut TreePropertyPushAdapter {
+            source: self,
+            target,
+            context,
+        });
     }
     // Source: cc/trees/layer_tree_impl.cc:1123-1146.
     pub fn HandleTickmarksVisibilityChange(&mut self, context: &mut LayerTreeContext<'_, B>) {
@@ -2048,9 +2786,7 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
             return;
         }
         let factor = self.current_page_scale_factor_for_tree(host.IsActiveTree(self.id));
-        crate::cc::trees::draw_property_utils::UpdatePageScaleFactor::<
-            B::DrawContext<'_>,
-        >(
+        crate::cc::trees::draw_property_utils::UpdatePageScaleFactor::<B::DrawContext<'_>>(
             &mut self.property_trees_,
             Some(self.viewport_property_ids_.page_scale_transform),
             factor,
@@ -2577,167 +3313,16 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         output_updates: Option<&mut Vec<i32>>,
         host: &mut dyn draw_host::LayerTreeDrawHost<B>,
     ) -> bool {
-        if !self.needs_update_draw_properties_ {
-            return true;
-        }
-        self.needs_update_draw_properties_ = false;
-        self.needs_update_tiles_ = false;
-        if !host.HasLayerTreeFrameSink() {
-            return false;
-        }
-        self.render_surface_list_.clear();
-        if self.layer_list_.is_empty() {
-            return true;
-        }
-        {
-            let tokens = self.GetCaptureViewTransitionTokensWithHost(host);
-            let mut draw = B::MakeDrawContext(
-                LayerTreeDrawState {
-                    layers: &mut self.layer_list_,
-                    viewport: &self.viewport_property_ids_,
-                    page_scale: &self.page_scale_factor_,
-                    device_scale: &self.device_scale_factor_,
-                    external_scale: &self.external_page_scale_factor_,
-                    device_viewport: &self.device_viewport_rect_,
-                    capture_tokens: &tokens,
-                    tree_id: self.id,
-                    view_transition_requests: &self.view_transition_requests_,
-                },
+        compositor_draw::tree_draw_update::UpdateTreeDrawProperties(
+            &mut DrawTreeUpdateAdapter {
+                tree: self,
                 host,
-            );
-            crate::cc::trees::draw_property_utils::CalculateDrawProperties(
-                &mut draw,
-                &mut self.property_trees_,
-                &mut self.render_surface_list_,
                 output_updates,
-            );
-        }
-        {
-            use crate::adapter::draw_property::DrawSurface;
-            use crate::adapter::occlusion::{
-                EffectTreeLayerListIteratorPosition as TrackerPosition,
-                EffectTreeLayerListIteratorState as TrackerState,
-            };
-            use crate::cc::layers::effect_tree_layer_list_iterator::State as IteratorState;
-            let mut tracker =
-                super::occlusion_tracker::OcclusionTracker::<B::Transform, i32, i32>::new(
-                    DrawSurface::content_rect(self.RootRenderSurface().unwrap()),
-                );
-            tracker.set_minimum_tracking_size(host.settings().minimum_occlusion_tracking_size());
-            // Source EffectTreeLayerListIterator stores only offsets and tree
-            // identity, then re-reads the resident tree on each increment. The
-            // Rust cursor has the same shape, so no layer/surface list snapshot
-            // or long immutable borrow is needed while source fields mutate.
-            let mut iterator = super::super::layers::effect_tree_layer_list_iterator::EffectTreeLayerListIterator::new(self);
-            while iterator.state() != IteratorState::kEnd {
-                let native_position = iterator.position(self);
-                let current_render_surface = native_position.current_render_surface;
-                let position = TrackerPosition {
-                    state: match native_position.state {
-                        IteratorState::kLayer => TrackerState::kLayer,
-                        IteratorState::kTargetSurface => TrackerState::kTargetSurface,
-                        IteratorState::kContributingSurface => TrackerState::kContributingSurface,
-                        IteratorState::kEnd => unreachable!(),
-                    },
-                    target_render_surface: native_position.target_render_surface.unwrap(),
-                    current_layer: native_position.current_layer,
-                };
-                {
-                    let occlusion = B::MakeOcclusionContext(
-                        &self.layer_list_,
-                        &self.property_trees_,
-                        &self.render_surface_list_,
-                    );
-                    tracker.EnterLayer(&position, &occlusion);
-                }
-                if position.state == TrackerState::kLayer {
-                    let layer_id = position.current_layer.unwrap();
-                    let transform = self
-                        .layer_list_
-                        .LayerById(layer_id)
-                        .unwrap()
-                        .DrawTransform(&self.property_trees_);
-                    let layer_occlusion = tracker.GetCurrentOcclusionForLayer(&transform);
-                    self.layer_list_
-                        .LayerByIdMut(layer_id)
-                        .unwrap()
-                        .SetOcclusionInContentSpace(layer_occlusion);
-                }
-                if position.state == TrackerState::kContributingSurface {
-                    let current_render_surface = current_render_surface.unwrap();
-                    let surface = self
-                        .property_trees_
-                        .effect_tree()
-                        .GetRenderSurface(current_render_surface)
-                        .unwrap();
-                    let mut transform = B::Transform::default();
-                    if let Some(occlusion_id) = tracker.OcclusionSurfaceForContributingSurface() {
-                        let target = self
-                            .property_trees_
-                            .effect_tree()
-                            .GetRenderSurface(occlusion_id)
-                            .unwrap();
-                        self.property_trees_.GetToTarget(
-                            DrawSurface::TransformTreeIndex(surface, &self.property_trees_),
-                            DrawSurface::EffectTreeIndex(target),
-                            &mut transform,
-                        );
-                        let node = self
-                            .property_trees_
-                            .effect_tree()
-                            .Node(DrawSurface::EffectTreeIndex(surface));
-                        crate::cc::trees::draw_property_utils::ConcatInverseSurfaceContentsScale::<B::DrawContext<'_>>(node,&mut transform);
-                        crate::adapter::property_tree::PropertyTreeTransform::PostTranslate(
-                            &mut transform,
-                            DrawSurface::pixel_alignment_offset(target),
-                        );
-                    }
-                    let surface_occlusion =
-                        tracker.GetCurrentOcclusionForContributingSurface(&transform);
-                    self.property_trees_
-                        .effect_tree_mutable()
-                        .GetRenderSurfaceMutable(current_render_surface)
-                        .unwrap()
-                        .SetOcclusionInContentSpace(surface_occlusion);
-                }
-                {
-                    let occlusion = B::MakeOcclusionContext(
-                        &self.layer_list_,
-                        &self.property_trees_,
-                        &self.render_surface_list_,
-                    );
-                    tracker.LeaveLayer(&position, &occlusion);
-                }
-                iterator.Increment(self);
-            }
-            let occlusion = B::MakeOcclusionContext(
-                &self.layer_list_,
-                &self.property_trees_,
-                &self.render_surface_list_,
-            );
-            self.unoccluded_screen_space_region_ =
-                tracker.ComputeVisibleRegionInScreen::<B::RegionBackend>(&occlusion);
-        }
-        if !host.IsResourcelessSoftwareDraw() {
-            self.needs_update_tiles_ = true;
-            let mut may_update = true;
-            if update_tiles {
-                may_update = self.UpdateTilesWithHost(host);
-            }
-            if may_update {
-                host.DidModifyTilePriorities(!update_tiles);
-            }
-        }
-        if update_images && host.HasImageAnimationController() {
-            assert!(!host.settings().trees_in_viz_in_viz_process());
-            host.UpdateImageAnimationStateFromDrivers(self);
-        }
-        self.device_viewport_rect_changed_ = false;
-        debug_assert!(
-            !self.needs_update_draw_properties_,
-            "CalcDrawProperties should not set_needs_update_draw_properties()"
-        );
-        true
+            },
+            update_tiles,
+            update_images,
+        )
+        .success
     }
     // Source: cc/trees/layer_tree_impl.cc:1960-1985.
     pub fn UpdateTiles(&mut self, context: &mut LayerTreeContext<'_, B>) -> bool {
@@ -2745,28 +3330,10 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
     }
     // Same source body; the host factory only splits resident fields/services.
     pub fn UpdateTilesWithHost(&mut self, host: &mut dyn draw_host::LayerTreeDrawHost<B>) -> bool {
-        if !self.needs_update_tiles_ {
-            return false;
-        }
-        self.needs_update_tiles_ = false;
-        let mut count = 0usize;
-        let mut changed = false;
-        let release = host.settings().release_tile_resources_for_hidden_layers();
-        B::WithPictureLayersContext(self, host, |layers, layer_context| {
-            let _ = layers.ForEachPictureLayer(&mut |layer| {
-                if !layer.HasValidTilePriorities(layer_context) {
-                    if release {
-                        layer.ReleaseResources(layer_context);
-                    }
-                    return std::ops::ControlFlow::Continue(());
-                }
-                count += 1;
-                changed |= layer.UpdateTiles(layer_context);
-                std::ops::ControlFlow::Continue(())
-            });
-        });
-        host.TraceLayersUpdatedCount(count);
-        changed
+        compositor_tile::picture_layer_update::UpdatePictureLayerTiles(
+            &mut TilePictureLayerUpdateAdapter { tree: self, host },
+        )
+        .changed
     }
     // Source: cc/trees/layer_tree_impl.cc:1987-2006.
     pub fn GetRenderSurfaceList(&self) -> &Vec<i32> {
@@ -2988,13 +3555,25 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         }
     }
     // Source: cc/trees/layer_tree_impl.cc:2213-2237.
-    pub fn CreateScrollbarAnimationController(&mut self,id:ElementId,opacity:f32,c:&mut LayerTreeContext<'_,B>)->Option<Box<crate::cc::input::scrollbar_animation_controller::ScrollbarAnimationController>>{
+    pub fn CreateScrollbarAnimationController(
+        &mut self,
+        id: ElementId,
+        opacity: f32,
+        c: &mut LayerTreeContext<'_, B>,
+    ) -> Option<Box<crate::cc::input::scrollbar_animation_controller::ScrollbarAnimationController>>
+    {
         c.host.CreateScrollbarAnimationController(self, id, opacity)
     }
     // Source: cc/trees/layer_tree_impl.cc:2212-2237.
     // Rust borrow split: source creation reads only immutable settings and
     // borrows the current host client; it does not access tree-owned fields.
-    pub(crate) fn CreateScrollbarAnimationControllerWithClient(settings:&B::Settings,id:ElementId,opacity:f32,client:&mut dyn crate::adapter::scrollbar::ScrollbarInitializationClient)->Option<Box<crate::cc::input::scrollbar_animation_controller::ScrollbarAnimationController>>{
+    pub(crate) fn CreateScrollbarAnimationControllerWithClient(
+        settings: &B::Settings,
+        id: ElementId,
+        opacity: f32,
+        client: &mut dyn crate::adapter::scrollbar::ScrollbarInitializationClient,
+    ) -> Option<Box<crate::cc::input::scrollbar_animation_controller::ScrollbarAnimationController>>
+    {
         use crate::cc::input::scrollbar_animation_controller::ScrollbarAnimationController as Controller;
         let delay = settings.scrollbar_fade_delay();
         let duration = settings.scrollbar_fade_duration();
@@ -3104,54 +3683,30 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
     pub(crate) fn QueuePinnedSwapPromiseFromActiveHost(&mut self, promise: Box<B::SwapPromise>) {
         self.pinned_swap_promise_list_.push(Some(promise));
     }
-    pub fn PassSwapPromises(
-        &mut self,
-        mut new: Vec<Box<B::SwapPromise>>,
-        c: &LayerTreeContext<'_, B>,
-    ) {
+    pub fn PassSwapPromises(&mut self, new: Vec<Box<B::SwapPromise>>, c: &LayerTreeContext<'_, B>) {
         let timestamp = c.host.MonotonicTimeNow();
-        // Preserve native unique_ptr moved-from slots until the source clear(), so
-        // BREAK_PROMISE destructors run after every DidNotSwap callback in this pass.
-        for promise in &mut self.swap_promise_list_ {
-            if promise
-                .as_mut()
-                .expect("non-null swap promise")
-                .DidNotSwap(DidNotSwapReason::SWAP_FAILS, timestamp)
-                == DidNotSwapAction::KEEP_ACTIVE
-            {
-                new.push(promise.take().unwrap());
-            }
-        }
-        self.swap_promise_list_.clear();
-        self.swap_promise_list_ = new.into_iter().map(Some).collect();
+        PassSwapPromisesPolicy::<B::SwapPromise, B::CompositorFrameMetadata>(
+            &mut self.swap_promise_list_,
+            new,
+            timestamp,
+        );
     }
     pub fn AppendSwapPromises(&mut self, new: Vec<Box<B::SwapPromise>>) {
         self.swap_promise_list_.extend(new.into_iter().map(Some));
     }
     // Source: cc/trees/layer_tree_impl.cc:2328-2370.
     pub fn FinishSwapPromises(&mut self, metadata: &mut B::CompositorFrameMetadata) {
-        for promise in &mut self.swap_promise_list_ {
-            promise
-                .as_mut()
-                .expect("non-null swap promise")
-                .WillSwap(metadata);
-        }
-        for promise in &mut self.pinned_swap_promise_list_ {
-            promise
-                .as_mut()
-                .expect("non-null swap promise")
-                .WillSwap(metadata);
-        }
+        FinishSwapPromisesPolicy(
+            &mut self.swap_promise_list_,
+            &mut self.pinned_swap_promise_list_,
+            metadata,
+        );
     }
     pub fn ClearSwapPromises(&mut self) {
-        for promise in &mut self.swap_promise_list_ {
-            promise.as_mut().expect("non-null swap promise").DidSwap();
-        }
-        self.swap_promise_list_.clear();
-        for promise in &mut self.pinned_swap_promise_list_ {
-            promise.as_mut().expect("non-null swap promise").DidSwap();
-        }
-        self.pinned_swap_promise_list_.clear();
+        ClearSwapPromisesPolicy::<B::SwapPromise, B::CompositorFrameMetadata>(
+            &mut self.swap_promise_list_,
+            &mut self.pinned_swap_promise_list_,
+        );
     }
     pub fn BreakSwapPromises(&mut self, reason: DidNotSwapReason, c: &LayerTreeContext<'_, B>) {
         self.BreakSwapPromisesAt(reason, c.host.MonotonicTimeNow());
@@ -3164,34 +3719,12 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         reason: DidNotSwapReason,
         timestamp: crate::adapter::time::TimeTicks,
     ) {
-        {
-            let mut persistent = Vec::new();
-            for promise in &mut self.swap_promise_list_ {
-                if promise
-                    .as_mut()
-                    .expect("non-null swap promise")
-                    .DidNotSwap(reason, timestamp)
-                    == DidNotSwapAction::KEEP_ACTIVE
-                {
-                    persistent.push(promise.take());
-                }
-            }
-            self.swap_promise_list_ = persistent;
-        }
-        {
-            let mut persistent = Vec::new();
-            for promise in &mut self.pinned_swap_promise_list_ {
-                if promise
-                    .as_mut()
-                    .expect("non-null swap promise")
-                    .DidNotSwap(reason, timestamp)
-                    == DidNotSwapAction::KEEP_ACTIVE
-                {
-                    persistent.push(promise.take());
-                }
-            }
-            self.pinned_swap_promise_list_ = persistent;
-        }
+        BreakSwapPromisesPolicy::<B::SwapPromise, B::CompositorFrameMetadata>(
+            &mut self.swap_promise_list_,
+            &mut self.pinned_swap_promise_list_,
+            reason,
+            timestamp,
+        );
     }
     // Source: cc/trees/layer_tree_impl.cc:2372-2412.
     pub fn DidModifyTilePriorities(&mut self, pending: bool, c: &mut LayerTreeContext<'_, B>) {
@@ -3970,16 +4503,13 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
     // Source: cc/trees/layer_tree_impl.cc:3227-3273.
     pub fn SetPendingPageScaleAnimation(
         &mut self,
-        value: Option<
-            Box<crate::cc::input::page_scale_animation::PendingPageScaleAnimation>,
-        >,
+        value: Option<Box<crate::cc::input::page_scale_animation::PendingPageScaleAnimation>>,
     ) {
         self.pending_page_scale_animation_ = value;
     }
     pub fn TakePendingPageScaleAnimation(
         &mut self,
-    ) -> Option<Box<crate::cc::input::page_scale_animation::PendingPageScaleAnimation>>
-    {
+    ) -> Option<Box<crate::cc::input::page_scale_animation::PendingPageScaleAnimation>> {
         self.pending_page_scale_animation_.take()
     }
     pub fn AppendEventsMetricsFromMainThread(&mut self, mut events: Vec<B::EventMetrics>) {
@@ -4832,7 +5362,7 @@ impl<B: LayerTreeTypes> ScrollbarControllerTree for LayerTreeImpl<B> {
 // Source: cc/trees/layer_tree_impl.cc:2445-2492. The source current scrollbar
 // is explicit; conflicting orientation unregisters this same current pointer.
 pub(crate) fn RegisterScrollbarWithContext<B: crate::adapter::layer_impl::LayerImplTypes>(
-    scrollbar:&mut crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplBase<B>,
+    scrollbar: &mut crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplBase<B>,
     context: &mut dyn crate::adapter::scrollbar_layer_impl_base::ScrollbarRegistrationContext<B>,
 ) {
     let element = scrollbar.scroll_element_id();
@@ -4873,7 +5403,7 @@ pub(crate) fn RegisterScrollbarWithContext<B: crate::adapter::layer_impl::LayerI
 }
 // Source: cc/trees/layer_tree_impl.cc:2494-2516.
 pub(crate) fn UnregisterScrollbarWithContext<B: crate::adapter::layer_impl::LayerImplTypes>(
-    scrollbar:&mut crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplBase<B>,
+    scrollbar: &mut crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplBase<B>,
     context: &mut dyn crate::adapter::scrollbar_layer_impl_base::ScrollbarRegistrationContext<B>,
 ) {
     let element = scrollbar.scroll_element_id();
@@ -4904,8 +5434,7 @@ pub(crate) struct CurrentScrollbarInitializationClient<
 > {
     pub tree: LayerTreeId,
     pub current_identity: usize,
-    pub current:
-        &'a mut crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplBase<B>,
+    pub current: &'a mut crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplBase<B>,
     pub remaining: &'a mut dyn LayerTreeRemainingStorage<B>,
     pub registry: &'a BTreeMap<ElementId, ScrollbarLayerIds>,
     pub geometry:

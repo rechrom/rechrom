@@ -5,9 +5,9 @@
 //! and returns typed DOM scroll-offset updates without mutating Page, Layout,
 //! Paint or Compositor.
 
-use crate::input_event::WheelEvent;
+use crate::{input_event::WheelEvent, interaction_engine::InteractionFragmentSource};
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
+    fragment_tree::FragmentPaintData,
     internal::layout_input::{Offset, Overflow},
 };
 
@@ -23,12 +23,13 @@ struct ScrollChainEntry {
 /// Resolve a blocked/cancelable wheel's default action against the current
 /// immutable fragment snapshot. The caller supplies live DOM offsets so a
 /// retained fragment does not become a second mutable scroll-state owner.
-pub fn ComputeMainThreadScrollUpdates(
-    fragments: &FragmentNode,
+pub fn ComputeMainThreadScrollUpdates<'a>(
+    fragments: impl Into<InteractionFragmentSource<'a>>,
     wheel: &WheelEvent,
     viewport_height: f64,
     current_offset: &impl Fn(u64, Offset) -> Offset,
 ) -> Vec<(u64, Offset)> {
+    let fragments = fragments.into();
     let mut updates: Vec<(u64, Offset)> = Vec::new();
     let layout_zoom = fragments
         .paint
@@ -110,7 +111,7 @@ pub fn ComputeMainThreadScrollUpdates(
 }
 
 fn ScrollChain(
-    fragment: &FragmentNode,
+    fragment: InteractionFragmentSource<'_>,
     point: Offset,
     parent: Offset,
     delta: Offset,
@@ -144,7 +145,7 @@ fn ScrollChain(
     }
     let mut chain = None;
     let target_here = target == Some(fragment.node_id);
-    for child in fragment.children.iter().rev() {
+    for child in fragment.Children().into_iter().rev() {
         let child_is_target_branch =
             target.is_some() && !target_here && FragmentContainsNode(child, target.unwrap());
         if target.is_some() && !child_is_target_branch {
@@ -254,10 +255,10 @@ fn ScrollChain(
     chain
 }
 
-fn FragmentContainsNode(fragment: &FragmentNode, node_id: u64) -> bool {
+fn FragmentContainsNode(fragment: InteractionFragmentSource<'_>, node_id: u64) -> bool {
     fragment.node_id == node_id
         || fragment
-            .children
-            .iter()
+            .Children()
+            .into_iter()
             .any(|child| FragmentContainsNode(child, node_id))
 }

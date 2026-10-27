@@ -13,14 +13,13 @@
 
 use crate::{
     adapter::{
-        geometry::{RectF, Size, SizeF, ToEnclosingRect, Vector2dF},
+        geometry::{RectF, Size, Vector2dF},
         main_layer::{LayerContext, MainLayerHostId},
         pending_layer::{
             LcdTextPreference, PendingClipNode, PendingDisplayItem, PendingEffectNode,
             PendingLayerColor, PendingLayerGeometry, PendingLayerJson, PendingLayerServices,
             PendingLayerTypes, PendingMappedVisualRect, PendingPaintArtifact, PendingPaintChunk,
             PendingPaintChunkSubset, PendingPropertyTreeState, PendingTransformNode,
-            PendingUpcastResult,
         },
         property_types::BlendMode,
     },
@@ -31,40 +30,151 @@ use crate::{
         layers::layer::{Layer, LayerRef},
     },
 };
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-    sync::Arc,
+use compositor_layerize::background_color::{
+    BackgroundColorOperations, BackgroundEffect, BackgroundSample,
+    ComputeBackgroundColor as ComputeLayerBackgroundColor,
 };
+use compositor_layerize::pending_layer_policy::{
+    CanUpcastPendingLayers, ComputePendingLayerMerge, ComputePendingLayerUpcast,
+    MightOverlapPendingLayers, PendingLayerMergeGeometry, PendingLayerMergeInput,
+    PendingLayerMergeOutput, PendingMappedVisualRect as PolicyMappedVisualRect,
+    PendingUpcastResult,
+};
+pub use compositor_layerize::pending_layer_policy::{
+    CompositingType, MergeResult, PendingLayerBounds, RequiresOwnLayer,
+};
+use compositor_layerize::transform_decomposition::PendingLayerDecomposition;
+use std::{fmt, sync::Arc};
 
 const K_NOT_FOUND: usize = usize::MAX;
 
-// Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:32-38.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CompositingType {
-    kScrollHitTestLayer,
-    kForeignLayer,
-    kScrollbarLayer,
-    kOverlap,
-    #[default]
-    kOther,
+struct BackgroundColorAdapter<'a>(&'a dyn PendingLayerColor);
+
+impl BackgroundColorOperations<crate::adapter::layer_tree_impl::Color4f>
+    for BackgroundColorAdapter<'_>
+{
+    fn Alpha(&self, color: crate::adapter::layer_tree_impl::Color4f) -> f32 {
+        color.alpha
+    }
+
+    fn MultiplyAlpha(
+        &self,
+        mut color: crate::adapter::layer_tree_impl::Color4f,
+        opacity: f32,
+    ) -> crate::adapter::layer_tree_impl::Color4f {
+        color.alpha *= opacity;
+        color
+    }
+
+    fn SourceOver(
+        &self,
+        foreground: crate::adapter::layer_tree_impl::Color4f,
+        background: crate::adapter::layer_tree_impl::Color4f,
+    ) -> crate::adapter::layer_tree_impl::Color4f {
+        self.0.GetResultingPaintColor(foreground, background)
+    }
 }
 
-// Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:104-109.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MergeResult {
-    pub merged: bool,
-    pub scroll_range_dependent: bool,
-}
+struct MergeGeometryAdapter<'a, B: PendingLayerTypes>(&'a dyn PendingLayerGeometry<B>);
 
-struct PendingMergeState<S> {
-    bounds: RectF,
-    property_tree_state: S,
-    rect_known_to_be_opaque: RectF,
-    text_known_to_be_on_opaque_background: bool,
-    solid_color_chunk_index: usize,
-    hit_test_opaqueness: HitTestOpaqueness,
-    scroll_range_dependent: bool,
+impl<B: PendingLayerTypes>
+    PendingLayerMergeGeometry<B::PropertyTreeState, B::TransformNode, HitTestOpaqueness>
+    for MergeGeometryAdapter<'_, B>
+{
+    fn SameEffectNode(&self, first: &B::PropertyTreeState, second: &B::PropertyTreeState) -> bool {
+        first.SameEffectNode(second)
+    }
+
+    fn CanUpcastWith(
+        &self,
+        first: &B::PropertyTreeState,
+        second: &B::PropertyTreeState,
+        merge_fixed_layers: bool,
+        merge_sticky_layers: bool,
+        is_composited_scroll: &mut dyn FnMut(&B::TransformNode) -> bool,
+    ) -> Option<PendingUpcastResult<B::PropertyTreeState>> {
+        first.CanUpcastWith(
+            second,
+            merge_fixed_layers,
+            merge_sticky_layers,
+            is_composited_scroll,
+        )
+    }
+
+    fn NearestScrollTranslationNode(&self, state: &B::PropertyTreeState) -> B::TransformNode {
+        state.NearestScrollTranslationNode()
+    }
+
+    fn SameNearestDirectlyCompositedAncestor(
+        &self,
+        first: &B::PropertyTreeState,
+        second: &B::PropertyTreeState,
+    ) -> bool {
+        first.SameNearestDirectlyCompositedAncestor(second)
+    }
+
+    fn MightOverlapForCompositing(
+        &self,
+        first_bounds: RectF,
+        first_state: &B::PropertyTreeState,
+        second_bounds: RectF,
+        second_state: &B::PropertyTreeState,
+    ) -> bool {
+        self.0
+            .MightOverlapForCompositing(first_bounds, first_state, second_bounds, second_state)
+    }
+
+    fn VisibilityLimit(&self, state: &B::PropertyTreeState) -> Option<RectF> {
+        self.0.VisibilityLimit(state)
+    }
+
+    fn MapLocalToAncestorVisualRect(
+        &self,
+        source: &B::PropertyTreeState,
+        destination: &B::PropertyTreeState,
+        rect: RectF,
+    ) -> PolicyMappedVisualRect {
+        self.0
+            .MapLocalToAncestorVisualRect(source, destination, rect)
+    }
+
+    fn MaximumCoveredRect(&self, first: RectF, second: RectF) -> RectF {
+        self.0.MaximumCoveredRect(first, second)
+    }
+
+    fn UnionRects(&self, first: RectF, second: RectF) -> RectF {
+        self.0.UnionRects(first, second)
+    }
+
+    fn ToRoundedRect(&self, rect: RectF) -> crate::adapter::geometry::Rect {
+        self.0.ToRoundedRect(rect)
+    }
+
+    fn HitTestOpaquenessIsOpaque(&self, value: HitTestOpaqueness) -> bool {
+        value == HitTestOpaqueness::kOpaque
+    }
+
+    fn MixedHitTestOpaqueness(&self) -> HitTestOpaqueness {
+        HitTestOpaqueness::kMixed
+    }
+
+    fn UnionHitTestOpaqueness(
+        &self,
+        first_rect: crate::adapter::geometry::Rect,
+        first: HitTestOpaqueness,
+        second_rect: crate::adapter::geometry::Rect,
+        second: HitTestOpaqueness,
+    ) -> HitTestOpaqueness {
+        UnionHitTestOpaqueness(first_rect, first, second_rect, second)
+    }
+
+    fn MergeFixedLayersEnabled(&self) -> bool {
+        self.0.MergeFixedLayersEnabled()
+    }
+
+    fn MergeStickyLayersEnabled(&self) -> bool {
+        self.0.MergeStickyLayersEnabled()
+    }
 }
 
 // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:250-284.
@@ -90,6 +200,102 @@ pub struct PendingLayer<B: PendingLayerTypes> {
     draws_content_: bool,
     text_known_to_be_on_opaque_background_: bool,
     has_decomposited_blend_mode_: bool,
+}
+
+impl<B: PendingLayerTypes> PendingLayerDecomposition for PendingLayer<B> {
+    type Transform = B::TransformNode;
+    type Clip = B::ClipNode;
+    type Effect = B::EffectNode;
+    type NodeIdentity = B::PropertyNodeIdentity;
+
+    fn TransformNode(&self) -> Self::Transform {
+        self.property_tree_state_.TransformNode()
+    }
+    fn ClipNode(&self) -> Self::Clip {
+        self.property_tree_state_.ClipNode()
+    }
+    fn EffectNode(&self) -> Self::Effect {
+        self.property_tree_state_.EffectNode()
+    }
+    fn TransformIsRoot(&self, node: &Self::Transform) -> bool {
+        node.IsRoot()
+    }
+    fn TransformParentUnalias(&self, node: &Self::Transform) -> Self::Transform {
+        node.ParentUnalias()
+    }
+    fn TransformUnaliasedParent(&self, node: &Self::Transform) -> Option<Self::Transform> {
+        node.UnaliasedParent()
+    }
+    fn TransformIsIdentityOr2dTranslation(&self, node: &Self::Transform) -> bool {
+        node.IsIdentityOr2dTranslation()
+    }
+    fn TransformHasScrollNode(&self, node: &Self::Transform) -> bool {
+        node.HasScrollNode()
+    }
+    fn TransformHasDirectCompositingReasonsOtherThan3dTransform(
+        &self,
+        node: &Self::Transform,
+    ) -> bool {
+        node.HasDirectCompositingReasonsOtherThan3dTransform()
+    }
+    fn TransformFlattensInheritedTransformSameAsParent(&self, node: &Self::Transform) -> bool {
+        node.FlattensInheritedTransformSameAsParent()
+    }
+    fn TransformBackfaceVisibilitySameAsParent(&self, node: &Self::Transform) -> bool {
+        node.BackfaceVisibilitySameAsParent()
+    }
+    fn TransformHasStickyConstraint(&self, node: &Self::Transform) -> bool {
+        node.HasStickyConstraint()
+    }
+    fn TransformHasAnchorPositionScrollData(&self, node: &Self::Transform) -> bool {
+        node.HasAnchorPositionScrollData()
+    }
+    fn TransformIsAffectedByOuterViewportBoundsDelta(&self, node: &Self::Transform) -> bool {
+        node.IsAffectedByOuterViewportBoundsDelta()
+    }
+    fn ClipIsRoot(&self, node: &Self::Clip) -> bool {
+        node.IsRoot()
+    }
+    fn ClipIdentity(&self, node: &Self::Clip) -> Self::NodeIdentity {
+        node.Identity()
+    }
+    fn ClipParentUnalias(&self, node: &Self::Clip) -> Self::Clip {
+        node.ParentUnalias()
+    }
+    fn ClipLocalTransformSpaceUnalias(&self, node: &Self::Clip) -> Self::Transform {
+        node.LocalTransformSpaceUnalias()
+    }
+    fn EffectIsRoot(&self, node: &Self::Effect) -> bool {
+        node.IsRoot()
+    }
+    fn EffectIdentity(&self, node: &Self::Effect) -> Self::NodeIdentity {
+        node.Identity()
+    }
+    fn EffectParentUnalias(&self, node: &Self::Effect) -> Self::Effect {
+        node.ParentUnalias()
+    }
+    fn EffectLocalTransformSpaceUnalias(&self, node: &Self::Effect) -> Self::Transform {
+        node.LocalTransformSpaceUnalias()
+    }
+    fn IsScrollHitTestLayer(&self) -> bool {
+        self.compositing_type_ == CompositingType::kScrollHitTestLayer
+    }
+    fn ScrollTranslationForScrollHitTestLayer(&self) -> Self::Transform {
+        PendingLayer::ScrollTranslationForScrollHitTestLayer(self)
+    }
+    fn ApplyDecompositedTransform(&mut self, node: &Self::Transform) {
+        self.offset_of_decomposited_transforms_ += node.Get2dTranslation();
+        self.change_of_decomposited_transforms_ = self
+            .change_of_decomposited_transforms_
+            .max(node.NodeChanged());
+    }
+    fn FinishDecompositedTransforms(&mut self, remaining_transform: Self::Transform) {
+        self.property_tree_state_
+            .SetTransformNode(remaining_transform);
+        let offset = self.offset_of_decomposited_transforms_;
+        self.bounds_.Offset(offset.x(), offset.y());
+        self.rect_known_to_be_opaque_.Offset(offset.x(), offset.y());
+    }
 }
 
 // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:45;
@@ -376,78 +582,8 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:162-163.
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:523-625.
     pub fn DecompositeTransforms(pending_layers: &mut [Self]) {
-        let mut can_be_decomposited: HashMap<B::TransformNode, bool> = HashMap::new();
-        let mut clips_and_effects_seen: HashSet<B::PropertyNodeIdentity> = HashSet::new();
-        for pending_layer in pending_layers.iter() {
-            let property_state = &pending_layer.property_tree_state_;
-            let mut node = property_state.TransformNode();
-            while !node.IsRoot() && !can_be_decomposited.contains_key(&node) {
-                if !node.IsIdentityOr2dTranslation()
-                    || node.HasScrollNode()
-                    || node.HasDirectCompositingReasonsOtherThan3dTransform()
-                    || !node.FlattensInheritedTransformSameAsParent()
-                    || !node.BackfaceVisibilitySameAsParent()
-                {
-                    mark_not_decompositable(&mut can_be_decomposited, node.clone());
-                    break;
-                }
-                debug_assert!(!node.HasStickyConstraint());
-                debug_assert!(!node.HasAnchorPositionScrollData());
-                debug_assert!(!node.IsAffectedByOuterViewportBoundsDelta());
-                can_be_decomposited.insert(node.clone(), true);
-                node = node.ParentUnalias();
-            }
-
-            let mut clip = property_state.ClipNode();
-            while !clip.IsRoot() && !clips_and_effects_seen.contains(&clip.Identity()) {
-                clips_and_effects_seen.insert(clip.Identity());
-                mark_not_decompositable(
-                    &mut can_be_decomposited,
-                    clip.LocalTransformSpaceUnalias(),
-                );
-                clip = clip.ParentUnalias();
-            }
-            let mut effect = property_state.EffectNode();
-            while !effect.IsRoot() && !clips_and_effects_seen.contains(&effect.Identity()) {
-                clips_and_effects_seen.insert(effect.Identity());
-                mark_not_decompositable(
-                    &mut can_be_decomposited,
-                    effect.LocalTransformSpaceUnalias(),
-                );
-                effect = effect.ParentUnalias();
-            }
-            if pending_layer.compositing_type_ == CompositingType::kScrollHitTestLayer {
-                mark_not_decompositable(
-                    &mut can_be_decomposited,
-                    pending_layer.ScrollTranslationForScrollHitTestLayer(),
-                );
-            }
-        }
-
-        for pending_layer in pending_layers.iter_mut() {
-            let mut transform = pending_layer.property_tree_state_.TransformNode();
-            while !transform.IsRoot()
-                && *can_be_decomposited
-                    .get(&transform)
-                    .expect("every visited transform has a decomposition decision")
-            {
-                pending_layer.offset_of_decomposited_transforms_ += transform.Get2dTranslation();
-                pending_layer.change_of_decomposited_transforms_ = pending_layer
-                    .change_of_decomposited_transforms_
-                    .max(transform.NodeChanged());
-                transform = transform.ParentUnalias();
-            }
-            pending_layer
-                .property_tree_state_
-                .SetTransformNode(transform);
-            let offset = pending_layer.offset_of_decomposited_transforms_;
-            pending_layer.bounds_.Offset(offset.x(), offset.y());
-            pending_layer
-                .rect_known_to_be_opaque_
-                .Offset(offset.x(), offset.y());
-        }
+        compositor_layerize::transform_decomposition::DecompositeTransforms(pending_layers);
     }
-
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:165-176.
     pub fn CcLayer(&self) -> LayerRef<B> {
         if let Some(client) = self.content_layer_client_.as_ref() {
@@ -531,11 +667,7 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         debug_assert!(item.IsScrollbar());
         let old_layer = old_pending_layer.and_then(|old| old.cc_layer_.take());
         let layer =
-            item.CreateOrReuseScrollbarLayer(
-                old_layer,
-                self.offset_of_decomposited_transforms_,
-                c,
-            );
+            item.CreateOrReuseScrollbarLayer(old_layer, self.offset_of_decomposited_transforms_, c);
         debug_assert!(self.cc_layer_.is_none());
         self.cc_layer_ = Some(layer);
     }
@@ -713,28 +845,6 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:229-231.
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:114-132.
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:167-185.
-    fn MapRectKnownToBeOpaque(
-        &self,
-        new_state: &B::PropertyTreeState,
-        mapped_layer_bounds: PendingMappedVisualRect,
-        geometry: &dyn PendingLayerGeometry<B>,
-    ) -> RectF {
-        if !mapped_layer_bounds.is_tight || self.rect_known_to_be_opaque_.IsEmpty() {
-            return RectF::default();
-        }
-        if self.rect_known_to_be_opaque_ == self.bounds_ {
-            return mapped_layer_bounds.rect;
-        }
-        let mut mapped_opaque = geometry.MapLocalToAncestorVisualRect(
-            &self.property_tree_state_,
-            new_state,
-            self.rect_known_to_be_opaque_,
-        );
-        intersect_rectf(&mut mapped_opaque.rect, mapped_layer_bounds.rect);
-        debug_assert!(mapped_opaque.is_tight);
-        mapped_opaque.rect
-    }
-
     pub fn Upcast(
         &mut self,
         new_state: &B::PropertyTreeState,
@@ -742,18 +852,16 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     ) {
         debug_assert!(!self.ChunkRequiresOwnLayer());
         debug_assert!(new_state.EffectUnaliasedParentSameAs(&self.property_tree_state_));
-        if self.property_tree_state_.EffectBlendMode() != BlendMode::kSrcOver {
-            self.has_decomposited_blend_mode_ = true;
-        }
-        let mapped_bounds = geometry.MapLocalToAncestorVisualRect(
-            &self.property_tree_state_,
+        let upcast = ComputePendingLayerUpcast(
+            &self.MergePolicyInput(),
             new_state,
-            self.bounds_,
+            self.property_tree_state_.EffectBlendMode() != BlendMode::kSrcOver,
+            &MergeGeometryAdapter::<B>(geometry),
         );
-        self.rect_known_to_be_opaque_ =
-            self.MapRectKnownToBeOpaque(new_state, mapped_bounds, geometry);
-        self.bounds_ = mapped_bounds.rect;
-        self.property_tree_state_ = new_state.clone();
+        self.rect_known_to_be_opaque_ = upcast.rect_known_to_be_opaque;
+        self.bounds_ = upcast.bounds;
+        self.property_tree_state_ = upcast.property_tree_state;
+        self.has_decomposited_blend_mode_ = upcast.has_decomposited_blend_mode;
         self.solid_color_chunk_index_ = K_NOT_FOUND;
     }
 
@@ -761,48 +869,31 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:115-119.
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:210-227;
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:444-489.
-    fn CanUpcastWith(
+    fn MergePolicyInput(
         &self,
-        guest: &Self,
-        guest_state: &B::PropertyTreeState,
-        merge_fixed_layers: bool,
-        merge_sticky_layers: bool,
-        is_composited_scroll: &mut dyn FnMut(&B::TransformNode) -> bool,
-    ) -> Option<PendingUpcastResult<B::PropertyTreeState>> {
-        debug_assert!(Arc::ptr_eq(
-            self.chunks_.artifact(),
-            guest.chunks_.artifact()
-        ));
-        if self.ChunkRequiresOwnLayer() || guest.ChunkRequiresOwnLayer() {
-            return None;
+    ) -> PendingLayerMergeInput<
+        '_,
+        B::PropertyTreeState,
+        B::TransformNode,
+        B::DomNodeId,
+        HitTestOpaqueness,
+    > {
+        PendingLayerMergeInput {
+            property_tree_state: &self.property_tree_state_,
+            non_composited_scroll_translations: &self.non_composited_scroll_translations_,
+            bounds: self.bounds_,
+            rect_known_to_be_opaque: self.rect_known_to_be_opaque_,
+            solid_color_chunk_index: self.IsSolidColor().then_some(self.solid_color_chunk_index_),
+            solid_color_alpha: self.IsSolidColor().then(|| self.GetSolidColor().alpha),
+            chunk_count: self.chunks_.len(),
+            compositing_type: self.compositing_type_,
+            hit_test_opaqueness: self.hit_test_opaqueness_,
+            canvas_child_id: self.canvas_child_id_,
+            has_text: self.has_text_,
+            draws_content: self.draws_content_,
+            text_known_to_be_on_opaque_background: self.text_known_to_be_on_opaque_background_,
+            has_decomposited_blend_mode: self.has_decomposited_blend_mode_,
         }
-        if !self.property_tree_state_.SameEffectNode(guest_state) {
-            return None;
-        }
-        let result = self.property_tree_state_.CanUpcastWith(
-            guest_state,
-            merge_fixed_layers,
-            merge_sticky_layers,
-            is_composited_scroll,
-        )?;
-        let home_scroll_translation = self.property_tree_state_.NearestScrollTranslationNode();
-        let guest_scroll_translation = guest_state.NearestScrollTranslationNode();
-        if home_scroll_translation == guest_scroll_translation {
-            return Some(result);
-        }
-        let lca_scroll_translation = result.upcasted_state.NearestScrollTranslationNode();
-        if (guest_scroll_translation == lca_scroll_translation
-            || self
-                .non_composited_scroll_translations_
-                .contains(&guest_scroll_translation))
-            && (home_scroll_translation == lca_scroll_translation
-                || guest
-                    .non_composited_scroll_translations_
-                    .contains(&home_scroll_translation))
-        {
-            return Some(result);
-        }
-        None
     }
 
     pub fn CanMergeWithDecompositedBlendMode(
@@ -812,13 +903,16 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         merge_fixed_layers: bool,
         merge_sticky_layers: bool,
         is_composited_scroll: &mut dyn FnMut(&B::TransformNode) -> bool,
+        geometry: &dyn PendingLayerGeometry<B>,
     ) -> bool {
-        self.CanUpcastWith(
-            guest,
+        CanUpcastPendingLayers(
+            &self.MergePolicyInput(),
+            &guest.MergePolicyInput(),
             upcast_state,
             merge_fixed_layers,
             merge_sticky_layers,
             is_composited_scroll,
+            &MergeGeometryAdapter::<B>(geometry),
         )
         .is_some()
     }
@@ -833,168 +927,20 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         device_pixel_ratio: f32,
         is_composited_scroll: &mut dyn FnMut(&B::TransformNode) -> bool,
         geometry: &dyn PendingLayerGeometry<B>,
-    ) -> Option<PendingMergeState<B::PropertyTreeState>> {
-        const K_MERGE_SPARSITY_AREA_TOLERANCE: f32 = 10_000.0;
-        if self.canvas_child_id_ != guest.canvas_child_id_ {
-            return None;
-        }
-        let mut force_merge = self.canvas_child_id_ == guest.canvas_child_id_
-            && self.canvas_child_id_ != B::InvalidDomNodeId();
-        let upcast_result = self.CanUpcastWith(
-            guest,
-            &guest.property_tree_state_,
-            geometry.MergeFixedLayersEnabled(),
-            geometry.MergeStickyLayersEnabled(),
+    ) -> Option<PendingLayerMergeOutput<B::PropertyTreeState, HitTestOpaqueness>> {
+        debug_assert!(Arc::ptr_eq(
+            self.chunks_.artifact(),
+            guest.chunks_.artifact()
+        ));
+        ComputePendingLayerMerge(
+            &self.MergePolicyInput(),
+            &guest.MergePolicyInput(),
+            B::InvalidDomNodeId(),
+            lcd_text_preference,
+            device_pixel_ratio,
             is_composited_scroll,
-        );
-        let PendingUpcastResult {
-            upcasted_state: merged_state,
-            scroll_range_dependent,
-        } = match upcast_result {
-            Some(result) => result,
-            None if force_merge => PendingUpcastResult {
-                upcasted_state: self.property_tree_state_.clone(),
-                scroll_range_dependent: false,
-            },
-            None => return None,
-        };
-        let merged_visibility_limit = geometry.VisibilityLimit(&merged_state);
-        if !guest.has_decomposited_blend_mode_
-            && merged_visibility_limit == Some(self.bounds_)
-            && merged_state == self.property_tree_state_
-            && self.rect_known_to_be_opaque_ == self.bounds_
-        {
-            return Some(PendingMergeState {
-                bounds: self.bounds_,
-                property_tree_state: merged_state,
-                rect_known_to_be_opaque: self.bounds_,
-                text_known_to_be_on_opaque_background: true,
-                solid_color_chunk_index: if guest.draws_content_ {
-                    K_NOT_FOUND
-                } else {
-                    self.solid_color_chunk_index_
-                },
-                hit_test_opaqueness: UnionHitTestOpaqueness(
-                    geometry.ToRoundedRect(self.bounds_),
-                    self.hit_test_opaqueness_,
-                    geometry.ToRoundedRect(guest.bounds_),
-                    guest.hit_test_opaqueness_,
-                ),
-                scroll_range_dependent,
-            });
-        }
-
-        let mut new_home_bounds = geometry.MapLocalToAncestorVisualRect(
-            &self.property_tree_state_,
-            &merged_state,
-            self.bounds_,
-        );
-        let mut new_guest_bounds = geometry.MapLocalToAncestorVisualRect(
-            &guest.property_tree_state_,
-            &merged_state,
-            guest.bounds_,
-        );
-        if let Some(limit) = merged_visibility_limit {
-            intersect_rectf(&mut new_home_bounds.rect, limit);
-            intersect_rectf(&mut new_guest_bounds.rect, limit);
-        }
-        let mut merged_bounds = geometry.UnionRects(new_home_bounds.rect, new_guest_bounds.rect);
-        if guest.has_decomposited_blend_mode_ {
-            force_merge = true;
-        }
-
-        let mut merged_rect_known_to_be_opaque = RectF::default();
-        let mut merged_text_known_to_be_on_opaque_background = false;
-        let mut merged_solid_color_chunk_index = K_NOT_FOUND;
-        if !force_merge {
-            let sum_area = new_home_bounds.rect.width() * new_home_bounds.rect.height()
-                + new_guest_bounds.rect.width() * new_guest_bounds.rect.height();
-            let tolerance =
-                K_MERGE_SPARSITY_AREA_TOLERANCE * device_pixel_ratio * device_pixel_ratio;
-            if merged_bounds.width() * merged_bounds.height() - sum_area > tolerance {
-                return None;
-            }
-            let home_opaque = self.MapRectKnownToBeOpaque(&merged_state, new_home_bounds, geometry);
-            let guest_opaque =
-                guest.MapRectKnownToBeOpaque(&merged_state, new_guest_bounds, geometry);
-            merged_rect_known_to_be_opaque = geometry.MaximumCoveredRect(home_opaque, guest_opaque);
-            merged_text_known_to_be_on_opaque_background =
-                self.text_known_to_be_on_opaque_background_;
-            if self.text_known_to_be_on_opaque_background_
-                != guest.text_known_to_be_on_opaque_background_
-            {
-                if !self.text_known_to_be_on_opaque_background_ {
-                    if merged_rect_known_to_be_opaque.Contains(new_home_bounds.rect) {
-                        merged_text_known_to_be_on_opaque_background = true;
-                    }
-                } else if !guest.text_known_to_be_on_opaque_background_
-                    && !merged_rect_known_to_be_opaque.Contains(new_guest_bounds.rect)
-                {
-                    merged_text_known_to_be_on_opaque_background = false;
-                }
-            }
-            if lcd_text_preference == LcdTextPreference::kStronglyPreferred
-                && !merged_text_known_to_be_on_opaque_background
-            {
-                if self.has_text_ && self.text_known_to_be_on_opaque_background_ {
-                    return None;
-                }
-                if guest.has_text_ && guest.text_known_to_be_on_opaque_background_ {
-                    return None;
-                }
-            }
-            if self.IsSolidColor()
-                && new_home_bounds.is_tight
-                && !guest.draws_content_
-                && new_home_bounds.rect == merged_bounds
-            {
-                merged_solid_color_chunk_index = self.solid_color_chunk_index_;
-            } else if guest.IsSolidColor()
-                && new_guest_bounds.is_tight
-                && new_guest_bounds.rect == merged_bounds
-                && (!self.draws_content_ || guest.GetSolidColor().alpha == 1.0)
-            {
-                merged_solid_color_chunk_index =
-                    self.chunks_.len() + guest.solid_color_chunk_index_;
-            }
-            if !self
-                .property_tree_state_
-                .SameNearestDirectlyCompositedAncestor(&guest.property_tree_state_)
-            {
-                assert!(geometry.MergeFixedLayersEnabled() || geometry.MergeStickyLayersEnabled());
-                if (self.IsSolidColor() || guest.IsSolidColor())
-                    && merged_solid_color_chunk_index == K_NOT_FOUND
-                {
-                    return None;
-                }
-            }
-        }
-
-        let mut home_hit_test_opaqueness = self.hit_test_opaqueness_;
-        if home_hit_test_opaqueness == HitTestOpaqueness::kOpaque && !new_home_bounds.is_tight {
-            home_hit_test_opaqueness = HitTestOpaqueness::kMixed;
-        }
-        let mut guest_hit_test_opaqueness = guest.hit_test_opaqueness_;
-        if guest_hit_test_opaqueness == HitTestOpaqueness::kOpaque && !new_guest_bounds.is_tight {
-            guest_hit_test_opaqueness = HitTestOpaqueness::kMixed;
-        }
-        let merged_hit_test_opaqueness = UnionHitTestOpaqueness(
-            geometry.ToRoundedRect(new_home_bounds.rect),
-            home_hit_test_opaqueness,
-            geometry.ToRoundedRect(new_guest_bounds.rect),
-            guest_hit_test_opaqueness,
-        );
-        PreserveNearIntegralBounds(&mut merged_bounds);
-        PreserveNearIntegralBounds(&mut merged_rect_known_to_be_opaque);
-        Some(PendingMergeState {
-            bounds: merged_bounds,
-            property_tree_state: merged_state,
-            rect_known_to_be_opaque: merged_rect_known_to_be_opaque,
-            text_known_to_be_on_opaque_background: merged_text_known_to_be_on_opaque_background,
-            solid_color_chunk_index: merged_solid_color_chunk_index,
-            hit_test_opaqueness: merged_hit_test_opaqueness,
-            scroll_range_dependent,
-        })
+            &MergeGeometryAdapter::<B>(geometry),
+        )
     }
 
     pub fn Merge(
@@ -1023,7 +969,7 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         self.rect_known_to_be_opaque_ = merged.rect_known_to_be_opaque;
         self.text_known_to_be_on_opaque_background_ = merged.text_known_to_be_on_opaque_background;
         self.has_text_ |= guest.has_text_;
-        self.solid_color_chunk_index_ = merged.solid_color_chunk_index;
+        self.solid_color_chunk_index_ = merged.solid_color_chunk_index.unwrap_or(K_NOT_FOUND);
         self.change_of_decomposited_transforms_ = self
             .change_of_decomposited_transforms_
             .max(guest.change_of_decomposited_transforms_);
@@ -1064,14 +1010,10 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:161;
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:515-522.
     pub fn MightOverlap(&self, other: &Self, geometry: &dyn PendingLayerGeometry<B>) -> bool {
-        if self.canvas_child_id_ != other.canvas_child_id_ {
-            return false;
-        }
-        geometry.MightOverlapForCompositing(
-            self.bounds_,
-            &self.property_tree_state_,
-            other.bounds_,
-            &other.property_tree_state_,
+        MightOverlapPendingLayers(
+            &self.MergePolicyInput(),
+            &other.MergePolicyInput(),
+            &MergeGeometryAdapter::<B>(geometry),
         )
     }
 
@@ -1081,39 +1023,26 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         &self,
         colors: &dyn PendingLayerColor,
     ) -> crate::adapter::layer_tree_impl::Color4f {
-        const K_MIN_BACKGROUND_COLOR_COVERAGE_RATIO: f32 = 0.5;
-        let mut background_colors = Vec::with_capacity(4);
-        let min_background_area =
-            K_MIN_BACKGROUND_COLOR_COVERAGE_RATIO * self.bounds_.width() * self.bounds_.height();
-        for index in (0..self.chunks_.len()).rev() {
+        let samples = (0..self.chunks_.len()).rev().map(|index| {
             let chunk = self.chunks_.chunk(index);
             let background = chunk.background_color();
-            if background.color.alpha == 0.0 || background.area < min_background_area {
-                continue;
-            }
-            let mut chunk_background_color = background.color;
             let chunk_state = chunk.PropertiesUnalias();
-            if !chunk_state.SameEffectNode(&self.property_tree_state_) {
-                if !chunk_state.EffectUnaliasedParentSameAs(&self.property_tree_state_)
-                    || !chunk_state.EffectIsOpacityOnly()
-                {
-                    continue;
-                }
-                chunk_background_color.alpha *= chunk_state.EffectOpacity();
+            let effect = if chunk_state.SameEffectNode(&self.property_tree_state_) {
+                BackgroundEffect::SameEffect
+            } else if chunk_state.EffectUnaliasedParentSameAs(&self.property_tree_state_)
+                && chunk_state.EffectIsOpacityOnly()
+            {
+                BackgroundEffect::OpacityOnly(chunk_state.EffectOpacity())
+            } else {
+                BackgroundEffect::Unsupported
+            };
+            BackgroundSample {
+                color: background.color,
+                covered_area: background.area,
+                effect,
             }
-            background_colors.push(chunk_background_color);
-            if chunk_background_color.alpha == 1.0 {
-                break;
-            }
-        }
-
-        let Some(mut background_color) = background_colors.pop() else {
-            return crate::adapter::layer_tree_impl::Color4f::default();
-        };
-        for color in background_colors.into_iter().rev() {
-            background_color = colors.GetResultingPaintColor(color, background_color);
-        }
-        background_color
+        });
+        ComputeLayerBackgroundColor(self.bounds_, samples, &BackgroundColorAdapter(colors))
     }
 
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:194-197;
@@ -1168,73 +1097,6 @@ impl<B: PendingLayerTypes> fmt::Display for PendingLayer<B> {
     }
 }
 
-// Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:143-145.
-pub const fn RequiresOwnLayer(compositing_type: CompositingType) -> bool {
-    !matches!(
-        compositing_type,
-        CompositingType::kOverlap | CompositingType::kOther
-    )
-}
-
-// Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:27-42.
-// Snap bounds only when all four edges are already within the source tolerance
-// of integral values. Reconstructing RectF is the translated ToRoundedRect path.
-pub fn PreserveNearIntegralBounds(bounds: &mut RectF) {
-    const K_TOLERANCE: f32 = 1e-3;
-    let left = bounds.x();
-    let top = bounds.y();
-    let right = bounds.right();
-    let bottom = bounds.bottom();
-    if (left.round() - left).abs() <= K_TOLERANCE
-        && (top.round() - top).abs() <= K_TOLERANCE
-        && (right.round() - right).abs() <= K_TOLERANCE
-        && (bottom.round() - bottom).abs() <= K_TOLERANCE
-    {
-        let rounded_left = left.round();
-        let rounded_top = top.round();
-        let rounded_right = right.round();
-        let rounded_bottom = bottom.round();
-        *bounds = RectF::new(
-            rounded_left,
-            rounded_top,
-            rounded_right - rounded_left,
-            rounded_bottom - rounded_top,
-        );
-    }
-}
-
-// Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:47-48;
-// Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:88-112.
-// This is the exact body used by PendingLayer::Bounds. Keeping it independent
-// of owner storage lets the eventual resident object call it without copying
-// PaintArtifact, chunks, property nodes, or layer state.
-pub fn PendingLayerBounds(
-    bounds: RectF,
-    rect_known_to_be_opaque: RectF,
-    is_solid_color: bool,
-) -> (Vector2dF, Size) {
-    let ceiled_size = Size::new(bounds.width().ceil() as i32, bounds.height().ceil() as i32);
-    if is_solid_color {
-        return (Vector2dF::new(bounds.x(), bounds.y()), ceiled_size);
-    }
-
-    let bounds_with_ceiled_size = RectF::FromOriginSize(
-        bounds.origin(),
-        SizeF::new(ceiled_size.width() as f32, ceiled_size.height() as f32),
-    );
-    let enclosing_bounds = ToEnclosingRect(bounds);
-    if rect_known_to_be_opaque.Contains(bounds_with_ceiled_size)
-        && !rect_known_to_be_opaque.Contains(RectF::from(enclosing_bounds))
-    {
-        return (Vector2dF::new(bounds.x(), bounds.y()), ceiled_size);
-    }
-
-    (
-        Vector2dF::new(enclosing_bounds.x as f32, enclosing_bounds.y as f32),
-        enclosing_bounds.size(),
-    )
-}
-
 fn intersect_rectf(rect: &mut RectF, other: RectF) {
     let left = rect.x().max(other.x());
     let top = rect.y().max(other.y());
@@ -1245,26 +1107,6 @@ fn intersect_rectf(rect: &mut RectF, other: RectF) {
     } else {
         RectF::new(left, top, right - left, bottom - top)
     };
-}
-
-fn mark_not_decompositable<T, C>(decisions: &mut HashMap<T, bool>, mut node: T)
-where
-    T: PendingTransformNode<C>,
-    C: Copy,
-{
-    loop {
-        if node.IsRoot() {
-            break;
-        }
-        match decisions.insert(node.clone(), false) {
-            Some(false) => break,
-            Some(true) | None => {}
-        }
-        let Some(parent) = node.UnaliasedParent() else {
-            break;
-        };
-        node = parent;
-    }
 }
 
 fn json_string(value: &str) -> String {

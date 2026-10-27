@@ -95,6 +95,240 @@ pub(crate) struct NativeAnimationOwner {
     trace: Arc<NativeKeyframeTrace>,
 }
 
+struct NativeTimelineTickAdapter<'borrow, 'target> {
+    timelines: &'borrow [ScrollTimelineRef],
+    ticking: &'borrow [AnimationHandle],
+    time: TimeTicks,
+    is_impl_only: bool,
+    call: &'borrow mut NativeAnimationCall<'target>,
+}
+
+impl compositor_animation::host_iteration::TimelineTickContext
+    for NativeTimelineTickAdapter<'_, '_>
+{
+    fn timeline_count(&self) -> usize {
+        self.timelines.len()
+    }
+
+    fn tick_timeline(&mut self, index: usize) -> bool {
+        self.timelines[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .TickTimeLinkedAnimations(self.ticking, self.time, self.is_impl_only, self.call)
+    }
+}
+
+struct NativeWorkletTickAdapter<'borrow, 'target> {
+    animations: &'borrow [AnimationHandle],
+    call: &'borrow mut NativeAnimationCall<'target>,
+}
+
+impl compositor_animation::host_iteration::WorkletTickContext for NativeWorkletTickAdapter<'_, '_> {
+    fn animation_count(&self) -> usize {
+        self.animations.len()
+    }
+
+    fn tick_if_worklet_animation(&mut self, index: usize) -> bool {
+        let mut animation = self.animations[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !animation.IsWorkletAnimation() {
+            return false;
+        }
+        self.call.selected_element = Some(animation.element_id());
+        animation.Tick(TimeTicks::default(), self.call);
+        true
+    }
+}
+
+struct NativeTimelineActivationAdapter<'a> {
+    timelines: &'a [ScrollTimelineRef],
+}
+
+impl compositor_animation::host_iteration::TimelineActivationContext
+    for NativeTimelineActivationAdapter<'_>
+{
+    fn timeline_count(&self) -> usize {
+        self.timelines.len()
+    }
+
+    fn activate_timeline(&mut self, index: usize) {
+        self.timelines[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ActivateTimeline();
+    }
+}
+
+struct NativeAnimationStateUpdateAdapter<'borrow, 'target> {
+    animations: &'borrow [AnimationHandle],
+    start_ready: bool,
+    events: &'borrow mut AnimationEvents<Curve>,
+    call: &'borrow mut NativeAnimationCall<'target>,
+}
+
+impl compositor_animation::host_iteration::AnimationStateUpdateContext
+    for NativeAnimationStateUpdateAdapter<'_, '_>
+{
+    fn animation_count(&self) -> usize {
+        self.animations.len()
+    }
+
+    fn update_animation_state(&mut self, index: usize) {
+        let element = self.animations[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .element_id();
+        self.call.selected_element = Some(element);
+        self.animations[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .UpdateState(self.start_ready, self.events, self.call);
+    }
+}
+
+struct NativeAnimationActivationAdapter<'borrow, 'target> {
+    animations: &'borrow [AnimationHandle],
+    events: &'borrow mut AnimationEvents<Curve>,
+    call: &'borrow mut NativeAnimationCall<'target>,
+}
+
+struct NativeTimelinePropertyPushAdapter<'owner, 'trees> {
+    target_owner: &'owner NativeAnimationOwner,
+    property_trees: &'trees PropertyTreesFor<NativeCompositorTypes>,
+}
+
+impl
+    compositor_animation::host_iteration::TimelinePropertyPushContext<
+        ScrollTimelineRef,
+        ScrollTimelineRef,
+    > for NativeTimelinePropertyPushAdapter<'_, '_>
+{
+    fn source_timeline_id(&mut self, source: &ScrollTimelineRef) -> i32 {
+        source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .id()
+    }
+
+    fn target_contains_timeline(&mut self, id: i32) -> bool {
+        self.target_owner.lock().timelines.contains_key(&id)
+    }
+
+    fn create_target_timeline(&mut self, source: &ScrollTimelineRef, id: i32) {
+        let impl_timeline = Arc::new(Mutex::new(
+            source
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .CreateImplInstance(),
+        ));
+        let mut call =
+            NativeAnimationCall::with_property_trees(self.target_owner, self.property_trees);
+        impl_timeline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .SetAnimationHost(Some(self.target_owner.host), &mut call);
+        assert!(self
+            .target_owner
+            .lock()
+            .timelines
+            .insert(id, impl_timeline)
+            .is_none());
+    }
+
+    fn target_timelines(&mut self) -> Vec<(i32, ScrollTimelineRef)> {
+        self.target_owner
+            .lock()
+            .timelines
+            .iter()
+            .map(|(id, timeline)| (*id, timeline.clone()))
+            .collect()
+    }
+
+    fn target_timeline_is_impl_only(&mut self, target: &ScrollTimelineRef) -> bool {
+        target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_impl_only()
+    }
+
+    fn remove_target_timeline(&mut self, id: i32, target: ScrollTimelineRef) {
+        let mut call =
+            NativeAnimationCall::with_property_trees(self.target_owner, self.property_trees);
+        let mut timeline = target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        timeline.ClearAnimations(&mut call);
+        timeline.SetAnimationHost(None, &mut call);
+        drop(timeline);
+        self.target_owner.lock().timelines.remove(&id);
+    }
+
+    fn target_timeline(&mut self, id: i32) -> ScrollTimelineRef {
+        self.target_owner
+            .lock()
+            .timelines
+            .get(&id)
+            .cloned()
+            .expect("impl timeline created before property push")
+    }
+
+    fn push_timeline_properties(&mut self, source: ScrollTimelineRef, target: ScrollTimelineRef) {
+        let mut call =
+            NativeAnimationCall::with_property_trees(self.target_owner, self.property_trees);
+        source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .PushPropertiesTo(
+                &mut target
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                &mut call,
+            );
+    }
+
+    fn mark_target_needs_push_properties(&mut self) {
+        self.target_owner.lock().needs_push_properties = true;
+    }
+}
+
+struct NativeTimeUpdatedEventAdapter<'a> {
+    animations: &'a [AnimationHandle],
+    events: &'a mut AnimationEvents<Curve>,
+}
+
+impl compositor_animation::host_iteration::TimeUpdatedEventContext
+    for NativeTimeUpdatedEventAdapter<'_>
+{
+    fn animation_count(&self) -> usize {
+        self.animations.len()
+    }
+
+    fn take_time_updated_event(&mut self, index: usize) {
+        self.animations[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .TakeTimeUpdatedEvent(self.events);
+    }
+}
+
+impl compositor_animation::host_iteration::AnimationActivationContext
+    for NativeAnimationActivationAdapter<'_, '_>
+{
+    fn animation_count(&self) -> usize {
+        self.animations.len()
+    }
+
+    fn activate_animation(&mut self, index: usize) {
+        let mut animation = self.animations[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.call.selected_element = Some(animation.element_id());
+        animation.ActivateKeyframeModels(self.call);
+        animation.UpdateState(false, self.events, self.call);
+    }
+}
+
 impl Default for NativeAnimationOwner {
     fn default() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -311,7 +545,6 @@ impl NativeAnimationOwner {
         );
         let timelines: Vec<_> = self.lock().timelines.values().cloned().collect();
         let ticking = self.TickingAnimations();
-        let mut animated = false;
         let _ = events;
         let mut call = NativeAnimationCall {
             owner: self,
@@ -321,15 +554,18 @@ impl NativeAnimationOwner {
             now: time,
             active: is_active,
         };
-        for timeline in timelines {
-            animated |= timeline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .TickTimeLinkedAnimations(&ticking, time, !is_active, &mut call);
-        }
+        let tick = compositor_animation::host_iteration::TickAnimationTimelines(
+            &mut NativeTimelineTickAdapter {
+                timelines: &timelines,
+                ticking: &ticking,
+                time,
+                is_impl_only: !is_active,
+                call: &mut call,
+            },
+        );
         HostAnimationTickResult {
-            animated,
-            needs_next_frame: animated,
+            animated: tick.animated,
+            needs_next_frame: tick.animated,
         }
     }
 
@@ -338,15 +574,12 @@ impl NativeAnimationOwner {
     pub(crate) fn TickWorkletAnimations(&self) {
         let ticking = self.TickingAnimations();
         let mut call = NativeAnimationCall::detached(self);
-        for animation in ticking {
-            let mut animation = animation
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if animation.IsWorkletAnimation() {
-                call.selected_element = Some(animation.element_id());
-                animation.Tick(TimeTicks::default(), &mut call);
-            }
-        }
+        compositor_animation::host_iteration::TickWorkletAnimations(
+            &mut NativeWorkletTickAdapter {
+                animations: &ticking,
+                call: &mut call,
+            },
+        );
     }
 
     // Source: cc/animation/animation_host.cc:870-875.
@@ -357,12 +590,11 @@ impl NativeAnimationOwner {
             "resident impl mutator owner"
         );
         let timelines: Vec<_> = self.lock().timelines.values().cloned().collect();
-        for timeline in timelines {
-            timeline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .ActivateTimeline();
-        }
+        compositor_animation::host_iteration::ActivateTimelines(
+            &mut NativeTimelineActivationAdapter {
+                timelines: &timelines,
+            },
+        );
     }
 
     // Source: cc/animation/animation_host.cc:485-518,538-570,602-640.
@@ -437,91 +669,13 @@ impl NativeAnimationOwner {
             return;
         }
 
-        let source_ids = source_timelines
-            .iter()
-            .map(|timeline| {
-                timeline
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .id()
-            })
-            .collect::<BTreeSet<_>>();
-
-        for source_timeline in &source_timelines {
-            let id = source_timeline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .id();
-            if target_owner.lock().timelines.contains_key(&id) {
-                continue;
-            }
-            let impl_timeline = Arc::new(Mutex::new(
-                source_timeline
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .CreateImplInstance(),
-            ));
-            let mut call = NativeAnimationCall::with_property_trees(&target_owner, property_trees);
-            impl_timeline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .SetAnimationHost(Some(target_owner.host), &mut call);
-            assert!(target_owner
-                .lock()
-                .timelines
-                .insert(id, impl_timeline)
-                .is_none());
-        }
-
-        let stale = {
-            let target = target_owner.lock();
-            target
-                .timelines
-                .iter()
-                .filter_map(|(id, timeline)| {
-                    let keep = source_ids.contains(id)
-                        || timeline
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .is_impl_only();
-                    (!keep).then_some((*id, timeline.clone()))
-                })
-                .collect::<Vec<_>>()
-        };
-        for (id, timeline) in stale {
-            let mut call = NativeAnimationCall::with_property_trees(&target_owner, property_trees);
-            let mut timeline = timeline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            timeline.ClearAnimations(&mut call);
-            timeline.SetAnimationHost(None, &mut call);
-            drop(timeline);
-            target_owner.lock().timelines.remove(&id);
-        }
-
-        for source_timeline in source_timelines {
-            let id = source_timeline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .id();
-            let target_timeline = target_owner
-                .lock()
-                .timelines
-                .get(&id)
-                .cloned()
-                .expect("impl timeline created before property push");
-            let mut call = NativeAnimationCall::with_property_trees(&target_owner, property_trees);
-            source_timeline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .PushPropertiesTo(
-                    &mut target_timeline
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner),
-                    &mut call,
-                );
-        }
-        target_owner.lock().needs_push_properties = true;
+        compositor_animation::host_iteration::PushTimelineProperties(
+            source_timelines,
+            &mut NativeTimelinePropertyPushAdapter {
+                target_owner: &target_owner,
+                property_trees,
+            },
+        );
     }
 
     pub(crate) fn UpdateAnimationState(
@@ -537,17 +691,14 @@ impl NativeAnimationOwner {
         }
         let mut update = |native: &mut AnimationEvents<Curve>| {
             let mut call = NativeAnimationCall::targeted(self, target);
-            for animation in &ticking {
-                let element = animation
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .element_id();
-                call.selected_element = Some(element);
-                animation
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .UpdateState(start_ready, native, &mut call);
-            }
+            compositor_animation::host_iteration::UpdateAnimationStates(
+                &mut NativeAnimationStateUpdateAdapter {
+                    animations: &ticking,
+                    start_ready,
+                    events: native,
+                    call: &mut call,
+                },
+            );
         };
         if let Some(events) = events {
             events.WithScrollAnimationEvents(&mut update);
@@ -574,14 +725,13 @@ impl NativeAnimationOwner {
         }
         let mut activate = |native: &mut AnimationEvents<Curve>| {
             let mut call = NativeAnimationCall::targeted(self, target);
-            for animation in &ticking {
-                let mut animation = animation
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                call.selected_element = Some(animation.element_id());
-                animation.ActivateKeyframeModels(&mut call);
-                animation.UpdateState(false, native, &mut call);
-            }
+            compositor_animation::host_iteration::ActivateAnimations(
+                &mut NativeAnimationActivationAdapter {
+                    animations: &ticking,
+                    events: native,
+                    call: &mut call,
+                },
+            );
         };
         if let Some(events) = events {
             events.WithScrollAnimationEvents(&mut activate);
@@ -603,12 +753,13 @@ impl NativeAnimationOwner {
                 // source owner flag and clear it only after visiting the real
                 // ticking set.
                 if native.needs_time_updated_events() {
-                    for animation in self.TickingAnimations() {
-                        animation
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .TakeTimeUpdatedEvent(native);
-                    }
+                    let ticking = self.TickingAnimations();
+                    compositor_animation::host_iteration::TakeTimeUpdatedEvents(
+                        &mut NativeTimeUpdatedEventAdapter {
+                            animations: &ticking,
+                            events: native,
+                        },
+                    );
                     native.set_needs_time_updated_events(false);
                 }
             });

@@ -1,10 +1,11 @@
 #![allow(non_snake_case)]
 use dom::{UserInteractionState, DOM};
+use layout_fragment::LayoutResultHandle;
 use layoutng_assembly::{
-    fragment_tree::FragmentNode, internal::layout_input::ConstraintSpace,
-    layout_engine::LayoutEngine,
+    fragment_tree::FragmentPaintData,
+    internal::layout_input::ConstraintSpace,
+    layout_engine::{LayoutEngine, NativePaintFragmentCursor},
 };
-use std::rc::Rc;
 
 // cpp: browser/browser.cc:1733-1743
 pub fn LayoutPersistentDocument(
@@ -12,16 +13,15 @@ pub fn LayoutPersistentDocument(
     owner: &mut DOM,
     interaction: &UserInteractionState,
     constraints: &ConstraintSpace,
-) -> FragmentNode {
+) -> LayoutResultHandle {
     LayoutDocumentWithEngine(engine, owner, interaction, constraints);
-    let fragments = engine
+    engine
         .TakeLayoutResult()
-        .expect("successful layout has fragments");
-    Rc::try_unwrap(fragments).unwrap_or_else(|shared| (*shared).clone())
+        .expect("successful layout has fragments")
 }
 
 /// Synchronize the document's resident tree, then update the retained engine's
-/// current fragment snapshot through its single layout/export entry point.
+/// current native layout result through its single layout publication entry point.
 pub(crate) fn LayoutDocumentWithEngine(
     engine: &mut LayoutEngine,
     owner: &mut DOM,
@@ -43,7 +43,7 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
     interaction: &UserInteractionState,
     constraints: &ConstraintSpace,
     purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
-) {
+) -> bool {
     let _trace = browser_tracing::span("layout", "Page.LayoutDocumentWithEngine");
     // Tree synchronization, layout and export form one synchronous lifecycle.
     // Their nested scopes must not collect every resident Page on this thread.
@@ -60,12 +60,14 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
     owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
     drop(synchronize);
     let build_done = profile.map(|start| start.elapsed());
-    match purpose {
-        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint => engine.Layout(),
-        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout => {
-            engine.UpdateLayout()
+    let updated = match purpose {
+        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint => {
+            engine.LayoutIfNeeded()
         }
-    }
+        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout => {
+            engine.UpdateLayoutIfNeeded()
+        }
+    };
     let layout_done = profile.map(|start| start.elapsed());
     heap_scope.DeferCollection();
     {
@@ -80,6 +82,7 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
             (elapsed - layout_done.unwrap()).as_secs_f64() * 1000.0,
             elapsed.as_secs_f64() * 1000.0);
     }
+    updated
 }
 
 /// Prove query geometry against current typed attribute inputs. This does not
@@ -117,16 +120,16 @@ pub(crate) fn MeasurementInputsMatch(
     matches
 }
 
-/// Synchronize paint-only style inputs and export a current fragment snapshot
+/// Synchronize paint-only style inputs on the current native fragment owners
 /// from the resident layout result. This is Blink's ordinary paint-only style
 /// lifecycle: style and PrePaint/Paint advance, while layout geometry remains
 /// the previously committed result.
-pub(crate) fn ExportPaintOnlyDocumentWithEngine(
+pub(crate) fn PopulatePaintDataWithEngine(
     engine: &mut LayoutEngine,
     owner: &mut DOM,
     interaction: &UserInteractionState,
-) -> Option<Rc<FragmentNode>> {
-    let mut trace = browser_tracing::span("layout", "Page.ExportPaintOnlyDocumentWithEngine");
+) -> Option<LayoutResultHandle> {
+    let mut trace = browser_tracing::span("layout", "Page.PopulatePaintDataWithEngine");
     let mut heap_scope = foundation::LayoutHeapScope::new();
     heap_scope.DeferCollection();
     let state = owner.GetDocument().StyleState();
@@ -141,12 +144,12 @@ pub(crate) fn ExportPaintOnlyDocumentWithEngine(
         && nodes.iter().all(|&id| {
             owner.EmitPaintInputs(id, interaction, |mutation| engine.ApplyMutation(mutation))
         })
-        && engine.ExportTargetedPaintInputs();
+        && engine.RefreshTargetedPaintInputs();
     if targeted {
         return engine.TakeLayoutResult();
     }
     owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
-    if !engine.ExportPaintOnly() {
+    if !engine.PopulatePaintData() {
         return None;
     }
     heap_scope.DeferCollection();
@@ -156,12 +159,12 @@ pub(crate) fn ExportPaintOnlyDocumentWithEngine(
 /// Direct animation update for compositor-friendly paint properties. The Page
 /// supplies only nodes sampled in the current animation batch; any missing or
 /// geometry-dirty native object rejects the whole fast path.
-pub(crate) fn ExportTargetedPaintOnlyDocumentWithEngine(
+pub(crate) fn RefreshTargetedPaintDataWithEngine(
     engine: &mut LayoutEngine,
     owner: &DOM,
     nodes: &[u64],
-) -> Option<Rc<FragmentNode>> {
-    let _trace = browser_tracing::span("layout", "Page.ExportTargetedPaintOnlyDocumentWithEngine");
+) -> Option<LayoutResultHandle> {
+    let _trace = browser_tracing::span("layout", "Page.RefreshTargetedPaintDataWithEngine");
     if nodes.is_empty() {
         return None;
     }
@@ -174,7 +177,7 @@ pub(crate) fn ExportTargetedPaintOnlyDocumentWithEngine(
             return None;
         }
     }
-    if !engine.ExportTargetedPaintOnly() {
+    if !engine.RefreshTargetedPaintData() {
         return None;
     }
     engine.TakeLayoutResult()
@@ -191,7 +194,7 @@ pub(crate) fn LayoutPersistentScrollDocument(
     owner: &mut DOM,
     constraints: &ConstraintSpace,
     changes: &[(u64, layoutng_assembly::internal::layout_input::Offset)],
-    fragments: &mut FragmentNode,
+    fragments: &mut LayoutResultHandle,
     scroll_only: bool,
 ) -> bool {
     LayoutPersistentScrollDocumentWithMode(
@@ -211,7 +214,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     owner: &mut DOM,
     constraints: &ConstraintSpace,
     changes: &[(u64, layoutng_assembly::internal::layout_input::Offset)],
-    fragments: &mut FragmentNode,
+    fragments: &mut LayoutResultHandle,
     scroll_only: bool,
     defer_cull_rect_refresh: bool,
 ) -> Option<ScrollLayoutUpdate> {
@@ -220,19 +223,42 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     // CullRectUpdater refreshes it and forces repaint if the painted extent
     // changes. Rechrom culls while projecting native fragments, so request a
     // fresh projection from the unchanged LayoutResult at the same boundary.
+    fn changed_enough(
+        node: NativePaintFragmentCursor<'_>,
+        id: u64,
+        offset: layoutng_assembly::internal::layout_input::Offset,
+    ) -> bool {
+        const DISTANCE: f64 = 512.0;
+        let ratio = node
+            .paint
+            .resources
+            .as_ref()
+            .map_or(1.0, |resources| resources.device_pixel_ratio)
+            .max(f64::MIN_POSITIVE);
+        let threshold = DISTANCE * ratio;
+        node.node_id == id
+            && node.paint_cull_scroll_offset.is_some_and(|origin| {
+                (offset.x - origin.x).abs() >= threshold || (offset.y - origin.y).abs() >= threshold
+            })
+            || node
+                .Children()
+                .into_iter()
+                .any(|child| changed_enough(child, id, offset))
+    }
+    let native_root = NativePaintFragmentCursor::FromHandle(fragments);
     let cull_rect_changed_enough = changes
         .iter()
-        .any(|&(id, offset)| fragments.PaintCullRectHasScrolledEnough(id, offset));
-    // Page defers main-thread cull projection while a phased gesture is active.
+        .any(|&(id, offset)| changed_enough(native_root, id, offset));
+    // Page defers main-thread cull-data refresh while a phased gesture is active.
     // Retained Paint covers that interval; the boundary update runs once when
     // the gesture ends, matching Chromium's separation between compositor
     // scrolling and main-thread paint-property work.
     let refresh_cull_rect = cull_rect_changed_enough && !(scroll_only && defer_cull_rect_refresh);
-    fn contains(node: &FragmentNode, id: u64) -> bool {
-        node.node_id == id || node.children.iter().any(|child| contains(child, id))
+    fn contains(node: NativePaintFragmentCursor<'_>, id: u64) -> bool {
+        node.node_id == id || node.Children().into_iter().any(|child| contains(child, id))
     }
     if !owner.GetDocument().StyleState().impact.IsEmpty()
-        || !changes.iter().all(|&(id, _)| contains(fragments, id))
+        || !changes.iter().all(|&(id, _)| contains(native_root, id))
     {
         return None;
     }
@@ -306,8 +332,8 @@ mod tests {
         let b = foundation::DynamicTo::<layoutng_assembly::internal::layout_box::LayoutBox>(root);
         unsafe { &*b }.GetLayoutResult(0)
     }
-    fn fragment(root: &FragmentNode, id: u64) -> &FragmentNode {
-        fn find(root: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+    fn fragment(root: &FragmentPaintData, id: u64) -> &FragmentPaintData {
+        fn find(root: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
             if root.node_id == id {
                 return Some(root);
             }
@@ -374,7 +400,7 @@ mod tests {
             assert_eq!(
                 fragment(&fragments, id).paint_cull_scroll_offset,
                 Some(offset),
-                "gesture completion runs one main-thread cull projection"
+                "gesture completion runs one main-thread cull-data refresh"
             );
         });
     }
@@ -424,6 +450,42 @@ mod tests {
     }
 
     #[test]
+    fn identical_constraints_reuse_layout_clean_projection() {
+        crate::native_test_thread::run(|| {
+            let mut owner = html::html_parser::ParseHTML(
+                "<html><body><div style='display:block;width:80px;height:30px'></div></body></html>",
+            );
+            resolve_for(&mut owner, 320, 200);
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let constraints = crate::CreateBrowserConstraints(320, 200);
+            let interaction = UserInteractionState::default();
+
+            assert!(LayoutDocumentWithEngineAtStage(
+                &mut engine,
+                &mut owner,
+                &interaction,
+                &constraints,
+                layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+            ));
+            let first = engine.GetLayoutResult().unwrap().RootPointer();
+            owner.GetDocumentMut().StyleStateMut().impact = Default::default();
+
+            assert!(!LayoutDocumentWithEngineAtStage(
+                &mut engine,
+                &mut owner,
+                &interaction,
+                &constraints,
+                layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+            ));
+            let second = engine.GetLayoutResult().unwrap().RootPointer();
+            assert_eq!(
+                first, second,
+                "layout-clean lifecycle must retain the published native result"
+            );
+        });
+    }
+
+    #[test]
     fn scroll_layout_entry_retains_result_and_matches_fresh_layout() {
         crate::native_test_thread::run(|| {
             use layoutng_assembly::internal::layout_input::Offset;
@@ -448,7 +510,7 @@ mod tests {
             let before = cached(root);
             let object = native(root, id);
             let object_result = cached(object);
-            let pixels = |f: &FragmentNode| {
+            let pixels = |f: &FragmentPaintData| {
                 raster::RasterizePaintArtifactTransparent(&paint::paint_engine::Paint(f), 320, 200)
             };
             for offset in [
@@ -625,7 +687,7 @@ mod tests {
                             &UserInteractionState::default(),
                             &cs,
                         );
-                        let pixels = |tree: &FragmentNode| {
+                        let pixels = |tree: &FragmentPaintData| {
                             raster::RasterizePaintArtifactTransparent(
                                 &paint::paint_engine::Paint(tree),
                                 320,
@@ -702,7 +764,7 @@ mod tests {
                 &UserInteractionState::default(),
                 &cs,
             );
-            let pixels = |tree: &FragmentNode| {
+            let pixels = |tree: &FragmentPaintData| {
                 raster::RasterizePaintArtifactTransparent(
                     &paint::paint_engine::Paint(tree),
                     320,
@@ -732,7 +794,7 @@ mod tests {
                     "pixel differences={}",
                     left.iter().zip(&right).filter(|(a, b)| a != b).count()
                 );
-                fn show(name: &str, tree: &FragmentNode) {
+                fn show(name: &str, tree: &FragmentPaintData) {
                     println!(
                         "{name}: node={} kind={:?} color={:?} offset={:?} size={:?}",
                         tree.node_id, tree.kind, tree.paint.style.color, tree.offset, tree.size
@@ -791,7 +853,7 @@ mod tests {
                     &UserInteractionState::default(),
                     &cs,
                 );
-                let pixels = |tree: &FragmentNode| {
+                let pixels = |tree: &FragmentPaintData| {
                     raster::RasterizePaintArtifactTransparent(
                         &paint::paint_engine::Paint(tree),
                         320,
@@ -1025,7 +1087,7 @@ mod tests {
                 &UserInteractionState::default(),
                 &cs,
             );
-            let pixels = |tree: &FragmentNode| {
+            let pixels = |tree: &FragmentPaintData| {
                 raster::RasterizePaintArtifactTransparent(
                     &paint::paint_engine::Paint(tree),
                     320,
@@ -1113,7 +1175,7 @@ mod tests {
                 &UserInteractionState::default(),
                 &crate::CreateBrowserConstraints(320, 200),
             );
-            fn find(f: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+            fn find(f: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
                 if f.node_id == id && f.kind == layoutng_assembly::fragment_tree::FragmentKind::kBox
                 {
                     return Some(f);

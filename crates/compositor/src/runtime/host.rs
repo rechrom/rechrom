@@ -75,7 +75,7 @@ impl TracedValue for TraceValue {
         self.0.AppendInteger(value)
     }
 }
-impl PropertyTrace for TraceValue {
+impl compositor_tree::property_types::PropertyTrace for TraceValue {
     fn BeginDictionaryUnnamed(&mut self) {
         self.0.BeginDictionaryUnnamed()
     }
@@ -87,6 +87,11 @@ impl PropertyTrace for TraceValue {
     }
     fn AppendString(&mut self, value: &str) {
         self.0.AppendString(value)
+    }
+}
+impl compositor_tile::tile_priority::TilePriorityTrace for TraceValue {
+    fn SetTileString(&mut self, name: &str, value: &str) {
+        self.0.SetString(name, value)
     }
 }
 impl LayerImplTraceValue for TraceValue {

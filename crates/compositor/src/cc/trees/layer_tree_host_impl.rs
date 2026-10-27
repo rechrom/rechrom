@@ -623,12 +623,6 @@ use crate::adapter::trace_sink::SourceLocation;
 use crate::cc::input::compositor_input_interfaces::InputDelegateForCompositor;
 use std::{cell::RefCell, rc::Rc};
 
-impl crate::adapter::micro_benchmark::HostHandle for LayerTreeHostId {
-    fn IsNull(&self) -> bool {
-        self.0 == 0
-    }
-}
-
 impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     // Source: cc/trees/layer_tree_host_impl.cc:585-628.
     // Stable owner/service IDs represent C++ non-owning pointers; the call
@@ -3588,9 +3582,10 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     ) {
         debug_assert!(context.services.IsImplThread(self.task_runner_provider_));
         assert!(context.services.SettingsFeatures().TreesInViz());
-        assert!(self
-            .settings_
-            .TreesInVizInClientProcess(context.services.SettingsFeatures()));
+        assert!(
+            self.settings_
+                .TreesInVizInClientProcess(context.services.SettingsFeatures())
+        );
         self.unbounded_frame_sink_id_ = *frame_sink_id;
         self.unbounded_local_surface_id_ = local_id.clone();
         if let Some(layer_context) = self.layer_context_.as_mut() {
@@ -3957,127 +3952,166 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             self.WithActiveTree(context, |tree, c| tree.GetDeviceViewport(c));
         hit_test_region_list.transform = self.DrawTransform().clone();
         let tree = self.active_tree_.as_ref().unwrap();
-        let device_scale_factor = tree.device_scale_factor();
         let mut overlapping_region = Region::<B::RegionBackend>::default();
-        let mut num_iterated_layers = 0usize;
-        let mut assume_overlap = false;
-        for layer in tree.rbegin() {
-            if let Some(surface_layer) = layer.AsHitTestSurfaceLayer() {
-                if !layer.HitTestable(tree.property_trees())
-                    && !HostImplHitTestLayer::<B>::draws_content(layer)
-                    && !surface_layer.has_pointer_events_none()
-                {
-                    continue;
-                }
-                if !surface_layer.surface_hit_testable() || !surface_layer.surface_range_is_valid()
-                {
-                    if !surface_layer.has_pointer_events_none() && !assume_overlap {
-                        overlapping_region.Union(&MathUtil::MapEnclosingClippedRect(
-                            &LayerTreeLayer::<B>::ScreenSpaceTransform(
-                                layer,
-                                tree.property_trees(),
-                            ),
-                            Rect::new(
-                                0,
-                                0,
-                                layer.bounds(tree.property_trees()).width(),
-                                layer.bounds(tree.property_trees()).height(),
-                            ),
-                        ));
-                    }
-                    continue;
-                }
-                let mut content_rect = context.services.ScaleToEnclosingRect(
-                    Rect::new(
-                        0,
-                        0,
-                        layer.bounds(tree.property_trees()).width(),
-                        layer.bounds(tree.property_trees()).height(),
-                    ),
-                    device_scale_factor,
-                );
-                let layer_screen_space_rect = MathUtil::MapEnclosingClippedRect(
-                    &LayerTreeLayer::<B>::ScreenSpaceTransform(layer, tree.property_trees()),
-                    Rect::new(
-                        0,
-                        0,
-                        layer.bounds(tree.property_trees()).width(),
-                        layer.bounds(tree.property_trees()).height(),
-                    ),
-                );
-                let mut flags = GetFlagsForSurfaceLayer::<B>(surface_layer);
-                let mut async_hit_test_reasons = kNotAsyncHitTest;
-                if surface_layer.has_pointer_events_none() {
-                    flags |= kHitTestIgnore;
-                }
-                if assume_overlap || overlapping_region.Intersects(&layer_screen_space_rect) {
-                    flags |= kHitTestAsk;
-                    async_hit_test_reasons |= kOverlappedRegion;
-                }
-                let effect_tree = tree.property_trees().effect_tree();
-                let layer_hit_test_region_is_masked =
-                    effect_tree.HitTestMayBeAffectedByMask(layer.effect_tree_index());
-                if layer.is_clipped() || layer_hit_test_region_is_masked {
-                    let layer_hit_test_region_is_rectangle = !layer_hit_test_region_is_masked
-                        && LayerTreeLayer::<B>::ScreenSpaceTransform(layer, tree.property_trees())
-                            .Preserves2dAxisAlignment()
-                        && tree
-                            .property_trees()
-                            .ClippedHitTestRegionIsRectangle(layer.effect_tree_index());
-                    content_rect = context
-                        .services
-                        .ScaleToEnclosingRect(layer.visible_layer_rect(), device_scale_factor);
-                    if !layer_hit_test_region_is_rectangle {
-                        flags |= kHitTestAsk;
-                        async_hit_test_reasons |= kIrregularClip;
-                    }
-                }
-                let surface_id = surface_layer.surface_range_end();
-                hit_test_region_list
-                    .regions
-                    .push(HostHitTestRegion::<B>::default());
-                PopulateHitTestRegion::<B>(
-                    hit_test_region_list.regions.last_mut().unwrap(),
-                    layer,
-                    flags,
-                    async_hit_test_reasons,
-                    RRectF {
-                        rect: RectF::new(
-                            content_rect.x as f32,
-                            content_rect.y as f32,
-                            content_rect.width as f32,
-                            content_rect.height as f32,
-                        ),
-                        ..Default::default()
-                    },
-                    surface_id,
-                    device_scale_factor,
-                    tree.property_trees(),
-                );
-                continue;
-            }
-            if !layer.HitTestable(tree.property_trees()) {
-                continue;
-            }
-            num_iterated_layers += 1;
-            if num_iterated_layers > kAssumeOverlapThreshold {
-                assume_overlap = true;
-            }
-            if !assume_overlap {
-                overlapping_region.Union(&MathUtil::MapEnclosingClippedRect(
-                    &LayerTreeLayer::<B>::ScreenSpaceTransform(layer, tree.property_trees()),
-                    Rect::new(
-                        0,
-                        0,
-                        layer.bounds(tree.property_trees()).width(),
-                        layer.bounds(tree.property_trees()).height(),
-                    ),
-                ));
-            }
-        }
+        let mut adapter = HostHitTestListAdapter {
+            tree,
+            context,
+            overlapping_region: &mut overlapping_region,
+            output: &mut hit_test_region_list,
+            device_scale_factor: tree.device_scale_factor(),
+        };
+        compositor_input::hit_test_list::BuildHitTestRegions(
+            &mut adapter,
+            tree.rbegin(),
+            kAssumeOverlapThreshold,
+        );
         Some(hit_test_region_list)
     }
 }
+
+struct HostHitTestListAdapter<'a, 'c, B: HostImplTypes> {
+    tree: &'a LayerTreeImpl<B>,
+    context: &'a mut HostImplContext<'c, B>,
+    overlapping_region: &'a mut Region<B::RegionBackend>,
+    output: &'a mut HostHitTestRegionList<B>,
+    device_scale_factor: f32,
+}
+
+impl<'layer, B: HostImplTypes> compositor_input::hit_test_list::HitTestListContext<&'layer B::Layer>
+    for HostHitTestListAdapter<'_, '_, B>
+{
+    fn surface_layer_state(
+        &self,
+        layer: &'layer B::Layer,
+    ) -> Option<compositor_input::hit_test_list::SurfaceLayerState> {
+        layer.AsHitTestSurfaceLayer().map(|surface| {
+            compositor_input::hit_test_list::SurfaceLayerState {
+                has_pointer_events_none: surface.has_pointer_events_none(),
+                surface_hit_testable: surface.surface_hit_testable(),
+                surface_range_valid: surface.surface_range_is_valid(),
+            }
+        })
+    }
+
+    fn layer_hit_testable(&self, layer: &'layer B::Layer) -> bool {
+        layer.HitTestable(self.tree.property_trees())
+    }
+
+    fn layer_draws_content(&self, layer: &'layer B::Layer) -> bool {
+        HostImplHitTestLayer::<B>::draws_content(layer)
+    }
+
+    fn add_layer_to_overlapping_region(&mut self, layer: &'layer B::Layer) {
+        self.overlapping_region
+            .Union(&MathUtil::MapEnclosingClippedRect(
+                &LayerTreeLayer::<B>::ScreenSpaceTransform(layer, self.tree.property_trees()),
+                Rect::new(
+                    0,
+                    0,
+                    layer.bounds(self.tree.property_trees()).width(),
+                    layer.bounds(self.tree.property_trees()).height(),
+                ),
+            ));
+    }
+
+    fn overlaps_accumulated_region(&self, layer: &'layer B::Layer) -> bool {
+        self.overlapping_region
+            .Intersects(&MathUtil::MapEnclosingClippedRect(
+                &LayerTreeLayer::<B>::ScreenSpaceTransform(layer, self.tree.property_trees()),
+                Rect::new(
+                    0,
+                    0,
+                    layer.bounds(self.tree.property_trees()).width(),
+                    layer.bounds(self.tree.property_trees()).height(),
+                ),
+            ))
+    }
+
+    fn full_content_rect(&self, layer: &'layer B::Layer) -> Rect {
+        self.context.services.ScaleToEnclosingRect(
+            Rect::new(
+                0,
+                0,
+                layer.bounds(self.tree.property_trees()).width(),
+                layer.bounds(self.tree.property_trees()).height(),
+            ),
+            self.device_scale_factor,
+        )
+    }
+
+    fn visible_content_rect(&self, layer: &'layer B::Layer) -> Rect {
+        self.context
+            .services
+            .ScaleToEnclosingRect(layer.visible_layer_rect(), self.device_scale_factor)
+    }
+
+    fn layer_is_clipped(&self, layer: &'layer B::Layer) -> bool {
+        layer.is_clipped()
+    }
+
+    fn hit_test_may_be_affected_by_mask(&self, layer: &'layer B::Layer) -> bool {
+        self.tree
+            .property_trees()
+            .effect_tree()
+            .HitTestMayBeAffectedByMask(layer.effect_tree_index())
+    }
+
+    fn screen_transform_preserves_2d_axis_alignment(&self, layer: &'layer B::Layer) -> bool {
+        LayerTreeLayer::<B>::ScreenSpaceTransform(layer, self.tree.property_trees())
+            .Preserves2dAxisAlignment()
+    }
+
+    fn clipped_hit_test_region_is_rectangle(&self, layer: &'layer B::Layer) -> bool {
+        self.tree
+            .property_trees()
+            .ClippedHitTestRegionIsRectangle(layer.effect_tree_index())
+    }
+
+    fn emit_surface_region(
+        &mut self,
+        layer: &'layer B::Layer,
+        plan: compositor_input::hit_test_list::HitTestRegionPlan,
+    ) {
+        use HostHitTestFlags::*;
+        let surface = layer
+            .AsHitTestSurfaceLayer()
+            .expect("surface-layer plan must resolve the same resident subtype");
+        let mut flags = GetFlagsForSurfaceLayer::<B>(surface);
+        let mut async_reasons = kNotAsyncHitTest;
+        if plan.ignore {
+            flags |= kHitTestIgnore;
+        }
+        if plan.ask {
+            flags |= kHitTestAsk;
+        }
+        if plan.overlapped_region {
+            async_reasons |= kOverlappedRegion;
+        }
+        if plan.irregular_clip {
+            async_reasons |= kIrregularClip;
+        }
+        self.output.regions.push(HostHitTestRegion::<B>::default());
+        PopulateHitTestRegion::<B>(
+            self.output.regions.last_mut().unwrap(),
+            layer,
+            flags,
+            async_reasons,
+            RRectF {
+                rect: RectF::new(
+                    plan.content_rect.x as f32,
+                    plan.content_rect.y as f32,
+                    plan.content_rect.width as f32,
+                    plan.content_rect.height as f32,
+                ),
+                ..Default::default()
+            },
+            surface.surface_range_end(),
+            self.device_scale_factor,
+            self.tree.property_trees(),
+        );
+    }
+}
+
 // Source: cc/trees/layer_tree_host_impl.cc:3780-3790.
 fn GetFlagsForSurfaceLayer<B: HostImplTypes>(layer: &dyn HostHitTestSurfaceLayer<B>) -> u32 {
     use HostHitTestFlags::*;
@@ -4372,71 +4406,1401 @@ mod source_chunk_b {
             .position(|pass| pass.id() == id)
             .map(HostRenderPassLocation::Unbounded)
     }
-    impl<B: HostImplTypes> LayerTreeHostImpl<B> {
-        // Source: cc/trees/layer_tree_host_impl.cc:1037-1106.
-        pub fn HasDamage(&self, context: &mut HostImplContext<'_, B>) -> bool {
-            let tree = self.active_tree_.as_ref().unwrap();
-            debug_assert!(!tree.needs_update_draw_properties());
-            debug_assert!(self.CanDraw(context));
-            if tree.HandleVisibilityChanged() {
-                return true;
+
+    struct RenderSurfacePassBuildAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a mut FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+        capture_tokens: &'a BTreeSet<ViewTransitionToken>,
+    }
+
+    impl<B: HostImplTypes> compositor_draw::render_pass_build::RenderSurfacePassBuildContext
+        for RenderSurfacePassBuildAdapter<'_, '_, B>
+    {
+        type ResourceId = ViewTransitionElementResourceId;
+
+        fn render_surface_count(&self) -> usize {
+            self.frame
+                .RenderSurfaceList(self.host.active_tree_.as_ref().unwrap().as_ref())
+                .unwrap()
+                .len()
+        }
+
+        fn surface_info(
+            &mut self,
+            index: usize,
+        ) -> compositor_draw::render_pass_build::RenderSurfacePassInfo<
+            ViewTransitionElementResourceId,
+        > {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let effect_id = self.frame.RenderSurfaceList(tree.as_ref()).unwrap()[index];
+            let surface = tree.GetRenderSurface(effect_id).unwrap();
+            let is_root = DrawSurface::<<B as LayerTreeTypes>::Transform>::EffectTreeIndex(surface)
+                == kContentsRootPropertyNodeId;
+            let should_draw = is_root
+                || HostDrawSurface::<B>::contributes_to_drawn_surface(surface)
+                || surface.CopyOfOutputRequired(tree.property_trees());
+            let unbounded = DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
+                surface,
+                tree.property_trees(),
+                self.host.settings_.enable_unbounded_element,
+            );
+            let resource_id = surface.ViewTransitionElementResourceId(tree.property_trees());
+            compositor_draw::render_pass_build::RenderSurfacePassInfo {
+                should_draw,
+                unbounded,
+                has_capture_contributions: surface.has_view_transition_capture_contributions(),
+                resource_id: resource_id.IsValid().then_some(resource_id),
             }
-            if !self.viewport_damage_rect_.IsEmpty() {
-                return true;
+        }
+
+        fn create_capture_render_pass(&mut self, index: usize, unbounded: bool) {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let effect_id = self.frame.RenderSurfaceList(tree.as_ref()).unwrap()[index];
+            let surface = tree.GetRenderSurface(effect_id).unwrap();
+            let target = if unbounded {
+                &mut self.frame.unbounded_render_passes
+            } else {
+                &mut self.frame.render_passes
+            };
+            let mut surface_context = crate::runtime::surface::RenderPassContext::<B> {
+                tree_id: tree.id,
+                trees: tree.property_trees(),
+                layers: tree.LayersForRead(),
+                settings: &self.host.settings_,
+                debug: &self.host.debug_state_,
+                scale: tree.device_scale_factor(),
+                services: self.context.services,
+            };
+            target.push(
+                surface.CreateViewTransitionCaptureRenderPass(
+                    self.capture_tokens,
+                    &mut surface_context,
+                ),
+            );
+        }
+
+        fn create_render_pass(&mut self, index: usize, unbounded: bool) {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let effect_id = self.frame.RenderSurfaceList(tree.as_ref()).unwrap()[index];
+            let surface = tree.GetRenderSurface(effect_id).unwrap();
+            let target = if unbounded {
+                &mut self.frame.unbounded_render_passes
+            } else {
+                &mut self.frame.render_passes
+            };
+            let mut surface_context = crate::runtime::surface::RenderPassContext::<B> {
+                tree_id: tree.id,
+                trees: tree.property_trees(),
+                layers: tree.LayersForRead(),
+                settings: &self.host.settings_,
+                debug: &self.host.debug_state_,
+                scale: tree.device_scale_factor(),
+                services: self.context.services,
+            };
+            target.push(surface.CreateRenderPass(self.capture_tokens, &mut surface_context));
+        }
+    }
+
+    struct RenderPassQuadWalkAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a mut FrameData<B>,
+        host_context: &'a mut HostImplContext<'services, B>,
+        iterator: EffectTreeLayerListIterator,
+        known_resource_ids: &'a BTreeSet<ViewTransitionElementResourceId>,
+        append_context: AppendQuadsContext,
+        capture_context: AppendQuadsContext,
+    }
+
+    impl<'a, 'services, B: HostImplTypes> RenderPassQuadWalkAdapter<'a, 'services, B> {
+        fn new(
+            host: &'a mut LayerTreeHostImpl<B>,
+            frame: &'a mut FrameData<B>,
+            host_context: &'a mut HostImplContext<'services, B>,
+            known_resource_ids: &'a BTreeSet<ViewTransitionElementResourceId>,
+            draw_mode: DrawMode,
+            capture_tokens: BTreeSet<ViewTransitionToken>,
+        ) -> Self {
+            let iterator =
+                EffectTreeLayerListIterator::new(host.active_tree_.as_ref().unwrap().as_ref());
+            let append_context = AppendQuadsContext::new(draw_mode, capture_tokens.clone(), false);
+            let capture_context = AppendQuadsContext::new(draw_mode, capture_tokens, true);
+            Self {
+                host,
+                frame,
+                host_context,
+                iterator,
+                known_resource_ids,
+                append_context,
+                capture_context,
             }
-            if &self.last_draw_referenced_surfaces_ != tree.SurfaceRanges() {
-                return true;
+        }
+
+        fn target_render_pass_id(&self, target: i32) -> B::RenderPassId {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .property_trees()
+                .effect_tree()
+                .GetRenderSurface(target)
+                .unwrap()
+                .render_pass_id()
+        }
+
+        fn capture_render_pass_id(&self, target: i32) -> Option<B::RenderPassId> {
+            let surface = self
+                .host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .property_trees()
+                .effect_tree()
+                .GetRenderSurface(target)
+                .unwrap();
+            surface
+                .has_view_transition_capture_contributions()
+                .then(|| surface.view_transition_capture_render_pass_id())
+        }
+    }
+
+    impl<B: HostImplTypes> compositor_draw::render_pass_quad_walk::RenderPassQuadWalkContext
+        for RenderPassQuadWalkAdapter<'_, '_, B>
+    {
+        type Surface = i32;
+        type Layer = i32;
+        type SurfaceId = B::SurfaceId;
+
+        fn current_entry(
+            &mut self,
+        ) -> Option<compositor_draw::render_pass_quad_walk::RenderPassQuadWalkEntry<i32, i32>>
+        {
+            use compositor_draw::render_pass_quad_walk::{
+                RenderPassQuadWalkEntry, RenderPassQuadWalkState,
+            };
+            if self.iterator.state() == State::kEnd {
+                return None;
             }
-            if &self.last_draw_local_surface_id_ != self.GetCurrentLocalSurfaceId(context) {
-                return true;
+            let position = self
+                .iterator
+                .position(self.host.active_tree_.as_ref().unwrap().as_ref());
+            Some(RenderPassQuadWalkEntry {
+                state: match position.state {
+                    State::kLayer => RenderPassQuadWalkState::Layer,
+                    State::kTargetSurface => RenderPassQuadWalkState::TargetSurface,
+                    State::kContributingSurface => RenderPassQuadWalkState::ContributingSurface,
+                    State::kEnd => unreachable!(),
+                },
+                target_surface: position.target_render_surface.unwrap(),
+                current_surface: position.current_render_surface,
+                current_layer: position.current_layer,
+            })
+        }
+
+        fn advance(&mut self) {
+            self.iterator
+                .Increment(self.host.active_tree_.as_ref().unwrap().as_ref());
+        }
+
+        fn target_has_copy_request(&mut self, target: i32) -> bool {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            tree.property_trees()
+                .effect_tree()
+                .GetRenderSurface(target)
+                .unwrap()
+                .HasCopyRequest(tree.property_trees())
+        }
+
+        fn take_target_copy_requests(&mut self, target: i32) {
+            let pass_id = self.target_render_pass_id(target);
+            let pass = FindRenderPassById::<B>(self.frame, pass_id)
+                .unwrap()
+                .get_mut::<B>(self.frame);
+            self.host
+                .active_tree_
+                .as_mut()
+                .unwrap()
+                .property_trees_mut()
+                .TakeCopyRequestsAndTransformToSurface(target, pass.copy_requests_mut());
+        }
+
+        fn process_target_for_throttling(&mut self, target: i32) {
+            let pass_id = self.target_render_pass_id(target);
+            if let Some(location) = FindRenderPassById::<B>(self.frame, pass_id) {
+                let throttle = BorrowedFrameThrottle::<B>::new(self.frame);
+                self.host
+                    .throttle_decider_
+                    .ProcessRenderPass(&throttle, location);
             }
-            if self
+        }
+
+        fn contributing_surface_should_append(&mut self, surface: i32) -> bool {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let surface = tree
+                .property_trees()
+                .effect_tree()
+                .GetRenderSurface(surface)
+                .unwrap();
+            HostDrawSurface::<B>::contributes_to_drawn_surface(surface)
+                && !DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
+                    surface,
+                    tree.property_trees(),
+                    self.host.settings_.enable_unbounded_element,
+                )
+        }
+
+        fn append_contributing_surface(
+            &mut self,
+            surface: i32,
+            target: i32,
+        ) -> AppendQuadsData<B::SurfaceId> {
+            let target_pass_id = self.target_render_pass_id(target);
+            let capture_pass_id = self.capture_render_pass_id(target);
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let surface = tree
+                .property_trees()
+                .effect_tree()
+                .GetRenderSurface(surface)
+                .unwrap();
+            let surface_context = crate::runtime::surface::RenderPassContext::<B> {
+                tree_id: tree.id,
+                trees: tree.property_trees(),
+                layers: tree.LayersForRead(),
+                settings: &self.host.settings_,
+                debug: &self.host.debug_state_,
+                scale: tree.device_scale_factor(),
+                services: self.host_context.services,
+            };
+            let mut data = AppendQuadsData::default();
+            surface.AppendQuads(
+                &self.append_context,
+                FindRenderPassById::<B>(self.frame, target_pass_id)
+                    .unwrap()
+                    .get_mut::<B>(self.frame),
+                &mut data,
+                &surface_context,
+            );
+            if let Some(capture_id) = capture_pass_id {
+                let mut capture_data = AppendQuadsData::default();
+                surface.AppendQuads(
+                    &self.capture_context,
+                    FindRenderPassById::<B>(self.frame, capture_id)
+                        .unwrap()
+                        .get_mut::<B>(self.frame),
+                    &mut capture_data,
+                    &surface_context,
+                );
+            }
+            data
+        }
+
+        fn classify_tracked_elements(
+            &mut self,
+            layer_id: i32,
+        ) -> compositor_draw::render_pass_quad_walk::TrackedElementClass {
+            use compositor_draw::render_pass_quad_walk::TrackedElementClass;
+            let layer = self
+                .host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .LayerById(layer_id)
+                .unwrap();
+            if layer.tracked_element_rects_empty() != Some(false) {
+                return TrackedElementClass::None;
+            }
+            for list in layer.tracked_element_rects() {
+                if list.into_iter().any(|should_exclude| should_exclude) {
+                    return TrackedElementClass::NeedsOcclusion;
+                }
+            }
+            TrackedElementClass::Present
+        }
+
+        fn layer_will_draw(&mut self, layer_id: i32) -> bool {
+            let draw_mode = self.append_context.draw_mode;
+            self.host
+                .WithActiveTree(self.host_context, |tree, tree_context| {
+                    B::WithPictureLayersContext(
+                        tree,
+                        tree_context.host,
+                        |storage, picture_context| {
+                            storage
+                                .LayerByIdMut(layer_id)
+                                .unwrap()
+                                .WillDraw(draw_mode, picture_context)
+                        },
+                    )
+                })
+        }
+
+        fn record_will_draw_layer(&mut self, layer: i32) {
+            self.frame.will_draw_layers.push(layer);
+        }
+
+        fn notify_layer_known_resources(&mut self, layer_id: i32) {
+            let known_resource_ids = self.known_resource_ids;
+            self.host
+                .WithActiveTree(self.host_context, |tree, tree_context| {
+                    B::WithPictureLayersContext(tree, tree_context.host, |storage, _| {
+                        storage
+                            .LayerByIdMut(layer_id)
+                            .unwrap()
+                            .NotifyKnownResourceIdsBeforeAppendQuads(known_resource_ids);
+                    })
+                });
+        }
+
+        fn append_layer(&mut self, layer_id: i32, target: i32) -> AppendQuadsData<B::SurfaceId> {
+            let target_pass_id = self.target_render_pass_id(target);
+            let capture_pass_id = self.capture_render_pass_id(target);
+            let frame = &mut *self.frame;
+            let append_context = &self.append_context;
+            let capture_context = &self.capture_context;
+            self.host
+                .WithActiveTree(self.host_context, |tree, tree_context| {
+                    B::WithPictureLayersContext(
+                        tree,
+                        tree_context.host,
+                        |storage, picture_context| {
+                            let layer = storage.LayerByIdMut(layer_id).unwrap();
+                            let mut data = AppendQuadsData::default();
+                            layer.AppendQuads(
+                                append_context,
+                                FindRenderPassById::<B>(frame, target_pass_id)
+                                    .unwrap()
+                                    .get_mut::<B>(frame),
+                                &mut data,
+                                picture_context,
+                            );
+                            if let Some(capture_id) = capture_pass_id {
+                                let mut capture_data = AppendQuadsData::default();
+                                layer.AppendQuads(
+                                    capture_context,
+                                    FindRenderPassById::<B>(frame, capture_id)
+                                        .unwrap()
+                                        .get_mut::<B>(frame),
+                                    &mut capture_data,
+                                    picture_context,
+                                );
+                            }
+                            data
+                        },
+                    )
+                })
+        }
+
+        fn layer_is_animating(&mut self, layer: i32) -> bool {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .LayerById(layer)
+                .unwrap()
+                .screen_space_transform_is_animating()
+        }
+
+        fn layer_has_missing_tiles(&mut self, layer_id: i32) -> bool {
+            self.host
+                .WithActiveTree(self.host_context, |tree, tree_context| {
+                    B::WithPictureLayersContext(
+                        tree,
+                        tree_context.host,
+                        |storage, picture_context| {
+                            storage
+                                .LayerByIdMut(layer_id)
+                                .unwrap()
+                                .HasMissingTiles(picture_context)
+                        },
+                    )
+                })
+        }
+
+        fn layer_checkerboarded_needs_record(&mut self, layer_id: i32) -> bool {
+            if self.append_context.draw_mode == DrawMode::DRAW_MODE_RESOURCELESS_SOFTWARE {
+                return false;
+            }
+            self.host
+                .WithActiveTree(self.host_context, |tree, tree_context| {
+                    B::WithPictureLayersContext(
+                        tree,
+                        tree_context.host,
+                        |storage, picture_context| {
+                            storage
+                                .LayerByIdMut(layer_id)
+                                .unwrap()
+                                .ComputeCheckerboardedNeedsRecord(picture_context)
+                        },
+                    )
+                })
+        }
+
+        fn process_layer_not_to_draw(&mut self, layer: i32) {
+            let layer = self
+                .host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .LayerById(layer)
+                .unwrap();
+            self.host.throttle_decider_.ProcessLayerNotToDraw(layer);
+        }
+
+        fn record_visible_content(&mut self, visible_area: i64, approximated_visible_area: i64) {
+            self.host_context
+                .services
+                .AddVisibleContentArea(self.host.rendering_stats_instrumentation_, visible_area);
+            self.host_context
+                .services
+                .AddApproximatedVisibleContentArea(
+                    self.host.rendering_stats_instrumentation_,
+                    approximated_visible_area,
+                );
+        }
+
+        fn accumulate_invalidated_area(&mut self, layer: i32) {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            AccumulateInvalidatedArea(
+                tree.LayerById(layer).unwrap(),
+                tree.property_trees(),
+                self.host.total_invalidated_area_.as_mut().unwrap(),
+            );
+        }
+    }
+
+    struct RenderPassPruningAdapter<'a, B: HostImplTypes> {
+        frame: &'a mut FrameData<B>,
+    }
+
+    impl<B: HostImplTypes> compositor_draw::render_pass_pruning::RenderPassPruningContext
+        for RenderPassPruningAdapter<'_, B>
+    {
+        type PassId = B::RenderPassId;
+        type ResourceId = ViewTransitionElementResourceId;
+
+        fn pass_count(&self) -> usize {
+            self.frame.render_passes.len()
+        }
+        fn pass_id(&self, pass: usize) -> B::RenderPassId {
+            self.frame.render_passes[pass].id()
+        }
+        fn quad_count(&self, pass: usize) -> usize {
+            self.frame.render_passes[pass].quad_count()
+        }
+        fn quad_material(
+            &self,
+            pass: usize,
+            quad: usize,
+        ) -> compositor_draw::render_pass_pruning::QuadMaterial {
+            match self.frame.render_passes[pass].quad_material(quad) {
+                HostQuadMaterial::kSharedElement => {
+                    compositor_draw::render_pass_pruning::QuadMaterial::SharedElement
+                }
+                HostQuadMaterial::kCompositorRenderPass => {
+                    compositor_draw::render_pass_pruning::QuadMaterial::RenderPass
+                }
+                _ => compositor_draw::render_pass_pruning::QuadMaterial::Other,
+            }
+        }
+        fn quad_shared_resource_id(
+            &self,
+            pass: usize,
+            quad: usize,
+        ) -> ViewTransitionElementResourceId {
+            self.frame.render_passes[pass].quad_shared_element_resource_id(quad)
+        }
+        fn quad_render_pass_id(&self, pass: usize, quad: usize) -> Option<B::RenderPassId> {
+            self.frame.render_passes[pass].quad_render_pass_id(quad)
+        }
+        fn erase_quad(&mut self, pass: usize, quad: usize) {
+            self.frame.render_passes[pass].EraseQuadAndInvalidateAllPointers(quad);
+        }
+        fn pass_has_copy_requests(&self, pass: usize) -> bool {
+            !self.frame.render_passes[pass].copy_requests().is_empty()
+        }
+        fn pass_has_subtree_capture(&self, pass: usize) -> bool {
+            self.frame.render_passes[pass].subtree_capture_id_is_valid()
+        }
+        fn pass_has_filters(&self, pass: usize) -> bool {
+            !self.frame.render_passes[pass].filters_is_empty()
+        }
+        fn pass_has_backdrop_filters(&self, pass: usize) -> bool {
+            !self.frame.render_passes[pass].backdrop_filters_is_empty()
+        }
+        fn pass_view_transition_resource_id(&self, pass: usize) -> ViewTransitionElementResourceId {
+            self.frame.render_passes[pass].view_transition_element_resource_id()
+        }
+        fn resource_id_is_valid(&self, id: ViewTransitionElementResourceId) -> bool {
+            id.IsValid()
+        }
+        fn has_view_transition_save_directive(&self) -> bool {
+            self.frame.has_view_transition_save_directive
+        }
+        fn remove_pass(&mut self, pass: usize) {
+            self.frame.render_passes.remove(pass);
+        }
+    }
+
+    struct PrepareToDrawAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a mut FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+    }
+
+    impl<B: HostImplTypes> compositor_draw::prepare_to_draw::PrepareToDrawContext
+        for PrepareToDrawAdapter<'_, '_, B>
+    {
+        type DrawResult = DrawResult;
+
+        fn trace_source_prepare(&mut self) {
+            self.context.services.TracePrepareToDraw(
+                self.host
+                    .active_tree_
+                    .as_ref()
+                    .unwrap()
+                    .source_frame_number(),
+            );
+        }
+
+        fn input_will_draw(&mut self) {
+            if let Some(input) = self.host.input_delegate_.as_mut() {
+                input.WillDraw();
+            }
+        }
+
+        fn tick_worklet_animations(&mut self) {
+            self.context
+                .services
+                .TickWorkletAnimations(&mut self.host.mutator_host_);
+        }
+
+        fn update_draw_properties(&mut self) -> bool {
+            self.host.WithActiveTree(self.context, |tree, c| {
+                tree.UpdateDrawProperties(true, true, None, c)
+            })
+        }
+
+        fn uses_external_tree_raster(&self) -> bool {
+            self.host.settings_.trees_in_viz_in_viz_process
+        }
+
+        fn prepare_resident_tiles_to_draw(&mut self) -> bool {
+            B::PrepareResidentTilesToDraw(self.host, self.context)
+        }
+
+        fn set_checkerboarded_needs_raster(&mut self, value: bool) {
+            self.frame.checkerboarded_needs_raster = value;
+        }
+
+        fn reset_frame_for_draw(&mut self) {
+            self.frame.render_surface_list = Some(self.host.active_tree_.as_ref().unwrap().id);
+            self.frame.render_passes.clear();
+            self.frame.unbounded_render_passes.clear();
+            self.frame.will_draw_layers.clear();
+            self.frame.has_no_damage = false;
+        }
+
+        fn root_render_surface_exists(&self) -> bool {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .RootRenderSurface()
+                .is_some()
+        }
+
+        fn add_viewport_damage(&mut self) {
+            let viewport_damage = self.host.viewport_damage_rect_;
+            self.host.WithActiveTreeDamage(self.context, |damage| {
+                damage
+                    .damage_tracker(
+                        damage
+                            .GetRenderSurface(kContentsRootPropertyNodeId)
+                            .unwrap(),
+                    )
+                    .AddDamageNextUpdate(viewport_damage)
+            });
+        }
+
+        fn calculate_render_passes(&mut self, expects_to_draw: bool) -> DrawResult {
+            self.host
+                .CalculateRenderPasses(self.frame, expects_to_draw, self.context)
+        }
+
+        fn verbose_log_frame(&mut self) {
+            self.context.services.VerboseLogFrame(self.frame);
+        }
+
+        fn draw_succeeded(&self, result: DrawResult) -> bool {
+            result == DrawResult::kSuccess
+        }
+
+        fn assert_not_resourceless_draw(&self) {
+            debug_assert!(!self.host.resourceless_software_draw_);
+        }
+
+        fn report_expected_draw_failure(&mut self) {
+            self.context.services.DumpWillBeCheck(
+                false,
+                "crbug.com/454680865: Draw result is not success while expects_to_draw is set",
+            );
+        }
+
+        fn success_result(&self) -> DrawResult {
+            DrawResult::kSuccess
+        }
+    }
+
+    struct FrameDamageAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a LayerTreeHostImpl<B>,
+        context: &'a mut HostImplContext<'services, B>,
+    }
+
+    impl<B: HostImplTypes> compositor_draw::frame_damage::FrameDamageContext
+        for FrameDamageAdapter<'_, '_, B>
+    {
+        fn visibility_changed(&mut self) -> bool {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .HandleVisibilityChanged()
+        }
+
+        fn viewport_has_damage(&mut self) -> bool {
+            !self.host.viewport_damage_rect_.IsEmpty()
+        }
+
+        fn referenced_surfaces_changed(&mut self) -> bool {
+            &self.host.last_draw_referenced_surfaces_
+                != self.host.active_tree_.as_ref().unwrap().SurfaceRanges()
+        }
+
+        fn local_surface_changed(&mut self) -> bool {
+            &self.host.last_draw_local_surface_id_
+                != self.host.GetCurrentLocalSurfaceId(self.context)
+        }
+
+        fn has_unsubmitted_unbounded_surface(&mut self) -> bool {
+            self.host
                 .unbounded_frame_sink_handler_
                 .as_ref()
                 .is_some_and(|handler| handler.HasUnsubmittedLocalSurfaceId())
-            {
-                return true;
-            }
-            if self
+        }
+
+        fn metadata_sequence_changed(&mut self) -> bool {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            self.host
                 .last_draw_render_frame_metadata_
                 .as_ref()
                 .is_some_and(|metadata| {
                     metadata.primary_main_frame_item_sequence_number
                         != tree.primary_main_frame_item_sequence_number()
                 })
-            {
-                return true;
+        }
+
+        fn unbounded_elements_enabled(&mut self) -> bool {
+            self.host.settings_.enable_unbounded_element
+        }
+
+        fn render_surface_count(&mut self) -> usize {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .GetRenderSurfaceList()
+                .len()
+        }
+
+        fn render_surface_has_visible_unbounded_damage(&mut self, index: usize) -> bool {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let effect_id = tree.GetRenderSurfaceList()[index];
+            let surface = tree.GetRenderSurface(effect_id).unwrap();
+            DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
+                surface,
+                tree.property_trees(),
+                self.host.settings_.enable_unbounded_element,
+            ) && HostDrawSurface::<B>::GetDamageRect(surface).Intersects(DrawSurface::<
+                <B as LayerTreeTypes>::Transform,
+            >::content_rect(
+                surface
+            ))
+        }
+
+        fn root_surface_has_visible_damage(&mut self) -> bool {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let root = tree.RootRenderSurface().unwrap();
+            HostDrawSurface::<B>::GetDamageRect(root)
+                .Intersects(DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root))
+        }
+
+        fn has_copy_requests(&mut self) -> bool {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .property_trees()
+                .effect_tree()
+                .HasCopyRequests()
+        }
+
+        fn hud_wants_to_draw(&mut self) -> bool {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .hud_layer()
+                .is_some_and(|hud| {
+                    hud.AsHeadsUpDisplayLayer()
+                        .expect("source hud_layer subtype")
+                        .IsAnimatingHUDContents()
+                })
+        }
+
+        fn has_view_transition_requests(&mut self) -> bool {
+            self.host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .HasViewTransitionRequests()
+        }
+    }
+
+    struct RenderPassPipelineAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a mut FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+        capture_tokens: Option<BTreeSet<ViewTransitionToken>>,
+        known_resource_ids: BTreeSet<ViewTransitionElementResourceId>,
+        output_frame_data: bool,
+        draw_mode: Option<DrawMode>,
+        commits_to_active_tree: bool,
+        background_color: Color4f,
+        #[cfg(debug_assertions)]
+        debug_viewport_origin: Option<crate::adapter::geometry::Point>,
+    }
+
+    impl<'a, 'services, B: HostImplTypes> RenderPassPipelineAdapter<'a, 'services, B> {
+        fn new(
+            host: &'a mut LayerTreeHostImpl<B>,
+            frame: &'a mut FrameData<B>,
+            context: &'a mut HostImplContext<'services, B>,
+        ) -> Self {
+            Self {
+                host,
+                frame,
+                context,
+                capture_tokens: None,
+                known_resource_ids: BTreeSet::new(),
+                output_frame_data: false,
+                draw_mode: None,
+                commits_to_active_tree: false,
+                background_color: Color4f::default(),
+                #[cfg(debug_assertions)]
+                debug_viewport_origin: None,
             }
-            if self.settings_.enable_unbounded_element {
-                for effect_id in tree.GetRenderSurfaceList() {
-                    let surface = tree.GetRenderSurface(*effect_id).unwrap();
-                    if DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
-                        surface,
-                        tree.property_trees(),
-                        self.settings_.enable_unbounded_element,
-                    ) && HostDrawSurface::<B>::GetDamageRect(surface).Intersects(DrawSurface::<
-                        <B as LayerTreeTypes>::Transform,
-                    >::content_rect(
-                        surface
-                    )) {
-                        return true;
+        }
+    }
+
+    impl<B: HostImplTypes> compositor_draw::render_pass_pipeline::RenderPassPipelineContext
+        for RenderPassPipelineAdapter<'_, '_, B>
+    {
+        fn layer_list_empty(&self) -> bool {
+            self.host.active_tree_.as_ref().unwrap().LayerListIsEmpty()
+        }
+
+        fn create_empty_root_pass(&mut self) {
+            let mut pass = <B::RenderPass as HostDrawPass<B>>::Create();
+            let viewport = self
+                .host
+                .WithActiveTree(self.context, |tree, c| tree.GetDeviceViewport(c));
+            pass.SetNew(1u64.into(), viewport, viewport, Default::default());
+            self.frame.render_passes.push(pass);
+        }
+
+        fn update_damage_tracking(&mut self) {
+            self.host.WithActiveTreeDamage(self.context, |damage| {
+                DamageTracker::UpdateDamageTracking(damage);
+                self.frame.damage_reasons = damage
+                    .damage_tracker(
+                        damage
+                            .GetRenderSurface(kContentsRootPropertyNodeId)
+                            .unwrap(),
+                    )
+                    .GetDamageReasons();
+            });
+        }
+
+        fn has_damage(&mut self) -> bool {
+            self.host.HasDamage(self.context)
+        }
+
+        fn validate_expected_draw_damage(&mut self, has_damage: bool) {
+            let _client_damage = self.context.services.CrashKey(
+                "client_damage",
+                HostCrashKeyValue::String64(self.host.root_layer_damage_rect_.ToString()),
+            );
+            if let Some(root) = self.host.active_tree_.as_ref().unwrap().RootRenderSurface() {
+                let mut viz_damage_rect = HostDrawSurface::<B>::GetDamageRect(root);
+                self.context.services.RectOutset(&mut viz_damage_rect, 2);
+                if !self.host.root_layer_damage_rect_.IsEmpty() {
+                    let _viz_damage = self.context.services.CrashKey(
+                        "viz_damage",
+                        HostCrashKeyValue::String64(viz_damage_rect.ToString()),
+                    );
+                    let _viz_content = self.context.services.CrashKey(
+                        "viz_content",
+                        HostCrashKeyValue::String64(
+                            DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root)
+                                .ToString(),
+                        ),
+                    );
+                    let _insets =
+                        self.context.services.CrashKey(
+                            "insets",
+                            HostCrashKeyValue::String64(self.context.services.RectInsetsString(
+                                viz_damage_rect,
+                                self.host.root_layer_damage_rect_,
+                            )),
+                        );
+                    let tree = self.host.active_tree_.as_ref().unwrap();
+                    let _dsf = self.context.services.CrashKey(
+                        "dsf",
+                        HostCrashKeyValue::String32(tree.device_scale_factor().to_string()),
+                    );
+                    let _transform = self.context.services.CrashKey(
+                        "transform",
+                        HostCrashKeyValue::String256(
+                            HostDrawSurface::<B>::draw_transform(root).ToString(),
+                        ),
+                    );
+                    let _damage_reasons = self.context.services.CrashKey(
+                        "damage_reasons",
+                        HostCrashKeyValue::String64(
+                            self.frame.damage_reasons.ToEnumBitmask().to_string(),
+                        ),
+                    );
+                    let _viewport_damage = self.context.services.CrashKey(
+                        "viewport_damage",
+                        HostCrashKeyValue::String64(self.host.viewport_damage_rect_.ToString()),
+                    );
+                    let _has_view_transitions = self.context.services.CrashKey(
+                        "has_view_transitions",
+                        HostCrashKeyValue::Boolean(tree.HasViewTransitionRequests()),
+                    );
+                    let _root_layer_bounds = self.context.services.CrashKey(
+                        "root_layer_bounds",
+                        HostCrashKeyValue::String64(tree.root_layer().map_or_else(
+                            || "null".to_string(),
+                            |root| {
+                                format!(
+                                    "{}x{}",
+                                    root.bounds(tree.property_trees()).width(),
+                                    root.bounds(tree.property_trees()).height()
+                                )
+                            },
+                        )),
+                    );
+                    let _surface_count = self.context.services.CrashKey(
+                        "surface_count",
+                        HostCrashKeyValue::Number(tree.GetRenderSurfaceList().len() as u64),
+                    );
+                    let (top, bottom, scale, viewport) =
+                        self.host.WithActiveTree(self.context, |tree, c| {
+                            (
+                                tree.CurrentTopControlsShownRatio(c),
+                                tree.CurrentBottomControlsShownRatio(c),
+                                tree.page_scale_factor_for_scroll(c),
+                                tree.GetDeviceViewport(c),
+                            )
+                        });
+                    let _top_controls = self
+                        .context
+                        .services
+                        .CrashKey("top_controls", HostCrashKeyValue::String32(top.to_string()));
+                    let _bottom_controls = self.context.services.CrashKey(
+                        "bottom_controls",
+                        HostCrashKeyValue::String32(bottom.to_string()),
+                    );
+                    let _page_scale = self
+                        .context
+                        .services
+                        .CrashKey("page_scale", HostCrashKeyValue::String32(scale.to_string()));
+                    let _device_viewport = self.context.services.CrashKey(
+                        "device_viewport",
+                        HostCrashKeyValue::String64(viewport.ToString()),
+                    );
+                    if self.context.services.ShouldRecordSubsampledMetric(0.1) {
+                        self.context.services.DumpWillBeCheck(
+                            viz_damage_rect.Contains(self.host.root_layer_damage_rect_),
+                            "crbug.com/454680865: Viz damage does not contain client damage!",
+                        );
                     }
                 }
             }
-            let root_surface = tree.RootRenderSurface().unwrap();
-            let root_surface_has_visible_damage = HostDrawSurface::<B>::GetDamageRect(root_surface)
-                .Intersects(
-                    DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root_surface),
+            self.context.services.DumpWillBeCheck(
+                has_damage,
+                "crbug.com/454680865: Has no damage while expects_to_draw is set.",
+            );
+        }
+
+        fn increment_consecutive_damage_frames(&mut self) {
+            self.host.consecutive_frame_with_damage_count_ += 1;
+        }
+
+        fn trace_empty_damage(&mut self) {
+            self.context.services.TraceEmptyDamageRect();
+        }
+
+        fn mark_frame_has_no_damage(&mut self) {
+            self.frame.has_no_damage = true;
+            debug_assert!(!self.host.resourceless_software_draw_);
+        }
+
+        fn reset_consecutive_damage_frames(&mut self) {
+            self.host.consecutive_frame_with_damage_count_ = 0;
+        }
+
+        fn begin_render_pass_trace(&mut self) {
+            self.context.services.TraceCalculateRenderPassesBegin(
+                self.frame
+                    .RenderSurfaceList(self.host.active_tree_.as_ref().unwrap().as_ref())
+                    .unwrap()
+                    .len() as u64,
+                self.host.RequiresHighResToDraw(),
+            );
+        }
+
+        fn reset_handle_visibility_changed(&mut self) {
+            self.host
+                .active_tree_
+                .as_mut()
+                .unwrap()
+                .ResetHandleVisibilityChanged();
+        }
+
+        fn update_view_transition_save_state(&mut self) {
+            self.frame.has_view_transition_save_directive = self
+                .host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .HasViewTransitionSaveRequest();
+            self.capture_tokens = Some(self.host.WithActiveTree(self.context, |tree, c| {
+                tree.GetCaptureViewTransitionTokens(c)
+            }));
+        }
+
+        fn build_render_surface_passes(&mut self) {
+            self.known_resource_ids = compositor_draw::render_pass_build::BuildRenderSurfacePasses(
+                &mut RenderSurfacePassBuildAdapter {
+                    host: self.host,
+                    frame: self.frame,
+                    context: self.context,
+                    capture_tokens: self.capture_tokens.as_ref().unwrap(),
+                },
+            )
+            .known_resource_ids;
+        }
+
+        fn damage_root_pass_for_hud(&mut self) {
+            if self
+                .host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .hud_layer()
+                .is_some()
+            {
+                let root = self.frame.render_passes.last_mut().unwrap();
+                root.set_damage_rect(root.output_rect());
+            }
+        }
+
+        fn prepare_compositing_throttling(&mut self) {
+            self.draw_mode = Some(self.host.GetDrawMode(self.context));
+            self.commits_to_active_tree = self.host.CommitsToActiveTree();
+            self.background_color = self.host.active_tree_.as_ref().unwrap().background_color();
+            #[cfg(debug_assertions)]
+            {
+                self.debug_viewport_origin =
+                    Some(self.host.WithActiveTree(self.context, |tree, c| {
+                        tree.GetDeviceViewport(c).origin()
+                    }));
+            }
+            assert!(!self.frame.checkerboarded_needs_record);
+            self.frame.has_copy_requests = self
+                .host
+                .active_tree_
+                .as_ref()
+                .unwrap()
+                .property_trees()
+                .effect_tree()
+                .HasCopyRequests();
+            if self.host.settings_.enable_compositing_based_throttling {
+                self.host.throttle_decider_.Prepare();
+            }
+            self.output_frame_data = !self
+                .host
+                .settings_
+                .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
+                || self.host.dump_compositor_frame_;
+        }
+
+        fn append_render_pass_quads(
+            &mut self,
+        ) -> compositor_draw::render_pass_pipeline::RenderPassContentResult {
+            let throttling_enabled = self.host.settings_.enable_compositing_based_throttling;
+            let ui_tree = self.host.settings_.is_layer_tree_for_ui;
+            let quad_walk = compositor_draw::render_pass_quad_walk::AppendRenderPassQuads(
+                &mut RenderPassQuadWalkAdapter::new(
+                    self.host,
+                    self.frame,
+                    self.context,
+                    &self.known_resource_ids,
+                    self.draw_mode.unwrap(),
+                    self.capture_tokens.take().unwrap(),
+                ),
+                compositor_draw::render_pass_quad_walk::RenderPassQuadWalkOptions {
+                    output_frame_data: self.output_frame_data,
+                    throttling_enabled,
+                    ui_tree,
+                },
+            );
+            self.frame
+                .activation_dependencies
+                .extend(quad_walk.frame_data.activation_dependencies);
+            if let Some(deadline) = quad_walk.frame_data.deadline_in_frames {
+                self.frame.deadline_in_frames = Some(
+                    self.frame
+                        .deadline_in_frames
+                        .map_or(deadline, |current| current.max(deadline)),
                 );
-            let hud_wants_to_draw = tree.hud_layer().is_some_and(|hud| {
-                hud.AsHeadsUpDisplayLayer()
-                    .expect("source hud_layer subtype")
-                    .IsAnimatingHUDContents()
-            });
-            root_surface_has_visible_damage
-                || tree.property_trees().effect_tree().HasCopyRequests()
-                || hud_wants_to_draw
-                || tree.HasViewTransitionRequests()
+            }
+            self.frame.use_default_lower_bound_deadline |=
+                quad_walk.frame_data.use_default_lower_bound_deadline;
+            self.frame.has_shared_element_resources |=
+                quad_walk.frame_data.has_shared_element_resources;
+            self.frame.checkerboarded_needs_record |= quad_walk.checkerboarded_needs_record;
+            self.frame.tracked_element_status = match quad_walk.tracked_element_class {
+                compositor_draw::render_pass_quad_walk::TrackedElementClass::None => {
+                    TrackedElementStatus::kNone
+                }
+                compositor_draw::render_pass_quad_walk::TrackedElementClass::Present => {
+                    TrackedElementStatus::kHasTrackedElements
+                }
+                compositor_draw::render_pass_quad_walk::TrackedElementClass::NeedsOcclusion => {
+                    TrackedElementStatus::kHasTrackedElementsNeedingOcclusion
+                }
+            };
+            compositor_draw::render_pass_pipeline::RenderPassContentResult {
+                num_missing_tiles: quad_walk.frame_data.num_missing_tiles,
+                have_missing_animated_tiles: quad_walk.have_missing_animated_tiles,
+            }
+        }
+
+        fn commits_to_active_tree(&self) -> bool {
+            self.commits_to_active_tree
+        }
+
+        fn report_expected_checkerboard_animation(&mut self) {
+            debug_assert!(
+                false,
+                "crbug.com/454680865: Has checkerboarded animations while expects_to_draw is set"
+            );
+        }
+
+        fn frame_checkerboarded_needs_raster(&self) -> bool {
+            self.frame.checkerboarded_needs_raster
+        }
+
+        fn requires_high_resolution_to_draw(&self) -> bool {
+            self.host.requires_high_res_to_draw_
+        }
+
+        fn report_expected_missing_high_resolution_content(&mut self) {
+            debug_assert!(
+                false,
+                "crbug.com/454680865: Is missing high res content while expects_to_draw is set"
+            );
+        }
+
+        fn resourceless_software_draw(&self) -> bool {
+            self.host.resourceless_software_draw_
+        }
+
+        fn frame_has_view_transition_save_directive(&self) -> bool {
+            self.frame.has_view_transition_save_directive
+        }
+
+        fn validate_render_passes(&mut self) {
+            #[cfg(debug_assertions)]
+            {
+                for pass in &self.frame.render_passes {
+                    for quad in 0..pass.quad_count() {
+                        debug_assert!(pass.quad_has_shared_quad_state(quad));
+                    }
+                }
+                debug_assert!(
+                    self.host.settings_.enable_unbounded_element
+                        || self.frame.unbounded_render_passes.is_empty()
+                );
+                for pass in &self.frame.unbounded_render_passes {
+                    for quad in 0..pass.quad_count() {
+                        debug_assert!(pass.quad_has_shared_quad_state(quad));
+                    }
+                }
+                debug_assert_eq!(
+                    self.frame
+                        .render_passes
+                        .last()
+                        .unwrap()
+                        .output_rect()
+                        .origin(),
+                    self.debug_viewport_origin.unwrap()
+                );
+            }
+        }
+
+        fn fill_root_background(&mut self, num_missing_tiles: i32) {
+            let tree = self.host.active_tree_.as_ref().unwrap();
+            let root_surface = tree
+                .property_trees()
+                .effect_tree()
+                .GetRenderSurface(kContentsRootPropertyNodeId);
+            if self.background_color.alpha == 1.0 {
+                if let Some(root) = root_surface {
+                    self.frame
+                        .render_passes
+                        .last_mut()
+                        .unwrap()
+                        .set_has_transparent_background(false);
+                    if self.output_frame_data {
+                        let mut fill_region = tree.UnoccludedScreenSpaceRegion().clone();
+                        if num_missing_tiles > 0 {
+                            fill_region = Region::new(DrawSurface::<
+                                <B as LayerTreeTypes>::Transform,
+                            >::content_rect(
+                                root
+                            ));
+                        }
+                        AppendQuadsToFillScreen::<B>(
+                            self.frame.render_passes.last_mut().unwrap(),
+                            Some(root),
+                            self.background_color,
+                            &fill_region,
+                        );
+                    }
+                }
+            }
+        }
+
+        fn outputs_frame_data(&self) -> bool {
+            self.output_frame_data
+        }
+
+        fn prune_render_passes(&mut self) {
+            self.host.RemoveRenderPasses(self.frame);
+        }
+
+        fn finish_render_pass_trace(&mut self, result: DrawResult, num_missing_tiles: i32) {
+            debug_assert!(!self.frame.render_passes.is_empty());
+            if self
+                .host
+                .settings_
+                .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
+            {
+                self.context
+                    .services
+                    .TraceCalculateRenderPassesEnd(result, None);
+            } else {
+                self.context
+                    .services
+                    .TraceCalculateRenderPassesEnd(result, Some(num_missing_tiles));
+            }
+        }
+
+        fn validate_final_result(&self, result: DrawResult) {
+            debug_assert!(
+                (!self.frame.has_copy_requests && !self.frame.has_view_transition_save_directive)
+                    || result == DrawResult::kSuccess
+            );
+        }
+    }
+
+    pub(super) struct TrackedElementGeometryAdapter<'a, B: HostImplTypes> {
+        pub(super) tree: &'a LayerTreeImpl<B>,
+        pub(super) layers: Vec<&'a B::Layer>,
+        pub(super) inner_scroll_id: i32,
+        pub(super) outer_scroll_id: i32,
+        pub(super) sticky_or_viewport_scroll_cache: BTreeMap<i32, i32>,
+    }
+
+    impl<B: HostImplTypes> compositor_draw::metadata_geometry::TrackedElementGeometryContext
+        for TrackedElementGeometryAdapter<'_, B>
+    {
+        type Feature = B::TrackedElementFeature;
+        type TrackedRect = B::TrackedElementRect;
+        type Occluder = HeuristicFixedOrStickyOccluder;
+        type Output =
+            <B as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects;
+
+        fn layer_count(&self) -> usize {
+            self.layers.len()
+        }
+
+        fn tracked_rects<'a>(
+            &'a self,
+            layer_index: usize,
+        ) -> Vec<(Self::Feature, &'a Self::TrackedRect)> {
+            let Some(tracked) =
+                HostMetadataLayer::<B>::tracked_element_rects_value(self.layers[layer_index])
+                    .filter(|tracked| !tracked.is_empty())
+            else {
+                return Vec::new();
+            };
+            tracked
+                .iter()
+                .flat_map(|(&feature, list)| list.iter().map(move |rect| (feature, rect)))
+                .collect()
+        }
+
+        fn should_add_to_compositor_frame_metadata(&self, rect: &Self::TrackedRect) -> bool {
+            rect.should_add_to_compositor_frame_metadata()
+        }
+
+        fn should_exclude_fixed_and_sticky_occlusions(&self, rect: &Self::TrackedRect) -> bool {
+            rect.should_exclude_fixed_and_sticky_occlusions()
+        }
+
+        fn calculate_visible_bounds(
+            &mut self,
+            layer_index: usize,
+            rect: &mut Self::TrackedRect,
+            front_occluders: &[Self::Occluder],
+        ) {
+            let layer = self.layers[layer_index];
+            rect.set_visible_bounds(CalculateVisibleBounds(
+                layer,
+                self.tree.property_trees(),
+                rect,
+                front_occluders,
+                self.tree.property_trees().transform_tree(),
+                self.inner_scroll_id,
+                self.outer_scroll_id,
+                &mut self.sticky_or_viewport_scroll_cache,
+            ));
+        }
+
+        fn append_tracked_rect(
+            &mut self,
+            output: &mut Self::Output,
+            feature: Self::Feature,
+            rect: Self::TrackedRect,
+        ) {
+            output.Append(feature, rect);
+        }
+
+        fn layer_occluder(&mut self, layer_index: usize) -> Option<Self::Occluder> {
+            let layer = self.layers[layer_index];
+            if !HostImplLayer::draws_content(layer)
+                || HostMetadataLayer::<B>::draw_opacity(layer) <= 0.05
+            {
+                return None;
+            }
+            let transform_tree = self.tree.property_trees().transform_tree();
+            let transform_id = HostImplLayer::transform_tree_index(layer);
+            if !IsFixedOrStickyOccluderTransform(
+                transform_id,
+                transform_tree,
+                self.inner_scroll_id,
+                self.outer_scroll_id,
+                &mut self.sticky_or_viewport_scroll_cache,
+            ) {
+                return None;
+            }
+            let layer_visible_rect =
+                HostImplLayer::VisibleLayerRect(layer, self.tree.property_trees());
+            if layer_visible_rect.IsEmpty() {
+                return None;
+            }
+            let occluder_screen_rect = MathUtil::ProjectEnclosingClippedRect(
+                &HostImplLayer::ScreenSpaceTransform(layer, self.tree.property_trees()),
+                layer_visible_rect,
+            );
+            if occluder_screen_rect.IsEmpty() {
+                return None;
+            }
+            Some(HeuristicFixedOrStickyOccluder {
+                rect: occluder_screen_rect,
+                transform_tree_index: transform_id,
+            })
+        }
+    }
+
+    pub(super) struct RegionCaptureGeometryAdapter<'a, B: HostImplTypes> {
+        pub(super) tree: &'a LayerTreeImpl<B>,
+        pub(super) layers: Vec<&'a B::Layer>,
+    }
+
+    impl<B: HostImplTypes> compositor_draw::metadata_geometry::RegionCaptureGeometryContext
+        for RegionCaptureGeometryAdapter<'_, B>
+    {
+        type CaptureId = B::RegionCaptureId;
+        type Rect = Rect;
+        type Output = <B as HostImplDTypes>::RegionCaptureBounds;
+
+        fn layer_count(&self) -> usize {
+            self.layers.len()
+        }
+
+        fn capture_bounds(&self, layer_index: usize) -> Vec<(Self::CaptureId, Self::Rect)> {
+            HostMetadataLayer::<B>::capture_bounds(self.layers[layer_index])
+                .map(|capture| capture.bounds().map(|(&id, rect)| (id, *rect)).collect())
+                .unwrap_or_default()
+        }
+
+        fn project_and_clip(&mut self, layer_index: usize, rect: Self::Rect) -> Self::Rect {
+            let mut screen = MathUtil::ProjectEnclosingClippedRect(
+                &HostImplLayer::ScreenSpaceTransform(
+                    self.layers[layer_index],
+                    self.tree.property_trees(),
+                ),
+                rect,
+            );
+            let root = self.tree.RootRenderSurface().unwrap();
+            let content = crate::adapter::geometry::ToEnclosedRect(MathUtil::MapClippedRect(
+                &crate::adapter::draw_property::DrawSurface::screen_space_transform(root),
+                crate::adapter::layer_tree_host_impl::HostScrollRenderSurface::DrawableContentRect(
+                    root,
+                    self.tree.property_trees(),
+                ),
+            ));
+            screen.Intersect(content);
+            screen
+        }
+
+        fn set_capture_bound(
+            &mut self,
+            output: &mut Self::Output,
+            id: Self::CaptureId,
+            rect: Self::Rect,
+        ) {
+            output.Set(id, rect);
+        }
+    }
+
+    impl<B: HostImplTypes> LayerTreeHostImpl<B> {
+        // Source: cc/trees/layer_tree_host_impl.cc:1037-1106.
+        pub fn HasDamage(&self, context: &mut HostImplContext<'_, B>) -> bool {
+            let tree = self.active_tree_.as_ref().unwrap();
+            debug_assert!(!tree.needs_update_draw_properties());
+            debug_assert!(self.CanDraw(context));
+            compositor_draw::frame_damage::HasFrameDamage(&mut FrameDamageAdapter {
+                host: self,
+                context,
+            })
+            .has_damage
         }
 
         // Source: cc/trees/layer_tree_host_impl.cc:1108-1585.
@@ -4449,592 +5813,12 @@ mod source_chunk_b {
             debug_assert!(frame.render_passes.is_empty());
             debug_assert!(self.CanDraw(host_context));
             debug_assert!(!expects_to_draw || self.settings_.trees_in_viz_in_viz_process);
-            if self.active_tree_.as_ref().unwrap().LayerListIsEmpty() {
-                let mut pass = <B::RenderPass as HostDrawPass<B>>::Create();
-                let viewport_rect =
-                    self.WithActiveTree(host_context, |tree, c| tree.GetDeviceViewport(c));
-                pass.SetNew(
-                    1u64.into(),
-                    viewport_rect,
-                    viewport_rect,
-                    Default::default(),
-                );
-                frame.render_passes.push(pass);
-                return DrawResult::kSuccess;
-            }
-            // Source: cc/trees/layer_tree_host_impl.cc:1125-1134.
-            self.WithActiveTreeDamage(host_context, |damage| {
-                DamageTracker::UpdateDamageTracking(damage);
-                frame.damage_reasons = damage
-                    .damage_tracker(
-                        damage
-                            .GetRenderSurface(kContentsRootPropertyNodeId)
-                            .unwrap(),
-                    )
-                    .GetDamageReasons();
-            });
-            let mut has_damage = self.HasDamage(host_context);
-            // Source: cc/trees/layer_tree_host_impl.cc:1136-1209.
-            if expects_to_draw {
-                let _client_damage = host_context.services.CrashKey(
-                    "client_damage",
-                    HostCrashKeyValue::String64(self.root_layer_damage_rect_.ToString()),
-                );
-                if self
-                    .active_tree_
-                    .as_ref()
-                    .unwrap()
-                    .RootRenderSurface()
-                    .is_some()
-                {
-                    let root = self
-                        .active_tree_
-                        .as_ref()
-                        .unwrap()
-                        .RootRenderSurface()
-                        .unwrap();
-                    let mut viz_damage_rect = HostDrawSurface::<B>::GetDamageRect(root);
-                    host_context.services.RectOutset(&mut viz_damage_rect, 2);
-                    if !self.root_layer_damage_rect_.IsEmpty() {
-                        let _viz_damage = host_context.services.CrashKey(
-                            "viz_damage",
-                            HostCrashKeyValue::String64(viz_damage_rect.ToString()),
-                        );
-                        let _viz_content = host_context.services.CrashKey(
-                            "viz_content",
-                            HostCrashKeyValue::String64(
-                                DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root)
-                                    .ToString(),
-                            ),
-                        );
-                        let _insets = host_context.services.CrashKey(
-                            "insets",
-                            HostCrashKeyValue::String64(
-                                host_context.services.RectInsetsString(
-                                    viz_damage_rect,
-                                    self.root_layer_damage_rect_,
-                                ),
-                            ),
-                        );
-                        let tree = self.active_tree_.as_ref().unwrap();
-                        let _dsf = host_context.services.CrashKey(
-                            "dsf",
-                            HostCrashKeyValue::String32(tree.device_scale_factor().to_string()),
-                        );
-                        let _transform = host_context.services.CrashKey(
-                            "transform",
-                            HostCrashKeyValue::String256(
-                                HostDrawSurface::<B>::draw_transform(root).ToString(),
-                            ),
-                        );
-                        let _damage_reasons = host_context.services.CrashKey(
-                            "damage_reasons",
-                            HostCrashKeyValue::String64(
-                                frame.damage_reasons.ToEnumBitmask().to_string(),
-                            ),
-                        );
-                        let _viewport_damage = host_context.services.CrashKey(
-                            "viewport_damage",
-                            HostCrashKeyValue::String64(self.viewport_damage_rect_.ToString()),
-                        );
-                        let _has_view_transitions = host_context.services.CrashKey(
-                            "has_view_transitions",
-                            HostCrashKeyValue::Boolean(tree.HasViewTransitionRequests()),
-                        );
-                        let _root_layer_bounds = host_context.services.CrashKey(
-                            "root_layer_bounds",
-                            HostCrashKeyValue::String64(tree.root_layer().map_or_else(
-                                || "null".to_string(),
-                                |root| {
-                                    format!(
-                                        "{}x{}",
-                                        root.bounds(tree.property_trees()).width(),
-                                        root.bounds(tree.property_trees()).height()
-                                    )
-                                },
-                            )),
-                        );
-                        let _surface_count = host_context.services.CrashKey(
-                            "surface_count",
-                            HostCrashKeyValue::Number(tree.GetRenderSurfaceList().len() as u64),
-                        );
-                        let (top, bottom, scale, viewport) =
-                            self.WithActiveTree(host_context, |tree, c| {
-                                (
-                                    tree.CurrentTopControlsShownRatio(c),
-                                    tree.CurrentBottomControlsShownRatio(c),
-                                    tree.page_scale_factor_for_scroll(c),
-                                    tree.GetDeviceViewport(c),
-                                )
-                            });
-                        let _top_controls = host_context
-                            .services
-                            .CrashKey("top_controls", HostCrashKeyValue::String32(top.to_string()));
-                        let _bottom_controls = host_context.services.CrashKey(
-                            "bottom_controls",
-                            HostCrashKeyValue::String32(bottom.to_string()),
-                        );
-                        let _page_scale = host_context
-                            .services
-                            .CrashKey("page_scale", HostCrashKeyValue::String32(scale.to_string()));
-                        let _device_viewport = host_context.services.CrashKey(
-                            "device_viewport",
-                            HostCrashKeyValue::String64(viewport.ToString()),
-                        );
-                        if host_context.services.ShouldRecordSubsampledMetric(0.1) {
-                            host_context.services.DumpWillBeCheck(
-                                viz_damage_rect.Contains(self.root_layer_damage_rect_),
-                                "crbug.com/454680865: Viz damage does not contain client damage!",
-                            );
-                        }
-                    }
-                }
-                host_context.services.DumpWillBeCheck(
-                    has_damage,
-                    "crbug.com/454680865: Has no damage while expects_to_draw is set.",
-                );
-                has_damage = true;
-            }
-            // Source: cc/trees/layer_tree_host_impl.cc:1211-1239.
-            if has_damage {
-                self.consecutive_frame_with_damage_count_ += 1;
-            } else {
-                host_context.services.TraceEmptyDamageRect();
-                frame.has_no_damage = true;
-                debug_assert!(!self.resourceless_software_draw_);
-                self.consecutive_frame_with_damage_count_ = 0;
-                return DrawResult::kSuccess;
-            }
-            host_context.services.TraceCalculateRenderPassesBegin(
-                frame
-                    .RenderSurfaceList(self.active_tree_.as_ref().unwrap().as_ref())
-                    .unwrap()
-                    .len() as u64,
-                self.RequiresHighResToDraw(),
-            );
-            self.active_tree_
-                .as_mut()
-                .unwrap()
-                .ResetHandleVisibilityChanged();
-            frame.has_view_transition_save_directive = self
-                .active_tree_
-                .as_ref()
-                .unwrap()
-                .HasViewTransitionSaveRequest();
-            let mut known_resource_ids = BTreeSet::new();
-            let capture_view_transition_tokens = self.WithActiveTree(host_context, |tree, c| {
-                tree.GetCaptureViewTransitionTokens(c)
-            });
-            // Source: cc/trees/layer_tree_host_impl.cc:1241-1274.
-            let render_surface_list_size = frame
-                .RenderSurfaceList(self.active_tree_.as_ref().unwrap().as_ref())
-                .unwrap()
-                .len();
-            for i in 0..render_surface_list_size {
-                let surface_index = render_surface_list_size - 1 - i;
-                let tree = self.active_tree_.as_ref().unwrap();
-                let effect_id = frame.RenderSurfaceList(tree.as_ref()).unwrap()[surface_index];
-                let surface = tree.GetRenderSurface(effect_id).unwrap();
-                let is_root_surface =
-                    DrawSurface::<<B as LayerTreeTypes>::Transform>::EffectTreeIndex(surface)
-                        == kContentsRootPropertyNodeId;
-                let should_draw_into_render_pass = is_root_surface
-                    || HostDrawSurface::<B>::contributes_to_drawn_surface(surface)
-                    || surface.CopyOfOutputRequired(tree.property_trees());
-                let resource_id = surface.ViewTransitionElementResourceId(tree.property_trees());
-                if should_draw_into_render_pass {
-                    let target_list =
-                        if DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
-                            surface,
-                            tree.property_trees(),
-                            self.settings_.enable_unbounded_element,
-                        ) {
-                            &mut frame.unbounded_render_passes
-                        } else {
-                            &mut frame.render_passes
-                        };
-                    let mut surface_context = crate::runtime::surface::RenderPassContext::<B> {
-                        tree_id: tree.id,
-                        trees: tree.property_trees(),
-                        layers: tree.LayersForRead(),
-                        settings: &self.settings_,
-                        debug: &self.debug_state_,
-                        scale: tree.device_scale_factor(),
-                        services: host_context.services,
-                    };
-                    if surface.has_view_transition_capture_contributions() {
-                        target_list.push(surface.CreateViewTransitionCaptureRenderPass(
-                            &capture_view_transition_tokens,
-                            &mut surface_context,
-                        ));
-                    }
-                    target_list.push(
-                        surface.CreateRenderPass(
-                            &capture_view_transition_tokens,
-                            &mut surface_context,
-                        ),
-                    );
-                }
-                if resource_id.IsValid() {
-                    known_resource_ids.insert(resource_id);
-                }
-            }
-            // Source: cc/trees/layer_tree_host_impl.cc:1276-1327.
-            if self.active_tree_.as_ref().unwrap().hud_layer().is_some() {
-                let root_pass = frame.render_passes.last_mut().unwrap();
-                root_pass.set_damage_rect(root_pass.output_rect());
-            }
-            // These native queries read immutable settings/owner scalars. The
-            // iterator retains only its source position; each operation below
-            // reborrows the resident tree for exactly the source call lifetime.
-            let draw_mode = self.GetDrawMode(host_context);
-            let commits_to_active_tree = self.CommitsToActiveTree();
-            #[cfg(debug_assertions)]
-            let debug_viewport_origin =
-                self.WithActiveTree(host_context, |tree, c| tree.GetDeviceViewport(c).origin());
-            let background_color = self.active_tree_.as_ref().unwrap().background_color();
-            let tree_id = self.active_tree_.as_ref().unwrap().id;
-            let surface_device_scale = self.active_tree_.as_ref().unwrap().device_scale_factor();
-            let mut draw_result = DrawResult::kSuccess;
-            let mut num_missing_tiles = 0;
-            assert!(!frame.checkerboarded_needs_record);
-            frame.has_copy_requests = self
-                .active_tree_
-                .as_ref()
-                .unwrap()
-                .property_trees()
-                .effect_tree()
-                .HasCopyRequests();
-            let mut have_missing_animated_tiles = false;
-            if self.settings_.enable_compositing_based_throttling {
-                self.throttle_decider_.Prepare();
-            }
-            let context = AppendQuadsContext::new(draw_mode, capture_view_transition_tokens, false);
-            let view_transition_capture_context = AppendQuadsContext::new(
-                context.draw_mode,
-                context.capture_view_transition_tokens.clone(),
-                true,
-            );
-            let output_frame_data = !self
-                .settings_
-                .TreesInVizInClientProcess(host_context.services.SettingsFeatures())
-                || self.dump_compositor_frame_;
-            let mut tracked_element_status = TrackedElementStatus::kNone;
-            // Source: cc/trees/layer_tree_host_impl.cc:1329-1472.
-            let mut it =
-                EffectTreeLayerListIterator::new(self.active_tree_.as_ref().unwrap().as_ref());
-            while it.state() != State::kEnd {
-                let position = it.position(self.active_tree_.as_ref().unwrap().as_ref());
-                let target_surface_id = position.target_render_surface.unwrap();
-                let target_surface = self
-                    .active_tree_
-                    .as_ref()
-                    .unwrap()
-                    .property_trees()
-                    .effect_tree()
-                    .GetRenderSurface(target_surface_id)
-                    .unwrap();
-                let target_render_pass_id = target_surface.render_pass_id();
-                let view_transition_capture_render_pass_id = (output_frame_data
-                    && target_surface.has_view_transition_capture_contributions())
-                .then(|| target_surface.view_transition_capture_render_pass_id());
-                let mut append_quads_data = AppendQuadsData::<B::SurfaceId>::default();
-                if it.state() == State::kTargetSurface {
-                    let has_copy_request = output_frame_data
-                        && target_surface
-                            .HasCopyRequest(self.active_tree_.as_ref().unwrap().property_trees());
-                    if has_copy_request {
-                        let target = FindRenderPassById::<B>(frame, target_render_pass_id)
-                            .unwrap()
-                            .get_mut::<B>(frame);
-                        self.active_tree_
-                            .as_mut()
-                            .unwrap()
-                            .property_trees_mut()
-                            .TakeCopyRequestsAndTransformToSurface(
-                                target_surface_id,
-                                target.copy_requests_mut(),
-                            );
-                    }
-                    if self.settings_.enable_compositing_based_throttling {
-                        if let Some(target) = FindRenderPassById::<B>(frame, target_render_pass_id)
-                        {
-                            let throttle = BorrowedFrameThrottle::<B>::new(frame);
-                            self.throttle_decider_.ProcessRenderPass(&throttle, target);
-                        }
-                    }
-                } else if it.state() == State::kContributingSurface {
-                    if output_frame_data {
-                        let surface_id = position.current_render_surface.unwrap();
-                        let tree = self.active_tree_.as_ref().unwrap();
-                        let surface = tree
-                            .property_trees()
-                            .effect_tree()
-                            .GetRenderSurface(surface_id)
-                            .unwrap();
-                        if HostDrawSurface::<B>::contributes_to_drawn_surface(surface)
-                            && !DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
-                                surface,
-                                tree.property_trees(),
-                                self.settings_.enable_unbounded_element,
-                            )
-                        {
-                            let surface_context = crate::runtime::surface::RenderPassContext::<B> {
-                                tree_id,
-                                trees: tree.property_trees(),
-                                layers: tree.LayersForRead(),
-                                settings: &self.settings_,
-                                debug: &self.debug_state_,
-                                scale: surface_device_scale,
-                                services: host_context.services,
-                            };
-                            surface.AppendQuads(
-                                &context,
-                                FindRenderPassById::<B>(frame, target_render_pass_id)
-                                    .unwrap()
-                                    .get_mut::<B>(frame),
-                                &mut append_quads_data,
-                                &surface_context,
-                            );
-                            if let Some(capture_id) = view_transition_capture_render_pass_id {
-                                let mut data = AppendQuadsData::default();
-                                surface.AppendQuads(
-                                    &view_transition_capture_context,
-                                    FindRenderPassById::<B>(frame, capture_id)
-                                        .unwrap()
-                                        .get_mut::<B>(frame),
-                                    &mut data,
-                                    &surface_context,
-                                );
-                            }
-                        }
-                    }
-                } else if it.state() == State::kLayer {
-                    let layer_id = position.current_layer.unwrap();
-                    let (will_draw, layer_animating, checkerboarded_needs_record) =
-                        self.WithActiveTree(host_context, |tree, tree_context| {
-                            B::WithPictureLayersContext(
-                                tree,
-                                tree_context.host,
-                                |storage, picture_context| {
-                                    let layer = storage.LayerByIdMut(layer_id).unwrap();
-                                    if layer.tracked_element_rects_empty() == Some(false) {
-                                        if tracked_element_status == TrackedElementStatus::kNone {
-                                            tracked_element_status =
-                                                TrackedElementStatus::kHasTrackedElements;
-                                        }
-                                        if tracked_element_status
-                                            != TrackedElementStatus::kHasTrackedElementsNeedingOcclusion
-                                        {
-                                            for list in layer.tracked_element_rects() {
-                                                for should_exclude in list {
-                                                    if should_exclude {
-                                                        tracked_element_status = TrackedElementStatus::kHasTrackedElementsNeedingOcclusion;
-                                                        break;
-                                                    }
-                                                }
-                                                if tracked_element_status == TrackedElementStatus::kHasTrackedElementsNeedingOcclusion {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    let will_draw = layer.WillDraw(context.draw_mode, picture_context);
-                                    if will_draw {
-                                        debug_assert_eq!(tree_id, layer.layer_tree_impl_id());
-                                        frame.will_draw_layers.push(layer.id());
-                                        layer.NotifyKnownResourceIdsBeforeAppendQuads(&known_resource_ids);
-                                        if output_frame_data {
-                                            layer.AppendQuads(
-                                                &context,
-                                                FindRenderPassById::<B>(frame, target_render_pass_id).unwrap().get_mut::<B>(frame),
-                                                &mut append_quads_data,
-                                                picture_context,
-                                            );
-                                            if let Some(capture_id) = view_transition_capture_render_pass_id {
-                                                let mut data = AppendQuadsData::default();
-                                                layer.AppendQuads(
-                                                    &view_transition_capture_context,
-                                                    FindRenderPassById::<B>(frame, capture_id).unwrap().get_mut::<B>(frame),
-                                                    &mut data,
-                                                    picture_context,
-                                                );
-                                            }
-                                        }
-                                    }
-                                    let layer_animating = layer.screen_space_transform_is_animating();
-                                    let missing = !output_frame_data
-                                        && will_draw
-                                        && layer.HasMissingTiles(picture_context);
-                                    let checkerboarded = context.draw_mode
-                                        != DrawMode::DRAW_MODE_RESOURCELESS_SOFTWARE
-                                        && layer.ComputeCheckerboardedNeedsRecord(picture_context);
-                                    (will_draw, layer_animating && missing, checkerboarded)
-                                },
-                            )
-                        });
-                    have_missing_animated_tiles |= layer_animating;
-                    if !will_draw && self.settings_.enable_compositing_based_throttling {
-                        let layer = self
-                            .active_tree_
-                            .as_ref()
-                            .unwrap()
-                            .LayerById(layer_id)
-                            .unwrap();
-                        self.throttle_decider_.ProcessLayerNotToDraw(layer);
-                    }
-                    if output_frame_data {
-                        host_context.services.AddVisibleContentArea(
-                            self.rendering_stats_instrumentation_,
-                            append_quads_data.visible_layer_area,
-                        );
-                        host_context.services.AddApproximatedVisibleContentArea(
-                            self.rendering_stats_instrumentation_,
-                            append_quads_data.approximated_visible_content_area,
-                        );
-                        num_missing_tiles += append_quads_data.num_missing_tiles;
-                        if append_quads_data.num_missing_tiles > 0 {
-                            have_missing_animated_tiles |= self
-                                .active_tree_
-                                .as_ref()
-                                .unwrap()
-                                .LayerById(layer_id)
-                                .unwrap()
-                                .screen_space_transform_is_animating();
-                        }
-                    }
-                    if checkerboarded_needs_record {
-                        frame.checkerboarded_needs_record = true;
-                    }
-                    if self.settings_.is_layer_tree_for_ui {
-                        let tree = self.active_tree_.as_ref().unwrap();
-                        AccumulateInvalidatedArea(
-                            tree.LayerById(layer_id).unwrap(),
-                            tree.property_trees(),
-                            self.total_invalidated_area_.as_mut().unwrap(),
-                        );
-                    }
-                }
-                if output_frame_data {
-                    frame
-                        .activation_dependencies
-                        .extend(append_quads_data.activation_dependencies.iter().cloned());
-                    if let Some(deadline) = append_quads_data.deadline_in_frames {
-                        frame.deadline_in_frames =
-                            Some(if let Some(current) = frame.deadline_in_frames {
-                                current.max(deadline)
-                            } else {
-                                deadline
-                            });
-                    }
-                    frame.use_default_lower_bound_deadline |=
-                        append_quads_data.use_default_lower_bound_deadline;
-                    frame.has_shared_element_resources |=
-                        append_quads_data.has_shared_element_resources;
-                }
-                it.Increment(self.active_tree_.as_ref().unwrap().as_ref());
-            }
-            // Source: cc/trees/layer_tree_host_impl.cc:1474-1539.
-            frame.tracked_element_status = tracked_element_status;
-            if have_missing_animated_tiles && !commits_to_active_tree {
-                if expects_to_draw {
-                    debug_assert!(
-                        false,
-                        "crbug.com/454680865: Has checkerboarded animations while expects_to_draw is set"
-                    );
-                } else {
-                    draw_result = DrawResult::kAbortedCheckerboardAnimations;
-                }
-            }
-            if frame.checkerboarded_needs_raster && self.requires_high_res_to_draw_ {
-                if expects_to_draw {
-                    debug_assert!(
-                        false,
-                        "crbug.com/454680865: Is missing high res content while expects_to_draw is set"
-                    );
-                } else {
-                    draw_result = DrawResult::kAbortedMissingHighResContent;
-                }
-            }
-            if self.resourceless_software_draw_ {
-                draw_result = DrawResult::kSuccess;
-            }
-            if frame.has_view_transition_save_directive {
-                draw_result = DrawResult::kSuccess;
-            }
-            #[cfg(debug_assertions)]
-            {
-                for pass in &frame.render_passes {
-                    for quad in 0..pass.quad_count() {
-                        debug_assert!(pass.quad_has_shared_quad_state(quad));
-                    }
-                }
-                debug_assert!(
-                    self.settings_.enable_unbounded_element
-                        || frame.unbounded_render_passes.is_empty()
-                );
-                for pass in &frame.unbounded_render_passes {
-                    for quad in 0..pass.quad_count() {
-                        debug_assert!(pass.quad_has_shared_quad_state(quad));
-                    }
-                }
-                debug_assert_eq!(
-                    frame.render_passes.last().unwrap().output_rect().origin(),
-                    debug_viewport_origin
-                );
-            }
-            // Source: cc/trees/layer_tree_host_impl.cc:1540-1585.
-            let has_transparent_background = background_color.alpha != 1.0;
-            let tree = self.active_tree_.as_ref().unwrap();
-            let root_surface = tree
-                .property_trees()
-                .effect_tree()
-                .GetRenderSurface(kContentsRootPropertyNodeId);
-            if let Some(root) = root_surface.filter(|_| !has_transparent_background) {
-                frame
-                    .render_passes
-                    .last_mut()
-                    .unwrap()
-                    .set_has_transparent_background(false);
-                if output_frame_data {
-                    // This Region copy is explicitly present in the source here.
-                    let mut fill_region = tree.UnoccludedScreenSpaceRegion().clone();
-                    if num_missing_tiles > 0 {
-                        fill_region = Region::new(
-                            DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root),
-                        );
-                    }
-                    AppendQuadsToFillScreen::<B>(
-                        frame.render_passes.last_mut().unwrap(),
-                        Some(root),
-                        background_color,
-                        &fill_region,
-                    );
-                }
-            }
-            if output_frame_data {
-                self.RemoveRenderPasses(frame);
-            }
-            debug_assert!(!frame.render_passes.is_empty());
-            if self
-                .settings_
-                .TreesInVizInClientProcess(host_context.services.SettingsFeatures())
-            {
-                host_context
-                    .services
-                    .TraceCalculateRenderPassesEnd(draw_result, None);
-            } else {
-                host_context
-                    .services
-                    .TraceCalculateRenderPassesEnd(draw_result, Some(num_missing_tiles));
-            }
-            debug_assert!(
-                (!frame.has_copy_requests && !frame.has_view_transition_save_directive)
-                    || draw_result == DrawResult::kSuccess
-            );
-            draw_result
+            compositor_draw::render_pass_pipeline::CalculateRenderPasses(
+                &mut RenderPassPipelineAdapter::new(self, frame, host_context),
+                expects_to_draw,
+            )
+            .0
         }
-        // Source: cc/trees/layer_tree_host_impl.cc:1587-1590.
         pub fn DidAnimateScrollOffset(&mut self, context: &mut HostImplContext<'_, B>) {
             DidAnimateScrollOffsetForHost(&self.settings_, self.delegate_, context);
         }
@@ -5048,134 +5832,21 @@ mod source_chunk_b {
             context: &mut HostImplContext<'_, B>,
         ) -> DrawResult {
             debug_assert!(!expects_to_draw || self.settings_.trees_in_viz_in_viz_process);
-            context
-                .services
-                .TracePrepareToDraw(self.active_tree_.as_ref().unwrap().source_frame_number());
-            if let Some(input) = self.input_delegate_.as_mut() {
-                input.WillDraw();
-            }
-            context
-                .services
-                .TickWorkletAnimations(&mut self.mutator_host_);
-            let ok = self.WithActiveTree(context, |tree, c| {
-                tree.UpdateDrawProperties(true, true, None, c)
-            });
-            debug_assert!(ok, "UpdateDrawProperties failed during draw");
-            if !self.settings_.trees_in_viz_in_viz_process {
-                frame.checkerboarded_needs_raster = !B::PrepareResidentTilesToDraw(self, context);
-            }
-            frame.render_surface_list = Some(self.active_tree_.as_ref().unwrap().id);
-            frame.render_passes.clear();
-            frame.unbounded_render_passes.clear();
-            frame.will_draw_layers.clear();
-            frame.has_no_damage = false;
-            if self
-                .active_tree_
-                .as_ref()
-                .unwrap()
-                .RootRenderSurface()
-                .is_some()
-            {
-                let viewport_damage = self.viewport_damage_rect_;
-                self.WithActiveTreeDamage(context, |damage| {
-                    damage
-                        .damage_tracker(
-                            damage
-                                .GetRenderSurface(kContentsRootPropertyNodeId)
-                                .unwrap(),
-                        )
-                        .AddDamageNextUpdate(viewport_damage)
-                });
-            }
-            let draw_result = self.CalculateRenderPasses(frame, expects_to_draw, context);
-            context.services.VerboseLogFrame(frame);
-            if draw_result != DrawResult::kSuccess {
-                debug_assert!(!self.resourceless_software_draw_);
-                if expects_to_draw {
-                    context.services.DumpWillBeCheck(
-                    false,
-                    "crbug.com/454680865: Draw result is not success while expects_to_draw is set",
-                );
-                    return DrawResult::kSuccess;
-                }
-                return draw_result;
-            }
-            DrawResult::kSuccess
+            compositor_draw::prepare_to_draw::PrepareToDraw(
+                &mut PrepareToDrawAdapter {
+                    host: self,
+                    frame,
+                    context,
+                },
+                expects_to_draw,
+            )
+            .0
         }
         // Source: cc/trees/layer_tree_host_impl.cc:1663-1766.
         pub fn RemoveRenderPasses(&mut self, frame: &mut FrameData<B>) {
-            debug_assert!(frame.render_passes.len() >= 1);
-            let mut pass_exists = BTreeSet::new();
-            let mut pass_references: BTreeMap<B::RenderPassId, i32> = BTreeMap::new();
-            let mut view_transition_quad_references = BTreeSet::new();
-            let mut i = 0;
-            while i < frame.render_passes.len() {
-                let pass = &mut frame.render_passes[i];
-                let mut quad = 0;
-                while quad < pass.quad_count() {
-                    if pass.quad_material(quad) == HostQuadMaterial::kSharedElement {
-                        view_transition_quad_references
-                            .insert(pass.quad_shared_element_resource_id(quad));
-                        quad += 1;
-                        continue;
-                    }
-                    if pass.quad_material(quad) != HostQuadMaterial::kCompositorRenderPass {
-                        quad += 1;
-                        continue;
-                    }
-                    let id = pass.quad_render_pass_id(quad).unwrap();
-                    if pass_exists.contains(&id) {
-                        *pass_references.entry(id).or_default() += 1;
-                        quad += 1;
-                    } else {
-                        pass.EraseQuadAndInvalidateAllPointers(quad);
-                    }
-                }
-                if i == frame.render_passes.len() - 1 {
-                    break;
-                }
-                let pass = &frame.render_passes[i];
-                if pass.quad_count() == 0
-                    && pass.copy_requests().is_empty()
-                    && !pass.subtree_capture_id_is_valid()
-                    && pass.filters_is_empty()
-                    && pass.backdrop_filters_is_empty()
-                    && !pass.view_transition_element_resource_id().IsValid()
-                {
-                    frame.render_passes.remove(i);
-                    continue;
-                }
-                pass_exists.insert(pass.id());
-                i += 1;
-            }
-            i = 0;
-            while i < frame.render_passes.len() - 1 {
-                let index = frame.render_passes.len() - 2 - i;
-                let pass = &frame.render_passes[index];
-                if !pass.copy_requests().is_empty() {
-                    i += 1;
-                    continue;
-                }
-                if *pass_references.entry(pass.id()).or_default() != 0 {
-                    i += 1;
-                    continue;
-                }
-                if pass.view_transition_element_resource_id().IsValid()
-                    && (frame.has_view_transition_save_directive
-                        || view_transition_quad_references
-                            .contains(&pass.view_transition_element_resource_id()))
-                {
-                    i += 1;
-                    continue;
-                }
-                for quad in 0..pass.quad_count() {
-                    if let Some(id) = pass.quad_render_pass_id(quad) {
-                        *pass_references.entry(id).or_default() -= 1;
-                    }
-                }
-                frame.render_passes.remove(index);
-                // Source --i then for increment leaves i unchanged after erasure.
-            }
+            compositor_draw::render_pass_pruning::RemoveUnreachableRenderPasses(
+                &mut RenderPassPruningAdapter { frame },
+            );
         }
         // Source: cc/trees/layer_tree_host_impl.cc:1768-1770.
         pub fn EvictTexturesForTesting(&mut self, context: &mut HostImplContext<'_, B>) {
@@ -5272,7 +5943,7 @@ mod source_chunk_c {
     // Existing canonical definitions excluded: cc:1809-1863,1865-1877.
     use crate::adapter::{
         geometry::RectF,
-        image_animation::{kDefaultFrameIndex, WhichTree},
+        image_animation::{WhichTree, kDefaultFrameIndex},
         layer_tree_impl::{LayerTreeLayer, LayerTreeLayerList},
         property_types::ViewTransitionElementResourceId,
     };
@@ -6095,7 +6766,7 @@ mod source_chunk_g {
     // Existing canonical owner definitions excluded:4832-4834,4836-4842,4988-4994.
     use crate::adapter::{
         geometry::PointF,
-        image_animation::{kDefaultFrameIndex, PaintImageId},
+        image_animation::{PaintImageId, kDefaultFrameIndex},
         input_handler::InputScrollNodeId,
         time::TimeTicks,
     };
@@ -7639,6 +8310,280 @@ use crate::cc::{
     input::actively_scrolling_type::ActivelyScrollingType,
     trees::{layer_tree_impl::LifecycleState, tree_synchronizer::TreeSynchronizer},
 };
+
+/// Resolves the resident HostImpl objects required by the Tree-owned
+/// activation state machine.  This adapter contains no activation branching or
+/// cross-stage ordering.
+struct TreeActivationAdapter<'a, 'services, B: HostImplTypes> {
+    host: &'a mut LayerTreeHostImpl<B>,
+    context: &'a mut HostImplContext<'services, B>,
+}
+
+impl<B: HostImplTypes> compositor_tree::activation::ActivationContext
+    for TreeActivationAdapter<'_, '_, B>
+{
+    fn trace_source_activation(&mut self) {
+        let trace_id = self.host.sync_tree().unwrap().trace_id();
+        self.context
+            .services
+            .TraceActivateSyncTree(&mut || trace_id);
+    }
+
+    fn has_pending_tree(&self) -> bool {
+        self.host.pending_tree_.is_some()
+    }
+
+    fn trace_pending_tree_activated(&mut self) {
+        let pending = self.host.pending_tree_.as_ref().unwrap();
+        self.context
+            .services
+            .TracePendingTreeActivated(pending.id, pending.local_surface_id_from_parent());
+    }
+
+    fn begin_sync(&mut self) {
+        self.host
+            .active_tree_
+            .as_mut()
+            .unwrap()
+            .lifecycle()
+            .AdvanceTo(LifecycleState::kBeginningSync);
+    }
+
+    fn process_pending_ui_resources(&mut self) {
+        self.host.WithPendingTree(self.context, |tree, c| {
+            tree.ProcessUIResourceRequestQueue(c)
+        });
+    }
+
+    fn pending_needs_full_tree_sync(&self) -> bool {
+        self.host
+            .pending_tree_
+            .as_ref()
+            .unwrap()
+            .needs_full_tree_sync()
+    }
+
+    fn synchronize_full_tree(&mut self) {
+        self.host
+            .WithActiveAndPendingTrees(self.context, |active, pending, c| {
+                TreeSynchronizer::SynchronizeTreesFromPending(pending, active, c);
+                active.set_needs_full_tree_sync(true);
+            });
+    }
+
+    fn push_scrollbar_opacities(&mut self) {
+        self.host
+            .PushScrollbarOpacitiesFromActiveToPending(self.context);
+    }
+
+    fn push_property_trees(&mut self) {
+        self.host
+            .WithActiveAndPendingTrees(self.context, |active, pending, c| {
+                pending.PushPropertyTreesTo(active, c)
+            });
+    }
+
+    fn mark_property_trees_synced(&mut self) {
+        self.host
+            .active_tree_
+            .as_mut()
+            .unwrap()
+            .lifecycle()
+            .AdvanceTo(LifecycleState::kSyncedPropertyTrees);
+    }
+
+    fn push_layer_properties(&mut self) {
+        self.host
+            .WithActiveAndPendingTrees(self.context, |active, pending, c| {
+                TreeSynchronizer::PushLayerPropertiesFromPending(pending, active, c);
+            });
+    }
+
+    fn mark_layer_properties_synced(&mut self) {
+        self.host
+            .active_tree_
+            .as_mut()
+            .unwrap()
+            .lifecycle()
+            .AdvanceTo(LifecycleState::kSyncedLayerProperties);
+    }
+
+    fn push_tree_properties(&mut self) {
+        self.host
+            .WithActiveAndPendingTrees(self.context, |active, pending, c| {
+                pending.PushPropertiesTo(active, c)
+            });
+    }
+
+    fn reset_pending_change_tracking(&mut self) {
+        if !self.host.pending_tree_.as_ref().unwrap().LayerListIsEmpty() {
+            self.host
+                .pending_tree_
+                .as_mut()
+                .unwrap()
+                .property_trees_mut()
+                .ResetAllChangeTracking();
+        }
+    }
+
+    fn finish_sync(&mut self) {
+        self.host
+            .active_tree_
+            .as_mut()
+            .unwrap()
+            .lifecycle()
+            .AdvanceTo(LifecycleState::kNotSyncing);
+    }
+
+    fn recycle_pending_tree(&mut self) {
+        debug_assert!(self.host.recycle_tree_.is_none());
+        std::mem::swap(&mut self.host.pending_tree_, &mut self.host.recycle_tree_);
+    }
+
+    fn promote_scroll_timelines(&mut self) {
+        self.context
+            .services
+            .PromoteScrollTimelinesPendingToActive(&mut self.host.mutator_host_);
+    }
+
+    fn activate_animations(&mut self) {
+        self.host.ActivateAnimations(self.context);
+    }
+
+    fn activate_image_state(&mut self) {
+        self.host.ActivateStateForImages(self.context);
+    }
+
+    fn process_active_ui_resources(&mut self) {
+        self.host.WithActiveTree(self.context, |tree, c| {
+            tree.ProcessUIResourceRequestQueue(c)
+        });
+    }
+
+    fn update_viewport_container_sizes(&mut self) {
+        self.host
+            .WithActiveTree(self.context, |tree, c| tree.UpdateViewportContainerSizes(c));
+    }
+
+    fn clamp_viewport_scroll_offsets(&mut self) {
+        self.host.WithActiveTree(self.context, |tree, c| {
+            if let Some(inner) = tree.InnerViewportScrollNode().map(|node| node.id) {
+                tree.ClampScrollNodeToMaxScrollOffset(inner, c);
+                debug_assert!(tree.OuterViewportScrollNode().is_some());
+                let outer = tree.OuterViewportScrollNode().unwrap().id;
+                tree.ClampScrollNodeToMaxScrollOffset(outer, c);
+            }
+        });
+    }
+
+    fn active_tree_did_become_active(&mut self) {
+        self.host
+            .WithActiveTree(self.context, |tree, c| tree.DidBecomeActive(c));
+    }
+
+    fn renew_tree_priority(&mut self) {
+        self.host.RenewTreePriority(self.context);
+    }
+
+    fn active_tree_has_picture_layers(&self) -> bool {
+        self.host
+            .active_tree_
+            .as_ref()
+            .unwrap()
+            .picture_layers()
+            .next()
+            .is_some()
+    }
+
+    fn mark_tile_priorities_modified(&mut self) {
+        self.host.DidModifyTilePriorities(false, self.context);
+    }
+
+    fn update_screenshot_destination(&mut self) {
+        let screenshot_token = self
+            .host
+            .active_tree_
+            .as_mut()
+            .unwrap()
+            .TakeScreenshotDestinationToken();
+        if self.host.GetCurrentLocalSurfaceId(self.context).is_valid() {
+            self.host.screenshot_destination_ = screenshot_token;
+        } else if !screenshot_token.is_empty() {
+            self.context.services.InvalidPreviousSurfaceScreenshot();
+        }
+    }
+
+    fn update_child_local_surface_id(&mut self) {
+        self.host.UpdateChildLocalSurfaceId(self.context);
+    }
+
+    fn notify_can_draw_state_changed(&mut self) {
+        let can_draw = self.host.CanDraw(self.context);
+        self.context
+            .services
+            .OnCanDrawStateChanged(self.host.delegate_, can_draw);
+    }
+
+    fn delegate_did_activate(&mut self) {
+        self.context
+            .services
+            .DelegateDidActivateSyncTree(self.host.delegate_);
+    }
+
+    fn run_tree_activation_callback(&mut self) {
+        if let Some(callback) = self.host.tree_activation_callback_.as_ref() {
+            self.context.services.RunTreeActivationCallback(callback);
+        }
+    }
+
+    fn start_pending_page_scale_animation(&mut self) -> bool {
+        let pending = self
+            .host
+            .active_tree_
+            .as_mut()
+            .unwrap()
+            .TakePendingPageScaleAnimation();
+        let Some(animation) = pending else {
+            return false;
+        };
+        self.host.StartPageScaleAnimation(
+            animation.target_offset,
+            animation.use_anchor,
+            animation.scale,
+            animation.duration,
+            self.context,
+        );
+        true
+    }
+
+    fn notify_input_tree_activated(&mut self) {
+        self.host.WithInputHandler(self.context, |input, host| {
+            if let Some(input) = input {
+                input.DidActivatePendingTree(host);
+            }
+        });
+    }
+
+    fn should_flush_display_tree(&self) -> bool {
+        self.host.layer_context_.is_some()
+            && !self.host.visible_
+            && self
+                .host
+                .settings_
+                .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
+    }
+
+    fn flush_display_tree(&mut self) {
+        self.host.FlushDisplayTree(self.context);
+    }
+
+    fn verbose_log_activated_tree(&mut self) {
+        self.context
+            .services
+            .VerboseLogActivatedTree(self.host.active_tree_.as_ref().unwrap());
+    }
+}
+
 impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     // Source: cc/trees/layer_tree_host_impl.cc:3932-3944.
     pub fn DidLoseLayerTreeFrameSink(&mut self, context: &mut HostImplContext<'_, B>) {
@@ -7752,170 +8697,64 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             return;
         }
         self.WithScrollbarOpacityTrees(context, |controllers, client, pending| {
-            for controller in controllers.values() {
-                for scrollbar in controller.as_ref().unwrap().Scrollbars(client) {
-                    let element_id = client.Scrollbar_element_id(&scrollbar);
-                    if let Some(source) = client
-                        .ActivePropertyTrees()
-                        .effect_tree()
-                        .FindNodeFromElementId(element_id)
-                    {
-                        if let Some(target) = pending
-                            .property_trees_mut()
-                            .effect_tree_mutable()
-                            .MutableFindNodeFromElementId(element_id)
-                        {
-                            let source_opacity = source.opacity;
-                            let target_opacity = target.opacity;
-                            if source_opacity == target_opacity {
-                                continue;
-                            }
-                            target.opacity = source_opacity;
-                            pending
-                                .property_trees_mut()
-                                .effect_tree_mutable()
-                                .set_needs_update(true);
-                        }
+            use compositor_tree::scrollbar_opacity_sync::ScrollbarOpacityCandidate;
+            // The once-with projection is consumed inside the Tree package's
+            // trace interval, so controller traversal and node lookups are
+            // attributed to Tree while resident ownership stays in the facade.
+            let candidates = std::iter::once_with(|| {
+                let mut candidates = Vec::new();
+                for controller in controllers.values() {
+                    for scrollbar in controller.as_ref().unwrap().Scrollbars(client) {
+                        let element_id = client.Scrollbar_element_id(&scrollbar);
+                        let Some(source) = client
+                            .ActivePropertyTrees()
+                            .effect_tree()
+                            .FindNodeFromElementId(element_id)
+                        else {
+                            candidates.push(ScrollbarOpacityCandidate::MissingSource);
+                            continue;
+                        };
+                        let source_opacity = source.opacity;
+                        let Some(target) = pending
+                            .property_trees()
+                            .effect_tree()
+                            .FindNodeFromElementId(element_id)
+                        else {
+                            candidates.push(ScrollbarOpacityCandidate::MissingTarget);
+                            continue;
+                        };
+                        candidates.push(ScrollbarOpacityCandidate::Present {
+                            element_id,
+                            source_opacity,
+                            target_opacity: target.opacity,
+                        });
                     }
                 }
+                candidates
+            })
+            .flatten();
+            let plan =
+                compositor_tree::scrollbar_opacity_sync::PlanScrollbarOpacitySync(candidates);
+            for update in plan.updates {
+                let target = pending
+                    .property_trees_mut()
+                    .effect_tree_mutable()
+                    .MutableFindNodeFromElementId(update.element_id)
+                    .expect("planned pending effect node");
+                target.opacity = update.opacity;
+                pending
+                    .property_trees_mut()
+                    .effect_tree_mutable()
+                    .set_needs_update(true);
             }
         });
     }
     // Source: cc/trees/layer_tree_host_impl.cc:4051-4197.
     pub fn ActivateSyncTree(&mut self, context: &mut HostImplContext<'_, B>) {
-        context
-            .services
-            .TraceActivateSyncTree(&mut || self.sync_tree().unwrap().trace_id());
-        if self.pending_tree_.is_some() {
-            let pending = self.pending_tree_.as_ref().unwrap();
-            context
-                .services
-                .TracePendingTreeActivated(pending.id, pending.local_surface_id_from_parent());
-            self.active_tree_
-                .as_mut()
-                .unwrap()
-                .lifecycle()
-                .AdvanceTo(LifecycleState::kBeginningSync);
-            self.WithPendingTree(context, |tree, c| tree.ProcessUIResourceRequestQueue(c));
-            if self.pending_tree_.as_ref().unwrap().needs_full_tree_sync() {
-                self.WithActiveAndPendingTrees(context, |active, pending, c| {
-                    TreeSynchronizer::SynchronizeTreesFromPending(pending, active, c);
-                    active.set_needs_full_tree_sync(true);
-                });
-            }
-            self.PushScrollbarOpacitiesFromActiveToPending(context);
-            self.WithActiveAndPendingTrees(context, |active, pending, c| {
-                pending.PushPropertyTreesTo(active, c)
-            });
-            self.active_tree_
-                .as_mut()
-                .unwrap()
-                .lifecycle()
-                .AdvanceTo(LifecycleState::kSyncedPropertyTrees);
-            self.WithActiveAndPendingTrees(context, |active, pending, c| {
-                TreeSynchronizer::PushLayerPropertiesFromPending(pending, active, c);
-            });
-            self.active_tree_
-                .as_mut()
-                .unwrap()
-                .lifecycle()
-                .AdvanceTo(LifecycleState::kSyncedLayerProperties);
-            self.WithActiveAndPendingTrees(context, |active, pending, c| {
-                pending.PushPropertiesTo(active, c)
-            });
-            if !self.pending_tree_.as_ref().unwrap().LayerListIsEmpty() {
-                self.pending_tree_
-                    .as_mut()
-                    .unwrap()
-                    .property_trees_mut()
-                    .ResetAllChangeTracking();
-            }
-            self.active_tree_
-                .as_mut()
-                .unwrap()
-                .lifecycle()
-                .AdvanceTo(LifecycleState::kNotSyncing);
-            debug_assert!(self.recycle_tree_.is_none());
-            // Source explicit owner swap; never takes a whole tree to evade a borrow.
-            std::mem::swap(&mut self.pending_tree_, &mut self.recycle_tree_);
-            context
-                .services
-                .PromoteScrollTimelinesPendingToActive(&mut self.mutator_host_);
-            self.ActivateAnimations(context);
-            self.ActivateStateForImages(context);
-        } else {
-            self.WithActiveTree(context, |tree, c| tree.ProcessUIResourceRequestQueue(c));
-        }
-        self.WithActiveTree(context, |tree, c| tree.UpdateViewportContainerSizes(c));
-        self.WithActiveTree(context, |tree, c| {
-            if let Some(inner) = tree.InnerViewportScrollNode().map(|node| node.id) {
-                tree.ClampScrollNodeToMaxScrollOffset(inner, c);
-                debug_assert!(tree.OuterViewportScrollNode().is_some());
-                let outer = tree.OuterViewportScrollNode().unwrap().id;
-                tree.ClampScrollNodeToMaxScrollOffset(outer, c);
-            }
+        compositor_tree::activation::ActivateSyncTree(&mut TreeActivationAdapter {
+            host: self,
+            context,
         });
-        self.WithActiveTree(context, |tree, c| tree.DidBecomeActive(c));
-        self.RenewTreePriority(context);
-        if self
-            .active_tree_
-            .as_ref()
-            .unwrap()
-            .picture_layers()
-            .next()
-            .is_some()
-        {
-            self.DidModifyTilePriorities(false, context);
-        }
-        let screenshot_token = self
-            .active_tree_
-            .as_mut()
-            .unwrap()
-            .TakeScreenshotDestinationToken();
-        if self.GetCurrentLocalSurfaceId(context).is_valid() {
-            self.screenshot_destination_ = screenshot_token;
-        } else if !screenshot_token.is_empty() {
-            context.services.InvalidPreviousSurfaceScreenshot();
-        }
-        self.UpdateChildLocalSurfaceId(context);
-        let can_draw = self.CanDraw(context);
-        context
-            .services
-            .OnCanDrawStateChanged(self.delegate_, can_draw);
-        context.services.DelegateDidActivateSyncTree(self.delegate_);
-        if let Some(callback) = self.tree_activation_callback_.as_ref() {
-            context.services.RunTreeActivationCallback(callback);
-        }
-        let pending_page_scale_animation = self
-            .active_tree_
-            .as_mut()
-            .unwrap()
-            .TakePendingPageScaleAnimation();
-        if let Some(animation) = pending_page_scale_animation {
-            self.StartPageScaleAnimation(
-                animation.target_offset,
-                animation.use_anchor,
-                animation.scale,
-                animation.duration,
-                context,
-            );
-        }
-        self.WithInputHandler(context, |input, host| {
-            if let Some(input) = input {
-                input.DidActivatePendingTree(host);
-            }
-        });
-        if self.layer_context_.is_some()
-            && !self.visible_
-            && self
-                .settings_
-                .TreesInVizInClientProcess(context.services.SettingsFeatures())
-        {
-            self.FlushDisplayTree(context);
-        }
-        context
-            .services
-            .VerboseLogActivatedTree(self.active_tree_.as_ref().unwrap());
     }
     // Source: cc/trees/layer_tree_host_impl.cc:4199-4204.
     pub fn ActivateStateForImages(&mut self, context: &mut HostImplContext<'_, B>) {
@@ -8597,10 +9436,10 @@ impl<B: HostImplTypes> BrowserControlsOffsetManagerQueries
         self.active_tree.bottom_controls_shown_ratio().Current(true)
     }
     fn ViewportScrollOffset(&self) -> PointF {
-        Viewport::TotalScrollOffsetForTree(self.active_tree)
+        ViewportTotalScrollOffsetForTree(self.active_tree)
     }
     fn MaxViewportScrollOffsetY(&self) -> f32 {
-        Viewport::MaxUserReachableTotalScrollOffsetYForTree(self.active_tree)
+        ViewportMaxUserReachableScrollOffsetYForTree(self.active_tree)
     }
     fn OnlyExpandTopControlsAtPageTop(&self) -> bool {
         self.active_tree.only_expand_top_controls_at_page_top()
@@ -8814,16 +9653,68 @@ impl<B: HostImplTypes> HostImplViewportRuntime<'_, '_, B> {
         callback(&mut host, self.input_view.as_ref())
     }
 }
-impl<B: HostImplTypes> crate::adapter::viewport::ViewportRuntime<B>
+fn ViewportScrollNodeForTree<B: HostImplTypes>(
+    tree: &LayerTreeImpl<B>,
+    node_id: i32,
+) -> compositor_input::viewport::ViewportScrollNode {
+    let node = tree.property_trees().scroll_tree().Node(node_id);
+    compositor_input::viewport::ViewportScrollNode {
+        id: node.id,
+        element_id: node.element_id,
+        container_bounds: node.container_bounds,
+        scrolls_inner_viewport: node.scrolls_inner_viewport,
+        scrolls_outer_viewport: node.scrolls_outer_viewport,
+        user_scrollable_vertical: node.user_scrollable_vertical,
+    }
+}
+fn ViewportTotalScrollOffsetForTree<B: HostImplTypes>(tree: &LayerTreeImpl<B>) -> PointF {
+    let properties = tree.property_trees();
+    let scroll = properties.scroll_tree();
+    let inner = tree
+        .InnerViewportScrollNode()
+        .map(|node| scroll.current_scroll_offset(node.element_id, properties.state()));
+    let outer = tree
+        .OuterViewportScrollNode()
+        .map(|node| scroll.current_scroll_offset(node.element_id, properties.state()));
+    Viewport::TotalScrollOffsetFromOffsets(inner, outer)
+}
+fn ViewportMaxUserReachableScrollOffsetYForTree<B: HostImplTypes>(tree: &LayerTreeImpl<B>) -> f32 {
+    let properties = tree.property_trees();
+    let (scroll, transforms, state) = properties.scroll_tree_read_context();
+    let inner = tree.InnerViewportScrollNode().expect("inner viewport node");
+    let inner_max_y = scroll.MaxScrollOffset(inner.id, transforms, state).y();
+    let outer = tree.OuterViewportScrollNode().map(|node| {
+        (
+            node.user_scrollable_vertical,
+            scroll.MaxScrollOffset(node.id, transforms, state).y(),
+            scroll.current_scroll_offset(node.element_id, state).y(),
+        )
+    });
+    Viewport::MaxUserReachableTotalScrollOffsetYFromOffsets(inner_max_y, outer)
+}
+impl<B: HostImplTypes> crate::adapter::viewport::ViewportRuntime
     for HostImplViewportRuntime<'_, '_, B>
 {
-    fn ActiveTree(&self) -> &LayerTreeImpl<B> {
-        self.active_tree_.as_ref().expect("source active tree")
+    fn ActiveTreeId(&self) -> LayerTreeId {
+        self.active_tree_.as_ref().expect("source active tree").id
     }
-    fn ScrollNode(&self, id: &crate::adapter::input_handler::InputScrollNodeId) -> &ScrollNode {
+    fn ScrollNode(
+        &self,
+        id: &crate::adapter::input_handler::InputScrollNodeId,
+    ) -> compositor_input::viewport::ViewportScrollNode {
         let tree = self.active_tree_.as_ref().unwrap();
         assert_eq!(tree.id, id.tree);
-        tree.property_trees().scroll_tree().Node(id.index)
+        ViewportScrollNodeForTree(tree, id.index)
+    }
+    fn InnerScrollNode(&self) -> Option<compositor_input::viewport::ViewportScrollNode> {
+        let tree = self.active_tree_.as_ref().unwrap();
+        tree.InnerViewportScrollNode()
+            .map(|node| ViewportScrollNodeForTree(tree, node.id))
+    }
+    fn OuterScrollNode(&self) -> Option<compositor_input::viewport::ViewportScrollNode> {
+        let tree = self.active_tree_.as_ref().unwrap();
+        tree.OuterViewportScrollNode()
+            .map(|node| ViewportScrollNodeForTree(tree, node.id))
     }
     fn CurrentPageScaleFactor(&self) -> f32 {
         self.active_tree_
@@ -8836,6 +9727,48 @@ impl<B: HostImplTypes> crate::adapter::viewport::ViewportRuntime<B>
             .as_ref()
             .unwrap()
             .page_scale_factor_for_scroll_for_tree(true, self.core.settings_.is_for_scalable_page)
+    }
+    fn MinPageScaleFactor(&self) -> f32 {
+        self.active_tree_.as_ref().unwrap().min_page_scale_factor()
+    }
+    fn CurrentScrollOffset(&self, element: ElementId) -> PointF {
+        let tree = self.active_tree_.as_ref().unwrap();
+        tree.property_trees()
+            .scroll_tree()
+            .current_scroll_offset(element, tree.property_trees().state())
+    }
+    fn MaxScrollOffset(&self, node_id: i32) -> PointF {
+        let tree = self.active_tree_.as_ref().unwrap();
+        let (scroll, transforms, state) = tree.property_trees().scroll_tree_read_context();
+        scroll.MaxScrollOffset(node_id, transforms, state)
+    }
+    fn CurrentlyScrollingNodeId(&self) -> Option<i32> {
+        self.active_tree_
+            .as_ref()
+            .unwrap()
+            .property_trees()
+            .scroll_tree()
+            .CurrentlyScrollingNode()
+            .map(|node| node.id)
+    }
+    fn FindSnapPosition(
+        &self,
+        node_id: i32,
+        current_position: PointF,
+    ) -> Option<compositor_input::scroll_snap_data::SnapPositionData> {
+        let tree = self.active_tree_.as_ref().unwrap();
+        tree.property_trees()
+            .scroll_tree()
+            .Node(node_id)
+            .snap_container_data
+            .as_ref()
+            .map(|data| {
+                data.FindSnapPosition(
+                    &*<dyn compositor_input::snap_selection_strategy::SnapSelectionStrategy>::CreateForTargetElement(
+                        current_position,
+                    ),
+                )
+            })
     }
     fn ScrollNodeBy(&mut self, id: i32, delta: &Vector2dF, viewport: &mut Viewport) -> Vector2dF {
         self.WithInputHost(viewport, |host, _| host.ScrollNodeByForViewport(id, delta))
@@ -8958,7 +9891,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     fn WithViewport<R>(
         &mut self,
         context: &mut HostImplContext<'_, B>,
-        callback: impl FnOnce(&mut Viewport, &mut crate::adapter::viewport::ViewportContext<'_, B>) -> R,
+        callback: impl FnOnce(&mut Viewport, &mut crate::adapter::viewport::ViewportContext<'_>) -> R,
     ) -> R {
         let HostImplRuntimeParts {
             core,
@@ -10438,7 +11371,7 @@ impl<B: HostImplTypes> crate::adapter::layer_tree_impl::LayerTreeHost<B>
             &mut client,
         );
     } // Source: cc/trees/layer_tree_impl.cc:1621-1626. The target's actual source
-      // callback body is shared with all narrower scroll/page-scale hosts.
+    // callback body is shared with all narrower scroll/page-scale hosts.
     fn PendingTreeDidUpdatePageScale(&mut self) {
         crate::adapter::layer_tree_impl::mutation::LayerTreeScaleHost::PendingTreeDidUpdatePageScale(&mut self.MutationHost());
     }
@@ -10658,6 +11591,54 @@ impl<B: HostImplTypes> HostImplInputTree<'_, B> {
 }
 
 // Source: cc/trees/layer_tree_host_impl.cc:6324-6333.
+struct HostScrollbarFlashAdapter<'a, T: crate::adapter::scrollbar::ScrollbarTransform> {
+    ids: Vec<ElementId>,
+    controllers: &'a mut HashMap<ElementId, Option<Box<ScrollbarAnimationController>>>,
+    flashed: Option<&'a mut HashSet<ElementId>>,
+    client: &'a mut dyn ScrollbarAnimationControllerClient<Transform = T>,
+}
+
+impl<T: crate::adapter::scrollbar::ScrollbarTransform>
+    compositor_input::scrollbar_flash::ScrollbarFlashContext for HostScrollbarFlashAdapter<'_, T>
+{
+    type ElementId = ElementId;
+
+    fn controller_count(&self) -> usize {
+        self.ids.len()
+    }
+
+    fn controller_element_id(&self, index: usize) -> ElementId {
+        self.ids[index]
+    }
+
+    fn was_flashed(&self, element: ElementId) -> bool {
+        self.flashed
+            .as_deref()
+            .is_some_and(|flashed| flashed.contains(&element))
+    }
+
+    fn notify_controller(&mut self, index: usize, did_scroll: bool) {
+        let controller = self
+            .controllers
+            .get_mut(&self.ids[index])
+            .expect("source scrollbar controller")
+            .as_mut()
+            .expect("source scrollbar controller dereference");
+        if did_scroll {
+            controller.DidScrollUpdate(self.client);
+        } else {
+            controller.WillUpdateScroll(self.client);
+        }
+    }
+
+    fn mark_flashed(&mut self, element: ElementId) {
+        self.flashed
+            .as_deref_mut()
+            .expect("once-per-controller mode requires flash state")
+            .insert(element);
+    }
+}
+
 fn FlashAllScrollbarsForHost(
     settings: &LayerTreeSettings,
     controllers: &mut HashMap<ElementId, Option<Box<ScrollbarAnimationController>>>,
@@ -10667,16 +11648,18 @@ fn FlashAllScrollbarsForHost(
     >,
 ) {
     assert!(settings.scrollbar_flash_after_any_scroll_update);
-    for controller in controllers.values_mut() {
-        let controller = controller
-            .as_mut()
-            .expect("source scrollbar controller dereference");
-        if did_scroll {
-            controller.DidScrollUpdate(client);
-        } else {
-            controller.WillUpdateScroll(client);
-        }
-    }
+    let ids = controllers.keys().copied().collect();
+    compositor_input::scrollbar_flash::FlashScrollbars(
+        &mut HostScrollbarFlashAdapter {
+            ids,
+            controllers,
+            flashed: None,
+            client,
+        },
+        compositor_input::scrollbar_flash::ScrollbarFlashMode::EveryController,
+        ElementId::default(),
+        did_scroll,
+    );
 }
 // Source: cc/trees/layer_tree_host_impl.cc:6335-6338.
 fn EraseFlashedScrollbarsForHost(settings: &LayerTreeSettings, flashed: &mut HashSet<ElementId>) {
@@ -10695,23 +11678,19 @@ fn MaybeFlashAllScrollbarsOnceForHost(
     >,
 ) -> bool {
     assert!(settings.scrollbar_flash_once_after_scroll_update);
-    let mut flashed_tracking_element_id = false;
-    for (&element_id, controller) in controllers.iter_mut() {
-        if flashed.contains(&element_id) {
-            continue;
-        }
-        let controller = controller
-            .as_mut()
-            .expect("source scrollbar controller dereference");
-        if did_scroll {
-            controller.DidScrollUpdate(client);
-        } else {
-            controller.WillUpdateScroll(client);
-        }
-        flashed.insert(element_id);
-        flashed_tracking_element_id = element_id == tracking;
-    }
-    flashed_tracking_element_id
+    let ids = controllers.keys().copied().collect();
+    compositor_input::scrollbar_flash::FlashScrollbars(
+        &mut HostScrollbarFlashAdapter {
+            ids,
+            controllers,
+            flashed: Some(flashed),
+            client,
+        },
+        compositor_input::scrollbar_flash::ScrollbarFlashMode::OncePerController,
+        tracking,
+        did_scroll,
+    )
+    .tracking_element_flashed
 }
 // Source: cc/trees/layer_tree_host_impl.cc:6306-6322.
 fn MaybeFlashAllScrollbarsForHost(
@@ -10766,8 +11745,8 @@ fn OnPageScaleUpdatedForHost(
 mod source_input_forwarding {
     // Source-aligned live mutation capabilities; selected receiver is borrowed out.
     use super::*;
-    use crate::adapter::layer_tree_impl::mutation::{LayerTreeScaleHost, LayerTreeScrollHost};
     use crate::adapter::layer_tree_impl::LayerTreeId;
+    use crate::adapter::layer_tree_impl::mutation::{LayerTreeScaleHost, LayerTreeScrollHost};
     pub(crate) struct HostImplMutationFacade<'a, 'c, B: HostImplTypes> {
         pub(crate) core: HostImplRuntimeCore<'a, B>,
         pub(crate) active_tree_: HostImplTreeSlot<'a, B>,
@@ -11146,7 +12125,7 @@ mod source_input_host {
             input_view: Option<&InputHandlerView<'_>>,
             callback: impl FnOnce(
                 &mut Viewport,
-                &mut crate::adapter::viewport::ViewportContext<'_, B>,
+                &mut crate::adapter::viewport::ViewportContext<'_>,
             ) -> R,
         ) -> R {
             let viewport = self.viewport_.as_mut().expect("source viewport");
@@ -11781,7 +12760,7 @@ mod source_input_host {
             self.WithViewport(Some(view), |viewport, c| viewport.CanScroll(node, state, c))
         }
         fn Viewport_TotalScrollOffset(&mut self) -> PointF {
-            Viewport::TotalScrollOffsetForTree(self.InputActiveTree())
+            ViewportTotalScrollOffsetForTree(self.InputActiveTree())
         }
 
         // Source: cc/trees/layer_tree_impl.h:138; cc/trees/property_tree.h:70-73.
@@ -13443,137 +14422,273 @@ mod source_chunk_d {
     use crate::adapter::layer_tree_impl::LayerTreeViewTransitionRequest;
     use crate::adapter::{damage_context::DamageContext, geometry::SizeF};
     use crate::cc::layers::draw_mode::DrawMode;
-    impl<B: HostImplTypes> LayerTreeHostImpl<B> {
-        // Source: cc/trees/layer_tree_host_impl.cc:2397-2465.
-        pub fn CollectTrackedElementRects(
-            &self,
-            is_for_compositor_frame_metadata: bool,
-            need_occlusion: bool,
-        ) -> <B as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects
-        {
-            let mut rects = <B as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects::default();
-            let tree = self.active_tree_.as_deref().unwrap();
-            let inner_scroll_id = tree
-                .InnerViewportScrollNode()
-                .map_or(kInvalidPropertyNodeId, |node| node.transform_id);
-            let outer_scroll_id = tree
-                .OuterViewportScrollNode()
-                .map_or(kInvalidPropertyNodeId, |node| node.transform_id);
-            let transform_tree = tree.property_trees().transform_tree();
-            let mut sticky_or_viewport_scroll_cache = BTreeMap::new();
-            let mut front_occluders = Vec::new();
-            for layer in tree.begin().rev() {
-                if let Some(tracked) = HostMetadataLayer::<B>::tracked_element_rects_value(layer)
-                    .filter(|tracked| !tracked.is_empty())
-                {
-                    for (&feature, tracked_element_list) in tracked.iter() {
-                        for rect_data in tracked_element_list {
-                            if rect_data.should_add_to_compositor_frame_metadata()
-                                != is_for_compositor_frame_metadata
-                            {
-                                continue;
-                            }
-                            assert!(
-                                !rect_data.should_exclude_fixed_and_sticky_occlusions()
-                                    || need_occlusion
-                            );
-                            let mut transformed_rect = rect_data.clone();
-                            transformed_rect.set_visible_bounds(CalculateVisibleBounds(
-                                layer,
-                                tree.property_trees(),
-                                rect_data,
-                                &front_occluders,
-                                transform_tree,
-                                inner_scroll_id,
-                                outer_scroll_id,
-                                &mut sticky_or_viewport_scroll_cache,
-                            ));
-                            rects.Append(feature, transformed_rect);
-                        }
-                    }
-                }
-                if need_occlusion
-                    && HostImplLayer::draws_content(layer)
-                    && HostMetadataLayer::<B>::draw_opacity(layer) > 0.05
-                {
-                    let transform_id = HostImplLayer::transform_tree_index(layer);
-                    if IsFixedOrStickyOccluderTransform(
-                        transform_id,
-                        transform_tree,
-                        inner_scroll_id,
-                        outer_scroll_id,
-                        &mut sticky_or_viewport_scroll_cache,
-                    ) {
-                        let layer_visible_rect =
-                            HostImplLayer::VisibleLayerRect(layer, tree.property_trees());
-                        if !layer_visible_rect.IsEmpty() {
-                            let occluder_screen_rect = MathUtil::ProjectEnclosingClippedRect(
-                                &HostImplLayer::ScreenSpaceTransform(layer, tree.property_trees()),
-                                layer_visible_rect,
-                            );
-                            if !occluder_screen_rect.IsEmpty() {
-                                front_occluders.push(HeuristicFixedOrStickyOccluder {
-                                    rect: occluder_screen_rect,
-                                    transform_tree_index: HostImplLayer::transform_tree_index(
-                                        layer,
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            rects
+
+    struct FrameResourcePassesAdapter<'a, B: HostImplTypes> {
+        passes: &'a [Box<B::RenderPass>],
+    }
+
+    impl<B: HostImplTypes> compositor_resource::frame_resource_export::FrameResourcePasses
+        for FrameResourcePassesAdapter<'_, B>
+    {
+        type ResourceId = crate::adapter::layer_tree_impl::ResourceId;
+
+        fn pass_count(&self) -> usize {
+            self.passes.len()
         }
-        // Source: cc/trees/layer_tree_host_impl.cc:2467-2492.
-        pub fn CollectRegionCaptureBounds(
-            &self,
-        ) -> <B as crate::adapter::layer_tree_host_impl::HostImplDTypes>::RegionCaptureBounds
-        {
-            let mut bounds = <B as crate::adapter::layer_tree_host_impl::HostImplDTypes>::RegionCaptureBounds::default();
-            let tree = self.active_tree_.as_deref().unwrap();
-            for layer in tree.begin().rev() {
-                let Some(capture) = HostMetadataLayer::<B>::capture_bounds(layer) else {
-                    continue;
-                };
-                for (&id, rect) in capture.bounds() {
-                    let mut screen = MathUtil::ProjectEnclosingClippedRect(
-                        &HostImplLayer::ScreenSpaceTransform(layer, tree.property_trees()),
-                        *rect,
-                    );
-                    let root = tree.RootRenderSurface().unwrap();
-                    let content=crate::adapter::geometry::ToEnclosedRect(MathUtil::MapClippedRect(&crate::adapter::draw_property::DrawSurface::screen_space_transform(root),crate::adapter::layer_tree_host_impl::HostScrollRenderSurface::DrawableContentRect(root, tree.property_trees())));
-                    screen.Intersect(content);
-                    bounds.Set(id, screen);
-                }
-            }
-            bounds
+
+        fn quad_count(&self, pass_index: usize) -> usize {
+            self.passes[pass_index].quad_count()
         }
-        // Source: cc/trees/layer_tree_host_impl.cc:2494-2661.
-        pub fn MakeCompositorFrameMetadata(
-            &mut self,
-            frame: &FrameData<B>,
-            context: &mut HostImplContext<'_, B>,
-        ) -> B::CompositorFrameMetadata {
-            let mut metadata = B::CompositorFrameMetadata::default();
-            if self.settings_.trees_in_viz_in_viz_process {
-                metadata.set_frame_token(self.next_frame_token_from_client_);
-            } else {
-                metadata.set_frame_token(
-                    context
-                        .services
-                        .IncrementFrameToken(&mut self.next_frame_token_),
-                );
+
+        fn quad_resource_id(&self, pass_index: usize, quad_index: usize) -> Self::ResourceId {
+            self.passes[pass_index].quad_resource_id(quad_index)
+        }
+    }
+
+    struct ViewTransitionSurfaceListAdapter<'a, B: HostImplTypes> {
+        tree: &'a LayerTreeImpl<B>,
+        surface_ids: &'a [i32],
+        tokens: &'a BTreeSet<crate::adapter::draw_property::ViewTransitionToken>,
+    }
+
+    impl<B: HostImplTypes> compositor_frame::view_transition_metadata::ViewTransitionSurfaceList
+        for ViewTransitionSurfaceListAdapter<'_, B>
+    {
+        type ResourceId = crate::adapter::property_types::ViewTransitionElementResourceId;
+        type RenderPassId = <B as crate::adapter::frame_data::FrameDataTypes>::RenderPassId;
+
+        fn surface_count(&self) -> usize {
+            self.surface_ids.len()
+        }
+
+        fn surface_resource(&self, index: usize) -> Option<Self::ResourceId> {
+            let id = self
+                .tree
+                .property_trees()
+                .effect_tree()
+                .Node(self.surface_ids[index])
+                .view_transition_element_resource_id;
+            id.IsValid().then_some(id)
+        }
+
+        fn resource_matches_capture_token(&self, resource: Self::ResourceId) -> bool {
+            resource.MatchesToken(self.tokens)
+        }
+
+        fn render_pass_id(&self, index: usize) -> Self::RenderPassId {
+            self.tree
+                .GetRenderSurface(self.surface_ids[index])
+                .unwrap()
+                .render_pass_id()
+        }
+
+        fn capture_render_pass_id(&self, index: usize) -> Self::RenderPassId {
+            self.tree
+                .GetRenderSurface(self.surface_ids[index])
+                .unwrap()
+                .view_transition_capture_render_pass_id()
+        }
+    }
+
+    struct FrameViewTransitionRequestAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+        metadata: &'a mut B::CompositorFrameMetadata,
+        requests: Vec<Box<B::ViewTransitionRequest>>,
+        elements: Option<
+            BTreeMap<
+                crate::adapter::property_types::ViewTransitionElementResourceId,
+                B::RenderPassId,
+            >,
+        >,
+        display_colors: Option<B::DisplayColorSpaces>,
+    }
+
+    impl<'a, 'services, B: HostImplTypes> FrameViewTransitionRequestAdapter<'a, 'services, B> {
+        fn new(
+            host: &'a mut LayerTreeHostImpl<B>,
+            frame: &'a FrameData<B>,
+            context: &'a mut HostImplContext<'services, B>,
+            metadata: &'a mut B::CompositorFrameMetadata,
+        ) -> Self {
+            Self {
+                host,
+                frame,
+                context,
+                metadata,
+                requests: Vec::new(),
+                elements: None,
+                display_colors: None,
             }
-            let tree = self.active_tree_.as_deref().unwrap();
+        }
+    }
+
+    impl<B: HostImplTypes> compositor_frame::view_transition_requests::ViewTransitionRequestContext
+        for FrameViewTransitionRequestAdapter<'_, '_, B>
+    {
+        fn embeds_transition_directives(&mut self) -> bool {
+            !self
+                .host
+                .settings_
+                .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
+        }
+
+        fn prepare_embedded_requests(&mut self) {
+            let tokens = self.host.WithActiveTree(self.context, |tree, c| {
+                tree.GetCaptureViewTransitionTokens(c)
+            });
+            let tree = self.host.active_tree_.as_deref().unwrap();
+            self.elements = Some(
+                compositor_frame::view_transition_metadata::BuildViewTransitionElementMap(
+                    &ViewTransitionSurfaceListAdapter::<B> {
+                        tree,
+                        surface_ids: self.frame.RenderSurfaceList(tree).unwrap(),
+                        tokens: &tokens,
+                    },
+                )
+                .0,
+            );
+            self.display_colors = Some(self.host.GetDisplayColorSpaces());
+            self.requests = self
+                .host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .TakeViewTransitionRequests(true);
+        }
+
+        fn embedded_request_count(&self) -> usize {
+            self.requests.len()
+        }
+
+        fn resourceless_draw(&self) -> bool {
+            self.host.resourceless_software_draw_
+        }
+
+        fn embedded_request_delays_deletion(&self, index: usize) -> bool {
+            HostMetadataTransitionRequest::delay_layer_tree_view_deletion(
+                self.requests[index].as_ref(),
+            )
+        }
+
+        fn embedded_request_animates_renderer(&self, index: usize) -> bool {
+            HostMetadataTransitionRequest::IsAnimateRenderer(self.requests[index].as_ref())
+        }
+
+        fn append_embedded_directive(&mut self, index: usize) {
+            let request = &self.requests[index];
+            self.metadata.transition_directives_mut().push(
+                self.context.services.ConstructTransitionDirective(
+                    request,
+                    self.elements.as_ref().unwrap(),
+                    self.display_colors.as_ref().unwrap(),
+                    HostMetadataTransitionRequest::delay_layer_tree_view_deletion(request.as_ref()),
+                ),
+            );
+        }
+
+        fn notify_embedded_request_processed(&mut self, index: usize) {
+            let sequence = self.requests[index].sequence_id();
+            self.host
+                .OnCompositorFrameTransitionDirectiveProcessed(sequence, self.context);
+        }
+
+        fn resident_request_count(&self) -> usize {
+            self.host
+                .active_tree_
+                .as_deref()
+                .unwrap()
+                .view_transition_requests()
+                .len()
+        }
+
+        fn mark_draw_properties_dirty(&mut self) {
+            self.host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .set_needs_update_draw_properties();
+        }
+
+        fn resident_request_delays_deletion(&self, index: usize) -> bool {
+            HostMetadataTransitionRequest::delay_layer_tree_view_deletion(
+                self.host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .view_transition_requests()[index]
+                    .as_ref(),
+            )
+        }
+
+        fn resident_request_animates_renderer(&self, index: usize) -> bool {
+            HostMetadataTransitionRequest::IsAnimateRenderer(
+                self.host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .view_transition_requests()[index]
+                    .as_ref(),
+            )
+        }
+
+        fn notify_resident_request_processed(&mut self, index: usize) {
+            let sequence = self
+                .host
+                .active_tree_
+                .as_deref()
+                .unwrap()
+                .view_transition_requests()[index]
+                .sequence_id();
+            self.host
+                .OnCompositorFrameTransitionDirectiveProcessed(sequence, self.context);
+        }
+    }
+
+    struct CompositorMetadataAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+    }
+
+    impl<B: HostImplTypes> compositor_frame::metadata_build::CompositorMetadataContext
+        for CompositorMetadataAdapter<'_, '_, B>
+    {
+        type Metadata = B::CompositorFrameMetadata;
+
+        fn new_metadata(&mut self) -> Self::Metadata {
+            B::CompositorFrameMetadata::default()
+        }
+
+        fn trees_in_viz_process(&self) -> bool {
+            self.host.settings_.trees_in_viz_in_viz_process
+        }
+
+        fn set_client_frame_token(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_frame_token(self.host.next_frame_token_from_client_);
+        }
+
+        fn increment_and_set_frame_token(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_frame_token(
+                self.context
+                    .services
+                    .IncrementFrameToken(&mut self.host.next_frame_token_),
+            );
+        }
+
+        fn populate_viewport_fields(&mut self, metadata: &mut Self::Metadata) {
+            let tree = self.host.active_tree_.as_deref().unwrap();
             metadata.set_device_scale_factor(
                 tree.painted_device_scale_factor() * tree.device_scale_factor(),
             );
             metadata.set_page_scale_factor(tree.current_page_scale_factor_for_tree(true));
             metadata.set_scrollable_viewport_size(
-                self.WithActiveTree(context, |tree, c| tree.ScrollableViewportSize(c)),
+                self.host
+                    .WithActiveTree(self.context, |tree, c| tree.ScrollableViewportSize(c)),
             );
             if let Some(inner) = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
@@ -13582,76 +14697,114 @@ mod source_chunk_d {
                 metadata.set_visible_viewport_size(inner.container_bounds);
             }
             metadata.set_root_background_color(
-                self.active_tree_.as_deref().unwrap().background_color(),
+                self.host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .background_color(),
             );
-            metadata.set_may_throttle_if_undrawn_frames(self.may_throttle_if_undrawn_frames_);
-            self.presentation_time_callbacks_
+            metadata.set_may_throttle_if_undrawn_frames(self.host.may_throttle_if_undrawn_frames_);
+        }
+
+        fn register_presentation_callbacks(&mut self, metadata: &mut Self::Metadata) {
+            self.host
+                .presentation_time_callbacks_
                 .RegisterMainThreadCallbacks(
                     metadata.frame_token(),
-                    self.active_tree_
+                    self.host
+                        .active_tree_
                         .as_deref_mut()
                         .unwrap()
                         .TakePresentationCallbacks(),
                 );
-            self.presentation_time_callbacks_
+            self.host
+                .presentation_time_callbacks_
                 .RegisterMainThreadSuccessfulCallbacks(
                     metadata.frame_token(),
-                    self.active_tree_
+                    self.host
+                        .active_tree_
                         .as_deref_mut()
                         .unwrap()
                         .TakeSuccessfulPresentationCallbacks(),
                 );
-            metadata.set_is_handling_interaction(self.IsHandlingInteraction(context));
-            let active_types = context
+        }
+
+        fn populate_activity_fields(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_is_handling_interaction(self.host.IsHandlingInteraction(self.context));
+            let active_types = self
+                .context
                 .services
-                .FrameSequenceTrackerActiveTypes(&mut self.frame_trackers_);
+                .FrameSequenceTrackerActiveTypes(&mut self.host.frame_trackers_);
             metadata.set_is_handling_animation(
-                context.services.HasMainThreadAnimation(&active_types)
-                    || context.services.HasCompositorThreadAnimation(&active_types),
+                self.context.services.HasMainThreadAnimation(&active_types)
+                    || self
+                        .context
+                        .services
+                        .HasCompositorThreadAnimation(&active_types),
             );
-            let referenced = self.active_tree_.as_deref().unwrap().SurfaceRanges();
+        }
+
+        fn copy_referenced_surfaces(&mut self, metadata: &mut Self::Metadata) {
+            let referenced = self.host.active_tree_.as_deref().unwrap().SurfaceRanges();
             for range in referenced {
                 metadata.referenced_surfaces_mut().push(range.clone());
             }
-            if &self.last_draw_referenced_surfaces_ != referenced {
-                self.last_draw_referenced_surfaces_ = referenced.clone();
+            if &self.host.last_draw_referenced_surfaces_ != referenced {
+                self.host.last_draw_referenced_surfaces_ = referenced.clone();
             }
+        }
+
+        fn populate_page_scale_and_browser_controls(&mut self, metadata: &mut Self::Metadata) {
             metadata.set_min_page_scale_factor(
-                self.active_tree_
+                self.host
+                    .active_tree_
                     .as_deref()
                     .unwrap()
                     .min_page_scale_factor(),
             );
             if self
-                .WithBrowserControls(context, |manager, client| manager.TopControlsHeight(client))
+                .host
+                .WithBrowserControls(self.context, |manager, client| {
+                    manager.TopControlsHeight(client)
+                })
                 > 0.0
             {
-                let visible = self.WithBrowserControls(context, |manager, client| {
-                    manager.TopControlsHeight(client)
-                }) * self.WithBrowserControls(context, |manager, client| {
-                    manager.TopControlsShownRatio(client)
-                });
+                let visible = self
+                    .host
+                    .WithBrowserControls(self.context, |manager, client| {
+                        manager.TopControlsHeight(client)
+                    })
+                    * self
+                        .host
+                        .WithBrowserControls(self.context, |manager, client| {
+                            manager.TopControlsShownRatio(client)
+                        });
                 metadata.set_top_controls_visible_height(visible);
-                // Source: cc/trees/layer_tree_host_impl.cc:2560-2591.
                 #[cfg(target_os = "android")]
                 {
                     let top_tag = self
+                        .host
                         .browser_controls_offset_manager_
                         .as_deref()
                         .unwrap()
                         .TopControlsOffsetTag();
                     let content_tag = self
+                        .host
                         .browser_controls_offset_manager_
                         .as_deref()
                         .unwrap()
                         .ContentOffsetTag();
                     if !top_tag.IsEmpty() {
                         assert!(!content_tag.IsEmpty());
-                        let mut offset = self.WithBrowserControls(context, |manager, client| {
-                            manager.TopControlsHeight(client)
-                        }) - visible;
+                        let mut offset = self
+                            .host
+                            .WithBrowserControls(self.context, |manager, client| {
+                                manager.TopControlsHeight(client)
+                            })
+                            - visible;
                         if visible == 0.0 {
                             offset += self
+                                .host
                                 .browser_controls_offset_manager_
                                 .as_deref()
                                 .unwrap()
@@ -13662,9 +14815,12 @@ mod source_chunk_d {
                             .AppendOffsetTagValue(top_tag, Vector2dF::new(0.0, -offset.round()));
                     }
                     if !content_tag.IsEmpty() {
-                        let offset = self.WithBrowserControls(context, |manager, client| {
-                            manager.TopControlsHeight(client)
-                        }) - visible;
+                        let offset = self
+                            .host
+                            .WithBrowserControls(self.context, |manager, client| {
+                                manager.TopControlsHeight(client)
+                            })
+                            - visible;
                         metadata.AppendOffsetTagValue(
                             content_tag,
                             Vector2dF::new(0.0, -offset.round()),
@@ -13672,28 +14828,40 @@ mod source_chunk_d {
                     }
                 }
             }
-            // Source: cc/trees/layer_tree_host_impl.cc:2594-2621.
             #[cfg(target_os = "android")]
-            if self.WithBrowserControls(context, |manager, client| {
-                manager.BottomControlsHeight(client)
-            }) > 0.0
+            if self
+                .host
+                .WithBrowserControls(self.context, |manager, client| {
+                    manager.BottomControlsHeight(client)
+                })
+                > 0.0
             {
                 let tag = self
+                    .host
                     .browser_controls_offset_manager_
                     .as_deref()
                     .unwrap()
                     .BottomControlsOffsetTag();
                 if !tag.IsEmpty() {
-                    let visible = self.WithBrowserControls(context, |manager, client| {
-                        manager.BottomControlsHeight(client)
-                    }) * self.WithBrowserControls(context, |manager, client| {
-                        manager.BottomControlsShownRatio(client)
-                    });
-                    let mut offset = self.WithBrowserControls(context, |manager, client| {
-                        manager.BottomControlsHeight(client)
-                    }) - visible;
+                    let visible = self
+                        .host
+                        .WithBrowserControls(self.context, |manager, client| {
+                            manager.BottomControlsHeight(client)
+                        })
+                        * self
+                            .host
+                            .WithBrowserControls(self.context, |manager, client| {
+                                manager.BottomControlsShownRatio(client)
+                            });
+                    let mut offset = self
+                        .host
+                        .WithBrowserControls(self.context, |manager, client| {
+                            manager.BottomControlsHeight(client)
+                        })
+                        - visible;
                     if visible == 0.0 {
                         offset += self
+                            .host
                             .browser_controls_offset_manager_
                             .as_deref()
                             .unwrap()
@@ -13703,7 +14871,11 @@ mod source_chunk_d {
                     metadata.AppendOffsetTagValue(tag, Vector2dF::new(0.0, offset.round()));
                 }
             }
+        }
+
+        fn populate_root_scroll_display_and_mobile(&mut self, metadata: &mut Self::Metadata) {
             if self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
@@ -13711,63 +14883,118 @@ mod source_chunk_d {
                 .is_some()
             {
                 metadata.set_root_scroll_offset(
-                    self.active_tree_.as_deref().unwrap().TotalScrollOffset(),
+                    self.host
+                        .active_tree_
+                        .as_deref()
+                        .unwrap()
+                        .TotalScrollOffset(),
                 );
             }
             metadata.set_display_transform_hint(
-                self.active_tree_
+                self.host
+                    .active_tree_
                     .as_deref()
                     .unwrap()
                     .display_transform_hint(),
             );
-            metadata.set_is_mobile_optimized(self.WithActiveTree(context, |tree, c| {
+            metadata.set_is_mobile_optimized(self.host.WithActiveTree(self.context, |tree, c| {
                 IsMobileOptimized(&HostNativeTreeView { tree, context: c })
             }));
+        }
+
+        fn populate_delegated_ink(&mut self, metadata: &mut Self::Metadata) {
             if let Some(ink) = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
                 .delegated_ink_metadata()
             {
-                let mut copy = context.services.CloneDelegatedInkMetadata(ink);
-                context
+                let mut copy = self.context.services.CloneDelegatedInkMetadata(ink);
+                self.context.services.SetDelegatedInkFrameTime(
+                    &mut copy,
+                    self.host.CurrentBeginFrameArgs().frame_time,
+                );
+                self.context
                     .services
-                    .SetDelegatedInkFrameTime(&mut copy, self.CurrentBeginFrameArgs().frame_time);
-                context.services.TraceDelegatedInkOnCompositorFrame(&copy);
+                    .TraceDelegatedInkOnCompositorFrame(&copy);
                 metadata.set_delegated_ink_metadata(copy);
             }
-            metadata.set_capture_bounds(self.CollectRegionCaptureBounds());
-            if self.settings_.trees_in_viz_in_viz_process {
-                metadata.set_tracked_element_rects(self.tracked_element_rects_from_client_.clone());
-            } else {
-                metadata.set_tracked_element_rects(self.CollectTrackedElementRects(true,frame.tracked_element_status==crate::cc::trees::frame_data::TrackedElementStatus::kHasTrackedElementsNeedingOcclusion));
-            }
-            if !self.screenshot_destination_.is_empty() {
-                metadata.set_screenshot_destination(self.screenshot_destination_);
-                if !self
-                    .settings_
-                    .TreesInVizInClientProcess(context.services.SettingsFeatures())
-                {
-                    self.screenshot_destination_ = UnguessableToken::default();
-                }
-            }
-            metadata.set_is_software(self.GetDrawMode(context) != DrawMode::DRAW_MODE_HARDWARE);
-            metadata
         }
-        // Source: cc/trees/layer_tree_host_impl.cc:2663-2810.
-        pub fn MakeRenderFrameMetadata(
-            &mut self,
-            frame: &FrameData<B>,
-            context: &mut HostImplContext<'_, B>,
-        ) -> crate::cc::trees::render_frame_metadata::RenderFrameMetadata<B> {
-            use crate::adapter::unbounded::LocalSurfaceId;
-            use crate::cc::trees::render_frame_metadata::RenderFrameMetadata;
-            let mut metadata = RenderFrameMetadata::<B>::default();
-            metadata.root_scroll_offset =
-                Some(self.active_tree_.as_deref().unwrap().TotalScrollOffset());
-            metadata.root_background_color =
-                self.active_tree_.as_deref().unwrap().background_color();
+
+        fn populate_capture_bounds(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_capture_bounds(self.host.CollectRegionCaptureBounds());
+        }
+
+        fn copy_client_tracked_element_rects(&mut self, metadata: &mut Self::Metadata) {
+            metadata
+                .set_tracked_element_rects(self.host.tracked_element_rects_from_client_.clone());
+        }
+
+        fn collect_tracked_element_rects(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_tracked_element_rects(self.host.CollectTrackedElementRects(
+                true,
+                self.frame.tracked_element_status
+                    == crate::cc::trees::frame_data::TrackedElementStatus::kHasTrackedElementsNeedingOcclusion,
+            ));
+        }
+
+        fn has_screenshot_destination(&self) -> bool {
+            !self.host.screenshot_destination_.is_empty()
+        }
+
+        fn set_screenshot_destination(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_screenshot_destination(self.host.screenshot_destination_);
+        }
+
+        fn trees_in_viz_client_process(&mut self) -> bool {
+            self.host
+                .settings_
+                .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
+        }
+
+        fn clear_screenshot_destination(&mut self) {
+            self.host.screenshot_destination_ = UnguessableToken::default();
+        }
+
+        fn populate_draw_mode(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_is_software(
+                self.host.GetDrawMode(self.context) != DrawMode::DRAW_MODE_HARDWARE,
+            );
+        }
+    }
+
+    struct RenderMetadataAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+    }
+
+    impl<B: HostImplTypes> compositor_frame::metadata_build::RenderMetadataContext
+        for RenderMetadataAdapter<'_, '_, B>
+    {
+        type Metadata = crate::cc::trees::render_frame_metadata::RenderFrameMetadata<B>;
+
+        fn new_metadata(&mut self) -> Self::Metadata {
+            Self::Metadata::default()
+        }
+
+        fn populate_base_fields(&mut self, metadata: &mut Self::Metadata) {
+            metadata.root_scroll_offset = Some(
+                self.host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .TotalScrollOffset(),
+            );
+            metadata.root_background_color = self
+                .host
+                .active_tree_
+                .as_deref()
+                .unwrap()
+                .background_color();
             metadata.is_scroll_offset_at_top = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
@@ -13775,86 +15002,110 @@ mod source_chunk_d {
                 .y()
                 == 0.0;
             metadata.device_scale_factor = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
                 .painted_device_scale_factor()
-                * self.active_tree_.as_deref().unwrap().device_scale_factor();
-            self.WithActiveTree(context, |tree, c| {
+                * self
+                    .host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .device_scale_factor();
+            self.host.WithActiveTree(self.context, |tree, c| {
                 tree.GetViewportSelection(&mut metadata.selection, c)
             });
-            metadata.is_mobile_optimized = self.WithActiveTree(context, |tree, c| {
+            metadata.is_mobile_optimized = self.host.WithActiveTree(self.context, |tree, c| {
                 IsMobileOptimized(&HostNativeTreeView { tree, context: c })
             });
             let viewport = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
-                .GetDeviceViewportWithExternal(self.external_viewport_);
+                .GetDeviceViewportWithExternal(self.host.external_viewport_);
             metadata.viewport_size_in_pixels = Size::new(viewport.width, viewport.height);
             metadata.page_scale_factor = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
                 .current_page_scale_factor_for_tree(true);
             metadata.external_page_scale_factor = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
                 .external_page_scale_factor();
             metadata.top_controls_height = self
-                .WithBrowserControls(context, |manager, client| manager.TopControlsHeight(client));
+                .host
+                .WithBrowserControls(self.context, |manager, client| {
+                    manager.TopControlsHeight(client)
+                });
             metadata.top_controls_shown_ratio = self
-                .WithBrowserControls(context, |manager, client| {
+                .host
+                .WithBrowserControls(self.context, |manager, client| {
                     manager.TopControlsShownRatio(client)
                 });
-            // Source: cc/trees/layer_tree_host_impl.cc:2687-2711.
             #[cfg(any(target_os = "android", target_os = "ios"))]
             {
                 metadata.bottom_controls_height = self
-                    .WithBrowserControls(context, |manager, client| {
+                    .host
+                    .WithBrowserControls(self.context, |manager, client| {
                         manager.BottomControlsHeight(client)
                     });
                 metadata.bottom_controls_shown_ratio = self
-                    .WithBrowserControls(context, |manager, client| {
+                    .host
+                    .WithBrowserControls(self.context, |manager, client| {
                         manager.BottomControlsShownRatio(client)
                     });
                 metadata.top_controls_min_height_offset = self
+                    .host
                     .browser_controls_offset_manager_
                     .as_deref()
                     .unwrap()
                     .TopControlsMinHeightOffset();
                 metadata.bottom_controls_min_height_offset = self
+                    .host
                     .browser_controls_offset_manager_
                     .as_deref()
                     .unwrap()
                     .BottomControlsMinHeightOffset();
-                metadata.scrollable_viewport_size =
-                    self.WithActiveTree(context, |tree, c| tree.ScrollableViewportSize(c));
+                metadata.scrollable_viewport_size = self
+                    .host
+                    .WithActiveTree(self.context, |tree, c| tree.ScrollableViewportSize(c));
                 metadata.min_page_scale_factor = self
+                    .host
                     .active_tree_
                     .as_deref()
                     .unwrap()
                     .min_page_scale_factor();
                 metadata.max_page_scale_factor = self
+                    .host
                     .active_tree_
                     .as_deref()
                     .unwrap()
                     .max_page_scale_factor();
-                metadata.root_layer_size = self.active_tree_.as_deref().unwrap().ScrollableSize();
+                metadata.root_layer_size =
+                    self.host.active_tree_.as_deref().unwrap().ScrollableSize();
                 if let Some(inner) = self
+                    .host
                     .active_tree_
                     .as_deref()
                     .unwrap()
                     .InnerViewportScrollNode()
                 {
-                    debug_assert!(self
-                        .active_tree_
-                        .as_deref()
-                        .unwrap()
-                        .OuterViewportScrollNode()
-                        .is_some());
+                    debug_assert!(
+                        self.host
+                            .active_tree_
+                            .as_deref()
+                            .unwrap()
+                            .OuterViewportScrollNode()
+                            .is_some()
+                    );
                     metadata.root_overflow_y_hidden = !self
+                        .host
                         .active_tree_
                         .as_deref()
                         .unwrap()
@@ -13863,88 +15114,1138 @@ mod source_chunk_d {
                         .user_scrollable_vertical
                         || !inner.user_scrollable_vertical;
                 }
-                metadata.has_transparent_background = frame
+                metadata.has_transparent_background = self
+                    .frame
                     .render_passes
                     .last()
                     .unwrap()
                     .has_transparent_background();
                 metadata.has_offset_tag = self
+                    .host
                     .browser_controls_offset_manager_
                     .as_deref()
                     .unwrap()
                     .HasOffsetTag();
             }
-            let mut allocate_new_local_surface_id = false;
-            if frame.tracked_element_status
-                != crate::cc::trees::frame_data::TrackedElementStatus::kNone
+        }
+
+        fn tracked_element_status(&self) -> compositor_frame::metadata_build::TrackedElementStatus {
+            use compositor_frame::metadata_build::TrackedElementStatus;
+            match self.frame.tracked_element_status {
+                crate::cc::trees::frame_data::TrackedElementStatus::kNone => {
+                    TrackedElementStatus::None
+                }
+                crate::cc::trees::frame_data::TrackedElementStatus::kHasTrackedElements => {
+                    TrackedElementStatus::Present
+                }
+                crate::cc::trees::frame_data::TrackedElementStatus::kHasTrackedElementsNeedingOcclusion => {
+                    TrackedElementStatus::NeedsOcclusion
+                }
+            }
+        }
+
+        fn collect_tracked_element_rects(
+            &mut self,
+            metadata: &mut Self::Metadata,
+            needs_occlusion: bool,
+        ) {
+            metadata.tracked_element_rects =
+                self.host.CollectTrackedElementRects(false, needs_occlusion);
+        }
+
+        fn has_previous_metadata(&self) -> bool {
+            self.host.last_draw_render_frame_metadata_.is_some()
+        }
+
+        fn update_vertical_scroll_direction(&mut self, metadata: &mut Self::Metadata) -> bool {
+            let last = self
+                .host
+                .last_draw_render_frame_metadata_
+                .as_ref()
+                .expect("previous metadata");
+            let old_y = last.root_scroll_offset.unwrap_or_default().y();
+            let new_y = metadata.root_scroll_offset.unwrap().y();
+            if MathUtil::IsWithinEpsilon(old_y, new_y) {
+                return false;
+            }
+            let direction = if old_y < new_y {
+                VerticalScrollDirection::kDown
+            } else {
+                VerticalScrollDirection::kUp
+            };
+            if self.host.last_vertical_scroll_direction_ == direction {
+                return false;
+            }
+            metadata.new_vertical_scroll_direction = direction;
+            true
+        }
+
+        fn previous_metadata_requires_new_local_surface_id(
+            &mut self,
+            metadata: &Self::Metadata,
+        ) -> bool {
+            let last = self
+                .host
+                .last_draw_render_frame_metadata_
+                .as_ref()
+                .expect("previous metadata");
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                metadata.tracked_element_rects=self.CollectTrackedElementRects(false,frame.tracked_element_status==crate::cc::trees::frame_data::TrackedElementStatus::kHasTrackedElementsNeedingOcclusion);
+                last.top_controls_height != metadata.top_controls_height
+                    || last.top_controls_shown_ratio != metadata.top_controls_shown_ratio
+                    || last.tracked_element_rects != metadata.tracked_element_rects
             }
-            if let Some(last) = self.last_draw_render_frame_metadata_.as_ref() {
-                let old_y = last.root_scroll_offset.unwrap_or_default().y();
-                let new_y = metadata.root_scroll_offset.unwrap().y();
-                if !MathUtil::IsWithinEpsilon(old_y, new_y) {
-                    let direction = if old_y < new_y {
-                        VerticalScrollDirection::kDown
-                    } else {
-                        VerticalScrollDirection::kUp
-                    };
-                    if self.last_vertical_scroll_direction_ != direction {
-                        metadata.new_vertical_scroll_direction = direction;
-                    }
-                }
-                // Source: cc/trees/layer_tree_host_impl.cc:2747-2792.
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(target_os = "android")]
+            {
+                let mut allocate = last.top_controls_height != metadata.top_controls_height
+                    || last.bottom_controls_height != metadata.bottom_controls_height
+                    || last.selection != metadata.selection
+                    || last.has_transparent_background != metadata.has_transparent_background;
+                allocate |= last.has_offset_tag && !metadata.has_offset_tag;
+                if !self
+                    .host
+                    .browser_controls_offset_manager_
+                    .as_deref()
+                    .unwrap()
+                    .HasOffsetTag()
                 {
-                    allocate_new_local_surface_id = last.top_controls_height
-                        != metadata.top_controls_height
-                        || last.top_controls_shown_ratio != metadata.top_controls_shown_ratio
-                        || last.tracked_element_rects != metadata.tracked_element_rects;
+                    allocate |= last.top_controls_shown_ratio != metadata.top_controls_shown_ratio
+                        || last.bottom_controls_shown_ratio != metadata.bottom_controls_shown_ratio;
                 }
-                #[cfg(target_os = "android")]
-                {
-                    allocate_new_local_surface_id = last.top_controls_height
-                        != metadata.top_controls_height
-                        || last.bottom_controls_height != metadata.bottom_controls_height
-                        || last.selection != metadata.selection
-                        || last.has_transparent_background != metadata.has_transparent_background;
-                    allocate_new_local_surface_id |=
-                        last.has_offset_tag && !metadata.has_offset_tag;
-                    if !self
-                        .browser_controls_offset_manager_
-                        .as_deref()
-                        .unwrap()
-                        .HasOffsetTag()
-                    {
-                        allocate_new_local_surface_id |= last.top_controls_shown_ratio
-                            != metadata.top_controls_shown_ratio
-                            || last.bottom_controls_shown_ratio
-                                != metadata.bottom_controls_shown_ratio;
-                    }
-                }
-                #[cfg(target_os = "ios")]
-                {
-                    allocate_new_local_surface_id = last.top_controls_height
-                        != metadata.top_controls_height
-                        || last.top_controls_shown_ratio != metadata.top_controls_shown_ratio
-                        || last.bottom_controls_height != metadata.bottom_controls_height
-                        || last.bottom_controls_shown_ratio != metadata.bottom_controls_shown_ratio
-                        || last.selection != metadata.selection
-                        || last.has_transparent_background != metadata.has_transparent_background;
-                }
+                allocate
             }
-            if self.GetCurrentLocalSurfaceId(context).is_valid() {
-                if allocate_new_local_surface_id && !self.settings_.trees_in_viz_in_viz_process {
-                    self.AllocateLocalSurfaceId();
-                }
-                metadata.local_surface_id = Some(self.GetCurrentLocalSurfaceId(context).clone());
+            #[cfg(target_os = "ios")]
+            {
+                last.top_controls_height != metadata.top_controls_height
+                    || last.top_controls_shown_ratio != metadata.top_controls_shown_ratio
+                    || last.bottom_controls_height != metadata.bottom_controls_height
+                    || last.bottom_controls_shown_ratio != metadata.bottom_controls_shown_ratio
+                    || last.selection != metadata.selection
+                    || last.has_transparent_background != metadata.has_transparent_background
             }
+        }
+
+        fn current_local_surface_id_is_valid(&mut self) -> bool {
+            self.host.GetCurrentLocalSurfaceId(self.context).is_valid()
+        }
+
+        fn trees_in_viz_process(&self) -> bool {
+            self.host.settings_.trees_in_viz_in_viz_process
+        }
+
+        fn allocate_local_surface_id(&mut self) {
+            self.host.AllocateLocalSurfaceId();
+        }
+
+        fn set_current_local_surface_id(&mut self, metadata: &mut Self::Metadata) {
+            metadata.local_surface_id =
+                Some(self.host.GetCurrentLocalSurfaceId(self.context).clone());
+        }
+
+        fn set_primary_main_frame_item_sequence_number(&mut self, metadata: &mut Self::Metadata) {
             metadata.primary_main_frame_item_sequence_number = self
+                .host
                 .active_tree_
                 .as_deref()
                 .unwrap()
                 .primary_main_frame_item_sequence_number();
-            metadata
+        }
+    }
+
+    struct FrameGenerationAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a mut FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+    }
+
+    impl<'a, 'services, B: HostImplTypes> FrameGenerationAdapter<'a, 'services, B> {
+        fn new(
+            host: &'a mut LayerTreeHostImpl<B>,
+            frame: &'a mut FrameData<B>,
+            context: &'a mut HostImplContext<'services, B>,
+        ) -> Self {
+            Self {
+                host,
+                frame,
+                context,
+            }
+        }
+    }
+
+    impl<B: HostImplTypes> compositor_frame::frame_generation::FrameGenerationContext
+        for FrameGenerationAdapter<'_, '_, B>
+    {
+        type Metadata = B::CompositorFrameMetadata;
+        type Frame = B::Frame;
+
+        fn trees_in_viz_process(&self) -> bool {
+            self.host.settings_.trees_in_viz_in_viz_process
+        }
+
+        fn record_memory_history(&mut self) {
+            self.host.memory_history_.as_deref_mut().unwrap().SaveEntry(
+                self.context
+                    .services
+                    .TileManagerMemoryStats(&self.host.tile_manager_),
+            );
+        }
+
+        fn debug_rects_enabled(&self) -> bool {
+            self.host.debug_state_.ShowDebugRects()
+        }
+
+        fn save_debug_rects(&mut self) {
+            let tree = self.host.active_tree_.as_deref_mut().unwrap();
+            let hud = tree
+                .hud_layer()
+                .map(|layer| crate::adapter::layer_tree_impl::LayerTreeLayer::id(layer));
+            let have_scroll_event_handlers = tree.have_scroll_event_handlers();
+            let state = tree.RenderPassState();
+            let mut debug_context = B::MakeDebugDrawContext(HostDebugDrawState {
+                layers: state.layer_list,
+                have_scroll_event_handlers,
+            });
+            self.host
+                .debug_rect_history_
+                .as_deref_mut()
+                .unwrap()
+                .SaveDebugRectsForCurrentFrame(
+                    &mut debug_context,
+                    state.property_trees,
+                    hud,
+                    state.render_surface_list,
+                    &self.host.debug_state_,
+                );
+        }
+
+        fn trace_scroll_delta_and_reset(&mut self) {
+            self.context
+                .services
+                .TraceScrollDeltaThisFrame(self.host.scroll_accumulated_this_frame_);
+            self.host.scroll_accumulated_this_frame_ = Vector2dF::default();
+        }
+
+        fn is_new_trace(&mut self) -> bool {
+            self.context.services.IsNewTrace()
+        }
+
+        fn begin_layer_tracing(&mut self) {
+            if let Some(tree) = self.host.pending_tree_.as_deref_mut() {
+                for layer in tree.begin_mut() {
+                    HostMetadataLayer::<B>::DidBeginTracing(layer);
+                }
+            }
+            for layer in self.host.active_tree_.as_deref_mut().unwrap().begin_mut() {
+                HostMetadataLayer::<B>::DidBeginTracing(layer);
+            }
+        }
+
+        fn frame_viewer_trace_enabled(&mut self) -> bool {
+            self.context.services.HostTraceCategoryEnabled(
+                "disabled-by-default-cc.debug,disabled-by-default-viz.quads,disabled-by-default-devtools.timeline.layers",
+            )
+        }
+
+        fn trace_frame_viewer_snapshot(&mut self) {
+            let value = self.host.AsValueWithFrame(Some(self.frame), self.context);
+            self.context
+                .services
+                .TraceFrameViewerSnapshot(self.host.id_, &value);
+        }
+
+        fn update_hud(&mut self) {
+            // GetDrawMode is intentionally evaluated even when no HUD layer exists.
+            let draw_mode = self.host.GetDrawMode(self.context);
+            if let Some(hud) = self
+                .host
+                .active_tree_
+                .as_deref()
+                .unwrap()
+                .hud_layer()
+                .map(|layer| crate::adapter::layer_tree_impl::LayerTreeLayer::id(layer))
+            {
+                let layer = self
+                    .host
+                    .active_tree_
+                    .as_deref_mut()
+                    .unwrap()
+                    .LayerByIdMutable(hud)
+                    .unwrap();
+                self.context.services.UpdateHudTexture(
+                    layer,
+                    draw_mode,
+                    self.host.layer_tree_frame_sink_.unwrap(),
+                    self.host.resource_provider_.as_deref_mut(),
+                    &self.host.raster_caps_,
+                    &mut self.frame.render_passes,
+                );
+            }
+        }
+
+        fn make_metadata(&mut self) -> Self::Metadata {
+            self.host
+                .MakeCompositorFrameMetadata(self.frame, self.context)
+        }
+
+        fn process_view_transition_requests(
+            &mut self,
+            metadata: &mut Self::Metadata,
+        ) -> compositor_frame::view_transition_requests::ViewTransitionRequestResult {
+            compositor_frame::view_transition_requests::ProcessViewTransitionRequests(
+                &mut FrameViewTransitionRequestAdapter::new(
+                    self.host,
+                    self.frame,
+                    self.context,
+                    metadata,
+                ),
+            )
+        }
+
+        fn populate_content_color_usage(&mut self, metadata: &mut Self::Metadata) {
+            self.host.WithActiveTree(self.context, |tree, c| {
+                PopulateMetadataContentColorUsage(
+                    &HostNativeTreeView { tree, context: c },
+                    self.frame,
+                    metadata,
+                )
+            });
+        }
+
+        fn set_shared_element_resources(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_has_shared_element_resources(self.frame.has_shared_element_resources);
+        }
+
+        fn set_frame_deadline(&mut self, metadata: &mut Self::Metadata, force_240_frames: bool) {
+            let frame_deadline = if force_240_frames {
+                240
+            } else {
+                self.frame.deadline_in_frames.unwrap_or(0)
+            };
+            metadata.set_deadline(self.context.services.MakeFrameDeadline(
+                self.host.CurrentBeginFrameArgs().frame_time,
+                frame_deadline,
+                self.host.CurrentBeginFrameArgs().interval,
+                self.frame.use_default_lower_bound_deadline,
+            ));
+        }
+
+        fn populate_interval_metadata(&mut self, metadata: &mut Self::Metadata) {
+            metadata.set_interval_frame_time(self.host.CurrentBeginFrameArgs().frame_time);
+            metadata.set_interval_has_input(self.host.has_input_for_frame_interval_);
+            metadata.set_interval_has_user_input(self.host.has_non_fling_input_since_last_frame_);
+            self.host.has_non_fling_input_since_last_frame_ = false;
+            use compositor_frame::metadata_interval_policy::{
+                AnimatedImageDuration, ContentIntervalKind, PlanMetadataContentIntervals,
+            };
+            let interval_plan = PlanMetadataContentIntervals(
+                &mut self.frame.damage_reasons,
+                &self.frame.video_layer_preferred_intervals,
+                self.host.frame_max_scroll_delta_,
+                self.host.begin_frame_time_delta_,
+                self.host.settings_.trees_in_viz_in_viz_process,
+                || {
+                    self.host
+                        .image_animation_controller_
+                        .as_mut()
+                        .expect("image animation controller")
+                        .GetConsistentContentFrameDuration()
+                        .map(|duration| AnimatedImageDuration {
+                            frame_duration: duration.frame_duration,
+                            num_images: duration.num_images,
+                        })
+                },
+            );
+            if let Some(speed) = interval_plan.major_scroll_speed {
+                metadata.set_major_scroll_speed(speed);
+            }
+            for interval in interval_plan.intervals {
+                let kind = match interval.kind {
+                    ContentIntervalKind::CompositorScroll => {
+                        HostContentFrameIntervalType::kCompositorScroll
+                    }
+                    ContentIntervalKind::Video => HostContentFrameIntervalType::kVideo,
+                    ContentIntervalKind::AnimatingImage => {
+                        HostContentFrameIntervalType::kAnimatingImage
+                    }
+                    ContentIntervalKind::ScrollbarFadeOutAnimation => {
+                        HostContentFrameIntervalType::kScrollBarFadeOutAnimation
+                    }
+                };
+                metadata.AppendContentInterval(kind, interval.duration, interval.duplicate_count);
+            }
+        }
+
+        fn finalize_pre_observer_metadata(&mut self, metadata: &mut Self::Metadata) {
+            if self.frame.trees_in_viz_timing_details.is_some()
+                && self.host.settings_.trees_in_viz_in_viz_process
+            {
+                metadata.set_trees_in_viz_timing_details(
+                    self.frame
+                        .trees_in_viz_timing_details
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                );
+            }
+            metadata.set_has_only_content_frame_interval_updates(self.frame.damage_reasons.empty());
+            metadata.set_activation_dependencies(std::mem::take(
+                &mut self.frame.activation_dependencies,
+            ));
+            self.host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .FinishSwapPromises(metadata);
+            debug_assert_eq!(
+                metadata.frame_token(),
+                self.host.next_frame_token(self.context)
+            );
+        }
+
+        fn has_render_frame_metadata_observer(&self) -> bool {
+            self.host.render_frame_metadata_observer_.is_some()
+        }
+
+        fn process_render_frame_metadata(&mut self, metadata: &mut Self::Metadata) {
+            self.host.last_draw_render_frame_metadata_ =
+                Some(self.host.MakeRenderFrameMetadata(self.frame, self.context));
+            if let Some(ink) = metadata.delegated_ink_metadata() {
+                self.host
+                    .last_draw_render_frame_metadata_
+                    .as_mut()
+                    .unwrap()
+                    .delegated_ink_metadata = Some(
+                    crate::cc::trees::render_frame_metadata::DelegatedInkBrowserMetadata::new(
+                        self.context.services.DelegatedInkIsHovering(ink),
+                    ),
+                );
+            }
+            if self
+                .host
+                .last_draw_render_frame_metadata_
+                .as_ref()
+                .unwrap()
+                .new_vertical_scroll_direction
+                != crate::adapter::render_metadata::VerticalScrollDirection::kNull
+            {
+                self.host.last_vertical_scroll_direction_ = self
+                    .host
+                    .last_draw_render_frame_metadata_
+                    .as_ref()
+                    .unwrap()
+                    .new_vertical_scroll_direction;
+            }
+            if let Some(observer) = self.host.render_frame_metadata_observer_.as_deref_mut() {
+                debug_assert!(!self.host.settings_.trees_in_viz_in_viz_process);
+                self.context.services.ObserveRenderFrameSubmission(
+                    observer,
+                    self.host.last_draw_render_frame_metadata_.as_ref().unwrap(),
+                    metadata,
+                    self.host
+                        .active_tree_
+                        .as_deref_mut()
+                        .unwrap()
+                        .TakeForceSendMetadataRequest(),
+                );
+            }
+            if self.host.settings_.trees_in_viz_in_viz_process {
+                metadata.set_send_frame_token_to_embedder(self.host.send_frame_token_to_embedder_);
+            }
+        }
+
+        fn commits_to_active_tree(&self) -> bool {
+            self.host.CommitsToActiveTree()
+        }
+
+        fn metadata_has_latency(&self, metadata: &Self::Metadata) -> bool {
+            !metadata.latency_info().is_empty()
+        }
+
+        fn annotate_latency(&mut self, metadata: &mut Self::Metadata) {
+            let time = self.context.services.MonotonicTimeNow();
+            self.host.ApplyFirstScrollTracking(
+                &metadata.latency_info()[0],
+                metadata.frame_token(),
+                self.context,
+            );
+            for latency in metadata.latency_info_mut() {
+                self.context
+                    .services
+                    .AddRendererSwapLatencyTimestamp(latency, time);
+            }
+        }
+
+        fn has_unbounded_render_passes(&self) -> bool {
+            !self.frame.unbounded_render_passes.is_empty()
+        }
+
+        fn has_unbounded_frame_sink_handler(&self) -> bool {
+            self.host.unbounded_frame_sink_handler_.is_some()
+        }
+
+        fn submit_unbounded_frame(&mut self) {
+            assert!(
+                !self
+                    .host
+                    .settings_
+                    .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
+            );
+            assert!(self.host.settings_.enable_unbounded_element);
+            let mut unbounded = B::Frame::default();
+            let mut unbounded_metadata = self
+                .host
+                .MakeCompositorFrameMetadata(self.frame, self.context);
+            unbounded_metadata.set_begin_frame_ack(self.frame.begin_frame_ack.clone());
+            unbounded.set_metadata(unbounded_metadata);
+            unbounded.set_render_passes(std::mem::take(&mut self.frame.unbounded_render_passes));
+            LayerTreeHostImpl::<B>::PopulateFrameResources(
+                &mut unbounded,
+                None,
+                self.host.resource_provider_.as_deref_mut().unwrap(),
+                self.host.layer_tree_frame_sink_.unwrap(),
+                self.context,
+            );
+            let mut returns = HostUnboundedResourceReturn::<B> {
+                provider: self.host.resource_provider_.as_deref_mut().unwrap(),
+                pool: self.host.resource_pool_.as_deref_mut(),
+                release: UIResourceReleaseClient {
+                    owner: self.host.owner_id_,
+                    deleted: &mut self.host.deleted_ui_resources_,
+                },
+                services: self.context.services,
+            };
+            self.host
+                .unbounded_frame_sink_handler_
+                .as_mut()
+                .unwrap()
+                .SubmitFrame(unbounded, &mut returns);
+        }
+
+        fn finalize_frame(&mut self, mut metadata: Self::Metadata) -> Self::Frame {
+            debug_assert!(self.frame.begin_frame_ack.IsSequenceValid());
+            metadata.set_begin_frame_ack(self.frame.begin_frame_ack.clone());
+            let mut compositor_frame = B::Frame::default();
+            compositor_frame.set_metadata(metadata);
+            LayerTreeHostImpl::<B>::PopulateFrameResources(
+                &mut compositor_frame,
+                Some(&self.frame.render_passes),
+                self.host.resource_provider_.as_deref_mut().unwrap(),
+                self.host.layer_tree_frame_sink_.unwrap(),
+                self.context,
+            );
+            compositor_frame.set_render_passes(std::mem::take(&mut self.frame.render_passes));
+            assert!(
+                !self.host.settings_.single_thread_proxy_scheduler
+                    || self
+                        .host
+                        .active_tree_
+                        .as_deref()
+                        .unwrap()
+                        .local_surface_id_from_parent()
+                        .is_valid()
+            );
+            if !self.host.settings_.trees_in_viz_in_viz_process {
+                let id = self.host.GetCurrentLocalSurfaceId(self.context);
+                self.context.services.FrameSinkSetCurrentLocalSurfaceId(
+                    self.host.layer_tree_frame_sink_.unwrap(),
+                    id,
+                );
+            }
+            self.host.last_draw_local_surface_id_ =
+                self.host.GetCurrentLocalSurfaceId(self.context).clone();
+            if let Some(name) = self.context.services.GetClientNameForMetrics() {
+                let total = compositor_frame
+                    .render_passes()
+                    .iter()
+                    .map(|pass| pass.quad_count())
+                    .sum();
+                self.context
+                    .services
+                    .RecordCompositorFrameQuadCount(name, total);
+            }
+            compositor_frame
+        }
+    }
+
+    struct FrameDrawSubmissionAdapter<'a, 'services, B: HostImplTypes> {
+        host: &'a mut LayerTreeHostImpl<B>,
+        frame: &'a mut FrameData<B>,
+        context: &'a mut HostImplContext<'services, B>,
+        compositor_frame: Option<B::Frame>,
+        frame_token: u32,
+        debug_begin_frame_ack: Option<compositor_scheduler::begin_frame::BeginFrameId>,
+        events_metrics: Option<B::EventMetricsSet>,
+        normalized_invalidated_area: Option<f32>,
+        submit_time: TimeTicks,
+        trees_in_viz_submit_time: TimeTicks,
+    }
+
+    impl<'a, 'services, B: HostImplTypes> FrameDrawSubmissionAdapter<'a, 'services, B> {
+        fn new(
+            host: &'a mut LayerTreeHostImpl<B>,
+            frame: &'a mut FrameData<B>,
+            context: &'a mut HostImplContext<'services, B>,
+        ) -> Self {
+            Self {
+                host,
+                frame,
+                context,
+                compositor_frame: None,
+                frame_token: 0,
+                debug_begin_frame_ack: None,
+                events_metrics: None,
+                normalized_invalidated_area: None,
+                submit_time: TimeTicks::default(),
+                trees_in_viz_submit_time: TimeTicks::default(),
+            }
+        }
+    }
+
+    impl<B: HostImplTypes> compositor_frame::draw_submission::DrawSubmissionContext
+        for FrameDrawSubmissionAdapter<'_, '_, B>
+    {
+        type SubmitInfo = crate::cc::metrics::submit_info::SubmitInfo<B::EventMetricsSet>;
+
+        fn reset_requires_high_resolution_draw(&mut self) {
+            self.host.ResetRequiresHighResToDraw();
+        }
+
+        fn frame_has_no_damage(&self) -> bool {
+            self.frame.has_no_damage
+        }
+
+        fn trace_no_damage_early_out(&mut self) {
+            self.context.services.TraceNoDamageEarlyOut();
+        }
+
+        fn break_swap_promises_for_no_damage(&mut self) {
+            self.host.WithActiveTree(self.context, |tree, c| {
+                tree.BreakSwapPromises(
+                    crate::adapter::layer_tree_impl::DidNotSwapReason::SWAP_FAILS,
+                    c,
+                )
+            });
+        }
+
+        fn uses_external_display_tree(&mut self) -> bool {
+            self.host
+                .settings_
+                .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
+        }
+
+        fn update_external_display_tree_without_damage(&mut self) {
+            self.host.UpdateDisplayTree(
+                self.frame,
+                Vec::new(),
+                <B as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects::default(),
+                false,
+                self.context,
+            );
+        }
+
+        fn reset_change_tracking(&mut self) {
+            self.host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .ResetAllChangeTracking();
+        }
+
+        fn is_ui_tree(&self) -> bool {
+            self.host.settings_.is_layer_tree_for_ui
+        }
+
+        fn discard_ui_event_metrics(&mut self) {
+            drop(
+                self.host
+                    .active_tree_
+                    .as_deref_mut()
+                    .unwrap()
+                    .TakeEventsMetrics(),
+            );
+            drop(
+                self.host
+                    .active_tree_
+                    .as_deref_mut()
+                    .unwrap()
+                    .TakeRasterEventsMetrics(),
+            );
+            drop(
+                self.context
+                    .services
+                    .TakeSavedEventsMetrics(&mut self.host.events_metrics_manager_),
+            );
+        }
+
+        fn set_frame_sink_source_frame_number(&mut self) {
+            self.context.services.FrameSinkSetSourceFrameNumber(
+                self.host.layer_tree_frame_sink_.unwrap(),
+                self.host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .source_frame_number(),
+            );
+        }
+
+        fn update_drawn_with_new_layer_tree(&mut self) -> bool {
+            let mut drawn_with_new_layer_tree = true;
+            if self.host.last_draw_active_tree_begin_frame_args_.IsValid() {
+                drawn_with_new_layer_tree = self
+                    .host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .CreatedBeginFrameArgs()
+                    .frame_id
+                    != self.host.last_draw_active_tree_begin_frame_args_.frame_id;
+            }
+            self.host.last_draw_active_tree_begin_frame_args_ = self
+                .host
+                .active_tree_
+                .as_deref()
+                .unwrap()
+                .CreatedBeginFrameArgs()
+                .clone();
+            drawn_with_new_layer_tree
+        }
+
+        fn generate_compositor_frame(&mut self) {
+            let compositor_frame = self.host.GenerateCompositorFrame(self.frame, self.context);
+            self.frame_token = compositor_frame.metadata().frame_token();
+            self.frame.frame_token = self.frame_token;
+            self.compositor_frame = Some(compositor_frame);
+        }
+
+        fn maybe_dump_compositor_frame(&mut self) {
+            if self.host.dump_compositor_frame_
+                && self.frame_token >= self.host.dump_compositor_frame_begin_
+                && self.frame_token <= self.host.dump_compositor_frame_end_
+            {
+                self.context.services.PostCompositorFrameDump(
+                    self.compositor_frame.as_ref().unwrap(),
+                    self.host
+                        .settings_
+                        .TreesInVizInClientProcess(self.context.services.SettingsFeatures()),
+                    self.host.settings_.trees_in_viz_in_viz_process,
+                    self.frame_token,
+                );
+            }
+        }
+
+        fn update_top_controls_visible_height(&mut self) -> bool {
+            let current = self
+                .compositor_frame
+                .as_ref()
+                .unwrap()
+                .metadata()
+                .top_controls_visible_height()
+                .unwrap_or(0.);
+            if current == self.host.top_controls_visible_height_ {
+                return false;
+            }
+            self.host.top_controls_visible_height_ = current;
+            true
+        }
+
+        fn capture_debug_begin_frame_ack(&mut self) {
+            #[cfg(debug_assertions)]
+            {
+                self.debug_begin_frame_ack = Some(
+                    self.compositor_frame
+                        .as_ref()
+                        .unwrap()
+                        .metadata()
+                        .begin_frame_ack()
+                        .frame_id(),
+                );
+            }
+        }
+
+        fn collect_event_metrics(&mut self) {
+            let main_events = self
+                .host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .TakeEventsMetrics();
+            let saved_events = self
+                .context
+                .services
+                .TakeSavedEventsMetrics(&mut self.host.events_metrics_manager_);
+            let raster_events = self
+                .host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .TakeRasterEventsMetrics();
+            let events_metrics =
+                self.context
+                    .services
+                    .MakeEventMetricsSet(main_events, saved_events, raster_events);
+            self.context.services.CollectScrollEventsFromFrame(
+                &mut self.host.lag_tracking_manager_,
+                self.frame_token,
+                &events_metrics,
+            );
+            self.events_metrics = Some(events_metrics);
+        }
+
+        fn collect_normalized_invalidated_area(&mut self) {
+            if !self.host.settings_.is_layer_tree_for_ui {
+                return;
+            }
+            assert!(self.host.total_invalidated_area_.is_some());
+            let output = crate::adapter::draw_property::DrawSurface::content_rect(
+                self.host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .RootRenderSurface()
+                    .unwrap(),
+            );
+            let area = self.host.total_invalidated_area_.unwrap();
+            self.normalized_invalidated_area = Some(
+                if area.IsValid() {
+                    area.ValueOrDie()
+                } else {
+                    u32::MAX
+                } as f32
+                    / (output.width * output.height) as f32,
+            );
+            self.host.total_invalidated_area_ = Some(CheckedU32::FromValue(0));
+        }
+
+        fn verbose_log_compositor_frame(&mut self) {
+            if VerboseLogEnabled(self.context.services) {
+                self.context
+                    .services
+                    .VerboseLogCompositorFrame(self.compositor_frame.as_ref().unwrap());
+            }
+        }
+
+        fn submit_external_display_tree(&mut self) {
+            self.submit_time = self.context.services.MonotonicTimeNow();
+            let compositor_frame = self.compositor_frame.as_mut().unwrap();
+            self.host.send_frame_token_to_embedder_ =
+                compositor_frame.metadata().send_frame_token_to_embedder();
+            let latency = compositor_frame.metadata_mut().TakeLatencyInfo();
+            let tracked = compositor_frame.metadata_mut().TakeTrackedElementRects();
+            self.trees_in_viz_submit_time =
+                self.host
+                    .UpdateDisplayTree(self.frame, latency, tracked, false, self.context);
+            self.context
+                .services
+                .FrameSinkExportFrameTiming(self.host.layer_tree_frame_sink_.unwrap());
+        }
+
+        fn submit_to_frame_sink(&mut self) {
+            self.submit_time = self.context.services.MonotonicTimeNow();
+            let mut compositor_frame = self.compositor_frame.take().unwrap();
+            self.context.services.TraceSubmitCompositorFrame(
+                self.host.CurrentBeginFrameArgs().trace_id,
+                compositor_frame.metadata().latency_info(),
+            );
+            if self.host.settings_.trees_in_viz_in_viz_process {
+                compositor_frame
+                    .metadata_mut()
+                    .set_submit_compositor_frame_time(self.submit_time);
+            }
+            self.context.services.FrameSinkSubmitCompositorFrame(
+                self.host.layer_tree_frame_sink_.unwrap(),
+                compositor_frame,
+                false,
+            );
+            if self.host.new_local_surface_id_expected_ {
+                self.context
+                    .services
+                    .FrameSinkNotifyNewLocalSurfaceIdExpectedWhilePaused(
+                        self.host.layer_tree_frame_sink_.unwrap(),
+                    );
+            }
+        }
+
+        fn validate_debug_begin_frame_ack(&mut self) {
+            #[cfg(debug_assertions)]
+            if !self.host.doing_sync_draw_ {
+                debug_assert_eq!(
+                    self.host.current_begin_frame_tracker_.Current().frame_id,
+                    self.debug_begin_frame_ack.unwrap()
+                );
+            }
+        }
+
+        fn stop_completed_draw_sequences(&mut self) {
+            if !self
+                .context
+                .services
+                .MutatorNextFrameHasPendingRAF(&self.host.mutator_host_)
+            {
+                self.context
+                    .services
+                    .StopDrawSequence(&mut self.host.frame_trackers_, HostDrawSequence::kRAF);
+            }
+            if !self
+                .context
+                .services
+                .MutatorHasCanvasInvalidation(&self.host.mutator_host_)
+            {
+                self.context.services.StopDrawSequence(
+                    &mut self.host.frame_trackers_,
+                    HostDrawSequence::kCanvasAnimation,
+                );
+            }
+            if !self
+                .context
+                .services
+                .MutatorNextFrameHasPendingRAF(&self.host.mutator_host_)
+                && !self
+                    .context
+                    .services
+                    .MutatorHasJSAnimation(&self.host.mutator_host_)
+            {
+                self.context.services.StopDrawSequence(
+                    &mut self.host.frame_trackers_,
+                    HostDrawSequence::kJSAnimation,
+                );
+            }
+            if self
+                .context
+                .services
+                .MutatorMainThreadAnimationsCount(&self.host.mutator_host_)
+                == 0
+                && !self
+                    .context
+                    .services
+                    .MutatorHasSmilAnimation(&self.host.mutator_host_)
+            {
+                self.context.services.StopDrawSequence(
+                    &mut self.host.frame_trackers_,
+                    HostDrawSequence::kMainThreadAnimation,
+                );
+                self.context.services.StopDrawSequence(
+                    &mut self.host.frame_trackers_,
+                    HostDrawSequence::kSETMainThreadAnimation,
+                );
+            } else if !self
+                .context
+                .services
+                .MutatorHasViewTransition(&self.host.mutator_host_)
+            {
+                self.context.services.StopDrawSequence(
+                    &mut self.host.frame_trackers_,
+                    HostDrawSequence::kSETMainThreadAnimation,
+                );
+            }
+        }
+
+        fn clear_swap_promises(&mut self) {
+            self.host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .ClearSwapPromises();
+        }
+
+        fn frame_has_copy_requests(&self) -> bool {
+            self.frame.has_copy_requests
+        }
+
+        fn clear_copy_requests(&mut self) {
+            self.host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .property_trees_mut()
+                .effect_tree_mutable()
+                .ClearCopyRequests();
+        }
+
+        fn mark_draw_properties_dirty(&mut self) {
+            self.host
+                .active_tree_
+                .as_deref_mut()
+                .unwrap()
+                .set_needs_update_draw_properties();
+        }
+
+        fn request_commit(&mut self) {
+            self.host.SetNeedsCommit(self.context);
+        }
+
+        fn mark_surface_damage_drawn(&mut self) {
+            assert_eq!(
+                self.frame.render_surface_list,
+                Some(self.host.active_tree_.as_deref().unwrap().id)
+            );
+            self.host.WithActiveTreeDamage(self.context, |damage| {
+                for effect_id in damage.GetRenderSurfaceList() {
+                    damage
+                        .damage_tracker(damage.GetRenderSurface(effect_id).unwrap())
+                        .DidDrawDamagedArea();
+                }
+            });
+        }
+
+        fn root_surface_exists(&self) -> bool {
+            self.host
+                .active_tree_
+                .as_deref()
+                .unwrap()
+                .RootRenderSurface()
+                .is_some()
+        }
+
+        fn reset_viewport_and_root_damage(&mut self) {
+            self.host.viewport_damage_rect_ = Rect::default();
+            self.host.root_layer_damage_rect_ = Rect::default();
+        }
+
+        fn notify_devtools_frame_drawn(&mut self) {
+            self.context.services.DidDrawDevtoolsFrame(
+                self.host.id_,
+                self.frame.begin_frame_ack.frame_id().sequence_number,
+            );
+        }
+
+        fn issue_rendering_stats(&mut self) {
+            self.context
+                .services
+                .IssueImplThreadRenderingStatsEvent(self.host.rendering_stats_instrumentation_);
+        }
+
+        fn throttling_enabled(&self) -> bool {
+            self.host.settings_.enable_compositing_based_throttling
+        }
+
+        fn throttling_changed(&self) -> bool {
+            self.host.throttle_decider_.HasThrottlingChanged()
+        }
+
+        fn notify_throttling_changed(&mut self) {
+            self.context.services.FrameSinksToThrottleUpdated(
+                self.host.delegate_,
+                self.host.throttle_decider_.ids(),
+            );
+        }
+
+        fn update_checkerboard_priority(&mut self) {
+            if !self
+                .context
+                .services
+                .NewContentForCheckerboardedScrollsEnabled()
+            {
+                return;
+            }
+            let mode = self
+                .context
+                .services
+                .NewContentForCheckerboardedScrollsMode();
+            let actively_scrolling = self.host.GetActivelyScrollingType(self.context)
+                != crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone;
+            if mode == HostCheckerboardMode::kPerScroll {
+                if actively_scrolling && self.frame.checkerboarded_needs_record {
+                    self.host.prioritize_new_content_due_to_checkerboarding_ = true;
+                }
+            } else if mode == HostCheckerboardMode::kPerFrame {
+                self.host.prioritize_new_content_due_to_checkerboarding_ =
+                    actively_scrolling && self.frame.checkerboarded_needs_record;
+            }
+        }
+
+        fn make_submit_info(
+            &mut self,
+            drawn_with_new_layer_tree: bool,
+            top_controls_moved: bool,
+        ) -> Self::SubmitInfo {
+            crate::cc::metrics::submit_info::SubmitInfo::new(
+                self.frame_token,
+                self.submit_time,
+                self.frame.checkerboarded_needs_raster,
+                self.frame.checkerboarded_needs_record,
+                top_controls_moved,
+                self.events_metrics.take().unwrap(),
+                drawn_with_new_layer_tree,
+                self.host
+                    .active_tree_
+                    .as_deref()
+                    .unwrap()
+                    .did_raster_inducing_scroll(),
+                self.normalized_invalidated_area,
+                self.trees_in_viz_submit_time,
+            )
+        }
+    }
+
+    impl<B: HostImplTypes> LayerTreeHostImpl<B> {
+        // Source: cc/trees/layer_tree_host_impl.cc:2397-2465.
+        pub fn CollectTrackedElementRects(
+            &self,
+            is_for_compositor_frame_metadata: bool,
+            need_occlusion: bool,
+        ) -> <B as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects
+        {
+            let tree = self.active_tree_.as_deref().unwrap();
+            let inner_scroll_id = tree
+                .InnerViewportScrollNode()
+                .map_or(kInvalidPropertyNodeId, |node| node.transform_id);
+            let outer_scroll_id = tree
+                .OuterViewportScrollNode()
+                .map_or(kInvalidPropertyNodeId, |node| node.transform_id);
+            compositor_draw::metadata_geometry::CollectTrackedElementGeometry(
+                &mut super::source_chunk_b::TrackedElementGeometryAdapter {
+                    tree,
+                    layers: tree.begin().rev().collect(),
+                    inner_scroll_id,
+                    outer_scroll_id,
+                    sticky_or_viewport_scroll_cache: BTreeMap::new(),
+                },
+                is_for_compositor_frame_metadata,
+                need_occlusion,
+            )
+            .0
+        }
+        // Source: cc/trees/layer_tree_host_impl.cc:2467-2492.
+        pub fn CollectRegionCaptureBounds(
+            &self,
+        ) -> <B as crate::adapter::layer_tree_host_impl::HostImplDTypes>::RegionCaptureBounds
+        {
+            let tree = self.active_tree_.as_deref().unwrap();
+            compositor_draw::metadata_geometry::CollectRegionCaptureGeometry(
+                &mut super::source_chunk_b::RegionCaptureGeometryAdapter {
+                    tree,
+                    layers: tree.begin().rev().collect(),
+                },
+            )
+            .0
+        }
+        // Source: cc/trees/layer_tree_host_impl.cc:2494-2661.
+        pub fn MakeCompositorFrameMetadata(
+            &mut self,
+            frame: &FrameData<B>,
+            context: &mut HostImplContext<'_, B>,
+        ) -> B::CompositorFrameMetadata {
+            compositor_frame::metadata_build::BuildCompositorMetadata(
+                &mut CompositorMetadataAdapter {
+                    host: self,
+                    frame,
+                    context,
+                },
+            )
+            .0
+        }
+        // Source: cc/trees/layer_tree_host_impl.cc:2663-2810.
+        pub fn MakeRenderFrameMetadata(
+            &mut self,
+            frame: &FrameData<B>,
+            context: &mut HostImplContext<'_, B>,
+        ) -> crate::cc::trees::render_frame_metadata::RenderFrameMetadata<B> {
+            compositor_frame::metadata_build::BuildRenderMetadata(&mut RenderMetadataAdapter {
+                host: self,
+                frame,
+                context,
+            })
+            .0
         }
         // Source: cc/trees/layer_tree_host_impl.cc:2812-3072.
         pub fn DrawLayers(
@@ -13954,754 +16255,20 @@ mod source_chunk_d {
         ) -> Option<crate::cc::metrics::submit_info::SubmitInfo<B::EventMetricsSet>> {
             debug_assert!(self.CanDraw(context));
             debug_assert_eq!(frame.has_no_damage, frame.render_passes.is_empty());
-            self.ResetRequiresHighResToDraw();
-            if frame.has_no_damage {
-                debug_assert!(!self.resourceless_software_draw_);
-                context.services.TraceNoDamageEarlyOut();
-                self.WithActiveTree(context, |tree, c| {
-                    tree.BreakSwapPromises(
-                        crate::adapter::layer_tree_impl::DidNotSwapReason::SWAP_FAILS,
-                        c,
-                    )
-                });
-                if self
-                    .settings_
-                    .TreesInVizInClientProcess(context.services.SettingsFeatures())
-                {
-                    self.UpdateDisplayTree(
-                        frame,
-                        Vec::new(),
-                        <B as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects::default(),
-                        false,
-                        context,
-                    );
-                }
-                self.active_tree_
-                    .as_deref_mut()
-                    .unwrap()
-                    .ResetAllChangeTracking();
-                if self.settings_.is_layer_tree_for_ui {
-                    drop(
-                        self.active_tree_
-                            .as_deref_mut()
-                            .unwrap()
-                            .TakeEventsMetrics(),
-                    );
-                    drop(
-                        self.active_tree_
-                            .as_deref_mut()
-                            .unwrap()
-                            .TakeRasterEventsMetrics(),
-                    );
-                    drop(
-                        context
-                            .services
-                            .TakeSavedEventsMetrics(&mut self.events_metrics_manager_),
-                    );
-                }
-                return None;
-            }
-            context.services.FrameSinkSetSourceFrameNumber(
-                self.layer_tree_frame_sink_.unwrap(),
-                self.active_tree_.as_deref().unwrap().source_frame_number(),
-            );
-            let mut drawn_with_new_layer_tree = true;
-            if self.last_draw_active_tree_begin_frame_args_.IsValid() {
-                drawn_with_new_layer_tree = self
-                    .active_tree_
-                    .as_deref()
-                    .unwrap()
-                    .CreatedBeginFrameArgs()
-                    .frame_id
-                    != self.last_draw_active_tree_begin_frame_args_.frame_id;
-            }
-            self.last_draw_active_tree_begin_frame_args_ = self
-                .active_tree_
-                .as_deref()
-                .unwrap()
-                .CreatedBeginFrameArgs()
-                .clone();
-            let mut compositor_frame = self.GenerateCompositorFrame(frame, context);
-            let frame_token = compositor_frame.metadata().frame_token();
-            frame.frame_token = frame_token;
-            if self.dump_compositor_frame_
-                && frame_token >= self.dump_compositor_frame_begin_
-                && frame_token <= self.dump_compositor_frame_end_
-            {
-                context.services.PostCompositorFrameDump(
-                    &compositor_frame,
-                    self.settings_
-                        .TreesInVizInClientProcess(context.services.SettingsFeatures()),
-                    self.settings_.trees_in_viz_in_viz_process,
-                    frame_token,
-                );
-            }
-            let mut top_controls_moved = false;
-            let current_top_controls = compositor_frame
-                .metadata()
-                .top_controls_visible_height()
-                .unwrap_or(0.);
-            if current_top_controls != self.top_controls_visible_height_ {
-                top_controls_moved = true;
-                self.top_controls_visible_height_ = current_top_controls;
-            }
-            #[cfg(debug_assertions)]
-            let begin_frame_ack_frame_id = compositor_frame.metadata().begin_frame_ack().frame_id();
-            let main_events = self
-                .active_tree_
-                .as_deref_mut()
-                .unwrap()
-                .TakeEventsMetrics();
-            let saved_events = context
-                .services
-                .TakeSavedEventsMetrics(&mut self.events_metrics_manager_);
-            let raster_events = self
-                .active_tree_
-                .as_deref_mut()
-                .unwrap()
-                .TakeRasterEventsMetrics();
-            let events_metrics =
-                context
-                    .services
-                    .MakeEventMetricsSet(main_events, saved_events, raster_events);
-            context.services.CollectScrollEventsFromFrame(
-                &mut self.lag_tracking_manager_,
-                frame_token,
-                &events_metrics,
-            );
-            let mut normalized_invalidated_area = None;
-            if self.settings_.is_layer_tree_for_ui {
-                assert!(self.total_invalidated_area_.is_some());
-                let output = crate::adapter::draw_property::DrawSurface::content_rect(
-                    self.active_tree_
-                        .as_deref()
-                        .unwrap()
-                        .RootRenderSurface()
-                        .unwrap(),
-                );
-                let area = self.total_invalidated_area_.unwrap();
-                normalized_invalidated_area = Some(
-                    if area.IsValid() {
-                        area.ValueOrDie()
-                    } else {
-                        u32::MAX
-                    } as f32
-                        / (output.width * output.height) as f32,
-                );
-                self.total_invalidated_area_ = Some(CheckedU32::FromValue(0));
-            }
-            if VerboseLogEnabled(context.services) {
-                context
-                    .services
-                    .VerboseLogCompositorFrame(&compositor_frame);
-            }
-            let submit_time = context.services.MonotonicTimeNow();
-            let mut trees_in_viz_submit_time = TimeTicks::default();
-            if self
-                .settings_
-                .TreesInVizInClientProcess(context.services.SettingsFeatures())
-            {
-                self.send_frame_token_to_embedder_ =
-                    compositor_frame.metadata().send_frame_token_to_embedder();
-                let latency = compositor_frame.metadata_mut().TakeLatencyInfo();
-                let tracked = compositor_frame.metadata_mut().TakeTrackedElementRects();
-                trees_in_viz_submit_time =
-                    self.UpdateDisplayTree(frame, latency, tracked, false, context);
-                context
-                    .services
-                    .FrameSinkExportFrameTiming(self.layer_tree_frame_sink_.unwrap());
-            } else {
-                context.services.TraceSubmitCompositorFrame(
-                    self.CurrentBeginFrameArgs().trace_id,
-                    compositor_frame.metadata().latency_info(),
-                );
-                if self.settings_.trees_in_viz_in_viz_process {
-                    compositor_frame
-                        .metadata_mut()
-                        .set_submit_compositor_frame_time(submit_time);
-                }
-                context.services.FrameSinkSubmitCompositorFrame(
-                    self.layer_tree_frame_sink_.unwrap(),
-                    compositor_frame,
-                    false,
-                );
-                if self.new_local_surface_id_expected_ {
-                    context
-                        .services
-                        .FrameSinkNotifyNewLocalSurfaceIdExpectedWhilePaused(
-                            self.layer_tree_frame_sink_.unwrap(),
-                        );
-                }
-            }
-            #[cfg(debug_assertions)]
-            if !self.doing_sync_draw_ {
-                debug_assert_eq!(
-                    self.current_begin_frame_tracker_.Current().frame_id,
-                    begin_frame_ack_frame_id
-                );
-            }
-            if !context
-                .services
-                .MutatorNextFrameHasPendingRAF(&self.mutator_host_)
-            {
-                context
-                    .services
-                    .StopDrawSequence(&mut self.frame_trackers_, HostDrawSequence::kRAF);
-            }
-            if !context
-                .services
-                .MutatorHasCanvasInvalidation(&self.mutator_host_)
-            {
-                context.services.StopDrawSequence(
-                    &mut self.frame_trackers_,
-                    HostDrawSequence::kCanvasAnimation,
-                );
-            }
-            if !context
-                .services
-                .MutatorNextFrameHasPendingRAF(&self.mutator_host_)
-                && !context.services.MutatorHasJSAnimation(&self.mutator_host_)
-            {
-                context
-                    .services
-                    .StopDrawSequence(&mut self.frame_trackers_, HostDrawSequence::kJSAnimation);
-            }
-            if context
-                .services
-                .MutatorMainThreadAnimationsCount(&self.mutator_host_)
-                == 0
-                && !context
-                    .services
-                    .MutatorHasSmilAnimation(&self.mutator_host_)
-            {
-                context.services.StopDrawSequence(
-                    &mut self.frame_trackers_,
-                    HostDrawSequence::kMainThreadAnimation,
-                );
-                context.services.StopDrawSequence(
-                    &mut self.frame_trackers_,
-                    HostDrawSequence::kSETMainThreadAnimation,
-                );
-            } else if !context
-                .services
-                .MutatorHasViewTransition(&self.mutator_host_)
-            {
-                context.services.StopDrawSequence(
-                    &mut self.frame_trackers_,
-                    HostDrawSequence::kSETMainThreadAnimation,
-                );
-            }
-            self.active_tree_
-                .as_deref_mut()
-                .unwrap()
-                .ClearSwapPromises();
-            if frame.has_copy_requests {
-                self.active_tree_
-                    .as_deref_mut()
-                    .unwrap()
-                    .property_trees_mut()
-                    .effect_tree_mutable()
-                    .ClearCopyRequests();
-                self.active_tree_
-                    .as_deref_mut()
-                    .unwrap()
-                    .set_needs_update_draw_properties();
-                self.SetNeedsCommit(context);
-            }
-            assert_eq!(
-                frame.render_surface_list,
-                Some(self.active_tree_.as_deref().unwrap().id)
-            );
-            self.WithActiveTreeDamage(context, |damage| {
-                for effect_id in damage.GetRenderSurfaceList() {
-                    damage
-                        .damage_tracker(damage.GetRenderSurface(effect_id).unwrap())
-                        .DidDrawDamagedArea();
-                }
-            });
-            if self
-                .active_tree_
-                .as_deref()
-                .unwrap()
-                .RootRenderSurface()
-                .is_some()
-            {
-                self.viewport_damage_rect_ = Rect::default();
-                self.root_layer_damage_rect_ = Rect::default();
-            }
-            self.active_tree_
-                .as_deref_mut()
-                .unwrap()
-                .ResetAllChangeTracking();
-            if !self.settings_.is_layer_tree_for_ui {
-                context.services.DidDrawDevtoolsFrame(
-                    self.id_,
-                    frame.begin_frame_ack.frame_id().sequence_number,
-                );
-            }
-            if !self
-                .settings_
-                .TreesInVizInClientProcess(context.services.SettingsFeatures())
-            {
-                context
-                    .services
-                    .IssueImplThreadRenderingStatsEvent(self.rendering_stats_instrumentation_);
-            }
-            if self.settings_.enable_compositing_based_throttling
-                && self.throttle_decider_.HasThrottlingChanged()
-            {
-                context
-                    .services
-                    .FrameSinksToThrottleUpdated(self.delegate_, self.throttle_decider_.ids());
-            }
-            if context.services.NewContentForCheckerboardedScrollsEnabled() {
-                let param = context.services.NewContentForCheckerboardedScrollsMode();
-                if param == HostCheckerboardMode::kPerScroll {
-                    if self.GetActivelyScrollingType(context)
-                        != crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone
-                        && frame.checkerboarded_needs_record
-                    {
-                        self.prioritize_new_content_due_to_checkerboarding_ = true;
-                    }
-                } else if param == HostCheckerboardMode::kPerFrame {
-                    self.prioritize_new_content_due_to_checkerboarding_ = self
-                        .GetActivelyScrollingType(context)
-                        != crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone
-                        && frame.checkerboarded_needs_record;
-                }
-            }
-            Some(crate::cc::metrics::submit_info::SubmitInfo::new(
-                frame_token,
-                submit_time,
-                frame.checkerboarded_needs_raster,
-                frame.checkerboarded_needs_record,
-                top_controls_moved,
-                events_metrics,
-                drawn_with_new_layer_tree,
-                self.active_tree_
-                    .as_deref()
-                    .unwrap()
-                    .did_raster_inducing_scroll(),
-                normalized_invalidated_area,
-                trees_in_viz_submit_time,
-            ))
+            compositor_frame::draw_submission::SubmitDrawnFrame(
+                &mut FrameDrawSubmissionAdapter::new(self, frame, context),
+            )
+            .0
         }
-        // Source: cc/trees/layer_tree_host_impl.cc:3074-3419.
         pub fn GenerateCompositorFrame(
             &mut self,
             frame: &mut FrameData<B>,
             context: &mut HostImplContext<'_, B>,
         ) -> B::Frame {
-            if !self.settings_.trees_in_viz_in_viz_process {
-                self.memory_history_
-                    .as_deref_mut()
-                    .unwrap()
-                    .SaveEntry(context.services.TileManagerMemoryStats(&self.tile_manager_));
-            }
-            if self.debug_state_.ShowDebugRects() {
-                let tree = self.active_tree_.as_deref_mut().unwrap();
-                let hud = tree
-                    .hud_layer()
-                    .map(|layer| crate::adapter::layer_tree_impl::LayerTreeLayer::id(layer));
-                let have_scroll_event_handlers = tree.have_scroll_event_handlers();
-                let state = tree.RenderPassState();
-                let mut debug_context = B::MakeDebugDrawContext(HostDebugDrawState {
-                    layers: state.layer_list,
-                    have_scroll_event_handlers,
-                });
-                self.debug_rect_history_
-                    .as_deref_mut()
-                    .unwrap()
-                    .SaveDebugRectsForCurrentFrame(
-                        &mut debug_context,
-                        state.property_trees,
-                        hud,
-                        state.render_surface_list,
-                        &self.debug_state_,
-                    );
-            }
-            context
-                .services
-                .TraceScrollDeltaThisFrame(self.scroll_accumulated_this_frame_);
-            self.scroll_accumulated_this_frame_ = Vector2dF::default();
-            if context.services.IsNewTrace() {
-                if let Some(tree) = self.pending_tree_.as_deref_mut() {
-                    for layer in tree.begin_mut() {
-                        HostMetadataLayer::<B>::DidBeginTracing(layer);
-                    }
-                }
-                for layer in self.active_tree_.as_deref_mut().unwrap().begin_mut() {
-                    HostMetadataLayer::<B>::DidBeginTracing(layer);
-                }
-            }
-            {
-                let trace=context.services.HostTraceCategoryEnabled("disabled-by-default-cc.debug,disabled-by-default-viz.quads,disabled-by-default-devtools.timeline.layers");
-                if trace {
-                    let value = self.AsValueWithFrame(Some(frame), context);
-                    context.services.TraceFrameViewerSnapshot(self.id_, &value);
-                }
-            }
-            let draw_mode = self.GetDrawMode(context);
-            if let Some(hud) = self
-                .active_tree_
-                .as_deref()
-                .unwrap()
-                .hud_layer()
-                .map(|layer| crate::adapter::layer_tree_impl::LayerTreeLayer::id(layer))
-            {
-                let layer = self
-                    .active_tree_
-                    .as_deref_mut()
-                    .unwrap()
-                    .LayerByIdMutable(hud)
-                    .unwrap();
-                context.services.UpdateHudTexture(
-                    layer,
-                    draw_mode,
-                    self.layer_tree_frame_sink_.unwrap(),
-                    self.resource_provider_.as_deref_mut(),
-                    &self.raster_caps_,
-                    &mut frame.render_passes,
-                );
-            }
-            let mut metadata = self.MakeCompositorFrameMetadata(frame, context);
-            let mut has_view_transition_with_animate = false;
-            let mut delay_layer_tree_view_deletion = false;
-            if !self
-                .settings_
-                .TreesInVizInClientProcess(context.services.SettingsFeatures())
-            {
-                let mut elements = BTreeMap::new();
-                let tokens =
-                    self.WithActiveTree(context, |tree, c| tree.GetCaptureViewTransitionTokens(c));
-                let tree = self.active_tree_.as_deref().unwrap();
-                for &effect_id in frame.RenderSurfaceList(tree).unwrap() {
-                    let surface = tree.GetRenderSurface(effect_id).unwrap();
-                    let id = tree
-                        .property_trees()
-                        .effect_tree()
-                        .Node(effect_id)
-                        .view_transition_element_resource_id;
-                    if !id.IsValid() {
-                        continue;
-                    }
-                    debug_assert!(
-                        !elements.contains_key(&id),
-                        "Cannot map a view-transition resource to two render passes"
-                    );
-                    if id.MatchesToken(&tokens) {
-                        elements.insert(id, surface.view_transition_capture_render_pass_id());
-                    } else {
-                        elements.insert(id, surface.render_pass_id());
-                    }
-                }
-                let display_colors = self.GetDisplayColorSpaces();
-                // The native range-for extends the returned owning vector through
-                // the whole loop. Borrow its unique_ptr elements so every request
-                // is destroyed at that same end-of-loop scope, not each iteration.
-                let requests = self
-                    .active_tree_
-                    .as_deref_mut()
-                    .unwrap()
-                    .TakeViewTransitionRequests(true);
-                for request in &requests {
-                    if self.resourceless_software_draw_ {
-                        self.OnCompositorFrameTransitionDirectiveProcessed(
-                            request.sequence_id(),
-                            context,
-                        );
-                    } else {
-                        metadata.transition_directives_mut().push(
-                            context.services.ConstructTransitionDirective(
-                                request,
-                                &elements,
-                                &display_colors,
-                                HostMetadataTransitionRequest::delay_layer_tree_view_deletion(
-                                    request.as_ref(),
-                                ),
-                            ),
-                        );
-                        if HostMetadataTransitionRequest::delay_layer_tree_view_deletion(
-                            request.as_ref(),
-                        ) {
-                            self.OnCompositorFrameTransitionDirectiveProcessed(
-                                request.sequence_id(),
-                                context,
-                            );
-                            if HostMetadataTransitionRequest::IsAnimateRenderer(request.as_ref()) {
-                                has_view_transition_with_animate = true;
-                            }
-                            delay_layer_tree_view_deletion = true;
-                        }
-                    }
-                }
-            } else {
-                if self
-                    .active_tree_
-                    .as_deref()
-                    .unwrap()
-                    .HasViewTransitionRequests()
-                {
-                    self.active_tree_
-                        .as_deref_mut()
-                        .unwrap()
-                        .set_needs_update_draw_properties();
-                }
-                // Native request objects remain resident in the Viz-client branch.
-                for index in 0..self
-                    .active_tree_
-                    .as_deref()
-                    .unwrap()
-                    .view_transition_requests()
-                    .len()
-                {
-                    let request = &self
-                        .active_tree_
-                        .as_deref()
-                        .unwrap()
-                        .view_transition_requests()[index];
-                    if HostMetadataTransitionRequest::delay_layer_tree_view_deletion(
-                        request.as_ref(),
-                    ) {
-                        let sequence = request.sequence_id();
-                        let animate =
-                            HostMetadataTransitionRequest::IsAnimateRenderer(request.as_ref());
-                        self.OnCompositorFrameTransitionDirectiveProcessed(sequence, context);
-                        if animate {
-                            has_view_transition_with_animate = true;
-                        }
-                        delay_layer_tree_view_deletion = true;
-                    }
-                }
-            }
-            self.WithActiveTree(context, |tree, c| {
-                PopulateMetadataContentColorUsage(
-                    &HostNativeTreeView { tree, context: c },
-                    frame,
-                    &mut metadata,
-                )
-            });
-            metadata.set_has_shared_element_resources(frame.has_shared_element_resources);
-            let mut frame_deadline = frame.deadline_in_frames.unwrap_or(0);
-            if delay_layer_tree_view_deletion && has_view_transition_with_animate {
-                frame_deadline = 240;
-            }
-            metadata.set_deadline(context.services.MakeFrameDeadline(
-                self.CurrentBeginFrameArgs().frame_time,
-                frame_deadline,
-                self.CurrentBeginFrameArgs().interval,
-                frame.use_default_lower_bound_deadline,
-            ));
-            metadata.set_interval_frame_time(self.CurrentBeginFrameArgs().frame_time);
-            metadata.set_interval_has_input(self.has_input_for_frame_interval_);
-            metadata.set_interval_has_user_input(self.has_non_fling_input_since_last_frame_);
-            self.has_non_fling_input_since_last_frame_ = false;
-            use crate::cc::trees::damage_reason::DamageReason;
-            if frame.damage_reasons.Has(DamageReason::kCompositorScroll) {
-                if self.begin_frame_time_delta_.InMicroseconds() < 100
-                    || self.begin_frame_time_delta_.InMicroseconds() > 1000000
-                {
-                    metadata.set_major_scroll_speed(0.);
-                } else {
-                    metadata.set_major_scroll_speed(
-                        (self.frame_max_scroll_delta_ as f64
-                            / self.begin_frame_time_delta_.InSecondsF())
-                            as f32,
-                    );
-                }
-                metadata.AppendContentInterval(
-                    HostContentFrameIntervalType::kCompositorScroll,
-                    TimeDelta::default(),
-                    1,
-                );
-                frame.damage_reasons.Remove(DamageReason::kCompositorScroll);
-            }
-            if !frame.video_layer_preferred_intervals.is_empty()
-                && frame.damage_reasons.Has(DamageReason::kVideoLayer)
-            {
-                for (&interval, &count) in &frame.video_layer_preferred_intervals {
-                    metadata.AppendContentInterval(
-                        HostContentFrameIntervalType::kVideo,
-                        interval,
-                        count - 1,
-                    );
-                }
-                frame.damage_reasons.Remove(DamageReason::kVideoLayer);
-            }
-            if frame.damage_reasons.Has(DamageReason::kAnimatedImage) {
-                if !self.settings_.trees_in_viz_in_viz_process {
-                    let duration = self
-                        .image_animation_controller_
-                        .as_mut()
-                        .expect("image animation controller")
-                        .GetConsistentContentFrameDuration();
-                    if let Some(duration) = duration {
-                        metadata.AppendContentInterval(
-                            HostContentFrameIntervalType::kAnimatingImage,
-                            duration.frame_duration,
-                            duration.num_images - 1,
-                        );
-                        frame.damage_reasons.Remove(DamageReason::kAnimatedImage);
-                    }
-                }
-            }
-            if frame
-                .damage_reasons
-                .Has(DamageReason::kScrollbarFadeOutAnimation)
-            {
-                metadata.AppendContentInterval(
-                    HostContentFrameIntervalType::kScrollBarFadeOutAnimation,
-                    TimeDelta::Microseconds(50_000),
-                    0,
-                );
-                frame
-                    .damage_reasons
-                    .Remove(DamageReason::kScrollbarFadeOutAnimation);
-            }
-            if frame.trees_in_viz_timing_details.is_some()
-                && self.settings_.trees_in_viz_in_viz_process
-            {
-                // Native TreesInVizTiming is four TimeTicks: its implicit move copies
-                // these scalar values and leaves the source optional engaged.
-                metadata.set_trees_in_viz_timing_details(
-                    frame.trees_in_viz_timing_details.as_ref().unwrap().clone(),
-                );
-            }
-            metadata.set_has_only_content_frame_interval_updates(frame.damage_reasons.empty());
-            metadata
-                .set_activation_dependencies(std::mem::take(&mut frame.activation_dependencies));
-            self.active_tree_
-                .as_deref_mut()
-                .unwrap()
-                .FinishSwapPromises(&mut metadata);
-            debug_assert_eq!(metadata.frame_token(), self.next_frame_token(context));
-            if self.render_frame_metadata_observer_.is_some()
-                || self.settings_.trees_in_viz_in_viz_process
-            {
-                self.last_draw_render_frame_metadata_ =
-                    Some(self.MakeRenderFrameMetadata(frame, context));
-                if let Some(ink) = metadata.delegated_ink_metadata() {
-                    self.last_draw_render_frame_metadata_
-                        .as_mut()
-                        .unwrap()
-                        .delegated_ink_metadata = Some(
-                        crate::cc::trees::render_frame_metadata::DelegatedInkBrowserMetadata::new(
-                            context.services.DelegatedInkIsHovering(ink),
-                        ),
-                    );
-                }
-                if self
-                    .last_draw_render_frame_metadata_
-                    .as_ref()
-                    .unwrap()
-                    .new_vertical_scroll_direction
-                    != crate::adapter::render_metadata::VerticalScrollDirection::kNull
-                {
-                    self.last_vertical_scroll_direction_ = self
-                        .last_draw_render_frame_metadata_
-                        .as_ref()
-                        .unwrap()
-                        .new_vertical_scroll_direction;
-                }
-                if let Some(observer) = self.render_frame_metadata_observer_.as_deref_mut() {
-                    debug_assert!(!self.settings_.trees_in_viz_in_viz_process);
-                    context.services.ObserveRenderFrameSubmission(
-                        observer,
-                        self.last_draw_render_frame_metadata_.as_ref().unwrap(),
-                        &mut metadata,
-                        self.active_tree_
-                            .as_deref_mut()
-                            .unwrap()
-                            .TakeForceSendMetadataRequest(),
-                    );
-                }
-                if self.settings_.trees_in_viz_in_viz_process {
-                    metadata.set_send_frame_token_to_embedder(self.send_frame_token_to_embedder_);
-                }
-            }
-            if !self.CommitsToActiveTree() && !metadata.latency_info().is_empty() {
-                let time = context.services.MonotonicTimeNow();
-                self.ApplyFirstScrollTracking(
-                    &metadata.latency_info()[0],
-                    metadata.frame_token(),
-                    context,
-                );
-                for latency in metadata.latency_info_mut() {
-                    context
-                        .services
-                        .AddRendererSwapLatencyTimestamp(latency, time);
-                }
-            }
-            if !frame.unbounded_render_passes.is_empty()
-                && self.unbounded_frame_sink_handler_.is_some()
-            {
-                assert!(!self
-                    .settings_
-                    .TreesInVizInClientProcess(context.services.SettingsFeatures()));
-                assert!(self.settings_.enable_unbounded_element);
-                let mut unbounded = B::Frame::default();
-                let mut unbounded_metadata = self.MakeCompositorFrameMetadata(frame, context);
-                unbounded_metadata.set_begin_frame_ack(frame.begin_frame_ack.clone());
-                unbounded.set_metadata(unbounded_metadata);
-                unbounded.set_render_passes(std::mem::take(&mut frame.unbounded_render_passes));
-                Self::PopulateFrameResources(
-                    &mut unbounded,
-                    None,
-                    self.resource_provider_.as_deref_mut().unwrap(),
-                    self.layer_tree_frame_sink_.unwrap(),
-                    context,
-                );
-                let mut returns = HostUnboundedResourceReturn::<B> {
-                    provider: self.resource_provider_.as_deref_mut().unwrap(),
-                    pool: self.resource_pool_.as_deref_mut(),
-                    release: UIResourceReleaseClient {
-                        owner: self.owner_id_,
-                        deleted: &mut self.deleted_ui_resources_,
-                    },
-                    services: context.services,
-                };
-                self.unbounded_frame_sink_handler_
-                    .as_mut()
-                    .unwrap()
-                    .SubmitFrame(unbounded, &mut returns);
-            }
-            debug_assert!(frame.begin_frame_ack.IsSequenceValid());
-            metadata.set_begin_frame_ack(frame.begin_frame_ack.clone());
-            let mut compositor_frame = B::Frame::default();
-            compositor_frame.set_metadata(metadata);
-            Self::PopulateFrameResources(
-                &mut compositor_frame,
-                Some(&frame.render_passes),
-                self.resource_provider_.as_deref_mut().unwrap(),
-                self.layer_tree_frame_sink_.unwrap(),
-                context,
-            );
-            compositor_frame.set_render_passes(std::mem::take(&mut frame.render_passes));
-            assert!(
-                !self.settings_.single_thread_proxy_scheduler
-                    || self
-                        .active_tree_
-                        .as_deref()
-                        .unwrap()
-                        .local_surface_id_from_parent()
-                        .is_valid()
-            );
-            if !self.settings_.trees_in_viz_in_viz_process {
-                let id = self.GetCurrentLocalSurfaceId(context);
-                context
-                    .services
-                    .FrameSinkSetCurrentLocalSurfaceId(self.layer_tree_frame_sink_.unwrap(), id);
-            }
-            self.last_draw_local_surface_id_ = self.GetCurrentLocalSurfaceId(context).clone();
-            if let Some(name) = context.services.GetClientNameForMetrics() {
-                let total = compositor_frame
-                    .render_passes()
-                    .iter()
-                    .map(|pass| pass.quad_count())
-                    .sum();
-                context.services.RecordCompositorFrameQuadCount(name, total);
-            }
-            compositor_frame
+            compositor_frame::frame_generation::GenerateCompositorFrame(
+                &mut FrameGenerationAdapter::new(self, frame, context),
+            )
+            .0
         }
         // Source: cc/trees/layer_tree_host_impl.cc:3347-3361 (native local closure).
         fn PopulateFrameResources(
@@ -14711,15 +16278,11 @@ mod source_chunk_d {
             sink: HostImplFrameSinkId,
             context: &mut HostImplContext<'_, B>,
         ) {
-            let mut resources = Vec::new();
-            for pass in passes.unwrap_or_else(|| frame.render_passes()) {
-                for index in 0..pass.quad_count() {
-                    let resource = pass.quad_resource_id(index);
-                    if resource != crate::adapter::layer_tree_impl::ResourceId::default() {
-                        resources.push(resource);
-                    }
-                }
-            }
+            let passes = passes.unwrap_or_else(|| frame.render_passes());
+            let (resources, _) =
+                compositor_resource::frame_resource_export::CollectFrameResourceIds(
+                    &FrameResourcePassesAdapter::<B> { passes },
+                );
             let interface = context.services.FrameSinkSharedImageInterface(sink);
             context.services.PrepareSendResourcesToParent(
                 provider,
@@ -14764,9 +16327,10 @@ mod source_chunk_d {
             is_flush: bool,
             context: &mut HostImplContext<'_, B>,
         ) -> TimeTicks {
-            debug_assert!(self
-                .settings_
-                .TreesInVizInClientProcess(context.services.SettingsFeatures()));
+            debug_assert!(
+                self.settings_
+                    .TreesInVizInClientProcess(context.services.SettingsFeatures())
+            );
             debug_assert!(self.layer_context_.is_some());
             let interface = context
                 .services
@@ -14785,9 +16349,10 @@ mod source_chunk_d {
         }
         // Source: cc/trees/layer_tree_host_impl.cc:3452-3491.
         pub fn FlushDisplayTree(&mut self, context: &mut HostImplContext<'_, B>) {
-            assert!(self
-                .settings_
-                .TreesInVizInClientProcess(context.services.SettingsFeatures()));
+            assert!(
+                self.settings_
+                    .TreesInVizInClientProcess(context.services.SettingsFeatures())
+            );
             assert!(self.layer_context_.is_some());
             let mut frame = FrameData::<B>::default();
             frame.origin_begin_main_frame_args =
@@ -15595,10 +17160,10 @@ struct HostPictureTileRelease<
         Option<&'a mut dyn crate::adapter::picture_layer_impl::PictureReleasedTileClient<B>>,
 }
 impl<
-        B: HostImplTypes
-            + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-            + crate::adapter::tile_manager::TileManagerTypes,
-    > crate::adapter::tile::TileTraceContext for HostPictureTileRelease<'_, '_, B>
+    B: HostImplTypes
+        + crate::adapter::picture_layer_impl::PictureLayerImplTypes
+        + crate::adapter::tile_manager::TileManagerTypes,
+> crate::adapter::tile::TileTraceContext for HostPictureTileRelease<'_, '_, B>
 {
     fn MakeDictIntoImplicitSnapshotWithCategory<V: PropertyTrace>(
         &self,
@@ -15620,10 +17185,10 @@ impl<
     }
 }
 impl<
-        B: HostImplTypes
-            + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-            + crate::adapter::tile_manager::TileManagerTypes,
-    > crate::adapter::tile_manager::TileReleaseRuntime<B> for HostPictureTileRelease<'_, '_, B>
+    B: HostImplTypes
+        + crate::adapter::picture_layer_impl::PictureLayerImplTypes
+        + crate::adapter::tile_manager::TileManagerTypes,
+> crate::adapter::tile_manager::TileReleaseRuntime<B> for HostPictureTileRelease<'_, '_, B>
 {
     fn ResourcePoolMutable(
         &mut self,
@@ -17012,7 +18577,7 @@ pub(crate) mod source_tile_manager_runtime {
             .GetPaintWorkletRecordMap()
         }
         fn TilingById(&self, id: PictureLayerTilingId) -> &PictureLayerTiling<Cpu<R>> {
-            Self::FindTilingIn(
+            let result = Self::FindTilingIn(
                 [
                     self.active.as_deref(),
                     self.pending.as_deref(),
@@ -17020,7 +18585,8 @@ pub(crate) mod source_tile_manager_runtime {
                 ],
                 &self.tiling_locations,
                 id,
-            )
+            );
+            result
         }
         fn IsClientOnActiveOrPendingTree(&self, id: PictureLayerTilingClientId) -> bool {
             // Source PictureLayerImpl::GetPendingOrActiveTwinLayer is a
@@ -18516,9 +20082,11 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             return;
         }
         assert_eq!(owner.owner, self.owner_id_);
-        assert!(owner
-            .alive
-            .ptr_eq(&std::sync::Arc::downgrade(&self.weak_factory_)));
+        assert!(
+            owner
+                .alive
+                .ptr_eq(&std::sync::Arc::downgrade(&self.weak_factory_))
+        );
         self.WithInputHandler(context, |input, host| {
             if let Some(input) = input {
                 input.RunAutoscrollTask(task, host);

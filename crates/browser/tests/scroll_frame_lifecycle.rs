@@ -114,7 +114,7 @@ fn pixels(page: &mut Page) -> Vec<u32> {
 }
 
 fn root_scroll_state(
-    node: &layoutng_assembly::fragment_tree::FragmentNode,
+    node: &layoutng_assembly::fragment_tree::FragmentPaintData,
 ) -> Option<(
     layoutng_assembly::internal::layout_input::Offset,
     Option<layoutng_assembly::internal::layout_input::Offset>,
@@ -181,7 +181,7 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
             }
             check(&mut page, "if(document.getElementById('sticky').getBoundingClientRect().y!==0)throw Error('root sticky');if(document.getElementById('fixed').getBoundingClientRect().y!==7)throw Error('fixed');if(document.getElementById('fixedsticky').getBoundingClientRect().y!==50)throw Error('fixed ancestor sticky');");
             let tree = &page.CurrentFrame().unwrap().fragments;
-            fn sticky(node: &layoutng_assembly::fragment_tree::FragmentNode) {
+            fn sticky(node: &layoutng_assembly::fragment_tree::FragmentPaintData) {
                 if let Some(constraint) = node.paint.sticky_constraint {
                     if let Some(axis) = constraint.vertical {
                         assert_eq!(axis.current_sticky_offset, node.paint.sticky_offset.y,

@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-style = { path = "../style" }
+style = { path = "../style/style" }
 browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 interaction = { path = "../interaction" }
@@ -25,4 +25,4 @@ html = { path = "../html" }
 http_transport = { path = "../http_transport" }
 # Standalone Web API tests link the assembly dispatch's real replaced-object
 # provider; browser executables already supply it through their layout bundle.
-layoutng_replaced = { path = "../layoutng/layoutng_replaced" }
+layout_algo_replaced = { path = "../layoutng/layout_algo_replaced" }

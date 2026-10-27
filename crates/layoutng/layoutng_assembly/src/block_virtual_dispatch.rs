@@ -13,6 +13,7 @@ use crate::internal::layout_input::NodeKind;
 use crate::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use crate::internal::layout_object::{RecalcScrollableOverflowResult, StyleChangeContext};
 use crate::internal::layout_object_child_list::LayoutObjectChildList;
+use crate::internal::layout_object_factory_set::SvgRootChildren;
 use crate::internal::layout_pass_scope::LayoutObjectFactoryScope;
 use crate::internal::layout_replaced::LayoutReplaced;
 use crate::internal::layout_text::LayoutText;
@@ -41,6 +42,7 @@ type GridStyleDidChange = fn(
     &StyleChangeContext,
 );
 static GRID_STYLE_DID_CHANGE: OnceLock<GridStyleDidChange> = OnceLock::new();
+static SVG_ROOT_CHILDREN: OnceLock<SvgRootChildren> = OnceLock::new();
 
 pub fn RegisterGridStyleDidChange(callback: GridStyleDidChange) {
     let existing = GRID_STYLE_DID_CHANGE.get_or_init(|| callback);
@@ -49,6 +51,15 @@ pub fn RegisterGridStyleDidChange(callback: GridStyleDidChange) {
 
 pub fn RegisterFlexStitchedRowGapIndex(callback: FlexStitchedRowGapIndex) {
     let existing = FLEX_STITCHED_ROW_GAP_INDEX.get_or_init(|| callback);
+    assert_eq!(*existing as usize, callback as usize);
+}
+
+/// LayoutSVGRoot owns its child list in the downstream SVG package. Native
+/// fragment cursors may walk that list after the layout factory scope has
+/// ended, just as Chromium can call the object's vtable at any lifecycle
+/// stage. Register the concrete override once with the assembled engine.
+pub fn RegisterSvgRootChildren(callback: SvgRootChildren) {
+    let existing = SVG_ROOT_CHILDREN.get_or_init(|| callback);
     assert_eq!(*existing as usize, callback as usize);
 }
 
@@ -826,6 +837,7 @@ pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
             let objects = LayoutObjectFactoryScope::Objects();
             let children = unsafe { objects.as_ref() }
                 .and_then(|objects| objects.svg_root_children)
+                .or_else(|| SVG_ROOT_CHILDREN.get().copied())
                 .expect("SVG root children are not installed");
             children(unsafe { &*object })
         }

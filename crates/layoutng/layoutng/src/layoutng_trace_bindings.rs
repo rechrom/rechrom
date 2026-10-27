@@ -64,7 +64,6 @@ use crate::internal::layout_view::LayoutView;
 use crate::internal::line_clamp_data::LineClampAncestorChain;
 use crate::internal::mathml_paint_info::MathMLPaintInfo;
 use crate::internal::measure_cache::MeasureCache;
-use crate::internal::min_max_sizes_cache::MinMaxSizesCache;
 use crate::internal::naming_scope::NamingScope;
 use crate::internal::node_rare_data_field::NodeRareDataField;
 use crate::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
@@ -165,7 +164,6 @@ trace_source_method!(
     LineClampAncestorChain,
     MathMLPaintInfo,
     MeasureCache,
-    MinMaxSizesCache,
     NamingScope,
     NodeRareDataField,
     NonOverflowingScrollRange,

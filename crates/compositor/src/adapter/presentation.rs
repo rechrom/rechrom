@@ -1,8 +1,6 @@
 //! Platform sequence affinity and callback argument types stay with the owner.
 //! The queue never executes callbacks and does not create or schedule threads.
-pub trait SequenceChecker {
-    fn Check(&self);
-}
+pub use compositor_frame::presentation_callback_buffer::SequenceChecker;
 pub type Callback<F> = Box<dyn FnOnce(&F)>;
 /// Source OnceCallback payload. The first-scroll binding carries only weak
 /// identity and scalar event data, and executes in the current Host call scope.

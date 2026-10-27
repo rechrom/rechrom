@@ -12,13 +12,23 @@ use layoutng_style::style::outline_type::OutlineType;
 use super::caret_rect::CaretShape;
 use super::layout_box::LayoutBox;
 use super::layout_box_model_tree::LayoutBoxModelObjectBaseForNode;
-use super::layout_node_metadata::{ContainerNode, Element, Node};
+use super::layout_node_metadata::{ContainerNode, Element};
 use super::layout_object::LayoutObject;
 use super::layout_scrollable_area::PaintLayerScrollableArea;
 use super::outline_rect_collector::OutlineRectCollector;
 pub use super::paint_layer::PaintLayer;
 use super::sticky_position_scrolling_constraints::{PerAxisData, StickyConstraintsData};
 use foundation::PhysicalOffset;
+
+#[path = "../../../layout_fragment/src/native_background_transfer.rs"]
+mod layout_fragment_native_background_transfer;
+use layout_fragment_native_background_transfer::LayoutBoxModelObjectBackgroundTransfersToView;
+
+#[path = "../../../layout_fragment/src/native_layout_box_model_scrollable_area.rs"]
+mod layout_fragment_native_layout_box_model_scrollable_area;
+
+#[path = "../../../layout_invalidation/src/native_layout_box_model_layer_invalidation.rs"]
+mod layout_invalidation_native_layout_box_model_layer_invalidation;
 
 // Declarations without supplied bodies remain typed external contracts.
 unsafe extern "Rust" {
@@ -62,95 +72,6 @@ unsafe extern "Rust" {
         additional_offset: &PhysicalOffset,
         outline_type: OutlineType,
     );
-}
-
-// Source: third_party/blink/renderer/core/layout/layout_box_model_object.cc:1123-1151.
-//
-// Keep this source method in the LayoutNG owner.  The immutable paint boundary
-// also exports the selected canvas background, but callers inside the resident
-// LayoutObject tree still need Chromium's original predicate (for example the
-// fixed-background object set assertion).
-#[unsafe(no_mangle)]
-fn LayoutBoxModelObjectBackgroundTransfersToView(
-    this: &LayoutBoxModelObject,
-    document_style: *const ComputedStyle,
-) -> bool {
-    if this.IsDocumentElement() {
-        return true;
-    }
-    if !this.IsBody() {
-        return false;
-    }
-
-    // NativeNodeMetadataRelations validates a single document element and a
-    // single primary body role. Walk the retained metadata tree rather than
-    // reaching back into DOM ownership.
-    unsafe fn FindDocumentElement(node: *mut Node) -> *mut Node {
-        if node.is_null() {
-            return std::ptr::null_mut();
-        }
-        let node_ref = unsafe { &*node };
-        if matches!(
-            node_ref.InputDocumentRole(),
-            super::layout_input::DocumentRole::kDocumentElement
-                | super::layout_input::DocumentRole::kDocumentElementAndBody
-        ) {
-            return node;
-        }
-        if !node_ref.IsContainerNode() {
-            return std::ptr::null_mut();
-        }
-        let mut child = unsafe { &*node.cast::<ContainerNode>() }.firstChild();
-        while !child.is_null() {
-            let found = unsafe { FindDocumentElement(child) };
-            if !found.is_null() {
-                return found;
-            }
-            child = unsafe { &*child }.nextSibling();
-        }
-        std::ptr::null_mut()
-    }
-
-    let mut root = this.GetNode();
-    if root.is_null() {
-        return false;
-    }
-    loop {
-        let parent = unsafe { &*root }.parentNode();
-        if parent.is_null() {
-            break;
-        }
-        root = unsafe { &mut (*parent).node };
-    }
-    let document_element = unsafe { FindDocumentElement(root) };
-    if document_element.is_null() || !unsafe { &*document_element }.IsHTMLElement() {
-        return false;
-    }
-
-    let document_object = unsafe { &*document_element }.GetLayoutObject();
-    if document_object.is_null() {
-        return false;
-    }
-    let document_style = if document_style.is_null() {
-        unsafe { &*document_element }.GetComputedStyle()
-    } else {
-        document_style
-    };
-    if document_style.is_null() || unsafe { &*document_style }.HasBackground() {
-        return false;
-    }
-    let document_object = unsafe { &*document_object };
-    let document_style = unsafe { &*document_style };
-    let document_has_containment = document_object
-        .ShouldApplyPaintContainmentWithStyle(document_style)
-        || document_object.ShouldApplyLayoutContainmentWithStyle(document_style)
-        || document_style.ContainsStyle()
-        || ((document_style.ContainsBlockSize() || document_style.ContainsInlineSize())
-            && document_object.IsEligibleForSizeContainment());
-    if document_has_containment {
-        return false;
-    }
-    !this.ShouldApplyAnyContainment()
 }
 
 // cpp: layoutng/internal/layout_box_model_object.h:44-51
@@ -222,45 +143,6 @@ impl LayoutBoxModelObject {
     pub fn GetScrollableArea(&self) -> *mut PaintLayerScrollableArea {
         self.CheckIsNotDestroyed();
         self.scrollable_area_.Get()
-    }
-
-    // cpp: layoutng/internal/layout_scrollable_area.cc:311-336
-    pub fn UpdateScrollableAreaForLayout(&mut self) {
-        self.CheckIsNotDestroyed();
-        let requires_scrollable_area = {
-            let box_ =
-                DynamicTo::<LayoutBox>(self as *mut LayoutBoxModelObject as *mut LayoutObject);
-            if box_.is_null() {
-                false
-            } else {
-                let box_ = unsafe { &*box_ };
-                box_.IsScrollContainer() || box_.IsOverscrollContainer() || box_.CanResize()
-            }
-        };
-        if requires_scrollable_area == !self.scrollable_area_.Get().is_null() {
-            return;
-        }
-        if self.scrollable_area_.Get().is_null() {
-            let box_ =
-                DynamicTo::<LayoutBox>(self as *mut LayoutBoxModelObject as *mut LayoutObject);
-            assert!(!box_.is_null());
-            self.scrollable_area_ = Member::from_ptr(MakeGarbageCollected(
-                PaintLayerScrollableArea::new(unsafe { &mut *box_ }),
-            ));
-        } else {
-            unsafe { &mut *self.scrollable_area_.Get() }.Dispose();
-            self.scrollable_area_ = Member::default();
-        }
-    }
-
-    // cpp: layoutng/internal/layout_scrollable_area.cc:338-344
-    pub fn DisposeScrollableAreaForLayout(&mut self) {
-        self.CheckIsNotDestroyed();
-        let area = self.scrollable_area_.Get();
-        if !area.is_null() {
-            unsafe { &mut *area }.Dispose();
-            self.scrollable_area_ = Member::default();
-        }
     }
 
     // cpp: layoutng/internal/layout_scrollable_area.cc:346-352
@@ -348,18 +230,6 @@ impl LayoutBoxModelObject {
 }
 
 impl LayoutBoxModelObject {
-    // cpp: layoutng/internal/layout_box_model_object.h:124-130
-    // cpp: core/layout/layout_box_model_object.cc:360-367
-    pub fn DestroyLayer(&mut self) {
-        self.CheckIsNotDestroyed();
-        debug_assert!(self.HasLayer() && !self.Layer().is_null());
-        self.SetHasLayer(false);
-        self.GetMutableForPainting()
-            .FirstFragment()
-            .SetLayer(std::ptr::null_mut());
-        self.SetNeedsPaintPropertyUpdate();
-    }
-
     pub fn ComputeStickyPositionConstraints(
         &self,
         scroll_container_layer: &PaintLayer,
@@ -431,23 +301,6 @@ impl LayoutBoxModelObject {
             return PaintLayerType::kForcedPaintLayer;
         }
         PaintLayerType::kNoPaintLayer
-    }
-
-    // The layer survives style changes whenever the native object continues
-    // to require a layer; only a no-layer transition destroys its client.
-    // cpp: core/layout/layout_box_model_object.cc:205-223,294-295
-    pub(crate) fn UpdateLayerAfterStyleChange(&mut self) {
-        let required = self.LayerTypeRequired();
-        let layer = self.Layer();
-        if required == PaintLayerType::kNoPaintLayer {
-            if !layer.is_null() {
-                self.DestroyLayer();
-            }
-        } else if layer.is_null() {
-            self.CreateLayerAfterStyleChange();
-        } else {
-            unsafe { &mut *layer }.UpdateSelfPaintingLayer();
-        }
     }
 
     // cpp: layoutng/internal/layout_box_model_object.h:180-188
@@ -529,21 +382,6 @@ impl LayoutBoxModelObject {
                 outline_type,
             )
         }
-    }
-
-    // cpp: layoutng/internal/layout_box_model_object.h:360-360
-    // cpp: core/layout/layout_box_model_object.cc:347-357
-    fn CreateLayerAfterStyleChange(&mut self) {
-        self.CheckIsNotDestroyed();
-        debug_assert!(!self.HasLayer() && self.Layer().is_null());
-        let owner = self as *mut LayoutBoxModelObject;
-        let layer = MakeGarbageCollected(PaintLayer::new(owner));
-        let mut painting = self.GetMutableForPainting();
-        let first = painting.FirstFragment();
-        first.EnsureId();
-        first.SetLayer(layer);
-        self.SetHasLayer(true);
-        self.SetNeedsPaintPropertyUpdate();
     }
 
     // cpp: layoutng/internal/layout_box_model_object.h:368-373

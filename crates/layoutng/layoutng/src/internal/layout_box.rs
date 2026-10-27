@@ -6,7 +6,7 @@ use std::ops::{Deref, DerefMut};
 
 use super::algorithm_forward::CustomLayoutChild;
 use foundation::{
-    gfx, kIndefiniteSize, DynamicTo, EClear, EColumnSpan, EOverflow, EPosition, EReadingFlow,
+    gfx, kIndefiniteSize, DynamicTo, EColumnSpan, EOverflow, EPosition, EReadingFlow,
     GCedHeapHashSet, GCedHeapVector, HeapVector, InfiniteIntRect, LayoutUnit, LogicalToPhysical,
     MakeGarbageCollected, Member, OverlayScrollbarClipBehavior, PhysicalOffset, PhysicalRect,
     PhysicalSize, ScopedCSSName, TextDirection, To, TransformAccumulation, TransformState,
@@ -14,13 +14,13 @@ use foundation::{
 };
 use graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
 use graphics_types::graphics::visual_rect_flags::{VisualRectFlag, VisualRectFlags};
-use layoutng_fragment_tree::block_break_token::BlockBreakToken;
-use layoutng_fragment_tree::fragment_data::FragmentData;
-use layoutng_fragment_tree::fragment_items::FragmentItems;
-use layoutng_fragment_tree::inline_cursor::InlineCursor;
-use layoutng_fragment_tree::layout_result::{EStatus, LayoutResult};
-use layoutng_fragment_tree::logical_fragment::LogicalFragment;
-use layoutng_fragment_tree::physical_box_fragment::PhysicalBoxFragment;
+use layout_fragment::block_break_token::BlockBreakToken;
+use layout_fragment::fragment_data::FragmentData;
+use layout_fragment::fragment_items::FragmentItems;
+use layout_fragment::inline_cursor::InlineCursor;
+use layout_fragment::layout_result::{EStatus, LayoutResult};
+use layout_fragment::logical_fragment::LogicalFragment;
+use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
 use layoutng_geometry::geometry::box_sides::PhysicalBoxSides;
 use layoutng_geometry::geometry::box_strut::{BoxStrut, PhysicalBoxStrut};
 use layoutng_geometry::geometry::fragment_geometry::FragmentGeometry;
@@ -36,7 +36,6 @@ use layoutng_style::style::style_overflow_clip_margin::ReferenceBox;
 
 use super::anchor_position_scroll_data::AnchorPositionScrollData;
 use super::block_node::BlockNode;
-use super::break_appeal::BreakAppeal;
 use super::caret_rect::CaretShape;
 use super::column_spanner_path::ColumnSpannerPath;
 use super::constraint_space::ConstraintSpace;
@@ -45,8 +44,7 @@ use super::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
 use super::early_break::EarlyBreak;
 use super::editing::forward::PositionWithAffinity;
 use super::form_node_metadata::{HTMLFieldSetElement, HTMLImageElement};
-use super::fragmentation_utils::FragmentIndex;
-use super::fragmentation_utils::{FragmentainerOffsetAtBfc, IsBreakInside};
+use super::fragmentation_utils::{BoxFragmentIndex, FragmentIndex};
 use super::gap::gap_geometry::GapGeometry;
 use super::grid_layout_data::GridLayoutData;
 use super::hit_test_phase::HitTestPhase;
@@ -71,10 +69,7 @@ use super::layout_object::{
 };
 use super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::layout_replaced::LayoutReplaced;
-use super::layout_utils::{
-    CalculateSizeBasedLayoutCacheStatus, LayoutCacheStatus,
-    MaySkipLayoutWithinBlockFormattingContext,
-};
+use super::layout_utils::LayoutCacheStatus;
 use super::layout_view::LayoutView;
 use super::loader::fetch::resource_priority::ResourcePriority;
 use super::loader::resource::image_resource_observer::{CanDeferInvalidation, WrappedImagePtr};
@@ -89,6 +84,58 @@ use super::overflow_model::{BoxOverflowModel, BoxScrollableOverflowModel};
 use super::scroll_layout_scope::ScrollbarFreezeState;
 use super::shapes::shape_outside_info::ShapeOutsideInfo;
 use layoutng_style::style::outline_type::OutlineType;
+
+#[path = "../../../layout_fragment/src/native_layout_box_fragment_geometry.rs"]
+mod layout_fragment_native_layout_box_fragment_geometry;
+use layout_fragment_native_layout_box_fragment_geometry::{
+    LayoutBoxBoundingBoxRelativeToFirstFragment, LayoutBoxComputeSize,
+    LayoutBoxFindPreviousBreakToken, LayoutBoxLocationContainer,
+    LayoutBoxPhysicalContractedBoxRect, LayoutBoxQuadsInAncestorInternal,
+    LayoutBoxResolvedDirection, LayoutBoxStitchedBlockSize,
+};
+
+#[path = "../../../layout_fragment/src/native_layout_box_fragment_access.rs"]
+mod layout_fragment_native_layout_box_fragment_access;
+
+#[path = "../../../layout_fragment/src/native_layout_result_overflow.rs"]
+mod layout_fragment_native_layout_result_overflow;
+use layout_fragment_native_layout_result_overflow::LayoutBoxSetScrollableOverflowFromLayoutResults;
+
+#[path = "../../../layout_fragment/src/native_physical_fragment_list.rs"]
+mod layout_fragment_native_physical_fragment_list;
+pub use layout_fragment_native_physical_fragment_list::{
+    PhysicalFragmentIterator, PhysicalFragmentList,
+};
+
+#[path = "../../../layout_invalidation/src/native_transform_invalidation.rs"]
+mod layout_invalidation_native_transform_invalidation;
+use layout_invalidation_native_transform_invalidation::LayoutBoxTransformsChangeMayRequireLayout;
+
+#[path = "../../../layout_invalidation/src/native_layout_box_fragment_retirement.rs"]
+mod layout_invalidation_native_layout_box_fragment_retirement;
+use layout_invalidation_native_layout_box_fragment_retirement::LayoutBoxDisassociatePhysicalFragments;
+
+#[path = "../../../layout_reuse/src/native_layout_box_result_cache.rs"]
+mod layout_reuse_native_layout_box_result_cache;
+use layout_reuse_native_layout_box_result_cache::{
+    LayoutBoxAddMeasureLayoutResult, LayoutBoxGetCachedLayoutResult,
+    LayoutBoxGetCachedMeasureResult, LayoutBoxGetSingleCachedLayoutResult,
+    LayoutBoxGetSingleCachedMeasureResultForTesting, LayoutBoxSetCachedLayoutResult,
+};
+
+#[path = "../../../layout_commit/src/native_layout_box_result_commit.rs"]
+mod layout_commit_native_layout_box_result_commit;
+use layout_commit_native_layout_box_result_commit::{
+    LayoutBoxAppendLayoutResult, LayoutBoxFinalizeLayoutResults, LayoutBoxRebuildFragmentTreeSpine,
+    LayoutBoxReplaceLayoutResult, LayoutBoxSetLayoutResult, LayoutBoxShrinkLayoutResults,
+};
+
+#[path = "../../../layout_algo_block/src/native_column_spanner_admission.rs"]
+mod layout_algo_block_native_column_spanner_admission;
+use layout_algo_block_native_column_spanner_admission::{
+    LayoutBoxDoesAncestryAllowColumnSpanner, LayoutBoxIsSelfValidColumnSpanner,
+    LayoutBoxIsValidColumnSpannerInTree, LayoutBoxShouldPreventColumnSpannerDescendants,
+};
 
 // The base-first Rust representation cannot use C++'s LayoutBox virtual
 // table. Keep the flex overflow conversion at this call boundary so callers
@@ -188,10 +235,6 @@ unsafe extern "Rust" {
     ) -> bool;
     fn LayoutBoxHasHitTestableOverflowProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxInvalidateItemsProvider(result: &LayoutResult);
-    fn LayoutBoxFragmentDataFromPhysicalFragmentProvider(
-        box_: &LayoutBox,
-        fragment: &PhysicalBoxFragment,
-    ) -> *const FragmentData;
     fn LayoutBoxAutoscrollProvider(box_: &mut LayoutBox, offset: &PhysicalOffset) -> bool;
     fn LayoutBoxCalculateAutoscrollDirectionProvider(
         box_: &LayoutBox,
@@ -394,139 +437,6 @@ impl LayoutBoxMutableForPainting {
     }
 }
 
-// cpp: layoutng/internal/layout_box.h:536-600
-// cpp: layoutng/internal/layout_box_fragment_data.cc:157-184,468-479
-pub struct PhysicalFragmentList<'a> {
-    layout_results_: &'a LayoutResultList,
-}
-
-pub struct PhysicalFragmentIterator<'a> {
-    list: PhysicalFragmentList<'a>,
-    index: usize,
-}
-
-impl<'a> PhysicalFragmentList<'a> {
-    pub fn new(layout_results: &'a LayoutResultList) -> Self {
-        Self {
-            layout_results_: layout_results,
-        }
-    }
-
-    pub fn Size(&self) -> usize {
-        self.layout_results_.len()
-    }
-
-    pub fn IsEmpty(&self) -> bool {
-        self.layout_results_.is_empty()
-    }
-
-    pub fn MayHaveFragmentItems(&self) -> bool {
-        !self.IsEmpty() && self.front().IsInlineFormattingContext()
-    }
-
-    pub fn HasFragmentItems(&self) -> bool {
-        self.MayHaveFragmentItems() && self.SlowHasFragmentItems()
-    }
-
-    pub fn SlowHasFragmentItems(&self) -> bool {
-        self.into_iter().any(PhysicalBoxFragment::HasItems)
-    }
-
-    pub fn IndexOf(&self, fragment: &PhysicalBoxFragment) -> usize {
-        for (index, result) in self.layout_results_.iter().enumerate() {
-            if unsafe { &*result.Get() }.GetPhysicalFragment() as *const _
-                == fragment as *const PhysicalBoxFragment as *const _
-            {
-                return index;
-            }
-        }
-        usize::MAX
-    }
-
-    pub fn Contains(&self, fragment: &PhysicalBoxFragment) -> bool {
-        self.IndexOf(fragment) != usize::MAX
-    }
-
-    pub fn front(&self) -> &PhysicalBoxFragment {
-        self.at(0)
-    }
-
-    pub fn back(&self) -> &PhysicalBoxFragment {
-        self.at(self.Size() - 1)
-    }
-
-    fn at(&self, index: usize) -> &PhysicalBoxFragment {
-        let physical = unsafe { &*self.layout_results_[index].Get() }.GetPhysicalFragment();
-        let box_fragment = To::<PhysicalBoxFragment>(physical as *const _);
-        unsafe { &*box_fragment }
-    }
-}
-
-impl<'a> IntoIterator for PhysicalFragmentList<'a> {
-    type Item = &'a PhysicalBoxFragment;
-    type IntoIter = PhysicalFragmentIterator<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        PhysicalFragmentIterator {
-            list: self,
-            index: 0,
-        }
-    }
-}
-
-impl<'a> IntoIterator for &PhysicalFragmentList<'a> {
-    type Item = &'a PhysicalBoxFragment;
-    type IntoIter = PhysicalFragmentIterator<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        PhysicalFragmentIterator {
-            list: PhysicalFragmentList::new(self.layout_results_),
-            index: 0,
-        }
-    }
-}
-
-impl<'a> Iterator for PhysicalFragmentIterator<'a> {
-    type Item = &'a PhysicalBoxFragment;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.list.Size() {
-            return None;
-        }
-        let index = self.index;
-        self.index += 1;
-        let physical = unsafe { &*self.list.layout_results_[index].Get() }.GetPhysicalFragment();
-        let box_fragment = To::<PhysicalBoxFragment>(physical as *const _);
-        Some(unsafe { &*box_fragment })
-    }
-}
-
-// cpp: layoutng/internal/layout_box_fragment_data.cc:42-66
-fn CheckDidAddFragment(
-    box_: &LayoutBox,
-    new_fragment: &PhysicalBoxFragment,
-    new_fragment_index: usize,
-) {
-    #[cfg(debug_assertions)]
-    {
-        if new_fragment.HasItems() {
-            debug_assert!(box_.ChildrenInline());
-        }
-        for (index, fragment) in box_.PhysicalFragments().into_iter().enumerate() {
-            debug_assert_eq!(fragment.IsFirstForNode(), index == 0);
-            let items = fragment.Items();
-            if !items.is_null() {
-                unsafe { &*items }.CheckAllItemsAreValid();
-            }
-            if index == new_fragment_index {
-                break;
-            }
-        }
-    }
-    #[cfg(not(debug_assertions))]
-    let _ = (box_, new_fragment, new_fragment_index);
-}
-
 // cpp: layoutng/internal/layout_box.h:299-302
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ContractionEdge {
@@ -536,63 +446,7 @@ pub enum ContractionEdge {
 
 // cpp: layoutng/internal/fragmentation_utils.cc:1404-1434
 pub(crate) fn FindPreviousBreakToken(fragment: &PhysicalBoxFragment) -> *const BlockBreakToken {
-    let box_ = To::<LayoutBox>(fragment.GetLayoutObject());
-    debug_assert!(!box_.is_null());
-    let box_ = unsafe { &*box_ };
-    debug_assert!(box_.PhysicalFragmentCount() >= 1);
-    if fragment.IsFirstForNode() {
-        return std::ptr::null();
-    }
-    debug_assert!(box_.PhysicalFragmentCount() > 1);
-    let break_token = fragment.GetBreakToken();
-    let previous_fragment = if !break_token.is_null() {
-        let sequence_number = unsafe { &*break_token }.SequenceNumber() as usize;
-        debug_assert!(sequence_number >= 1);
-        box_.GetPhysicalFragment(sequence_number - 1)
-    } else {
-        box_.GetPhysicalFragment(box_.PhysicalFragmentCount() - 2)
-    };
-    unsafe { &*previous_fragment }.GetBreakToken()
-}
-
-// cpp: layoutng/internal/layout_box_fragment_data.cc:69-90
-fn FragmentForEdge(box_: &LayoutBox, edges: PhysicalBoxSides) -> *const PhysicalBoxFragment {
-    debug_assert!(box_.PhysicalFragmentCount() > 1);
-    debug_assert_eq!(
-        u8::from(edges.top) + u8::from(edges.right) + u8::from(edges.bottom) + u8::from(edges.left),
-        1
-    );
-    let logical_edges = edges.ToLogical(box_.StyleRef().GetWritingDirection());
-    if logical_edges.block_end {
-        for idx in (1..box_.PhysicalFragmentCount()).rev() {
-            let fragment = box_.GetPhysicalFragment(idx);
-            let previous_token = FindPreviousBreakToken(unsafe { &*fragment });
-            if !unsafe { &*previous_token }.IsAtBlockEnd() {
-                return fragment;
-            }
-        }
-    }
-    box_.GetPhysicalFragment(0)
-}
-
-// cpp: layoutng/internal/layout_box_fragment_data.cc:93-97
-fn FragmentForLeftEdge(box_: &LayoutBox) -> *const PhysicalBoxFragment {
-    FragmentForEdge(box_, PhysicalBoxSides::new(false, false, false, true))
-}
-
-// cpp: layoutng/internal/layout_box_fragment_data.cc:99-103
-fn FragmentForRightEdge(box_: &LayoutBox) -> *const PhysicalBoxFragment {
-    FragmentForEdge(box_, PhysicalBoxSides::new(false, true, false, false))
-}
-
-// cpp: layoutng/internal/layout_box_fragment_data.cc:105-109
-fn FragmentForTopEdge(box_: &LayoutBox) -> *const PhysicalBoxFragment {
-    FragmentForEdge(box_, PhysicalBoxSides::new(true, false, false, false))
-}
-
-// cpp: layoutng/internal/layout_box_fragment_data.cc:111-115
-fn FragmentForBottomEdge(box_: &LayoutBox) -> *const PhysicalBoxFragment {
-    FragmentForEdge(box_, PhysicalBoxSides::new(false, false, true, false))
+    LayoutBoxFindPreviousBreakToken(fragment)
 }
 
 // LayoutBox owns exactly one LayoutBoxModelObject base, kept first so the
@@ -815,7 +669,9 @@ impl LayoutBox {
         &self,
         fragment: &PhysicalBoxFragment,
     ) -> *const FragmentData {
-        unsafe { LayoutBoxFragmentDataFromPhysicalFragmentProvider(self, fragment) }
+        // cpp: layoutng/internal/layout_box.cc
+        // LayoutBox::FragmentDataFromPhysicalFragment
+        self.FragmentList().at(BoxFragmentIndex(fragment) as u32)
     }
 
     pub fn Autoscroll(&mut self, offset: &PhysicalOffset) -> bool {
@@ -1341,6 +1197,10 @@ impl LayoutBox {
         unsafe { LayoutBoxIsFragmentationContextRootProvider(self) }
     }
 
+    pub(crate) fn HasCachedLayoutResults(&self) -> bool {
+        !self.layout_results_.is_empty()
+    }
+
     // cpp: layoutng/internal/layout_box_hot.cc:23-462
     pub fn CachedLayoutResult(
         &mut self,
@@ -1351,259 +1211,15 @@ impl LayoutBox {
         initial_fragment_geometry: *mut Option<FragmentGeometry>,
         out_cache_status: &mut LayoutCacheStatus,
     ) -> *const LayoutResult {
-        self.CheckIsNotDestroyed();
-        *out_cache_status = LayoutCacheStatus::kNeedsLayout;
-        if self.SelfNeedsFullLayout() || self.ShouldSkipLayoutCache() || !early_break.is_null() {
-            return std::ptr::null();
-        }
-
-        let use_layout_cache_slot = new_space.CacheSlot() == LayoutResultCacheSlot::kLayout
-            && !self.layout_results_.is_empty();
-        let mut cached_layout_result = if use_layout_cache_slot {
-            self.GetCachedLayoutResult(break_token)
-        } else {
-            self.GetCachedMeasureResult(new_space, initial_fragment_geometry)
-        };
-        if cached_layout_result.is_null() {
-            return std::ptr::null();
-        }
-        let cached = unsafe { &*cached_layout_result };
-        debug_assert_eq!(cached.Status(), EStatus::kSuccess);
-        let mut cache_status = LayoutCacheStatus::kHit;
-        let physical_fragment =
-            unsafe { &*To::<PhysicalBoxFragment>(cached.GetPhysicalFragment() as *const _) };
-        let fragment_break_token = physical_fragment.GetBreakToken();
-        if (!fragment_break_token.is_null() && unsafe { &*fragment_break_token }.IsRepeated())
-            || (!break_token.is_null() && unsafe { &*break_token }.IsRepeated())
-        {
-            return std::ptr::null();
-        }
-
-        let is_blocked_by_display_lock = self.ChildLayoutBlockedByDisplayLock();
-        let child_needs_layout = !is_blocked_by_display_lock && self.ChildNeedsFullLayout();
-        if self.NeedsSimplifiedLayoutOnly() {
-            cache_status = LayoutCacheStatus::kNeedsSimplifiedLayout;
-        } else if child_needs_layout {
-            if !self.ChildrenInline() || !physical_fragment.HasItems() || !use_layout_cache_slot {
-                return std::ptr::null();
-            }
-            if physical_fragment.NeedsOOFPositionedInfoPropagation()
-                || !cached.GetExclusionSpace().IsEmpty()
-                || new_space.HasFloats()
-                || physical_fragment.HasMovedChildren()
-            {
-                return std::ptr::null();
-            }
-            cache_status = LayoutCacheStatus::kCanReuseLines;
-        }
-
-        let node = BlockNode::new(self as *mut LayoutBox);
-        let mut size_cache_status = LayoutCacheStatus::kHit;
-        if use_layout_cache_slot {
-            size_cache_status = CalculateSizeBasedLayoutCacheStatus(
-                &node,
-                break_token,
-                cached,
-                new_space,
-                initial_fragment_geometry,
-            );
-        }
-        if size_cache_status == LayoutCacheStatus::kNeedsLayout {
-            return std::ptr::null();
-        }
-        if cached.HasOrthogonalFallbackSizeDescendant()
-            && unsafe { &mut *self.View() }.AffectedByResizedInitialContainingBlock(cached)
-        {
-            return std::ptr::null();
-        }
-        if !physical_fragment.ChildrenValid()
-            && (size_cache_status == LayoutCacheStatus::kNeedsSimplifiedLayout
-                || cache_status == LayoutCacheStatus::kNeedsSimplifiedLayout)
-        {
-            return std::ptr::null();
-        }
-        if size_cache_status == LayoutCacheStatus::kNeedsSimplifiedLayout
-            && cache_status == LayoutCacheStatus::kHit
-        {
-            cache_status = LayoutCacheStatus::kNeedsSimplifiedLayout;
-        }
-        if cache_status == LayoutCacheStatus::kNeedsSimplifiedLayout {
-            if self.IsLayoutReplaced()
-                || (!use_layout_cache_slot && self.GetCachedLayoutResult(break_token).is_null())
-            {
-                return std::ptr::null();
-            }
-        }
-        if !break_token.is_null()
-            && unsafe { &*break_token }.IsBreakBefore()
-            && cached.GetBreakAppeal() < BreakAppeal::kBreakAppealPerfect
-        {
-            return std::ptr::null();
-        }
-
-        let bfc_line_offset = new_space.GetBfcOffset().line_offset;
-        let mut bfc_block_offset = cached.BfcBlockOffset();
-        let mut block_offset_delta = LayoutUnit::default();
-        let mut end_margin_strut = cached.EndMarginStrut();
-        let is_fragmented = IsBreakInside(break_token)
-            || !physical_fragment.GetBreakToken().is_null()
-            || self.PhysicalFragmentCount() > 1;
-        let old_space = cached.GetConstraintSpaceForCaching();
-        let are_bfc_offsets_equal = new_space.GetBfcOffset() == old_space.GetBfcOffset()
-            && new_space.ExpectedBfcBlockOffset() == old_space.ExpectedBfcBlockOffset()
-            && new_space.ForcedBfcBlockOffset() == old_space.ForcedBfcBlockOffset();
-        let is_margin_strut_equal = new_space.GetMarginStrut() == old_space.GetMarginStrut();
-        let is_exclusion_space_equal =
-            new_space.GetExclusionSpace() == old_space.GetExclusionSpace();
-        let is_clearance_offset_equal = new_space.ClearanceOffset() == old_space.ClearanceOffset();
-        let is_new_formatting_context = physical_fragment.IsFormattingContextRoot();
-
-        if !is_new_formatting_context
-            && (!are_bfc_offsets_equal
-                || !is_exclusion_space_equal
-                || !is_margin_strut_equal
-                || !is_clearance_offset_equal)
-        {
-            debug_assert!(!unsafe { LayoutBoxCreatesNewFormattingContextProvider(self) });
-            if cache_status == LayoutCacheStatus::kNeedsSimplifiedLayout
-                || cache_status == LayoutCacheStatus::kCanReuseLines
-            {
-                return std::ptr::null();
-            }
-            debug_assert_eq!(cache_status, LayoutCacheStatus::kHit);
-            if !MaySkipLayoutWithinBlockFormattingContext(
-                cached,
-                new_space,
-                &mut bfc_block_offset,
-                &mut block_offset_delta,
-                &mut end_margin_strut,
-            ) {
-                return std::ptr::null();
-            }
-        }
-
-        if new_space.HasBlockFragmentation() {
-            debug_assert!(old_space.HasBlockFragmentation());
-            if cache_status != LayoutCacheStatus::kHit
-                || physical_fragment.HasNestedMulticolsWithOOFs()
-                || physical_fragment.HasOutOfFlowFragmentChild()
-                || !column_spanner_path.is_null()
-                || !cached.GetColumnSpannerPath().is_null()
-            {
-                return std::ptr::null();
-            }
-            if new_space.FragmentainerBlockSize() != old_space.FragmentainerBlockSize()
-                || new_space.FragmentainerOffset() != old_space.FragmentainerOffset()
-            {
-                if is_fragmented
-                    || cached.MinimalSpaceShortage().is_some()
-                    || physical_fragment.IsFragmentationContextRoot()
-                    || cached.IsBlockSizeForFragmentationClamped()
-                    || cached.IsTruncatedByFragmentationLine()
-                {
-                    return std::ptr::null();
-                }
-
-                let do_floats_cross_fragmentation_line = || {
-                    let result_exclusion_space = cached.GetExclusionSpace();
-                    if result_exclusion_space != old_space.GetExclusionSpace() {
-                        let block_end_offset = FragmentainerOffsetAtBfc(new_space)
-                            + result_exclusion_space.ClearanceOffset(EClear::kBoth);
-                        if block_end_offset > new_space.FragmentainerBlockSize() {
-                            return true;
-                        }
-                    }
-                    false
-                };
-
-                if bfc_block_offset.is_none() && cached.IsSelfCollapsing() {
-                    if old_space.IsInitialColumnBalancingPass()
-                        || do_floats_cross_fragmentation_line()
-                    {
-                        return std::ptr::null();
-                    }
-                } else {
-                    if physical_fragment.IsInlineFormattingContext()
-                        && !is_new_formatting_context
-                        && do_floats_cross_fragmentation_line()
-                    {
-                        return std::ptr::null();
-                    }
-                    let block_size_for_fragmentation = cached.BlockSizeForFragmentation();
-                    let block_end_offset = FragmentainerOffsetAtBfc(new_space)
-                        + bfc_block_offset.unwrap_or_default()
-                        + block_size_for_fragmentation;
-                    if block_end_offset > new_space.FragmentainerBlockSize() {
-                        return std::ptr::null();
-                    }
-                }
-                if old_space.IsInitialColumnBalancingPass() {
-                    if physical_fragment.HasOutOfFlowInFragmentainerSubtree() {
-                        return std::ptr::null();
-                    }
-                    let block = DynamicTo::<super::layout_block::LayoutBlock>(
-                        self as *mut LayoutBox as *mut LayoutObject,
-                    );
-                    if !block.is_null() && unsafe { &*block }.IsFragmentationContextRoot() {
-                        return std::ptr::null();
-                    }
-                }
-            }
-        }
-
-        if is_fragmented {
-            if cached.GetExclusionSpace().HasFragmentainerBreak()
-                || cache_status == LayoutCacheStatus::kNeedsSimplifiedLayout
-            {
-                return std::ptr::null();
-            }
-        }
-        *out_cache_status = cache_status;
-        if cache_status == LayoutCacheStatus::kNeedsSimplifiedLayout
-            || cache_status == LayoutCacheStatus::kCanReuseLines
-        {
-            return cached_layout_result;
-        }
-        physical_fragment.CheckType();
-        debug_assert_eq!(*out_cache_status, LayoutCacheStatus::kHit);
-        if use_layout_cache_slot
-            && !is_blocked_by_display_lock
-            && self.NeedsScrollableOverflowRecalc()
-        {
-            #[cfg(debug_assertions)]
-            let cloned_cached_layout_result = LayoutResult::CloneWithPostLayoutFragments(cached);
-            if !DisableLayoutSideEffectsScope::IsDisabled() {
-                self.RecalcScrollableOverflow();
-            }
-            cached_layout_result = self.GetCachedLayoutResult(break_token);
-            #[cfg(debug_assertions)]
-            unsafe { &*cloned_cached_layout_result }
-                .CheckSameForSimplifiedLayout(unsafe { &*cached_layout_result }, false);
-        }
-
-        let cached = unsafe { &*cached_layout_result };
-        if self.IsTableRow() {
-            // Match the source's const_cast through LayoutResult's
-            // explicitly interior-mutable cached space.
-            cached.ReplaceTableRowDataForCaching(
-                new_space.CloneTableDataHandle(),
-                new_space.TableRowIndex(),
-            );
-        }
-        if are_bfc_offsets_equal && is_exclusion_space_equal && is_margin_strut_equal {
-            cached
-                .GetExclusionSpace()
-                .MoveAndUpdateDerivedGeometry(new_space.GetExclusionSpace());
-            return cached_layout_result;
-        }
-        MakeGarbageCollected(LayoutResult::copy_with_new_space(
-            cached,
+        crate::layout_reuse_package::cached_layout_result(
+            self,
             new_space,
-            &end_margin_strut,
-            bfc_line_offset,
-            bfc_block_offset,
-            block_offset_delta,
-        ))
+            break_token,
+            early_break,
+            column_spanner_path,
+            initial_fragment_geometry,
+            out_cache_status,
+        )
     }
 
     // cpp: layoutng/internal/layout_box_geometry.cc:58-59
@@ -1737,25 +1353,7 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_geometry.cc:576-601
     pub fn BoundingBoxRelativeToFirstFragment(&self) -> PhysicalRect {
-        self.CheckIsNotDestroyed();
-        let mut bounding_rect = PhysicalRect::default();
-        let mut first_fragment: *const PhysicalBoxFragment = std::ptr::null();
-        for fragment in self.PhysicalFragments() {
-            let offset = if first_fragment.is_null() {
-                first_fragment = fragment;
-                PhysicalOffset::default()
-            } else {
-                fragment.OffsetFromRootFragmentationContext()
-                    - unsafe { &*first_fragment }.OffsetFromRootFragmentationContext()
-            };
-            let fragment_rect = PhysicalRect::new(offset, fragment.Size());
-            bounding_rect.UniteEvenIfEmpty(&fragment_rect);
-            let break_token = fragment.GetBreakToken();
-            if !break_token.is_null() && unsafe { &*break_token }.IsAtBlockEnd() {
-                break;
-            }
-        }
-        bounding_rect
+        LayoutBoxBoundingBoxRelativeToFirstFragment(self)
     }
 
     // cpp: layoutng/internal/layout_box_geometry.cc:647-650
@@ -1766,12 +1364,7 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_geometry.cc:772-779
     pub fn TransformsChangeMayRequireLayout(&self) -> bool {
-        for fragment in self.PhysicalFragments() {
-            if fragment.HasAnchorsToPropagate() {
-                return true;
-            }
-        }
-        false
+        LayoutBoxTransformsChangeMayRequireLayout(self)
     }
 
     // cpp: layoutng/internal/layout_box_geometry.cc:781-784
@@ -1822,30 +1415,12 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_geometry.cc:404-414
     pub fn IsValidColumnSpannerInTree(&self, style: &ComputedStyle) -> bool {
-        self.CheckIsNotDestroyed();
-        if self.Parent().is_null()
-            || !self.IsInsideMulticol()
-            || !self.IsSelfValidColumnSpanner(style)
-        {
-            return false;
-        }
-        self.DoesAncestryAllowColumnSpanner(style)
+        LayoutBoxIsValidColumnSpannerInTree(self, style)
     }
 
     // cpp: layoutng/internal/layout_box_geometry.cc:416-433
     pub fn IsSelfValidColumnSpanner(&self, style: &ComputedStyle) -> bool {
-        self.CheckIsNotDestroyed();
-        if style.GetColumnSpan() != EColumnSpan::kAll {
-            return false;
-        }
-        if self.ShouldBeHandledAsInline(style)
-            || self.ShouldBeHandledAsFloating(style)
-            || self.ToPositionedState(style.GetPosition())
-                == PositionedState::kIsOutOfFlowPositioned
-        {
-            return false;
-        }
-        true
+        LayoutBoxIsSelfValidColumnSpanner(self, style)
     }
 
     // cpp: layoutng/internal/layout_box.h:638-641
@@ -1855,25 +1430,7 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_geometry.cc:435-449
     pub fn DoesAncestryAllowColumnSpanner(&self, _style: &ComputedStyle) -> bool {
-        self.CheckIsNotDestroyed();
-        debug_assert!(self.IsInsideMulticol());
-        let parent = self.Parent();
-        let mut ancestor = if parent.is_null() {
-            std::ptr::null_mut()
-        } else {
-            unsafe { &*parent }.EnclosingBox()
-        };
-        while !ancestor.is_null() {
-            let ancestor_ref = unsafe { &*ancestor };
-            if ancestor_ref.IsMulticolContainer() {
-                return true;
-            }
-            if ancestor_ref.ShouldPreventColumnSpannerDescendants() {
-                return false;
-            }
-            ancestor = ancestor_ref.ContainingBlock() as *mut LayoutBox;
-        }
-        false
+        LayoutBoxDoesAncestryAllowColumnSpanner(self)
     }
 
     // cpp: layoutng/internal/layout_box.h:650-653
@@ -1883,24 +1440,7 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_geometry.cc:451-478
     pub fn ShouldPreventColumnSpannerDescendants(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        if self.IsSelfValidColumnSpannerCurrentStyle() {
-            return true;
-        }
-        let block_flow =
-            DynamicTo::<LayoutBlockFlow>(self as *const LayoutBox as *const LayoutObject);
-        if block_flow.is_null() {
-            return true;
-        }
-        let block_flow = unsafe { &*block_flow };
-        if block_flow.IsMonolithic()
-            || block_flow.CreatesNewFormattingContext()
-            || block_flow.CanContainFixedPositionObjects()
-        {
-            return true;
-        }
-        debug_assert_ne!(self.StyleRef().GetColumnSpan(), EColumnSpan::kAll);
-        false
+        LayoutBoxShouldPreventColumnSpannerDescendants(self)
     }
 
     // cpp: layoutng/internal/layout_box_geometry.cc:348-374
@@ -2130,25 +1670,7 @@ impl LayoutBox {
         mode: MapCoordinatesFlags,
         box_type: BoxQuadType,
     ) {
-        self.CheckIsNotDestroyed();
-        // The LayoutBox storage used by SVG containers must not turn a
-        // resource definition into a CSS geometry box.
-        if self.IsSVGHiddenContainer() {
-            return;
-        }
-        let mut first_fragment: Option<&PhysicalBoxFragment> = None;
-        for fragment in self.PhysicalFragments() {
-            let offset = if let Some(first) = first_fragment {
-                fragment.OffsetFromRootFragmentationContext()
-                    - first.OffsetFromRootFragmentationContext()
-            } else {
-                first_fragment = Some(fragment);
-                PhysicalOffset::default()
-            };
-            let mut rect = LocalRectForBoxQuad(fragment, box_type);
-            rect.offset += offset;
-            quads.push(self.LocalRectToAncestorQuad(&rect, ancestor, mode));
-        }
+        LayoutBoxQuadsInAncestorInternal(self, quads, ancestor, mode, box_type)
     }
 
     // cpp: layoutng/internal/layout_box_geometry.cc:540-549
@@ -2188,15 +1710,7 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_geometry.cc:665-674
     pub fn ResolvedDirection(&self) -> TextDirection {
-        self.CheckIsNotDestroyed();
-        if self.IsInLayoutNGInlineFormattingContext() && self.IsInline() {
-            let mut cursor = InlineCursor::default();
-            cursor.MoveToLayoutObject(self);
-            if !cursor.IsNull() {
-                return cursor.Current().ResolvedDirection();
-            }
-        }
-        self.StyleRef().Direction()
+        LayoutBoxResolvedDirection(self)
     }
 
     // cpp: layoutng/internal/layout_box_geometry.cc:652-662
@@ -2304,34 +1818,7 @@ impl LayoutBox {
     // cpp: layoutng/internal/layout_box.h:263-263
     // cpp: layoutng/internal/layout_box_fragment_data.cc:482-521
     pub fn StitchedBlockSize(&self) -> LayoutUnit {
-        self.CheckIsNotDestroyed();
-        if self.PhysicalFragmentCount() == 0 {
-            return LayoutUnit::default();
-        }
-        let writing_direction = self.StyleRef().GetWritingDirection();
-        let first_fragment = unsafe { &*self.GetPhysicalFragment(0) };
-        let first_break_token = first_fragment.GetBreakToken();
-        if first_fragment.IsOnlyForNode()
-            || (!first_break_token.is_null() && unsafe { &*first_break_token }.IsRepeated())
-        {
-            return LogicalFragment::new(writing_direction, first_fragment).BlockSize();
-        }
-        let mut idx = self.PhysicalFragmentCount() - 1;
-        debug_assert!(idx >= 1);
-        let mut last_content_fragment_size = unsafe { &*self.GetPhysicalFragment(idx) }.Size();
-        let mut previously_consumed_block_size = LayoutUnit::default();
-        while idx != 0 {
-            idx -= 1;
-            let break_token = unsafe { &*self.GetPhysicalFragment(idx) }.GetBreakToken();
-            if !unsafe { &*break_token }.IsAtBlockEnd() {
-                previously_consumed_block_size = unsafe { &*break_token }.ConsumedBlockSize();
-                break;
-            }
-            last_content_fragment_size = unsafe { &*self.GetPhysicalFragment(idx) }.Size();
-        }
-        let logical_size =
-            ToLogicalSize(last_content_fragment_size, self.StyleRef().GetWritingMode());
-        previously_consumed_block_size + logical_size.block_size
+        LayoutBoxStitchedBlockSize(self)
     }
 
     // cpp: layoutng/internal/layout_box.h:250-254
@@ -2387,80 +1874,13 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:593-640
     pub fn PhysicalContractedBoxRect(&self, edge: ContractionEdge) -> PhysicalRect {
-        self.CheckIsNotDestroyed();
-        let mut rect = PhysicalRect::new(PhysicalOffset::default(), self.StitchedSize());
-        let mut inset = PhysicalBoxStrut::default();
-        if self.PhysicalFragmentCount() == 1 {
-            let fragment = unsafe { &*self.GetPhysicalFragment(0) };
-            if fragment.HasBorders() {
-                inset += fragment.Borders();
-            }
-            if fragment.HasScrollbar() {
-                inset += fragment.Scrollbar();
-            }
-            if edge == ContractionEdge::kContractToContentEdge && fragment.HasPadding() {
-                inset += fragment.Padding();
-            }
-        } else if self.PhysicalFragmentCount() != 0 {
-            let top_fragment = unsafe { &*FragmentForTopEdge(self) };
-            let right_fragment = unsafe { &*FragmentForRightEdge(self) };
-            let bottom_fragment = unsafe { &*FragmentForBottomEdge(self) };
-            let left_fragment = unsafe { &*FragmentForLeftEdge(self) };
-            inset.top += top_fragment.Borders().top + top_fragment.Scrollbar().top;
-            inset.right += right_fragment.Borders().right + right_fragment.Scrollbar().right;
-            inset.bottom += bottom_fragment.Borders().bottom + bottom_fragment.Scrollbar().bottom;
-            inset.left += left_fragment.Borders().left + left_fragment.Scrollbar().left;
-            if edge == ContractionEdge::kContractToContentEdge {
-                inset.top += top_fragment.Padding().top;
-                inset.right += right_fragment.Padding().right;
-                inset.bottom += bottom_fragment.Padding().bottom;
-                inset.left += left_fragment.Padding().left;
-            }
-        }
-        rect.Contract(&inset);
-        rect.size.width = rect.size.width.ClampNegativeToZero();
-        rect.size.height = rect.size.height.ClampNegativeToZero();
-        rect
+        LayoutBoxPhysicalContractedBoxRect(self, edge)
     }
 
     // cpp: layoutng/internal/layout_box.h:1314-1315
     // cpp: layoutng/internal/layout_box_fragment_data.cc:533-576
     pub fn ComputeSize(&self) -> PhysicalSize {
-        self.CheckIsNotDestroyed();
-        let results = self.GetLayoutResults();
-        let Some(first_result) = results.iter().next() else {
-            return PhysicalSize::default();
-        };
-        let first_fragment = unsafe { &*first_result.Get() }.GetPhysicalFragment();
-        if results.len() == 1 {
-            return first_fragment.Size();
-        }
-        let converter =
-            WritingModeConverter::without_outer_size(first_fragment.Style().GetWritingDirection());
-        let mut previous_break_token: *const BlockBreakToken = std::ptr::null();
-        let mut size = LogicalSize::default();
-        for result in results {
-            let fragment = unsafe { &*result.Get() }.GetPhysicalFragment();
-            debug_assert!(fragment.IsBox());
-            let physical_fragment =
-                unsafe { &*(fragment as *const _ as *const PhysicalBoxFragment) };
-            let fragment_logical_size = converter.ToLogicalSize(physical_fragment.Size());
-            if physical_fragment.IsFirstForNode() {
-                size = fragment_logical_size;
-            } else {
-                debug_assert!(!previous_break_token.is_null());
-                size.block_size = fragment_logical_size.block_size
-                    + unsafe { &*previous_break_token }.ConsumedBlockSize();
-            }
-            previous_break_token = physical_fragment.GetBreakToken();
-            if previous_break_token.is_null()
-                || unsafe { &*previous_break_token }.IsRepeated()
-                || unsafe { &*previous_break_token }.IsAtBlockEnd()
-            {
-                break;
-            }
-        }
-        converter.ToPhysicalSize(size)
+        LayoutBoxComputeSize(self)
     }
 
     // cpp: layoutng/internal/layout_box.h:670-676
@@ -2727,206 +2147,47 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:119-131
     pub fn DisassociatePhysicalFragments(&mut self) {
-        self.CheckIsNotDestroyed();
-        if self.FirstInlineFragmentItemIndex() != 0 {
-            FragmentItems::LayoutObjectWillBeDestroyed(self);
-            self.ClearFirstInlineFragmentItemIndex();
-        }
-        let measure_cache = self.measure_cache_.Get();
-        if !measure_cache.is_null() {
-            unsafe { &*measure_cache }.LayoutObjectWillBeDestroyed();
-        }
-        for result in self.layout_results_.iter() {
-            unsafe { &*result.Get() }
-                .GetPhysicalFragment()
-                .LayoutObjectWillBeDestroyed();
-        }
+        LayoutBoxDisassociatePhysicalFragments(self)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:186-207
     pub fn AddMeasureLayoutResult(&mut self, result: *const LayoutResult) {
-        self.CheckIsNotDestroyed();
-        let result_ref = unsafe { &*result };
-        if result_ref.Status() != EStatus::kSuccess {
-            return;
-        }
-        if result_ref.GetConstraintSpaceForCaching().CacheSlot() != LayoutResultCacheSlot::kMeasure
-        {
-            return;
-        }
-        let box_fragment = To::<PhysicalBoxFragment>(result_ref.GetPhysicalFragment() as *const _);
-        debug_assert!(unsafe { &*box_fragment }.IsOnlyForNode());
-        if self.measure_cache_.Get().is_null() {
-            self.measure_cache_ = Member::from_ptr(MakeGarbageCollected(MeasureCache::default()));
-        }
-        let measure_cache = unsafe { &mut *self.measure_cache_.Get() };
-        if self.NeedsLayout() && !self.NeedsSimplifiedLayoutOnly() {
-            measure_cache.Clear();
-        }
-        measure_cache.Add(result);
+        LayoutBoxAddMeasureLayoutResult(self, result)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:209-243
     pub fn SetCachedLayoutResult(&mut self, result: *const LayoutResult, index: usize) {
-        self.CheckIsNotDestroyed();
-        let result_ref = unsafe { &*result };
-        if result_ref.GetConstraintSpaceForCaching().CacheSlot() == LayoutResultCacheSlot::kMeasure
-        {
-            debug_assert!(result_ref.GetPhysicalFragment().GetBreakToken().is_null());
-            let box_fragment =
-                To::<PhysicalBoxFragment>(result_ref.GetPhysicalFragment() as *const _);
-            debug_assert!(unsafe { &*box_fragment }.IsOnlyForNode());
-            debug_assert_eq!(index, 0);
-            self.AddMeasureLayoutResult(result);
-            if self.IsTableCell() {
-                unsafe { InvalidateLayoutResultCacheAfterMeasureProvider(self) };
-            }
-        } else if self.NeedsLayout() && !self.NeedsSimplifiedLayoutOnly() {
-            let measure_cache = self.measure_cache_.Get();
-            if !measure_cache.is_null() {
-                unsafe { &mut *measure_cache }.Clear();
-            }
-        }
-        let measure_cache = self.measure_cache_.Get();
-        if !measure_cache.is_null() {
-            unsafe { &*measure_cache }.SetFragmentChildrenInvalid(result);
-        }
-        self.SetLayoutResult(result, index);
+        LayoutBoxSetCachedLayoutResult(self, result, index)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:245-290
     pub fn SetLayoutResult(&mut self, result: *const LayoutResult, index: usize) {
-        self.CheckIsNotDestroyed();
-        let result_ref = unsafe { &*result };
-        debug_assert_eq!(result_ref.Status(), EStatus::kSuccess);
-        let box_fragment = To::<PhysicalBoxFragment>(result_ref.GetPhysicalFragment() as *const _);
-        let box_fragment = unsafe { &*box_fragment };
-        if index != usize::MAX && self.layout_results_.len() > index {
-            if self.layout_results_.len() > index + 1 {
-                let break_token = box_fragment.GetBreakToken();
-                if break_token.is_null()
-                    || unsafe { &*break_token }.IsCausedByColumnSpanner()
-                    || box_fragment.IsFragmentationContextRoot()
-                {
-                    if box_fragment.IsInlineFormattingContext() {
-                        FragmentItems::ClearAssociatedFragments(
-                            self as *mut LayoutBox as *mut LayoutObject,
-                        );
-                    }
-                    self.ShrinkLayoutResults(index + 1);
-                }
-            }
-            self.ReplaceLayoutResult(result, index);
-            return;
-        }
-        debug_assert!(index == self.layout_results_.len() || index == usize::MAX);
-        self.AppendLayoutResult(result);
-        if box_fragment.GetBreakToken().is_null() {
-            self.FinalizeLayoutResults();
-        }
+        LayoutBoxSetLayoutResult(self, result, index)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:292-300
     pub fn AppendLayoutResult(&mut self, result: *const LayoutResult) {
-        self.CheckIsNotDestroyed();
-        let fragment =
-            To::<PhysicalBoxFragment>(unsafe { &*result }.GetPhysicalFragment() as *const _);
-        debug_assert!(!DisableLayoutSideEffectsScope::IsDisabled());
-        self.layout_results_
-            .push(Member::from_ptr(result as *mut LayoutResult));
-        self.InvalidateCachedGeometry();
-        CheckDidAddFragment(self, unsafe { &*fragment }, usize::MAX);
+        LayoutBoxAppendLayoutResult(self, result)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:302-341
     pub fn ReplaceLayoutResult(&mut self, result: *const LayoutResult, index: usize) {
-        self.CheckIsNotDestroyed();
-        debug_assert!(index <= self.layout_results_.len());
-        let old_result = self.layout_results_[index].Get();
-        if old_result == result as *mut LayoutResult {
-            return;
-        }
-        let fragment =
-            To::<PhysicalBoxFragment>(unsafe { &*result }.GetPhysicalFragment() as *const _);
-        let fragment = unsafe { &*fragment };
-        let old_fragment = unsafe { &*old_result }.GetPhysicalFragment();
-        let got_new_fragment = old_fragment as *const _ != fragment as *const _ as *const _;
-        if got_new_fragment {
-            if self.HasFragmentItems() {
-                FragmentItems::ClearAssociatedFragments(
-                    self as *mut LayoutBox as *mut LayoutObject,
-                );
-            }
-            if self.layout_results_.len() > 1 && fragment.Size() != old_fragment.Size() {
-                self.SetShouldDoFullPaintInvalidation();
-            }
-        }
-        debug_assert!(!DisableLayoutSideEffectsScope::IsDisabled());
-        self.layout_results_[index] = Member::from_ptr(result as *mut LayoutResult);
-        self.InvalidateCachedGeometry();
-        CheckDidAddFragment(self, fragment, index);
-        if got_new_fragment && fragment.GetBreakToken().is_null() {
-            debug_assert_eq!(index, self.layout_results_.len() - 1);
-            self.FinalizeLayoutResults();
-        }
+        LayoutBoxReplaceLayoutResult(self, result, index)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:343-356
     pub fn FinalizeLayoutResults(&mut self) {
-        self.CheckIsNotDestroyed();
-        debug_assert!(!self.layout_results_.is_empty());
-        let last = self
-            .layout_results_
-            .last()
-            .expect("layout result required")
-            .Get();
-        debug_assert!(unsafe { &*last }
-            .GetPhysicalFragment()
-            .GetBreakToken()
-            .is_null());
-        #[cfg(feature = "expensive_dchecks")]
-        self.CheckMayHaveFragmentItems();
-        if self.HasFragmentItems() {
-            let results = &self.layout_results_ as *const LayoutResultList;
-            let block_flow =
-                DynamicTo::<LayoutBlockFlow>(self as *mut LayoutBox as *mut LayoutObject);
-            debug_assert!(!block_flow.is_null());
-            FragmentItems::FinalizeAfterLayout(unsafe { &*results }, unsafe { &mut *block_flow });
-        }
+        LayoutBoxFinalizeLayoutResults(self)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:358-387
     pub fn RebuildFragmentTreeSpine(&mut self) {
-        self.CheckIsNotDestroyed();
-        debug_assert!(self.PhysicalFragmentCount() != 0);
-        let mut container = self as *mut LayoutBox;
-        while !container.is_null()
-            && unsafe { &*container }.PhysicalFragmentCount() != 0
-            && !unsafe { &*container }.NeedsLayout()
-        {
-            let current = unsafe { &mut *container };
-            for result in current.layout_results_.iter_mut() {
-                let cloned = LayoutResult::CloneWithPostLayoutFragments(unsafe { &*result.Get() });
-                *result = Member::from_ptr(cloned as *mut LayoutResult);
-            }
-            let measure_cache = current.measure_cache_.Get();
-            if !measure_cache.is_null() {
-                unsafe { &mut *measure_cache }.Clear();
-            }
-            container = current.ContainingNGBox();
-        }
-        if !container.is_null() && unsafe { &*container }.NeedsLayout() {
-            unsafe { &mut *container }.SetHasBrokenSpine();
-        }
+        LayoutBoxRebuildFragmentTreeSpine(self)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:389-397
     pub fn ShrinkLayoutResults(&mut self, results_to_keep: usize) {
-        self.CheckIsNotDestroyed();
-        debug_assert!(self.layout_results_.len() >= results_to_keep);
-        debug_assert!(!DisableLayoutSideEffectsScope::IsDisabled());
-        self.layout_results_.truncate(results_to_keep);
-        self.InvalidateCachedGeometry();
+        LayoutBoxShrinkLayoutResults(self, results_to_keep)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:412-422
@@ -2934,19 +2195,7 @@ impl LayoutBox {
         &self,
         break_token: *const BlockBreakToken,
     ) -> *const LayoutResult {
-        self.CheckIsNotDestroyed();
-        let index = FragmentIndex(break_token);
-        if index >= self.layout_results_.len() {
-            return std::ptr::null();
-        }
-        let result = self.layout_results_[index].Get();
-        debug_assert!(
-            !unsafe { &*result }
-                .GetPhysicalFragment()
-                .IsLayoutObjectDestroyedOrMoved()
-                || self.BeingDestroyed()
-        );
-        result
+        LayoutBoxGetCachedLayoutResult(self, break_token)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:424-450
@@ -2955,29 +2204,12 @@ impl LayoutBox {
         space: &ConstraintSpace,
         fragment_geometry: *mut Option<FragmentGeometry>,
     ) -> *const LayoutResult {
-        self.CheckIsNotDestroyed();
-        let measure_cache = self.measure_cache_.Get();
-        if measure_cache.is_null() {
-            return std::ptr::null();
-        }
-        if !self.layout_results_.is_empty() {
-            let first_fragment = unsafe { &*self.GetPhysicalFragment(0) };
-            if !first_fragment.GetBreakToken().is_null() {
-                return std::ptr::null();
-            }
-        }
-        debug_assert!(!fragment_geometry.is_null());
-        unsafe { &mut *measure_cache }.Find(
-            &BlockNode::new(self as *const LayoutBox as *mut LayoutBox),
-            space,
-            unsafe { &mut *fragment_geometry },
-        )
+        LayoutBoxGetCachedMeasureResult(self, space, fragment_geometry)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:452-455
     pub fn GetSingleCachedLayoutResult(&self) -> *const LayoutResult {
-        debug_assert!(self.layout_results_.len() <= 1);
-        self.GetCachedLayoutResult(std::ptr::null())
+        LayoutBoxGetSingleCachedLayoutResult(self)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:642-658
@@ -3019,242 +2251,17 @@ impl LayoutBox {
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:678-763
     pub fn SetScrollableOverflowFromLayoutResults(&mut self) {
-        self.CheckIsNotDestroyed();
-        self.ClearSelfNeedsScrollableOverflowRecalc();
-        self.ClearChildNeedsScrollableOverflowRecalc();
-        let overflow = self.overflow_.Get();
-        if !overflow.is_null() {
-            unsafe { &mut *overflow }.scrollable_overflow = None;
-        }
-        if self.IsLayoutReplaced() {
-            return;
-        }
-        let writing_mode = self.StyleRef().GetWritingMode();
-        let mut scrollable_overflow: Option<PhysicalRect> = None;
-        let mut consumed_block_size = LayoutUnit::default();
-        let mut fragment_width_sum = LayoutUnit::default();
-        for layout_result in self.layout_results_.iter() {
-            let fragment = To::<PhysicalBoxFragment>(
-                unsafe { &*layout_result.Get() }.GetPhysicalFragment() as *const _,
-            );
-            let fragment = unsafe { &*fragment };
-            let offset_adjust = match writing_mode {
-                WritingMode::kHorizontalTb => {
-                    PhysicalOffset::new(LayoutUnit::default(), consumed_block_size)
-                }
-                WritingMode::kVerticalRl | WritingMode::kSidewaysRl => {
-                    fragment_width_sum += fragment.Size().width;
-                    PhysicalOffset::new(
-                        -fragment.Size().width - consumed_block_size,
-                        LayoutUnit::default(),
-                    )
-                }
-                WritingMode::kVerticalLr | WritingMode::kSidewaysLr => {
-                    PhysicalOffset::new(consumed_block_size, LayoutUnit::default())
-                }
-            };
-            let mut fragment_scrollable_overflow = fragment.ScrollableOverflow();
-            fragment_scrollable_overflow.offset += offset_adjust;
-            if let Some(overflow) = scrollable_overflow.as_mut() {
-                overflow.UniteEvenIfEmpty(&fragment_scrollable_overflow);
-            } else {
-                scrollable_overflow = Some(fragment_scrollable_overflow);
-            }
-            let break_token = fragment.GetBreakToken();
-            if !break_token.is_null() {
-                if unsafe { &*break_token }.IsRepeated() {
-                    break;
-                }
-                consumed_block_size = unsafe { &*break_token }.ConsumedBlockSize();
-            }
-        }
-        let Some(mut scrollable_overflow) = scrollable_overflow else {
-            return;
-        };
-        if self.StyleRef().IsFlippedBlocksWritingMode() {
-            scrollable_overflow.offset.left += fragment_width_sum;
-        }
-        if scrollable_overflow.IsEmpty()
-            || self
-                .PhysicalPaddingBoxRect()
-                .ContainsRect(&scrollable_overflow)
-        {
-            return;
-        }
-        debug_assert!(!self.ScrollableOverflowIsSet());
-        if self.overflow_.Get().is_null() {
-            self.overflow_ = Member::from_ptr(MakeGarbageCollected(BoxOverflowModel::default()));
-        }
-        unsafe { &mut *self.overflow_.Get() }.scrollable_overflow =
-            Some(BoxScrollableOverflowModel::new(&scrollable_overflow));
+        LayoutBoxSetScrollableOverflowFromLayoutResults(self)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:578-592
     pub fn LocationContainer(&self) -> *mut LayoutBox {
-        self.CheckIsNotDestroyed();
-        if self.IsSVGChild() {
-            return std::ptr::null_mut();
-        }
-        let mut container = self.Container();
-        while !container.is_null() && !unsafe { &*container }.IsBox() {
-            container = unsafe { &*container }.Container();
-        }
-        To::<LayoutBox>(container)
-    }
-
-    // cpp: layoutng/internal/layout_box_fragment_data.cc:399-405
-    #[cfg(feature = "expensive_dchecks")]
-    pub fn CheckMayHaveFragmentItems(&self) {
-        self.CheckIsNotDestroyed();
-        if !self.MayHaveFragmentItems() {
-            debug_assert!(!self.PhysicalFragments().SlowHasFragmentItems());
-        }
-    }
-
-    // cpp: layoutng/internal/layout_box.h:606-606
-    // cpp: layoutng/internal/layout_box_fragment_data.cc:462-465
-    pub fn GetLayoutResult(&self, i: usize) -> *const LayoutResult {
-        self.CheckIsNotDestroyed();
-        self.layout_results_[i].Get()
-    }
-
-    // cpp: layoutng/internal/layout_box_fragment_data.cc:407-410
-    pub fn InvalidateCachedGeometry(&self) {
-        self.CheckIsNotDestroyed();
-        self.SetHasValidCachedGeometry(false);
+        LayoutBoxLocationContainer(self)
     }
 
     // cpp: layoutng/internal/layout_box_fragment_data.cc:457-460
     pub fn GetSingleCachedMeasureResultForTesting(&self) -> *const LayoutResult {
-        self.CheckIsNotDestroyed();
-        let measure_cache = self.measure_cache_.Get();
-        if measure_cache.is_null() {
-            std::ptr::null()
-        } else {
-            unsafe { &*measure_cache }.GetLastForTesting()
-        }
-    }
-
-    // cpp: layoutng/internal/layout_box.h:607-611
-    // cpp: layoutng/internal/layout_box_hot.cc:464-467
-    pub fn GetPhysicalFragment(&self, i: usize) -> *const PhysicalBoxFragment {
-        self.CheckIsNotDestroyed();
-        let result = unsafe { &*self.layout_results_[i].Get() };
-        result.GetPhysicalFragment() as *const _ as *const PhysicalBoxFragment
-    }
-
-    // cpp: layoutng/internal/layout_box.h:614-617
-    pub fn PhysicalFragmentCount(&self) -> usize {
-        self.CheckIsNotDestroyed();
-        self.layout_results_.len()
-    }
-
-    // cpp: layoutng/internal/layout_box_fragment_data.cc:133-136
-    pub fn HasInlineFragments(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        self.first_fragment_item_index_ != 0
-    }
-
-    // cpp: layoutng/internal/layout_box_fragment_data.cc:138-142
-    pub fn ClearFirstInlineFragmentItemIndex(&mut self) {
-        self.CheckIsNotDestroyed();
-        assert!(self.IsInLayoutNGInlineFormattingContext());
-        self.first_fragment_item_index_ = 0;
-    }
-
-    // cpp: layoutng/internal/layout_box_fragment_data.cc:144-149
-    pub fn SetFirstInlineFragmentItemIndex(&mut self, index: usize) {
-        self.CheckIsNotDestroyed();
-        assert!(self.IsInLayoutNGInlineFormattingContext());
-        debug_assert_ne!(index, 0);
-        self.first_fragment_item_index_ = index;
-    }
-
-    // cpp: layoutng/internal/layout_box_fragment_data.cc:151-155
-    pub fn InLayoutNGInlineFormattingContextWillChange(&mut self, _new_value: bool) {
-        self.CheckIsNotDestroyed();
-        if self.IsInLayoutNGInlineFormattingContext() {
-            self.ClearFirstInlineFragmentItemIndex();
-        }
-    }
-
-    // cpp: layoutng/internal/layout_box_geometry.cc:676-689
-    // cpp: layoutng/internal/layout_box_geometry.cc:691-704
-    pub fn OutOfFlowInsetsForGetComputedStyle(&self) -> &BoxStrut {
-        self.CheckIsNotDestroyed();
-        let layout_results = self.GetLayoutResults();
-        let first = layout_results
-            .iter()
-            .next()
-            .expect("out-of-flow insets require a completed layout result");
-        #[cfg(feature = "expensive_dchecks")]
-        {
-            let mut previous = unsafe { &*first.Get() };
-            for result in layout_results.iter().skip(1) {
-                let current = unsafe { &*result.Get() };
-                debug_assert_eq!(
-                    current.OutOfFlowInsetsForGetComputedStyle(),
-                    previous.OutOfFlowInsetsForGetComputedStyle(),
-                );
-                previous = current;
-            }
-        }
-        unsafe { &*first.Get() }.OutOfFlowInsetsForGetComputedStyle()
-    }
-
-    // cpp: layoutng/internal/layout_box_geometry.cc:676-689
-    // cpp: layoutng/internal/layout_box_geometry.cc:740-754
-    pub fn NeedsAnchorPositionScrollAdjustmentInX(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        let layout_results = self.GetLayoutResults();
-        let Some(first) = layout_results.iter().next() else {
-            return false;
-        };
-        #[cfg(feature = "expensive_dchecks")]
-        {
-            let mut previous = unsafe { &*first.Get() };
-            for result in layout_results.iter().skip(1) {
-                let current = unsafe { &*result.Get() };
-                debug_assert_eq!(
-                    current.NeedsAnchorPositionScrollAdjustmentInX(),
-                    previous.NeedsAnchorPositionScrollAdjustmentInX(),
-                );
-                previous = current;
-            }
-        }
-        unsafe { &*first.Get() }.NeedsAnchorPositionScrollAdjustmentInX()
-    }
-
-    // cpp: layoutng/internal/layout_box_geometry.cc:676-689
-    // cpp: layoutng/internal/layout_box_geometry.cc:756-770
-    pub fn NeedsAnchorPositionScrollAdjustmentInY(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        let layout_results = self.GetLayoutResults();
-        let Some(first) = layout_results.iter().next() else {
-            return false;
-        };
-        #[cfg(feature = "expensive_dchecks")]
-        {
-            let mut previous = unsafe { &*first.Get() };
-            for result in layout_results.iter().skip(1) {
-                let current = unsafe { &*result.Get() };
-                debug_assert_eq!(
-                    current.NeedsAnchorPositionScrollAdjustmentInY(),
-                    previous.NeedsAnchorPositionScrollAdjustmentInY(),
-                );
-                previous = current;
-            }
-        }
-        unsafe { &*first.Get() }.NeedsAnchorPositionScrollAdjustmentInY()
-    }
-
-    // cpp: layoutng/internal/layout_box.h:1363-1368
-    pub fn FirstInlineFragmentItemIndex(&self) -> usize {
-        self.CheckIsNotDestroyed();
-        if !self.IsInLayoutNGInlineFormattingContext() {
-            return 0;
-        }
-        self.first_fragment_item_index_
+        LayoutBoxGetSingleCachedMeasureResultForTesting(self)
     }
 }
 

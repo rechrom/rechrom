@@ -12,8 +12,8 @@ use foundation::{
 };
 use graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use graphics_types::graphics::visual_rect_flags::VisualRectFlags;
-use layoutng_fragment_tree::fragment_data::{FragmentData, FragmentDataList};
-use layoutng_fragment_tree::physical_box_fragment::PhysicalBoxFragment;
+use layout_fragment::fragment_data::{FragmentData, FragmentDataList};
+use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
 use layoutng_geometry::geometry::axis::PhysicalAxis;
 use layoutng_geometry::geometry::overflow_clip_axes::{
     kNoOverflowClip, kOverflowClipBothAxis, OverflowClipAxes,
@@ -60,6 +60,74 @@ use super::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReasons;
 use super::scrollbar_theme_metrics::{RequireScrollbarTheme, ScrollbarThemeMetrics};
 use super::selection_state::SelectionState;
 use super::style_variant::StyleVariant;
+
+#[path = "../../../layout_invalidation/src/native_layout_object_state_propagation.rs"]
+mod layout_invalidation_native_layout_object_state_propagation;
+use layout_invalidation_native_layout_object_state_propagation::{
+    LayoutObjectDepthSlow, LayoutObjectSetDepthIncludingDescendants,
+    LayoutObjectSetDescendantNeedsPaintPropertyUpdate,
+    LayoutObjectSetScrollAnchorDisablingStyleChangedOnAncestor,
+};
+
+#[path = "../../../layout_invalidation/src/native_layout_object_image_observers.rs"]
+mod layout_invalidation_native_layout_object_image_observers;
+
+#[path = "../../../layout_fragment/src/native_layout_object_fragment_queries.rs"]
+mod layout_fragment_native_layout_object_fragment_queries;
+
+#[path = "../../../layout_fragment/src/native_layout_object_selection_queries.rs"]
+mod layout_fragment_native_layout_object_selection_queries;
+
+#[path = "../../../layout_fragment/src/native_layout_object_paint_dispatch.rs"]
+mod layout_fragment_native_layout_object_paint_dispatch;
+
+#[path = "../../../layout_fragment/src/native_layout_object_paint_state.rs"]
+mod layout_fragment_native_layout_object_paint_state;
+
+#[path = "../../../layout_fragment/src/native_layout_object_effective_style.rs"]
+mod layout_fragment_native_layout_object_effective_style;
+
+#[path = "../../../layout_fragment/src/native_layout_object_gap_queries.rs"]
+mod layout_fragment_native_layout_object_gap_queries;
+
+#[path = "../../../layout_fragment/src/native_layout_object_inline_fragment_state.rs"]
+mod layout_fragment_native_layout_object_inline_fragment_state;
+
+#[path = "../../../layout_invalidation/src/native_layout_object_paint_invalidation.rs"]
+mod layout_invalidation_native_layout_object_paint_invalidation;
+
+#[path = "../../../layout_fragment/src/native_layout_object_layer_queries.rs"]
+mod layout_fragment_native_layout_object_layer_queries;
+
+#[path = "../../../layout_fragment/src/native_layout_object_coordinate_conversion.rs"]
+mod layout_fragment_native_layout_object_coordinate_conversion;
+
+#[path = "../../../layout_fragment/src/native_layout_object_bounding_geometry.rs"]
+mod layout_fragment_native_layout_object_bounding_geometry;
+
+#[path = "../../../layout_fragment/src/native_layout_object_scroll_container_queries.rs"]
+mod layout_fragment_native_layout_object_scroll_container_queries;
+
+#[path = "../../../layout_algo_inline/src/native_layout_object_editing_queries.rs"]
+mod layout_algo_inline_native_layout_object_editing_queries;
+pub use layout_algo_inline_native_layout_object_editing_queries::{
+    AssociatedLayoutObjectOf, AssociatedLayoutObjectOfDefault,
+};
+
+#[path = "../../../layout_algo_list/src/native_layout_object_list_marker_queries.rs"]
+mod layout_algo_list_native_layout_object_list_marker_queries;
+
+#[path = "../../../layout_invalidation/src/native_layout_object_layer_mutation.rs"]
+mod layout_invalidation_native_layout_object_layer_mutation;
+
+#[path = "../../../layout_invalidation/src/native_layout_object_style_services.rs"]
+mod layout_invalidation_native_layout_object_style_services;
+
+#[path = "../../../layout_invalidation/src/native_layout_object_prepaint_invalidation.rs"]
+mod layout_invalidation_native_layout_object_prepaint_invalidation;
+
+#[path = "../../../layout_invalidation/src/native_layout_object_display_lock.rs"]
+mod layout_invalidation_native_layout_object_display_lock;
 
 // These are forward declarations in the owning C++ header. Their concrete
 // layouts belong to the hit-test and paint implementations.
@@ -128,13 +196,7 @@ pub enum CursorDirective {
     kDoNotSetCursor,
 }
 
-// cpp: layoutng/internal/layout_object.h:117-120
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MarkingBehavior {
-    kMarkOnlyThis,
-    kMarkContainerChain,
-}
+pub use layout_invalidation::MarkingBehavior;
 
 // cpp: layoutng/internal/layout_object.h:122-122
 #[repr(i32)]
@@ -226,6 +288,7 @@ pub enum OverflowRecalcType {
 // paths remain to be mapped before this owning header is complete.
 // cpp: layoutng/internal/layout_object.h:3589-3909
 pub(crate) struct LayoutObjectBitfields {
+    pub(crate) layout_invalidation_: layout_invalidation::LayoutInvalidationState,
     pub(crate) paint_invalidation_reason_for_pre_paint_: u8,
     positioned_state_: PositionedState,
     selection_state_: u8,
@@ -241,16 +304,8 @@ pub(crate) struct LayoutObjectBitfields {
     is_in_detached_non_dom_tree_: bool,
     #[cfg(debug_assertions)]
     as_image_observer_count_: u32,
-    self_needs_full_layout_: bool,
-    child_needs_full_layout_: bool,
-    needs_simplified_layout_: bool,
     self_needs_scrollable_overflow_recalc_: bool,
     child_needs_scrollable_overflow_recalc_: bool,
-    pub(crate) intrinsic_logical_widths_dirty_: bool,
-    pub(crate) intrinsic_logical_widths_depends_on_block_constraints_: bool,
-    pub(crate) indefinite_intrinsic_logical_widths_dirty_: bool,
-    pub(crate) definite_intrinsic_logical_widths_dirty_: bool,
-    pub(crate) needs_collect_inlines_: bool,
     pub(crate) should_check_for_paint_invalidation_: bool,
     pub(crate) subtree_should_check_for_paint_invalidation_: bool,
     pub(crate) should_delay_full_paint_invalidation_: bool,
@@ -329,6 +384,7 @@ impl Default for LayoutObjectBitfields {
     // cpp: layoutng/internal/layout_object.h:3589-3909
     fn default() -> Self {
         Self {
+            layout_invalidation_: Default::default(),
             paint_invalidation_reason_for_pre_paint_: 0,
             positioned_state_: PositionedState::kIsStaticallyPositioned,
             selection_state_: 0,
@@ -344,16 +400,8 @@ impl Default for LayoutObjectBitfields {
             is_in_detached_non_dom_tree_: false,
             #[cfg(debug_assertions)]
             as_image_observer_count_: 0,
-            self_needs_full_layout_: false,
-            child_needs_full_layout_: false,
-            needs_simplified_layout_: false,
             self_needs_scrollable_overflow_recalc_: false,
             child_needs_scrollable_overflow_recalc_: false,
-            intrinsic_logical_widths_dirty_: false,
-            intrinsic_logical_widths_depends_on_block_constraints_: true,
-            indefinite_intrinsic_logical_widths_dirty_: true,
-            definite_intrinsic_logical_widths_dirty_: true,
-            needs_collect_inlines_: false,
             should_check_for_paint_invalidation_: true,
             subtree_should_check_for_paint_invalidation_: false,
             should_delay_full_paint_invalidation_: false,
@@ -1313,16 +1361,6 @@ impl LayoutObject {
         unsafe { DispatchLayoutObjectVisualRectRespectsVisibility(self) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:2155-2155
-    pub fn UpdateFromElementBase(&mut self) {
-        self.CheckIsNotDestroyed();
-    }
-
-    pub fn UpdateFromElement(&mut self) {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectUpdateFromElement(self) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:1828-1835,1868-1870,2272-2280
     pub fn CanContainAbsolutePositionObjects(&self) -> bool {
         self.CheckIsNotDestroyed();
@@ -1344,49 +1382,6 @@ impl LayoutObject {
     pub fn ClearNeedsCollectInlines(&mut self) {
         self.CheckIsNotDestroyed();
         self.SetNeedsCollectInlinesFlag(false);
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2438-2453,3470-3472
-    pub fn QuadsInAncestorInternal(
-        &self,
-        _quads: &mut Vector<gfx::QuadF>,
-        _ancestor: *const LayoutBoxModelObject,
-        _mode: MapCoordinatesFlags,
-        _box_type: BoxQuadType,
-    ) {
-        self.CheckIsNotDestroyed();
-    }
-
-    pub fn QuadsInAncestor(
-        &self,
-        quads: &mut Vector<gfx::QuadF>,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-        box_type: BoxQuadType,
-    ) {
-        self.CheckIsNotDestroyed();
-        self.QuadsInAncestorInternal(quads, ancestor, mode, box_type);
-    }
-
-    pub fn AbsoluteQuads(
-        &self,
-        quads: &mut Vector<gfx::QuadF>,
-        mode: MapCoordinatesFlags,
-        box_type: BoxQuadType,
-    ) {
-        self.CheckIsNotDestroyed();
-        self.QuadsInAncestor(quads, std::ptr::null(), mode, box_type);
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3454-3457
-    pub fn CanBeSelectionLeafInternalBase(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        false
-    }
-
-    pub fn CanBeSelectionLeafInternal(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectCanBeSelectionLeafInternal(self) }
     }
 
     // cpp: layoutng/internal/layout_object.h:542-550
@@ -1656,33 +1651,43 @@ impl LayoutObject {
     pub fn IntrinsicLogicalWidthsDependsOnBlockConstraints(&self) -> bool {
         self.CheckIsNotDestroyed();
         self.bitfields_
-            .intrinsic_logical_widths_depends_on_block_constraints_
+            .layout_invalidation_
+            .intrinsic_logical_widths_depends_on_block_constraints()
     }
 
     pub fn SetIntrinsicLogicalWidthsDependsOnBlockConstraints(&mut self, value: bool) {
         self.CheckIsNotDestroyed();
         self.bitfields_
-            .intrinsic_logical_widths_depends_on_block_constraints_ = value;
+            .layout_invalidation_
+            .set_intrinsic_logical_widths_depends_on_block_constraints(value);
     }
 
     pub fn IndefiniteIntrinsicLogicalWidthsDirty(&self) -> bool {
         self.CheckIsNotDestroyed();
-        self.bitfields_.indefinite_intrinsic_logical_widths_dirty_
+        self.bitfields_
+            .layout_invalidation_
+            .indefinite_intrinsic_logical_widths_dirty()
     }
 
     pub fn SetIndefiniteIntrinsicLogicalWidthsDirty(&mut self, value: bool) {
         self.CheckIsNotDestroyed();
-        self.bitfields_.indefinite_intrinsic_logical_widths_dirty_ = value;
+        self.bitfields_
+            .layout_invalidation_
+            .set_indefinite_intrinsic_logical_widths_dirty(value);
     }
 
     pub fn DefiniteIntrinsicLogicalWidthsDirty(&self) -> bool {
         self.CheckIsNotDestroyed();
-        self.bitfields_.definite_intrinsic_logical_widths_dirty_
+        self.bitfields_
+            .layout_invalidation_
+            .definite_intrinsic_logical_widths_dirty()
     }
 
     pub fn SetDefiniteIntrinsicLogicalWidthsDirty(&mut self, value: bool) {
         self.CheckIsNotDestroyed();
-        self.bitfields_.definite_intrinsic_logical_widths_dirty_ = value;
+        self.bitfields_
+            .layout_invalidation_
+            .set_definite_intrinsic_logical_widths_dirty(value);
     }
 
     // cpp: layoutng/internal/layout_object.h:591-626
@@ -1864,34 +1869,12 @@ impl LayoutObject {
 
     // cpp: layoutng/internal/layout_object_tree.cc:146-160
     pub fn DepthSlow(&self) -> u32 {
-        self.CheckIsNotDestroyed();
-        debug_assert_eq!(u32::from(self.bitfields_.depth_), kMaxLayoutObjectDepth);
-        let mut extra = 0u32;
-        let mut object: *const LayoutObject = self;
-        while !object.is_null() {
-            let current = unsafe { &*object };
-            if u32::from(current.bitfields_.depth_) < kMaxLayoutObjectDepth {
-                return u32::from(current.bitfields_.depth_).wrapping_add(extra);
-            }
-            extra = extra.wrapping_add(1);
-            object = current.Parent();
-        }
-        std::process::abort();
+        LayoutObjectDepthSlow(self)
     }
 
     // cpp: layoutng/internal/layout_object_tree.cc:162-180
     pub fn SetDepthIncludingDescendants(&mut self, depth: u32) {
-        self.CheckIsNotDestroyed();
-        let clamped_depth = depth.min(kMaxLayoutObjectDepth);
-        if u32::from(self.bitfields_.depth_) == clamped_depth {
-            return;
-        }
-        self.bitfields_.depth_ = clamped_depth as u16;
-        let mut child = self.SlowFirstChild();
-        while !child.is_null() {
-            unsafe { &mut *child }.SetDepthIncludingDescendants(clamped_depth + 1);
-            child = unsafe { &*child }.NextSibling();
-        }
+        LayoutObjectSetDepthIncludingDescendants(self, depth)
     }
 
     // cpp: layoutng/internal/layout_object.h:3122-3129
@@ -1918,26 +1901,7 @@ impl LayoutObject {
 
     // cpp: layoutng/internal/layout_node_data.cc:33-48
     pub fn SetScrollAnchorDisablingStyleChangedOnAncestor(&mut self) {
-        self.CheckIsNotDestroyed();
-        let mut object = self.Parent();
-        let viewport_defining_element = self.ViewportDefiningElementForLayout();
-        while !object.is_null() {
-            let block = DynamicTo::<LayoutBlock>(object);
-            if !block.is_null()
-                && (unsafe { &*block }.IsScrollContainer()
-                    || unsafe { &*block }.GetNode() == viewport_defining_element as *mut Node)
-            {
-                unsafe { &mut *block }.SetScrollAnchorDisablingStyleChanged(true);
-                return;
-            }
-            object = unsafe { &*object }.Parent();
-        }
-    }
-
-    // cpp: layoutng/internal/layout_node_data.cc:51-55
-    pub fn ChildLayoutBlockedByDisplayLock(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        ContentLockBlocksChildLayout(self.GetNode())
+        LayoutObjectSetScrollAnchorDisablingStyleChangedOnAncestor(self)
     }
 
     // cpp: layoutng/internal/layout_node_data.cc:70-76
@@ -2361,254 +2325,6 @@ impl LayoutObject {
         self.IsOutOfFlowPositioned() && self.StyleRef().GetPosition() == EPosition::kFixed
     }
 
-    // cpp: layoutng/internal/layout_object.h:1542-1553
-    pub fn IsScrollContainer(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        if self.IsLayoutReplaced() {
-            return false;
-        }
-        // SVG containers use LayoutBox storage at the immutable fragment
-        // boundary, but correspond to LayoutSVGModelObject in Chromium.
-        // A viewport clip must not turn that storage into a CSS scroll owner.
-        if self.IsSVGContainer() && !self.IsSVGForeignObject() {
-            return false;
-        }
-        // The extracted LayoutView also carries the document element's style.
-        // Chromium's separate LayoutView is always the viewport scroll owner,
-        // including when the propagated CSS overflow is visible or hidden.
-        self.IsLayoutView() || (self.HasNonVisibleOverflow() && self.StyleRef().IsScrollContainer())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1525-1535
-    pub fn IsOverscrollContainer(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        if !self.IsBox() {
-            return false;
-        }
-        if self.IsOverscrollAreaParent() {
-            return true;
-        }
-        self.StyleRef().EffectiveOverscrollContainerType() != EOverscrollContainerType::kNone
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2401-2405
-    pub fn OffsetFromContainer(
-        &self,
-        container: *const LayoutObject,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalOffset {
-        self.CheckIsNotDestroyed();
-        self.OffsetFromContainerInternal(container, mode)
-    }
-
-    pub fn OffsetFromContainerDefault(&self, container: *const LayoutObject) -> PhysicalOffset {
-        self.OffsetFromContainer(container, MapCoordinatesFlags::default())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3459-3461
-    pub fn OffsetFromContainerInternal(
-        &self,
-        container: *const LayoutObject,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalOffset {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectOffsetFromContainerInternal(self, container, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2287-2294
-    pub fn AncestorToLocalRect(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        rect: &PhysicalRect,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalRect {
-        self.CheckIsNotDestroyed();
-        let quad = gfx::QuadF::from(gfx::RectF::from(*rect));
-        PhysicalRect::EnclosingRect(
-            &self
-                .AncestorToLocalQuad(ancestor, &quad, mode)
-                .BoundingBox(),
-        )
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2295-2297
-    pub fn AncestorToLocalQuad(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        quad: &gfx::QuadF,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::QuadF {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectAncestorToLocalQuad(self, ancestor, quad, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2298-2304
-    pub fn AncestorToLocalPointPhysical(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        point: &PhysicalOffset,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalOffset {
-        self.CheckIsNotDestroyed();
-        let float_point = gfx::PointF::new(point.left.ToFloat(), point.top.ToFloat());
-        PhysicalOffset::FromPointFRound(&self.AncestorToLocalPointF(ancestor, &float_point, mode))
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2305-2307
-    pub fn AncestorToLocalPointF(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        point: &gfx::PointF,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::PointF {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectAncestorToLocalPointFProvider(self, ancestor, point, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2315-2317
-    pub fn LocalToAncestorRect(
-        &self,
-        rect: &PhysicalRect,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalRect {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectLocalToAncestorRectProvider(self, rect, ancestor, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2318-2323
-    pub fn LocalRectToAncestorQuad(
-        &self,
-        rect: &PhysicalRect,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::QuadF {
-        self.CheckIsNotDestroyed();
-        let quad = gfx::QuadF::from(gfx::RectF::from(*rect));
-        self.LocalToAncestorQuad(&quad, ancestor, mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2324-2326
-    pub fn LocalToAncestorQuad(
-        &self,
-        quad: &gfx::QuadF,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::QuadF {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectLocalToAncestorQuad(self, quad, ancestor, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2327-2333
-    pub fn LocalToAncestorPointPhysical(
-        &self,
-        point: &PhysicalOffset,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalOffset {
-        self.CheckIsNotDestroyed();
-        let float_point = gfx::PointF::new(point.left.ToFloat(), point.top.ToFloat());
-        PhysicalOffset::FromPointFRound(&self.LocalToAncestorPoint(&float_point, ancestor, mode))
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2342-2343
-    pub fn LocalToAncestorTransform(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::Transform {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectLocalToAncestorTransformProvider(self, ancestor, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2344-2347
-    pub fn LocalToAbsoluteTransform(&self, mode: MapCoordinatesFlags) -> gfx::Transform {
-        self.CheckIsNotDestroyed();
-        self.LocalToAncestorTransform(std::ptr::null(), mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2352-2356
-    pub fn LocalToAbsoluteRect(
-        &self,
-        rect: &PhysicalRect,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalRect {
-        self.CheckIsNotDestroyed();
-        self.LocalToAncestorRect(rect, std::ptr::null(), mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2357-2361
-    pub fn LocalRectToAbsoluteQuad(
-        &self,
-        rect: &PhysicalRect,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::QuadF {
-        self.CheckIsNotDestroyed();
-        self.LocalRectToAncestorQuad(rect, std::ptr::null(), mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2362-2366
-    pub fn LocalToAbsoluteQuad(&self, quad: &gfx::QuadF, mode: MapCoordinatesFlags) -> gfx::QuadF {
-        self.CheckIsNotDestroyed();
-        self.LocalToAncestorQuad(quad, std::ptr::null(), mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2367-2371
-    pub fn LocalToAbsolutePointPhysical(
-        &self,
-        point: &PhysicalOffset,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalOffset {
-        self.CheckIsNotDestroyed();
-        self.LocalToAncestorPointPhysical(point, std::ptr::null(), mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2372-2376
-    pub fn LocalToAbsolutePointF(
-        &self,
-        point: &gfx::PointF,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::PointF {
-        self.CheckIsNotDestroyed();
-        self.LocalToAncestorPoint(point, std::ptr::null(), mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2377-2381
-    pub fn AbsoluteToLocalRect(
-        &self,
-        rect: &PhysicalRect,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalRect {
-        self.CheckIsNotDestroyed();
-        self.AncestorToLocalRect(std::ptr::null(), rect, mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2382-2386
-    pub fn AbsoluteToLocalQuad(&self, quad: &gfx::QuadF, mode: MapCoordinatesFlags) -> gfx::QuadF {
-        self.CheckIsNotDestroyed();
-        self.AncestorToLocalQuad(std::ptr::null(), quad, mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2387-2391
-    pub fn AbsoluteToLocalPointPhysical(
-        &self,
-        point: &PhysicalOffset,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalOffset {
-        self.CheckIsNotDestroyed();
-        self.AncestorToLocalPointPhysical(std::ptr::null(), point, mode)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2392-2396
-    pub fn AbsoluteToLocalPointF(
-        &self,
-        point: &gfx::PointF,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::PointF {
-        self.CheckIsNotDestroyed();
-        self.AncestorToLocalPointF(std::ptr::null(), point, mode)
-    }
-
     // cpp: layoutng/internal/layout_object.h:1033-1036
     pub fn IsLayoutInlineBase(&self) -> bool {
         self.CheckIsNotDestroyed();
@@ -2679,24 +2395,30 @@ impl LayoutObject {
     // cpp: layoutng/internal/layout_object.h:1420-1442
     pub fn NeedsSimplifiedLayoutOnly(&self) -> bool {
         self.CheckIsNotDestroyed();
-        self.bitfields_.needs_simplified_layout_
-            && !self.bitfields_.self_needs_full_layout_
-            && !self.bitfields_.child_needs_full_layout_
+        self.bitfields_
+            .layout_invalidation_
+            .needs_simplified_layout_only()
     }
 
     pub fn SelfNeedsFullLayout(&self) -> bool {
         self.CheckIsNotDestroyed();
-        self.bitfields_.self_needs_full_layout_
+        self.bitfields_
+            .layout_invalidation_
+            .self_needs_full_layout()
     }
 
     pub fn ChildNeedsFullLayout(&self) -> bool {
         self.CheckIsNotDestroyed();
-        self.bitfields_.child_needs_full_layout_
+        self.bitfields_
+            .layout_invalidation_
+            .child_needs_full_layout()
     }
 
     pub fn NeedsSimplifiedLayout(&self) -> bool {
         self.CheckIsNotDestroyed();
-        self.bitfields_.needs_simplified_layout_
+        self.bitfields_
+            .layout_invalidation_
+            .needs_simplified_layout()
     }
 
     // cpp: layoutng/internal/layout_object.h:1478-1507
@@ -2739,13 +2461,17 @@ impl LayoutObject {
     // cpp: layoutng/internal/layout_object.h:3911-3914
     pub fn SetSelfNeedsFullLayout(&mut self, value: bool) {
         self.CheckIsNotDestroyed();
-        self.bitfields_.self_needs_full_layout_ = value;
+        self.bitfields_
+            .layout_invalidation_
+            .set_self_needs_full_layout(value);
     }
 
     // cpp: layoutng/internal/layout_tree_invalidation.cc:259-266
     pub fn SetChildNeedsFullLayout(&mut self, value: bool) {
         self.CheckIsNotDestroyed();
-        self.bitfields_.child_needs_full_layout_ = value;
+        self.bitfields_
+            .layout_invalidation_
+            .set_child_needs_full_layout(value);
         if value {
             self.bitfields_.is_subgrid_min_max_sizes_cache_dirty_ = true;
             self.bitfields_.is_table_column_constraints_dirty_ = true;
@@ -2755,7 +2481,9 @@ impl LayoutObject {
     // cpp: layoutng/internal/layout_tree_invalidation.cc:254-257
     pub fn SetNeedsSimplifiedLayout(&mut self, value: bool) {
         self.CheckIsNotDestroyed();
-        self.bitfields_.needs_simplified_layout_ = value;
+        self.bitfields_
+            .layout_invalidation_
+            .set_needs_simplified_layout(value);
     }
 
     // cpp: layoutng/internal/layout_object_core_services.cc:262-269
@@ -2773,17 +2501,7 @@ impl LayoutObject {
 
     // cpp: layoutng/internal/layout_object_core_services.cc:271-279
     pub fn SetDescendantNeedsPaintPropertyUpdate(&mut self) {
-        self.CheckIsNotDestroyed();
-        let mut object: *mut LayoutObject = self;
-        while !object.is_null()
-            && !unsafe { &*object }
-                .bitfields_
-                .descendant_needs_paint_property_update_
-        {
-            let current = unsafe { &mut *object };
-            current.bitfields_.descendant_needs_paint_property_update_ = true;
-            object = current.Parent();
-        }
+        LayoutObjectSetDescendantNeedsPaintPropertyUpdate(self)
     }
 
     // cpp: layoutng/internal/layout_object.h:2472-2477
@@ -2810,65 +2528,6 @@ impl LayoutObject {
 
     pub fn ImageResourceObserver(&self) -> &ImageResourceObserver {
         &self.image_resource_observer_
-    }
-
-    // Source UpdateImageObservers/UpdateFillImages subset for real native
-    // mask StyleImages. Add new subscriptions before removing old ones.
-    // cpp: core/layout/layout_object.cc:3109-3116,3200,3703-3722
-    pub(crate) fn UpdateMaskImageObservers(
-        &mut self,
-        old: *const ComputedStyle,
-        new: *const ComputedStyle,
-    ) {
-        if self.IsText() {
-            return;
-        }
-        let old_layers = if old.is_null() {
-            std::ptr::null()
-        } else {
-            unsafe { &*old }.MaskLayers() as *const FillLayer
-        };
-        let new_layers = if new.is_null() {
-            std::ptr::null()
-        } else {
-            unsafe { &*new }.MaskLayers() as *const FillLayer
-        };
-        let mut a = old_layers;
-        let mut b = new_layers;
-        let mut identical = true;
-        while !a.is_null() || !b.is_null() {
-            if a.is_null() || b.is_null() || unsafe { &*a }.GetImage() != unsafe { &*b }.GetImage()
-            {
-                identical = false;
-                break;
-            }
-            a = unsafe { &*a }.Next();
-            b = unsafe { &*b }.Next();
-        }
-        if identical {
-            return;
-        }
-        let receiver = (self as *mut LayoutObject).cast();
-        self.image_resource_observer_.BindReceiver(receiver);
-        let observer = &mut self.image_resource_observer_ as *mut ImageResourceObserver;
-        let mut layer = new_layers;
-        while !layer.is_null() {
-            let current = unsafe { &*layer };
-            let image = current.GetImage();
-            if !image.is_null() {
-                unsafe { &mut *image }.AddClient(observer);
-            }
-            layer = current.Next();
-        }
-        layer = old_layers;
-        while !layer.is_null() {
-            let current = unsafe { &*layer };
-            let image = current.GetImage();
-            if !image.is_null() {
-                unsafe { &mut *image }.RemoveClient(observer);
-            }
-            layer = current.Next();
-        }
     }
 
     // cpp: layoutng/internal/layout_object.h:3073-3080
@@ -3892,9 +3551,7 @@ impl LayoutObject {
 
     pub fn NeedsLayout(&self) -> bool {
         self.CheckIsNotDestroyed();
-        self.bitfields_.self_needs_full_layout_
-            || self.bitfields_.child_needs_full_layout_
-            || self.bitfields_.needs_simplified_layout_
+        self.bitfields_.layout_invalidation_.needs_layout()
     }
 
     // cpp: layoutng/internal/layout_object.h:1563-1566
@@ -3979,15 +3636,6 @@ impl LayoutObject {
         {
             self.is_destroyed_ = true;
         }
-    }
-
-    pub fn AnonymousHasStylePropagationOverrideBase(&mut self) -> bool {
-        self.CheckIsNotDestroyed();
-        false
-    }
-
-    pub fn InLayoutNGInlineFormattingContextWillChangeBase(&self, _new_value: bool) {
-        self.CheckIsNotDestroyed();
     }
 
     pub fn IsTextOrSVGChild(&self) -> bool {
@@ -4307,216 +3955,16 @@ impl LayoutObject {
         unsafe { LayoutObjectAssertClearedPaintInvalidationFlagsProvider(self) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:3168-3168
-    pub fn ChildPrePaintBlockedByDisplayLock(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectChildPrePaintBlockedByDisplayLockProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2820-2820
-    pub fn SetShouldDelayFullPaintInvalidation(&mut self) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectSetShouldDelayFullPaintInvalidationProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2963-2963
-    pub fn SetShouldInheritContainerTimingRoot(&mut self, inherit: bool) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectSetShouldInheritContainerTimingRootProvider(self, inherit) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3444-3444
-    pub fn ClearPaintFlags(&mut self) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectClearPaintFlagsProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3443-3443
-    pub fn EnsureIsReadyForPaintInvalidation(&mut self) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectEnsureIsReadyForPaintInvalidationProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2854-2857
-    pub fn UpdateAnonymousChildStyleBase(
-        &self,
-        _child: *const LayoutObject,
-        _builder: &mut ComputedStyleBuilder,
-    ) {
-        self.CheckIsNotDestroyed();
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2854-2857
-    pub fn UpdateAnonymousChildStyle(
-        &self,
-        child: *const LayoutObject,
-        builder: &mut ComputedStyleBuilder,
-    ) {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectUpdateAnonymousChildStyle(self, child, builder) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:1357-1361
     pub fn IsAbsolutePositioned(&self) -> bool {
         self.CheckIsNotDestroyed();
         self.IsOutOfFlowPositioned() && self.StyleRef().GetPosition() == EPosition::kAbsolute
     }
 
-    // cpp: layoutng/internal/layout_object.h:1537-1540
-    pub fn IsContentMovingOverscrollContainer(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        self.IsBox() && self.StyleRef().IsContentMovingOverscrollContainer()
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1555-1559
-    pub fn IsScrollContainerWithScrollMarkerGroup(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        (self.IsScrollContainer() || self.IsDocumentElement())
-            && !self.StyleRef().ScrollMarkerGroupNone()
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2023-2029
-    pub fn StitchedRowGapIndexBase(
-        &self,
-        _fragment: &PhysicalBoxFragment,
-        gap_index: usize,
-        _line_index: Option<usize>,
-    ) -> usize {
-        self.CheckIsNotDestroyed();
-        gap_index
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2023-2029
-    pub fn StitchedRowGapIndex(
-        &self,
-        fragment: &PhysicalBoxFragment,
-        gap_index: usize,
-        line_index: Option<usize>,
-    ) -> usize {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectStitchedRowGapIndex(self, fragment, gap_index, line_index) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2492-2497
-    pub fn EffectiveStyle(&self, style_variant: StyleVariant) -> &ComputedStyle {
-        self.CheckIsNotDestroyed();
-        if style_variant == StyleVariant::kStandard {
-            self.StyleRef()
-        } else {
-            self.SlowEffectiveStyle(style_variant)
-        }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2499-2502
-    pub fn ResolveColorWithStyle(style: &ComputedStyle, color_property: &Longhand) -> Color {
-        style.VisitedDependentColor(color_property, None)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2504-2507
-    pub fn ResolveColor(&self, color_property: &Longhand) -> Color {
-        self.CheckIsNotDestroyed();
-        self.StyleRef().VisitedDependentColor(color_property, None)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2687-2691
-    pub fn CreatesGroup(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        self.StyleRef().HasGroupingProperty(self.HasReflection())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2906-2911
-    pub fn EffectiveAllowedTouchAction(&self) -> TouchAction {
-        self.CheckIsNotDestroyed();
-        if self.InsideBlockingTouchEventHandler() {
-            TouchAction::kNone
-        } else {
-            self.StyleRef().EffectiveTouchAction()
-        }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2912-2915
-    pub fn HasEffectiveAllowedTouchAction(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        self.EffectiveAllowedTouchAction() != TouchAction::kAuto
-    }
-
     // cpp: layoutng/internal/layout_object.h:326-326
     pub fn DecoratedName(&self) -> BlinkString {
         self.CheckIsNotDestroyed();
         unsafe { LayoutObjectDecoratedNameProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:334-334
-    pub fn HasDistortingVisualEffects(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectHasDistortingVisualEffectsProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:337-337
-    pub fn HasNonZeroEffectiveOpacity(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectHasNonZeroEffectiveOpacityProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:448-448
-    pub fn EnclosingLayer(&self) -> *mut PaintLayer {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectEnclosingLayerProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:449-449
-    pub fn AddLayers(&mut self, parent_layer: *mut PaintLayer) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectAddLayersProvider(self, parent_layer) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:450-450
-    pub fn RemoveLayers(&mut self, parent_layer: *mut PaintLayer) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectRemoveLayersProvider(self, parent_layer) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:451-451
-    pub fn MoveLayers(&mut self, old_parent: *mut PaintLayer, new_parent: *mut PaintLayer) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectMoveLayersProvider(self, old_parent, new_parent) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:452-454
-    pub fn FindNextLayer(
-        &mut self,
-        parent_layer: *mut PaintLayer,
-        start_point: *mut LayoutObject,
-        check_parent: bool,
-    ) -> *mut PaintLayer {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectFindNextLayerProvider(self, parent_layer, start_point, check_parent) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:452-454
-    pub fn FindNextLayerDefault(
-        &mut self,
-        parent_layer: *mut PaintLayer,
-        start_point: *mut LayoutObject,
-    ) -> *mut PaintLayer {
-        self.FindNextLayer(parent_layer, start_point, true)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:458-458
-    pub fn PaintingLayer(&self, max_depth: i32) -> *mut PaintLayer {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectPaintingLayerProvider(self, max_depth) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:458-458
-    pub fn PaintingLayerDefault(&self) -> *mut PaintLayer {
-        self.PaintingLayer(-1)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:833-833
-    pub fn IsBackdropForOverscrollAreaParent(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsBackdropForOverscrollAreaParentProvider(self) }
     }
 
     // cpp: layoutng/internal/layout_object.h:1051-1051
@@ -4536,523 +3984,9 @@ impl LayoutObject {
         self.CheckIsNotDestroyed();
         unsafe { LayoutObjectIsMenuListProvider(self) }
     }
-
-    // cpp: layoutng/internal/layout_object.h:1519-1519
-    pub fn HasClipRelatedProperty(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectHasClipRelatedPropertyProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1655-1655
-    pub fn IsScrollMarker(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsScrollMarkerProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1657-1657
-    pub fn IsScrollMarkerGroupBefore(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsScrollMarkerGroupBeforeProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1661-1661
-    pub fn IsListMarkerForSummary(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsListMarkerForSummaryProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1664-1664
-    pub fn IsInListMarker(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsInListMarkerProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:745-745
-    pub fn NotifyPriorityScrollAnchorStatusChanged(&mut self) {
-        unsafe { LayoutObjectNotifyPriorityScrollAnchorStatusChangedProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:786-786
-    pub fn AddAbsoluteRectForLayer(&mut self, result: &mut gfx::Rect) {
-        unsafe { LayoutObjectAddAbsoluteRectForLayerProvider(self, result) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:827-827
-    pub fn CreateObject(element: *mut Element, style: &ComputedStyle) -> *mut LayoutObject {
-        unsafe { LayoutObjectCreateObjectProvider(element, style) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:828-829
-    pub fn CreateBlockFlowOrListItem(
-        element: *mut Element,
-        style: &ComputedStyle,
-    ) -> *mut LayoutBlockFlow {
-        unsafe { LayoutObjectCreateBlockFlowOrListItemProvider(element, style) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1698-1698
-    pub fn GeneratingNode(&self) -> *mut Node {
-        unsafe { LayoutObjectGeneratingNodeProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1702-1702
-    pub fn EnclosingNode(&self) -> *mut Node {
-        unsafe { LayoutObjectEnclosingNodeProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1853-1853
-    pub fn ScrollParent(&self, base: *const Element) -> *mut Element {
-        unsafe { LayoutObjectScrollParentProvider(self, base) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1853-1853
-    pub fn ScrollParentDefault(&self) -> *mut Element {
-        self.ScrollParent(std::ptr::null())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1857-1857
-    pub fn OffsetParent(&self, base: *const Element) -> *mut Element {
-        unsafe { LayoutObjectOffsetParentProvider(self, base) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1857-1857
-    pub fn OffsetParentDefault(&self) -> *mut Element {
-        self.OffsetParent(std::ptr::null())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1914-1914
-    pub fn InvalidateSubtreePositionTry(&mut self, mark_style_dirty: bool) {
-        unsafe { LayoutObjectInvalidateSubtreePositionTryProvider(self, mark_style_dirty) }
-    }
-
-    // cpp: third_party/blink/renderer/core/layout/layout_object.cc:5738-5743
-    pub fn IsCanvasOrInCanvasSubtree(&self) -> bool {
-        self.IsCanvas() || self.IsInCanvasSubtree()
-    }
-
-    // cpp: third_party/blink/renderer/core/layout/layout_object.cc:5745-5756
-    pub fn IsInCanvasSubtree(&self) -> bool {
-        let parent = self.Parent();
-        !parent.is_null() && unsafe { &*parent }.IsCanvasOrInCanvasSubtree()
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2113-2113
-    pub fn RecalcNormalFlowChildVisualOverflowIfNeeded(&mut self) {
-        unsafe { LayoutObjectRecalcNormalFlowChildVisualOverflowIfNeededProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2593-2593
-    pub fn CanUpdateSelectionOnRootLineBoxes(&self) -> bool {
-        unsafe { LayoutObjectCanUpdateSelectionOnRootLineBoxesProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2612-2612
-    pub fn AbsoluteSelectionRect(&self) -> PhysicalRect {
-        unsafe { LayoutObjectAbsoluteSelectionRectProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2614-2614
-    pub fn CanBeSelectionLeaf(&self) -> bool {
-        unsafe { LayoutObjectCanBeSelectionLeafProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2615-2615
-    pub fn IsSelected(&self) -> bool {
-        unsafe { LayoutObjectIsSelectedProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2616-2616
-    pub fn IsSelectable(&self) -> bool {
-        unsafe { LayoutObjectIsSelectableProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2651-2651
-    pub fn VisibleToHitTestRequest(&self, request: &HitTestRequest) -> bool {
-        unsafe { LayoutObjectVisibleToHitTestRequestProvider(self, request) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2674-2674
-    pub fn CanvasForDrawingLayoutObject(&self) -> *mut LayoutObject {
-        unsafe { LayoutObjectCanvasForDrawingLayoutObjectProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2761-2761
-    pub fn SetShouldInvalidatePaintForHitTest(&mut self) {
-        unsafe { LayoutObjectSetShouldInvalidatePaintForHitTestProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2868
-    // cpp: layoutng/internal/layout_object.cc:5318-5339
-    pub fn ClearPaintInvalidationFlags(&mut self) {
-        self.CheckIsNotDestroyed();
-        if !self.bitfields_.should_delay_full_paint_invalidation_ {
-            self.bitfields_.paint_invalidation_reason_for_pre_paint_ =
-                PaintInvalidationReason::kNone as u8;
-            self.bitfields_.background_needs_full_paint_invalidation_ = false;
-        }
-        self.bitfields_.should_check_for_paint_invalidation_ = false;
-        self.bitfields_.subtree_should_check_for_paint_invalidation_ = false;
-        self.bitfields_.subtree_should_do_full_paint_invalidation_ = false;
-        self.bitfields_
-            .may_need_paint_invalidation_animated_background_image_ = false;
-        self.bitfields_.should_check_layout_for_paint_invalidation_ = false;
-        self.bitfields_
-            .descendant_should_check_layout_for_paint_invalidation_ = false;
-        self.bitfields_.should_invalidate_selection_ = false;
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2802-2802
-    pub fn SetMayNeedPaintInvalidationAnimatedBackgroundImage(&mut self) {
-        unsafe { LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundImageProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2821-2821
-    pub fn ClearShouldDelayFullPaintInvalidation(&mut self) {
-        unsafe { LayoutObjectClearShouldDelayFullPaintInvalidationProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2827-2827
-    pub fn SetShouldInvalidateSelection(&mut self) {
-        unsafe { LayoutObjectSetShouldInvalidateSelectionProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2882-2882
-    pub fn InvalidateSelectionOnStyleChange(&mut self) {
-        unsafe { LayoutObjectInvalidateSelectionOnStyleChangeProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2891-2891
-    pub fn SetNeedsPrePaintSubtreeWalk(&mut self, reasons: PrePaintSubtreeWalkReasons) {
-        unsafe { LayoutObjectSetNeedsPrePaintSubtreeWalkProvider(self, reasons) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2897-2897
-    pub fn SetDescendantNeedsPrePaintSubtreeWalk(&mut self, reasons: PrePaintSubtreeWalkReasons) {
-        unsafe { LayoutObjectSetDescendantNeedsPrePaintSubtreeWalkProvider(self, reasons) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2923-2923
-    pub fn MarkEffectiveAllowedTouchActionChanged(&mut self) {
-        unsafe { LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2938-2938
-    pub fn MarkBlockingWheelEventHandlerChanged(&mut self) {
-        unsafe { LayoutObjectMarkBlockingWheelEventHandlerChangedProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2944-2944
-    pub fn MarkSoftNavigationContextChanged(&mut self) {
-        unsafe { LayoutObjectMarkSoftNavigationContextChangedProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2958-2958
-    pub fn MarkContainerTimingChanged(&mut self) {
-        unsafe { LayoutObjectMarkContainerTimingChangedProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3170-3170
-    pub fn ChildPaintBlockedByDisplayLock(&self) -> bool {
-        unsafe { LayoutObjectChildPaintBlockedByDisplayLockProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3120-3120
-    pub fn MaybeClearIsScrollAnchorObject(&mut self) {
-        unsafe { LayoutObjectMaybeClearIsScrollAnchorObjectProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3264-3264
-    pub fn SetSVGDescendantMayHaveTransformRelatedOperations(&mut self) {
-        unsafe { LayoutObjectSetSVGDescendantMayHaveTransformRelatedOperationsProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3341-3341
-    pub fn UpdateAfterReinsert(&mut self, old_style: &ComputedStyle) {
-        unsafe { LayoutObjectUpdateAfterReinsertProvider(self, old_style) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3446-3446
-    pub(crate) fn SetIsBackgroundAttachmentFixedObject(&mut self, value: bool) {
-        unsafe { LayoutObjectSetIsBackgroundAttachmentFixedObjectProvider(self, value) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3447-3447
-    pub(crate) fn SetCanCompositeBackgroundAttachmentFixed(&mut self, value: bool) {
-        unsafe { LayoutObjectSetCanCompositeBackgroundAttachmentFixedProvider(self, value) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3474-3474
-    pub(crate) fn BackgroundIsKnownToBeObscured(&self) -> bool {
-        unsafe { LayoutObjectBackgroundIsKnownToBeObscuredProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3475-3475
-    pub(crate) fn SetBackgroundIsKnownToBeObscured(&mut self, value: bool) {
-        unsafe { LayoutObjectSetBackgroundIsKnownToBeObscuredProvider(self, value) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3491-3491
-    pub(crate) fn FirstLineStyleWithoutFallback(&self) -> *const ComputedStyle {
-        unsafe { LayoutObjectFirstLineStyleWithoutFallbackProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3579-3579
-    fn MarkSelfPaintingLayerForVisualOverflowRecalc(&mut self) {
-        unsafe { LayoutObjectMarkSelfPaintingLayerForVisualOverflowRecalcProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2725-2725
-    pub fn GetImageOrientation(object: *const LayoutObject) -> RespectImageOrientationEnum {
-        unsafe { LayoutObjectGetImageOrientationProvider(object) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3540-3540
-    fn AddAsImageObserver(&mut self, image: *mut StyleImage) {
-        unsafe { LayoutObjectAddAsImageObserverProvider(self, image) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3541-3541
-    fn RemoveAsImageObserver(&mut self, image: *mut StyleImage) {
-        unsafe { LayoutObjectRemoveAsImageObserverProvider(self, image) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3543-3543
-    fn UpdateImage(&mut self, old_image: *mut StyleImage, new_image: *mut StyleImage) {
-        unsafe { LayoutObjectUpdateImageProvider(self, old_image, new_image) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3544-3544
-    fn UpdateShapeImage(&mut self, old_shape: *const ShapeValue, new_shape: *const ShapeValue) {
-        unsafe { LayoutObjectUpdateShapeImageProvider(self, old_shape, new_shape) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3545-3546
-    fn UpdateFillImages(&mut self, old_layers: *const FillLayer, new_layers: *const FillLayer) {
-        unsafe { LayoutObjectUpdateFillImagesProvider(self, old_layers, new_layers) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3547-3548
-    fn UpdateCursorImages(
-        &mut self,
-        old_cursors: *const CursorList,
-        new_cursors: *const CursorList,
-    ) {
-        unsafe { LayoutObjectUpdateCursorImagesProvider(self, old_cursors, new_cursors) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3561-3561
-    fn InvalidateSelectedChildrenOnStyleChange(&mut self) {
-        unsafe { LayoutObjectInvalidateSelectedChildrenOnStyleChangeProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3565-3565
-    fn AdjustStyleDifference(&self, difference: StyleDifference) -> StyleDifference {
-        unsafe { LayoutObjectAdjustStyleDifferenceProvider(self, difference) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3572-3573
-    fn UpdateImageObservers(
-        &mut self,
-        old_style: *const ComputedStyle,
-        new_style: *const ComputedStyle,
-    ) {
-        unsafe { LayoutObjectUpdateImageObserversProvider(self, old_style, new_style) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3574-3574
-    fn UpdateFirstLineImageObservers(&mut self, new_style: *const ComputedStyle) {
-        unsafe { LayoutObjectUpdateFirstLineImageObserversProvider(self, new_style) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3576-3576
-    fn ApplyPseudoElementStyleChanges(&mut self, old_style: *const ComputedStyle) {
-        unsafe { LayoutObjectApplyPseudoElementStyleChangesProvider(self, old_style) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3577-3577
-    fn ApplyFirstLineChanges(&mut self, old_style: *const ComputedStyle) {
-        unsafe { LayoutObjectApplyFirstLineChangesProvider(self, old_style) }
-    }
 }
 
 impl LayoutObject {
-    // cpp: layoutng/internal/layout_object.h:2254-2255
-    pub fn ContainingScrollContainerAnyAxis(
-        &self,
-        ignore_layout_view_for_fixed_pos: bool,
-    ) -> *const LayoutBox {
-        unsafe {
-            LayoutObjectContainingScrollContainerAnyAxisProvider(
-                self,
-                ignore_layout_view_for_fixed_pos,
-            )
-        }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2254-2255
-    pub fn ContainingScrollContainerAnyAxisDefault(&self) -> *const LayoutBox {
-        self.ContainingScrollContainerAnyAxis(false)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2262-2263
-    pub fn ContainingScrollContainerLayerAnyAxis(
-        &self,
-        ignore_layout_view_for_fixed_pos: bool,
-    ) -> *const PaintLayer {
-        unsafe {
-            LayoutObjectContainingScrollContainerLayerAnyAxisProvider(
-                self,
-                ignore_layout_view_for_fixed_pos,
-            )
-        }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2262-2263
-    pub fn ContainingScrollContainerLayerAnyAxisDefault(&self) -> *const PaintLayer {
-        self.ContainingScrollContainerLayerAnyAxis(false)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2268-2270
-    pub fn ContainingScrollContainerLayerForAxis(
-        &self,
-        axis: PhysicalAxis,
-        ignore_layout_view_for_fixed_pos: bool,
-    ) -> *const PaintLayer {
-        unsafe {
-            LayoutObjectContainingScrollContainerLayerForAxisProvider(
-                self,
-                axis,
-                ignore_layout_view_for_fixed_pos,
-            )
-        }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2268-2270
-    pub fn ContainingScrollContainerLayerForAxisDefault(
-        &self,
-        axis: PhysicalAxis,
-    ) -> *const PaintLayer {
-        self.ContainingScrollContainerLayerForAxis(axis, false)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2410-2410
-    pub fn OffsetFromAncestor(&self, ancestor: *const LayoutObject) -> PhysicalOffset {
-        unsafe { LayoutObjectOffsetFromAncestorProvider(self, ancestor) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2412-2412
-    pub fn AbsoluteBoundingBoxRectF(&self, mode: MapCoordinatesFlags) -> gfx::RectF {
-        unsafe { LayoutObjectAbsoluteBoundingBoxRectFProvider(self, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2412-2412
-    pub fn AbsoluteBoundingBoxRectFDefault(&self) -> gfx::RectF {
-        self.AbsoluteBoundingBoxRectF(MapCoordinatesFlags::default())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2416-2416
-    pub fn AbsoluteBoundingBoxRect(&self, mode: MapCoordinatesFlags) -> gfx::Rect {
-        unsafe { LayoutObjectAbsoluteBoundingBoxRectProvider(self, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2416-2416
-    pub fn AbsoluteBoundingBoxRectDefault(&self) -> gfx::Rect {
-        self.AbsoluteBoundingBoxRect(MapCoordinatesFlags::default())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2422-2422
-    pub fn AbsoluteBoundingBoxRectForUnboundedElement(&self) -> gfx::Rect {
-        unsafe { LayoutObjectAbsoluteBoundingBoxRectForUnboundedElementProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2430-2431
-    pub fn AbsoluteBoundingBoxRectHandlingEmptyInline(
-        &self,
-        flags: MapCoordinatesFlags,
-    ) -> PhysicalRect {
-        unsafe { LayoutObjectAbsoluteBoundingBoxRectHandlingEmptyInlineProvider(self, flags) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2430-2431
-    pub fn AbsoluteBoundingBoxRectHandlingEmptyInlineDefault(&self) -> PhysicalRect {
-        self.AbsoluteBoundingBoxRectHandlingEmptyInline(MapCoordinatesFlags::default())
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2434-2434
-    pub fn AbsoluteBoundingBoxRectForScrollIntoView(&self) -> PhysicalRect {
-        unsafe { LayoutObjectAbsoluteBoundingBoxRectForScrollIntoViewProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2456-2456
-    pub fn AbsoluteBoundingBoxRectIncludingDescendants(&self) -> gfx::Rect {
-        unsafe { LayoutObjectAbsoluteBoundingBoxRectIncludingDescendantsProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1671-1671
-    pub fn GetCachedPseudoElementStyle(&self, pseudo_id: PseudoId) -> *const ComputedStyle {
-        unsafe { LayoutObjectGetCachedPseudoElementStyleProvider(self, pseudo_id) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1672-1672
-    pub fn GetUncachedPseudoElementStyle(&self, request: &StyleRequest) -> *const ComputedStyle {
-        unsafe { LayoutObjectGetUncachedPseudoElementStyleProvider(self, request) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2187-2187
-    pub fn PositionForPoint(&self, point: &PhysicalOffset) -> PositionWithAffinity {
-        unsafe { DispatchLayoutObjectPositionForPoint(self, point) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2188-2189
-    pub fn CreatePositionWithAffinity(
-        &self,
-        offset: i32,
-        affinity: TextAffinity,
-    ) -> PositionWithAffinity {
-        unsafe { LayoutObjectCreatePositionWithAffinityProvider(self, offset, affinity) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2190-2190
-    pub fn CreatePositionWithAffinityDefault(&self, offset: i32) -> PositionWithAffinity {
-        unsafe { LayoutObjectCreatePositionWithAffinityDefaultProvider(self, offset) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2191-2191
-    pub fn FindPosition(&self) -> PositionWithAffinity {
-        unsafe { LayoutObjectFindPositionProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2192-2192
-    pub fn FirstPositionInOrBeforeThis(&self) -> PositionWithAffinity {
-        unsafe { LayoutObjectFirstPositionInOrBeforeThisProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2193-2193
-    pub fn LastPositionInOrAfterThis(&self) -> PositionWithAffinity {
-        unsafe { LayoutObjectLastPositionInOrAfterThisProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2194-2194
-    pub fn PositionAfterThis(&self) -> PositionWithAffinity {
-        unsafe { LayoutObjectPositionAfterThisProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2195-2195
-    pub fn PositionBeforeThis(&self) -> PositionWithAffinity {
-        unsafe { LayoutObjectPositionBeforeThisProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2218-2219
-    pub fn SetModifiedStyleOutsideStyleRecalc(
-        &mut self,
-        style: *const ComputedStyle,
-        apply_changes: ApplyStyleChanges,
-    ) {
-        unsafe {
-            LayoutObjectSetModifiedStyleOutsideStyleRecalcProvider(self, style, apply_changes)
-        }
-    }
-
     // cpp: layoutng/internal/layout_object.h:791-793
     #[cfg(debug_assertions)]
     pub fn DumpLayoutObject(
@@ -5130,59 +4064,6 @@ impl LayoutObject {
     #[cfg(all(debug_assertions, feature = "expensive_dchecks"))]
     pub fn AssertFragmentTreeDefault(&self) {
         self.AssertFragmentTree(false)
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2559-2559
-    pub fn HitTestForOcclusion(&self, rect: &PhysicalRect) -> HitTestResult {
-        unsafe { LayoutObjectHitTestForOcclusionProvider(self, rect) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2626-2626
-    pub fn DestroyAndCleanupAnonymousWrappers(&mut self, performing_reattach: bool) {
-        unsafe { LayoutObjectDestroyAndCleanupAnonymousWrappersProvider(self, performing_reattach) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2696-2698
-    pub fn CollectOutlineRectsAndAdvance(
-        &self,
-        outline_type: OutlineType,
-        iterator: &mut AccompaniedFragmentIterator,
-    ) -> Vector<PhysicalRect> {
-        unsafe { LayoutObjectCollectOutlineRectsAndAdvanceProvider(self, outline_type, iterator) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2704-2706
-    pub fn OutlineRects(
-        &self,
-        info: *mut LayoutOutlineInfo,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    ) -> Vector<PhysicalRect> {
-        unsafe { LayoutObjectOutlineRectsProvider(self, info, additional_offset, outline_type) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3207-3207
-    pub fn GetDisplayLockContext(&self) -> *mut DisplayLockContext {
-        unsafe { LayoutObjectGetDisplayLockContextProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3414-3418
-    pub(crate) fn MapToVisualRectInAncestorSpaceInternalFastPath(
-        &self,
-        ancestor_or_null_for_viewport: *const LayoutBoxModelObject,
-        rect: &mut gfx::RectF,
-        flags: VisualRectFlags,
-        intersects: &mut bool,
-    ) -> bool {
-        unsafe {
-            LayoutObjectMapToVisualRectInAncestorSpaceInternalFastPathProvider(
-                self,
-                ancestor_or_null_for_viewport,
-                rect,
-                flags,
-                intersects,
-            )
-        }
     }
 }
 
@@ -5282,276 +4163,6 @@ impl LayoutObject {
         }
         self.IsRenderedLegendInternal()
     }
-
-    // cpp: layoutng/internal/layout_object.h:1994-1997
-    pub fn IsFragmentLessBoxBase(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        false
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1994-1997
-    pub fn IsFragmentLessBox(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsFragmentLessBox(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2001-2004
-    pub fn HasInlineFragmentsBase(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        false
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2001-2004
-    pub fn HasInlineFragments(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectHasInlineFragments(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2011-2014
-    pub fn FirstInlineFragmentItemIndexBase(&self) -> usize {
-        self.CheckIsNotDestroyed();
-        0
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2011-2014
-    pub fn FirstInlineFragmentItemIndex(&self) -> usize {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectFirstInlineFragmentItemIndex(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2015-2015
-    pub fn ClearFirstInlineFragmentItemIndexBase(&mut self) {
-        self.CheckIsNotDestroyed();
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2015-2015
-    pub fn ClearFirstInlineFragmentItemIndex(&mut self) {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectClearFirstInlineFragmentItemIndex(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2016-2016
-    pub fn SetFirstInlineFragmentItemIndexBase(&mut self, _index: usize) {
-        self.CheckIsNotDestroyed();
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2016-2016
-    pub fn SetFirstInlineFragmentItemIndex(&mut self, index: usize) {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectSetFirstInlineFragmentItemIndex(self, index) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3398-3401
-    pub fn AnonymousHasStylePropagationOverride(&mut self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectAnonymousHasStylePropagationOverride(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3403-3405
-    pub fn InLayoutNGInlineFormattingContextWillChange(&mut self, value: bool) {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectInLayoutNGInlineFormattingContextWillChange(self, value) }
-    }
-}
-
-impl LayoutObject {
-    // cpp: layoutng/internal/layout_object.h:2102-2102
-    pub fn Paint(&self, info: &PaintInfo) {
-        if self.IsSVGHiddenContainer() {
-            return;
-        }
-        unsafe { LayoutObjectPaintProvider(self, info) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2108-2108
-    pub fn InvalidateVisualOverflow(&mut self) {
-        unsafe { LayoutObjectInvalidateVisualOverflowProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2157-2157
-    pub fn AddDraggableRegions(&mut self, regions: &mut Vector<DraggableRegionValue>) {
-        unsafe { LayoutObjectAddDraggableRegionsProvider(self, regions) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2160-2160
-    pub fn CanHaveAdditionalCompositingReasons(&self) -> bool {
-        unsafe { LayoutObjectCanHaveAdditionalCompositingReasonsProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2161-2161
-    pub fn AdditionalCompositingReasons(&self) -> CompositingReasons {
-        unsafe { LayoutObjectAdditionalCompositingReasonsProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2171-2173
-    pub fn HitTestAllPhases(
-        &mut self,
-        result: &mut HitTestResult,
-        location: &HitTestLocation,
-        accumulated_offset: &PhysicalOffset,
-    ) -> bool {
-        unsafe { LayoutObjectHitTestAllPhasesProvider(self, result, location, accumulated_offset) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2178-2178
-    pub fn NodeForHitTest(&self) -> *mut Node {
-        unsafe { LayoutObjectNodeForHitTestProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2179-2179
-    pub fn UpdateHitTestResult(&self, result: &mut HitTestResult, offset: &PhysicalOffset) {
-        unsafe { LayoutObjectUpdateHitTestResultProvider(self, result, offset) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2182-2185
-    pub fn NodeAtPoint(
-        &mut self,
-        result: &mut HitTestResult,
-        location: &HitTestLocation,
-        accumulated_offset: &PhysicalOffset,
-        phase: HitTestPhase,
-    ) -> bool {
-        if self.IsSVGHiddenContainer() {
-            return false;
-        }
-        unsafe {
-            LayoutObjectNodeAtPointProvider(self, result, location, accumulated_offset, phase)
-        }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2197-2197
-    pub fn DirtyLinesFromChangedChild(&mut self, _child: *mut LayoutObject) {
-        self.CheckIsNotDestroyed();
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2534-2536
-    pub fn MapToVisualRectInAncestorSpacePhysical(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        rect: &mut PhysicalRect,
-        flags: VisualRectFlags,
-    ) -> bool {
-        unsafe { LayoutObjectMapToVisualRectPhysicalProvider(self, ancestor, rect, flags) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2538-2540
-    pub fn MapToVisualRectInAncestorSpaceFloat(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        rect: &mut gfx::RectF,
-        flags: VisualRectFlags,
-    ) -> bool {
-        unsafe { LayoutObjectMapToVisualRectFloatProvider(self, ancestor, rect, flags) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2544-2547
-    pub fn MapToVisualRectInAncestorSpaceInternal(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        flags: VisualRectFlags,
-    ) -> bool {
-        unsafe { DispatchLayoutObjectMapToVisualRectInternal(self, ancestor, state, flags) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2554-2556
-    pub fn GetPropertyContainer(
-        &self,
-        skip_info: *mut AncestorSkipInfo,
-        state: *mut PropertyTreeStateOrAlias,
-        flags: VisualRectFlags,
-    ) -> *const LayoutObject {
-        unsafe { LayoutObjectGetPropertyContainerProvider(self, skip_info, state, flags) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2623-2624
-    pub fn LocalCaretRect(&self, offset: i32, shape: CaretShape) -> PhysicalRect {
-        unsafe { LayoutObjectLocalCaretRectProvider(self, offset, shape) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2666-2668
-    pub fn MapLocalToAncestor(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        mode: MapCoordinatesFlags,
-    ) {
-        unsafe { LayoutObjectMapLocalToAncestorProvider(self, ancestor, state, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2669-2671
-    pub fn MapAncestorToLocal(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        mode: MapCoordinatesFlags,
-    ) {
-        unsafe { LayoutObjectMapAncestorToLocalProvider(self, ancestor, state, mode) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2712-2717
-    pub fn AddOutlineRectsBase(
-        &self,
-        _collector: &mut dyn OutlineRectCollector,
-        _info: *mut LayoutOutlineInfo,
-        _additional_offset: &PhysicalOffset,
-        _outline_type: OutlineType,
-    ) {
-        self.CheckIsNotDestroyed();
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2712-2717
-    pub fn AddOutlineRects(
-        &self,
-        collector: &mut dyn OutlineRectCollector,
-        info: *mut LayoutOutlineInfo,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    ) {
-        self.CheckIsNotDestroyed();
-        unsafe {
-            DispatchLayoutObjectAddOutlineRects(
-                self,
-                collector,
-                info,
-                additional_offset,
-                outline_type,
-            )
-        }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2834-2834
-    pub fn InvalidatePaint(&self, context: &PaintInvalidatorContext) {
-        unsafe { LayoutObjectInvalidatePaintProvider(self, context) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2843-2843
-    pub fn InvalidateDisplayItemClients(&self, reason: PaintInvalidationReason) {
-        unsafe { LayoutObjectInvalidateDisplayItemClientsProvider(self, reason) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2861-2861
-    pub fn DebugRect(&self) -> PhysicalRect {
-        unsafe { LayoutObjectDebugRectProvider(self) }
-    }
-}
-
-// cpp: layoutng/internal/layout_object.h:3949-3952
-pub fn AssociatedLayoutObjectOf(
-    node: &Node,
-    offset_in_node: i32,
-    side: LayoutObjectSide,
-) -> *const LayoutObject {
-    unsafe { AssociatedLayoutObjectOfProvider(node, offset_in_node, side) }
-}
-
-// cpp: layoutng/internal/layout_object.h:3949-3952
-pub fn AssociatedLayoutObjectOfDefault(node: &Node, offset_in_node: i32) -> *const LayoutObject {
-    AssociatedLayoutObjectOf(
-        node,
-        offset_in_node,
-        LayoutObjectSide::kRemainingTextIfOnBoundary,
-    )
 }
 
 // cpp: layoutng/internal/layout_object.h:3961-3961

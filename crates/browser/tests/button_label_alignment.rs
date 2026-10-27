@@ -6,7 +6,7 @@ mod native_test_thread;
 use browser::page::Page;
 use foundation::ETextAlign;
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
+    fragment_tree::FragmentPaintData,
     internal::layout_input::{FontFace, NodeKind, Offset},
 };
 use std::{cell::RefCell, io, rc::Rc};
@@ -98,10 +98,10 @@ fn fixture(author_color: bool) -> Page {
 }
 
 fn find_fragment<'a>(
-    node: &'a FragmentNode,
+    node: &'a FragmentPaintData,
     parent: Offset,
-    predicate: &impl Fn(&FragmentNode) -> bool,
-) -> Option<(&'a FragmentNode, Offset)> {
+    predicate: &impl Fn(&FragmentPaintData) -> bool,
+) -> Option<(&'a FragmentPaintData, Offset)> {
     let absolute = Offset {
         x: parent.x + node.offset.x,
         y: parent.y + node.offset.y,

@@ -1,0 +1,12 @@
+[package]
+name = "compositor_resource"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+compositor_raster = { path = "../compositor_raster" }
+compositor_scheduler = { path = "../compositor_scheduler" }
+compositor_tile = { path = "../compositor_tile" }
+compositor_tree = { path = "../compositor_tree" }

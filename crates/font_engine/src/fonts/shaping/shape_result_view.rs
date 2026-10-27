@@ -359,7 +359,7 @@ impl InitData {
     }
 
     fn PopulateSegments(&mut self, segments: &[Segment]) {
-        assert!(!segments.is_empty());
+        debug_assert!(!segments.is_empty());
         let first = &segments[0];
         if !first.result.is_null() {
             let result = unsafe { &*first.result };
@@ -376,13 +376,13 @@ impl InitData {
         for segment in segments {
             if !segment.result.is_null() {
                 let result = unsafe { &*segment.result };
-                assert_eq!(result.Direction(), self.direction);
+                debug_assert_eq!(result.Direction(), self.direction);
                 self.has_vertical_offsets |= result.HasVerticalOffsets();
                 self.num_parts += Self::CountResult(result, segment);
             } else {
-                assert!(!segment.view.is_null());
+                debug_assert!(!segment.view.is_null());
                 let view = unsafe { &*segment.view };
-                assert_eq!(view.Direction(), self.direction);
+                debug_assert_eq!(view.Direction(), self.direction);
                 self.has_vertical_offsets |= view.HasVerticalOffsets();
                 self.num_parts += Self::CountView(view, segment);
             }
@@ -472,16 +472,24 @@ impl ShapeResultView {
             0
         };
         let range_end = segment.end_index.min(part_end).wrapping_sub(run_start);
-        assert!(range_end > range_start);
+        debug_assert!(range_end > range_start);
         let (range, part_width) =
             if part_start >= segment.start_index && part_end <= segment.end_index {
                 (run.GetGlyphDataRange(), run.Width())
             } else {
                 let range = run.FindGlyphDataRange(range_start, range_end);
-                let mut width = InlineLayoutUnit::new();
-                for glyph in range.Glyphs() {
-                    width += glyph.advance.To::<16, i64>();
-                }
+                // This is the same sum as Chromium's InlineLayoutUnit
+                // std::accumulate. A ShapeResultRun is capped at 2^15
+                // glyphs, and each TextRunLayoutUnit advance has an i32 raw
+                // value, so their raw i64 sum cannot overflow. Summing the
+                // raw values lets LLVM use a plain/vectorized reduction while
+                // preserving the exact fixed-point result.
+                let raw_width = range
+                    .Glyphs()
+                    .iter()
+                    .map(|glyph| i64::from(glyph.advance.RawValue()))
+                    .sum::<i64>();
+                let width = InlineLayoutUnit::FromRawValue(raw_width);
                 (range, width.ToFloat())
             };
         self.width_ += part_width;
@@ -555,7 +563,7 @@ impl ShapeResultView {
 
     // cpp: font_engine/fonts/shaping/shape_result_view.cc:172-204
     pub fn Create(segments: &[Segment]) -> *mut Self {
-        assert!(!segments.is_empty());
+        debug_assert!(!segments.is_empty());
         let mut data = InitData::default();
         data.PopulateSegments(segments);
         let output = MakeGarbageCollected(Self::new(&data));
@@ -570,6 +578,7 @@ impl ShapeResultView {
                 output_ref.PopulateRunInfoParts(segment);
             }
         }
+        debug_assert_eq!(data.num_parts, output_ref.parts_.size());
         output
     }
 
@@ -582,7 +591,19 @@ impl ShapeResultView {
     pub fn CreateFromResult(result: *const ShapeResult) -> *mut Self {
         assert!(!result.is_null());
         let result_ref = unsafe { &*result };
-        Self::CreateFromResultRange(result, result_ref.StartIndex(), result_ref.EndIndex())
+        // Chromium has a dedicated full-result overload here.  It can use the
+        // source run count directly and therefore avoids the generic segment
+        // path's CountRunInfoParts pass before populating the parts.
+        let mut data = InitData::default();
+        data.PopulateResult(result_ref);
+        let output = MakeGarbageCollected(Self::new(&data));
+        let output_ref = unsafe { &mut *output };
+        debug_assert_eq!(output_ref.num_characters_, 0);
+        debug_assert_eq!(output_ref.width_, 0.0);
+        output_ref.parts_.ReserveInitialCapacity(data.num_parts);
+        output_ref.PopulateRunInfoParts(&Segment::from_result(result, 0, u32::MAX));
+        debug_assert_eq!(data.num_parts, output_ref.parts_.size());
+        output
     }
 
     // cpp: font_engine/fonts/shaping/shape_result_view.cc:206-225

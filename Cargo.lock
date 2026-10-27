@@ -257,20 +257,21 @@ dependencies = [
  "image_resource",
  "interaction",
  "javascript",
+ "layout_algo_block",
+ "layout_algo_flex",
+ "layout_algo_float",
+ "layout_algo_forms",
+ "layout_algo_grid",
+ "layout_algo_list",
+ "layout_algo_multicol",
+ "layout_algo_out_of_flow",
+ "layout_algo_replaced",
+ "layout_algo_svg",
+ "layout_algo_table",
+ "layout_fragment",
  "layoutng_assembly",
- "layoutng_block",
- "layoutng_flex",
- "layoutng_float",
- "layoutng_forms",
  "layoutng_foundation",
- "layoutng_grid",
- "layoutng_list",
- "layoutng_multicol",
- "layoutng_out_of_flow",
- "layoutng_replaced",
  "layoutng_style",
- "layoutng_svg",
- "layoutng_table",
  "open",
  "page_mutation",
  "paint",
@@ -455,11 +456,114 @@ dependencies = [
 name = "compositor"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
+ "compositor_animation",
+ "compositor_draw",
+ "compositor_frame",
+ "compositor_input",
+ "compositor_layerize",
+ "compositor_raster",
+ "compositor_resource",
+ "compositor_scheduler",
+ "compositor_tile",
+ "compositor_tree",
  "getrandom 0.4.3",
  "layoutng_foundation",
  "paint",
  "serde_json",
  "skia",
+]
+
+[[package]]
+name = "compositor_animation"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_scheduler",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_draw"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_frame"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_draw",
+ "compositor_resource",
+ "compositor_scheduler",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_input"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_animation",
+ "compositor_scheduler",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_layerize"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_raster"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+]
+
+[[package]]
+name = "compositor_resource"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_raster",
+ "compositor_scheduler",
+ "compositor_tile",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_scheduler"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_draw",
+ "compositor_tile",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_tile"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor_draw",
+ "compositor_raster",
+ "compositor_tree",
+]
+
+[[package]]
+name = "compositor_tree"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "paint_model",
 ]
 
 [[package]]
@@ -771,9 +875,9 @@ dependencies = [
  "image_decoder",
  "image_resource",
  "javascript",
+ "layout_algo_replaced",
  "layoutng_assembly",
  "layoutng_foundation",
- "layoutng_replaced",
  "page_mutation",
  "resource",
  "style",
@@ -790,10 +894,10 @@ dependencies = [
  "font_engine",
  "html",
  "image_resource",
+ "layout_algo_block",
+ "layout_algo_replaced",
  "layoutng_assembly",
- "layoutng_block",
  "layoutng_foundation",
- "layoutng_replaced",
  "layoutng_style",
  "style",
 ]
@@ -1280,9 +1384,9 @@ name = "html"
 version = "0.0.1"
 dependencies = [
  "dom",
+ "layout_algo_replaced",
  "layoutng_assembly",
  "layoutng_foundation",
- "layoutng_replaced",
 ]
 
 [[package]]
@@ -1879,11 +1983,225 @@ dependencies = [
 ]
 
 [[package]]
+name = "layout_algo_block"
+version = "0.0.1"
+dependencies = [
+ "font_engine",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+ "paint",
+ "raster",
+]
+
+[[package]]
+name = "layout_algo_custom"
+version = "0.0.1"
+
+[[package]]
+name = "layout_algo_flex"
+version = "0.0.1"
+dependencies = [
+ "font_engine",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_float"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_forms"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_fragmentation"
+version = "0.0.1"
+
+[[package]]
+name = "layout_algo_grid"
+version = "0.0.1"
+dependencies = [
+ "font_engine",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_inline"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "icu_bidi",
+ "layoutng_foundation",
+]
+
+[[package]]
+name = "layout_algo_inline_assembly"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "cssom",
+ "font_engine",
+ "icu_bidi",
+ "image_resource",
+ "layout_algo_custom",
+ "layout_algo_mathml",
+ "layout_commit",
+ "layout_fragment",
+ "layout_invalidation",
+ "layout_reuse",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+ "skia",
+]
+
+[[package]]
+name = "layout_algo_list"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_mathml"
+version = "0.0.1"
+
+[[package]]
+name = "layout_algo_multicol"
+version = "0.0.1"
+dependencies = [
+ "layout_algo_block",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_out_of_flow"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_replaced"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_sizing"
+version = "0.0.1"
+
+[[package]]
+name = "layout_algo_svg"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
+
+[[package]]
+name = "layout_algo_table"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "cssom",
+ "dom",
+ "html",
+ "layout_algo_block",
+ "layout_algo_replaced",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+ "style",
+]
+
+[[package]]
+name = "layout_commit"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layout_fragment",
+]
+
+[[package]]
+name = "layout_fragment"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "image_resource",
+ "layoutng_foundation",
+]
+
+[[package]]
+name = "layout_invalidation"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+]
+
+[[package]]
+name = "layout_reuse"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_foundation",
+ "layoutng_geometry",
+]
+
+[[package]]
 name = "layoutng"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "layout_commit",
+ "layout_invalidation",
+ "layout_reuse",
  "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
@@ -1899,61 +2217,16 @@ dependencies = [
  "font_engine",
  "icu_bidi",
  "image_resource",
- "layoutng_custom",
+ "layout_algo_custom",
+ "layout_algo_mathml",
+ "layout_commit",
+ "layout_fragment",
+ "layout_invalidation",
+ "layout_reuse",
  "layoutng_foundation",
  "layoutng_geometry",
- "layoutng_mathml",
  "layoutng_style",
  "skia",
-]
-
-[[package]]
-name = "layoutng_block"
-version = "0.0.1"
-dependencies = [
- "font_engine",
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
- "paint",
- "raster",
-]
-
-[[package]]
-name = "layoutng_custom"
-version = "0.0.1"
-
-[[package]]
-name = "layoutng_flex"
-version = "0.0.1"
-dependencies = [
- "font_engine",
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
-]
-
-[[package]]
-name = "layoutng_float"
-version = "0.0.1"
-dependencies = [
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
-]
-
-[[package]]
-name = "layoutng_forms"
-version = "0.0.1"
-dependencies = [
- "font_engine",
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
 ]
 
 [[package]]
@@ -1974,87 +2247,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "layoutng_grid"
-version = "0.0.1"
-dependencies = [
- "font_engine",
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
-]
-
-[[package]]
-name = "layoutng_inline"
-version = "0.0.1"
-dependencies = [
- "font_engine",
- "icu_bidi",
- "layoutng_foundation",
-]
-
-[[package]]
-name = "layoutng_inline_assembly"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "cssom",
- "font_engine",
- "icu_bidi",
- "image_resource",
- "layoutng_custom",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_mathml",
- "layoutng_style",
- "skia",
-]
-
-[[package]]
-name = "layoutng_list"
-version = "0.0.1"
-dependencies = [
- "font_engine",
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_style",
-]
-
-[[package]]
-name = "layoutng_mathml"
-version = "0.0.1"
-
-[[package]]
-name = "layoutng_multicol"
-version = "0.0.1"
-dependencies = [
- "layoutng_assembly",
- "layoutng_block",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
-]
-
-[[package]]
-name = "layoutng_out_of_flow"
-version = "0.0.1"
-dependencies = [
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
-]
-
-[[package]]
-name = "layoutng_replaced"
-version = "0.0.1"
-dependencies = [
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_style",
-]
-
-[[package]]
 name = "layoutng_style"
 version = "0.0.1"
 dependencies = [
@@ -2062,33 +2254,6 @@ dependencies = [
  "image_resource",
  "layoutng_foundation",
  "layoutng_geometry",
-]
-
-[[package]]
-name = "layoutng_svg"
-version = "0.0.1"
-dependencies = [
- "font_engine",
- "layoutng_assembly",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_style",
-]
-
-[[package]]
-name = "layoutng_table"
-version = "0.0.1"
-dependencies = [
- "cssom",
- "dom",
- "html",
- "layoutng_assembly",
- "layoutng_block",
- "layoutng_foundation",
- "layoutng_geometry",
- "layoutng_replaced",
- "layoutng_style",
- "style",
 ]
 
 [[package]]
@@ -2705,12 +2870,82 @@ version = "0.0.1"
 dependencies = [
  "animation",
  "browser_tracing",
+ "image_resource",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "paint_chunk",
+ "paint_commit",
+ "paint_model",
+ "paint_record",
+ "paint_reuse",
+ "paint_walk",
+ "prepaint",
+]
+
+[[package]]
+name = "paint_chunk"
+version = "0.0.1"
+dependencies = [
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "paint_model",
+]
+
+[[package]]
+name = "paint_commit"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "paint_model",
+ "paint_record",
+ "prepaint",
+]
+
+[[package]]
+name = "paint_model"
+version = "0.0.1"
+dependencies = [
+ "image_resource",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "serde_json",
+]
+
+[[package]]
+name = "paint_record"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
  "font_engine",
  "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_style",
- "serde_json",
+ "paint_chunk",
+ "paint_model",
+ "paint_reuse",
+ "prepaint",
+]
+
+[[package]]
+name = "paint_reuse"
+version = "0.0.1"
+dependencies = [
+ "layoutng_assembly",
+ "paint_model",
+]
+
+[[package]]
+name = "paint_walk"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_assembly",
+ "paint_model",
+ "paint_record",
+ "prepaint",
 ]
 
 [[package]]
@@ -2895,6 +3130,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy 0.8.59",
+]
+
+[[package]]
+name = "prepaint"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "image_resource",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "paint_model",
+ "paint_reuse",
 ]
 
 [[package]]
@@ -3668,7 +3916,112 @@ dependencies = [
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_style",
+ "style_commit",
+ "style_diff",
+ "style_invalidation",
+ "style_match",
+ "style_model",
+ "style_parser",
+ "style_resolve",
+ "style_rules",
+ "style_walk",
  "url",
+]
+
+[[package]]
+name = "style_commit"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_foundation",
+ "layoutng_style",
+ "style_diff",
+ "style_model",
+]
+
+[[package]]
+name = "style_diff"
+version = "0.0.1"
+dependencies = [
+ "layoutng_style",
+ "style_model",
+]
+
+[[package]]
+name = "style_invalidation"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_foundation",
+ "style_model",
+]
+
+[[package]]
+name = "style_match"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_foundation",
+ "layoutng_style",
+ "style_model",
+ "style_parser",
+ "style_rules",
+ "style_walk",
+]
+
+[[package]]
+name = "style_model"
+version = "0.0.1"
+dependencies = [
+ "layoutng_foundation",
+ "layoutng_style",
+]
+
+[[package]]
+name = "style_parser"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_foundation",
+ "layoutng_style",
+ "style_model",
+ "url",
+]
+
+[[package]]
+name = "style_resolve"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "layoutng_foundation",
+ "layoutng_style",
+ "style_match",
+ "style_model",
+ "style_parser",
+]
+
+[[package]]
+name = "style_rules"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_foundation",
+ "layoutng_style",
+ "style_invalidation",
+ "style_model",
+ "style_parser",
+]
+
+[[package]]
+name = "style_walk"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "layoutng_foundation",
+ "layoutng_style",
+ "style_invalidation",
+ "style_model",
 ]
 
 [[package]]
@@ -4248,9 +4601,9 @@ dependencies = [
  "http_transport",
  "interaction",
  "javascript",
+ "layout_algo_replaced",
  "layoutng_assembly",
  "layoutng_foundation",
- "layoutng_replaced",
  "paint",
  "percent-encoding",
  "skia",

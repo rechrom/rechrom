@@ -20,10 +20,11 @@ use javascript::javascript_runtime::{
     JavaScriptRuntime,
 };
 use javascript::script_engine::ScriptEngine;
+use layout_fragment::LayoutResultHandle;
 use layoutng_assembly::layout_boundary_support::LayoutUpdateKind;
-use layoutng_assembly::layout_engine::LayoutPaintOutput;
+use layoutng_assembly::layout_engine::{LayoutPaintOutput, NativePaintFragmentCursor};
 use layoutng_assembly::{
-    fragment_tree::{FragmentKind, FragmentNode, PaintResources},
+    fragment_tree::{FragmentKind, FragmentPaintData, PaintResources},
     internal::{
         layout_input::{ConstraintSpace, Offset},
         layout_input_types::IntSize,
@@ -673,7 +674,11 @@ impl PageRenderPipeline {
         &mut self,
         args: foundation::begin_frame::BeginFrameArgs,
     ) -> io::Result<CompositorWheelResult> {
-        if self.compositor.is_none() {
+        // The internal presenter advances its scheduler with BeginFrame().
+        // Routing a host frame into that same scheduler mixes two clock
+        // sources and can move frame_time backwards. Only externally
+        // presented Pages subscribe to the host's physical BeginFrames.
+        if !self.external_presentation || self.compositor.is_none() {
             return Ok(CompositorWheelResult::default());
         }
         let mut trace = browser_tracing::span("compositor", "PageCompositor.PhysicalBeginFrame");
@@ -1326,7 +1331,7 @@ pub struct PageFrame {
     pub sequence: u64,
     /// Last compositor scroll delta reflected by this committed snapshot.
     pub compositor_scroll_sequence: u64,
-    pub fragments: Rc<FragmentNode>,
+    pub fragments: LayoutResultHandle,
     pub display_items: Arc<paint::paint_engine::PaintArtifact>,
     /// Rechrom-specific certification for its immutable document-image record
     /// catalog. Blink's SVGImage instead sizes its isolated document and asks
@@ -1397,6 +1402,30 @@ struct ProgrammaticScrollAnimation {
     curve: compositor::cc::animation::scroll_offset_animation_curve::ScrollOffsetAnimationCurve,
     start_time: Option<std::time::Instant>,
 }
+
+#[derive(Clone, Copy, Default)]
+struct ResourceReferenceDirty(u8);
+
+impl ResourceReferenceDirty {
+    const STYLE_SHEETS: u8 = 1 << 0;
+    const IMAGES: u8 = 1 << 1;
+    const FONTS: u8 = 1 << 2;
+    const ALL: Self = Self(Self::STYLE_SHEETS | Self::IMAGES | Self::FONTS);
+    const VIEWPORT: Self = Self(Self::IMAGES | Self::FONTS);
+
+    fn Contains(self, flag: u8) -> bool {
+        self.0 & flag != 0
+    }
+
+    fn IsEmpty(self) -> bool {
+        self.0 == 0
+    }
+
+    fn Insert(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+}
+
 struct PageState {
     document: Rc<DocumentEngine>,
     style_engine: RefCell<style::StyleEngine>,
@@ -1426,11 +1455,11 @@ struct PageState {
     // Chromium lets cc keep moving the active scroll tree while Blink's
     // CullRectUpdater catches up on the main thread.  Preserve that ordering
     // for a phased wheel gesture and remember the final offsets which still
-    // need a cull projection after the gesture ends.
+    // need a main-thread cull-data refresh after the gesture ends.
     defer_scroll_cull_refresh: Cell<bool>,
     deferred_scroll_cull_updates: RefCell<Vec<(u64, Offset)>>,
     styles_resolved: Cell<bool>,
-    resource_references_dirty: Cell<bool>,
+    resource_references_dirty: Cell<ResourceReferenceDirty>,
     // A stable image resource id published a new immutable content snapshot.
     // This never means DOM, layout geometry or display-item recording changed.
     paint_resources_dirty: Cell<bool>,
@@ -1506,7 +1535,7 @@ impl PageState {
             defer_scroll_cull_refresh: Cell::new(false),
             deferred_scroll_cull_updates: RefCell::new(Vec::new()),
             styles_resolved: Cell::new(false),
-            resource_references_dirty: Cell::new(true),
+            resource_references_dirty: Cell::new(ResourceReferenceDirty::ALL),
             paint_resources_dirty: Cell::new(false),
             pending_paint_mutations: RefCell::new(Vec::new()),
             layout_revision: Cell::new(None),
@@ -1653,10 +1682,18 @@ impl PageState {
         self.InvalidateStylePreservingGeometry();
     }
     fn InvalidateStylePreservingGeometry(&self) {
+        self.InvalidateStylePreservingGeometryWithResources(ResourceReferenceDirty::ALL);
+    }
+    fn InvalidateStylePreservingGeometryWithResources(&self, resources: ResourceReferenceDirty) {
         self.styles_resolved.set(false);
-        self.resource_references_dirty.set(true);
+        self.MarkResourceReferencesDirty(resources);
         self.scroll_only.set(false);
         self.dirty.set(true);
+    }
+    fn MarkResourceReferencesDirty(&self, resources: ResourceReferenceDirty) {
+        let mut dirty = self.resource_references_dirty.get();
+        dirty.Insert(resources);
+        self.resource_references_dirty.set(dirty);
     }
     // cpp: browser/browser.cc:947-981
     fn ApplyDOMMutation(
@@ -2023,9 +2060,9 @@ impl PageState {
                 "resolved_noop",
                 (offset_only && !self.scroll_only.get()) as u8 as f64,
             );
-            // Move the committed frame through Layout's zero-copy Paint output.
-            // Dropping the engine's matching Rc before mutation ensures only a
-            // genuinely retained external frame can trigger copy-on-write.
+            // Move the committed native-result owner back through Layout. The
+            // handle move is allocation-free; geometry and topology remain on
+            // the original LayoutResult/PhysicalFragment owners.
             let mut layout_output = self
                 .layout_engine
                 .borrow_mut()
@@ -2033,10 +2070,9 @@ impl PageState {
             let defer_cull_refresh = offset_only && self.defer_scroll_cull_refresh.get();
             trace.set("defer_cull_refresh", defer_cull_refresh as u8 as f64);
             if defer_cull_refresh {
-                let fragments = layout_output.Fragments();
                 let mut deferred = self.deferred_scroll_cull_updates.borrow_mut();
                 for &(id, offset) in updates.iter() {
-                    let changed_enough = fragments.PaintCullRectHasScrolledEnough(id, offset);
+                    let changed_enough = layout_output.PaintCullRectHasScrolledEnough(id, offset);
                     if let Some(index) = deferred.iter().position(|(pending, _)| *pending == id) {
                         if changed_enough {
                             deferred[index].1 = offset;
@@ -2055,7 +2091,7 @@ impl PageState {
                     &mut self.document.borrow_mut(),
                     &self.constraints.borrow(),
                     &updates,
-                    Rc::make_mut(layout_output.FragmentsMut()),
+                    layout_output.ResultHandleMut(),
                     offset_only,
                     defer_cull_refresh,
                 )
@@ -2107,7 +2143,7 @@ impl PageState {
             paint.AdoptPaintResult(std::mem::take(&mut frame.display_items));
             let property_update = (scroll_layout
                 == crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry)
-                .then(|| paint.TryUpdateScrollProperties(layout_output.Fragments()));
+                .then(|| paint.TryUpdateScrollProperties(&layout_output));
             if defer_cull_refresh
                 && matches!(
                     property_update,
@@ -2123,7 +2159,7 @@ impl PageState {
                 let refreshed = self
                     .layout_engine
                     .borrow_mut()
-                    .RefreshScrollCullProjection(Rc::make_mut(layout_output.FragmentsMut()));
+                    .RefreshScrollCullData(layout_output.ResultHandleMut());
                 assert!(refreshed, "retained scroll lost its native layout tree");
                 scroll_layout = crate::persistent_layout::ScrollLayoutUpdate::RefreshedLayout;
                 self.deferred_scroll_cull_updates.borrow_mut().clear();
@@ -2137,7 +2173,7 @@ impl PageState {
                         eprintln!("scroll-paint-reuse rejected={reason:?}");
                     }
                 }
-                paint.Paint(layout_output.Fragments(), self.layout_editing.PaintState());
+                paint.Paint(&layout_output, self.layout_editing.PaintState());
                 Some(paint.CommitPaintResult())
             } else {
                 None
@@ -2262,8 +2298,9 @@ impl PageState {
     // layout. This assembly exports complete native layout batches, so advance
     // style/layout until the published content sizes are unchanged before any
     // measurement or paint consumes the batch.
-    fn LayoutWithContainerQueries(&self, purpose: LayoutUpdateKind) {
+    fn LayoutWithContainerQueries(&self, purpose: LayoutUpdateKind) -> bool {
         let mut observed = std::collections::HashSet::new();
+        let mut updated = false;
         let limit = self.document.borrow().GetDocument().NodeCount() + 1;
         for _ in 0..limit {
             #[cfg(test)]
@@ -2271,7 +2308,7 @@ impl PageState {
                 .set(self.full_layout_lifecycles.get() + 1);
             let sizes = {
                 loop {
-                    crate::font_session::LayoutWithSystemFontsAtStage(
+                    updated |= crate::font_session::LayoutWithSystemFontsAtStage(
                         &mut self.layout_engine.borrow_mut(),
                         &mut self.document.borrow_mut(),
                         &self.interaction.borrow(),
@@ -2298,7 +2335,7 @@ impl PageState {
                 if !self.style_engine.borrow().HasContainerQueries() {
                     drop(layout);
                     self.ReflectLayoutScrollOffsets();
-                    return;
+                    return updated;
                 }
                 layout.ContainerQuerySizes()
             };
@@ -2316,7 +2353,7 @@ impl PageState {
             };
             if !changed {
                 self.ReflectLayoutScrollOffsets();
-                return;
+                return updated;
             }
             let signature = sizes
                 .iter()
@@ -2536,7 +2573,12 @@ impl PageState {
                 if viewport_changed {
                     self.document.borrow_mut().InvalidateLayoutGeometry();
                 }
-                self.InvalidateStyle();
+                self.InvalidateLayoutOutput();
+                self.InvalidateStylePreservingGeometryWithResources(if viewport_changed {
+                    ResourceReferenceDirty::VIEWPORT
+                } else {
+                    ResourceReferenceDirty::default()
+                });
             }
             PageMutation::ScrollMutation(m) => {
                 if let Some(effect) = self.document.ApplyScrollOffset(m.target_node_id, m.offset) {
@@ -2917,7 +2959,11 @@ impl Page {
         mut output: LayoutPaintOutput,
     ) -> io::Result<LayoutPaintOutput> {
         let mut trace = browser_tracing::span("lifecycle", "Page.ReconcileResponsiveAutoSizes");
-        fn collect(document: &Document, node: &FragmentNode, output: &mut Vec<(usize, f64)>) {
+        fn collect(
+            document: &Document,
+            node: NativePaintFragmentCursor<'_>,
+            output: &mut Vec<(usize, f64)>,
+        ) {
             if node.kind == FragmentKind::kBox && node.paint.replaced_content.is_some() {
                 if let Some(index) = document.FindNodeById(node.node_id) {
                     if document.AllowsResponsiveImageAutoSizes(index) {
@@ -2927,7 +2973,7 @@ impl Page {
                     }
                 }
             }
-            for child in &node.children {
+            for child in node.Children() {
                 collect(document, child, output);
             }
         }
@@ -2945,7 +2991,7 @@ impl Page {
                 let _trace = browser_tracing::span("lifecycle", "Page.CollectResponsiveAutoSizes");
                 let owner = self.state.document.borrow();
                 let mut widths = Vec::new();
-                collect(owner.GetDocument(), output.Fragments(), &mut widths);
+                collect(owner.GetDocument(), output.PaintCursor(), &mut widths);
                 widths
             };
             responsive_images = responsive_images.max(widths.len());
@@ -3004,7 +3050,7 @@ impl Page {
         output: &mut LayoutPaintOutput,
     ) -> io::Result<()> {
         fn collect(
-            node: &FragmentNode,
+            node: NativePaintFragmentCursor<'_>,
             images: &[layoutng_assembly::internal::layout_input::PaintImage],
             device_pixel_ratio: f64,
             preferred_color_scheme: u8,
@@ -3039,7 +3085,7 @@ impl Page {
                     }
                 }
             }
-            for child in &node.children {
+            for child in node.Children() {
                 collect(
                     child,
                     images,
@@ -3050,11 +3096,11 @@ impl Page {
             }
         }
         fn install_resources(
-            node: &mut FragmentNode,
+            node: &mut FragmentPaintData,
             resources: &Arc<PaintResources>,
             catalogs: &mut std::collections::HashMap<*const PaintResources, bool>,
         ) {
-            // Export shares one immutable catalog across all fragments. Compare
+            // Fragment-local paint inputs share one immutable catalog. Compare
             // each distinct prior catalog once, preserving resource identity
             // when it is current, as ImageResourceContent/Font retain theirs.
             let changed = node.paint.resources.as_ref().is_none_or(|previous| {
@@ -3070,9 +3116,6 @@ impl Page {
                 node.pre_paint_subtree_revision = 0;
                 node.paint.resources = Some(resources.clone());
             }
-            for child in &mut node.children {
-                install_resources(child, resources, catalogs);
-            }
         }
 
         let preferred_color_scheme = match self.state.preferred_color_scheme.get() {
@@ -3083,7 +3126,7 @@ impl Page {
             let constraints = self.state.constraints.borrow();
             let mut requirements = BTreeMap::new();
             collect(
-                output.Fragments(),
+                output.PaintCursor(),
                 &constraints.images,
                 constraints.device_pixel_ratio,
                 preferred_color_scheme,
@@ -3123,7 +3166,7 @@ impl Page {
                 )?;
             }
         }
-        // Paint-only fragment export can retain an earlier resource catalog.
+        // Paint-only fragment data can retain an earlier resource catalog.
         // Rebind the current immutable catalog even when every container was
         // already published (or there are only background-image clients).
         // Otherwise a resize back to a retained variant or a host preference
@@ -3141,11 +3184,7 @@ impl Page {
             });
             let mut trace = browser_tracing::span("resource", "Page.BindPaintResources");
             let mut catalogs = std::collections::HashMap::new();
-            install_resources(
-                Rc::make_mut(output.FragmentsMut()),
-                &resources,
-                &mut catalogs,
-            );
+            output.VisitPaintInputsMut(|input| install_resources(input, &resources, &mut catalogs));
             trace.set("compared_catalogs", catalogs.len() as f64);
         }
         Ok(())
@@ -3208,24 +3247,22 @@ impl Page {
             paints_opaque_base_background: !constraints.printing,
             viewport: constraints.viewport,
         });
-        fn install(node: &mut FragmentNode, resources: &Arc<PaintResources>) -> bool {
+        fn install(node: &mut FragmentPaintData, resources: &Arc<PaintResources>) -> bool {
             let mut rebound = node.paint.resources.as_deref() != Some(resources.as_ref());
             if rebound {
                 node.pre_paint_revision = 0;
                 node.pre_paint_subtree_revision = 0;
             }
             node.paint.resources = Some(resources.clone());
-            for child in &mut node.children {
-                rebound |= install(child, resources);
-            }
             rebound
         }
-        // A retained paint-only fragment tree can still point at the catalog
+        // Retained fragment-local Paint data can still point at the catalog
         // from before an earlier container mutation. Even when the requested
         // variant is already present in Page's current catalog, bind that
         // catalog and re-record once so the immutable artifact publishes the
         // exact record named by its display items.
-        let rebound = install(Rc::make_mut(output.FragmentsMut()), &resources);
+        let mut rebound = false;
+        output.VisitPaintInputsMut(|input| rebound |= install(input, &resources));
         Ok(changed || rebound)
     }
 
@@ -3245,11 +3282,13 @@ impl Page {
         };
         let frame_sequence = self.frame.as_ref().map_or(0, |frame| frame.sequence);
         let owner = self.state.document.borrow();
-        self.wheel_event_regions.borrow_mut().Resolve(
+        self.wheel_event_regions.borrow_mut().ResolveNative(
             frame_sequence,
             scripts.BlockingWheelListenerTargets(),
             owner.GetDocument(),
-            self.frame.as_ref().map(|frame| frame.fragments.as_ref()),
+            self.frame
+                .as_ref()
+                .map(|frame| NativePaintFragmentCursor::FromHandle(&frame.fragments)),
         )
     }
 
@@ -3883,14 +3922,12 @@ impl Page {
             .frame
             .as_ref()
             .ok_or_else(|| io::Error::other("cannot dispatch input before the first frame"))?;
+        let fragments = NativePaintFragmentCursor::FromHandle(&frame.fragments);
         let result = if let Some(scripts) = &mut self.scripts {
-            scripts.Dispatch(&routed_input, &frame.fragments)?
+            scripts.Dispatch(&routed_input, fragments)?
         } else {
-            self.interaction.Dispatch(
-                &routed_input,
-                &self.state.document.Handle(),
-                &frame.fragments,
-            )
+            self.interaction
+                .Dispatch(&routed_input, &self.state.document.Handle(), fragments)
         };
         let dom_done = dispatch_profile.map(|start| start.elapsed());
 
@@ -4048,10 +4085,11 @@ impl Page {
             self.cursor_hit_test_queries += 1;
         }
         let cursor = match (self.cursor_position, self.frame.as_ref()) {
-            (Some(point), Some(frame)) => {
-                self.interaction
-                    .CursorAt(&self.state.document.Handle(), &frame.fragments, point)
-            }
+            (Some(point), Some(frame)) => self.interaction.CursorAt(
+                &self.state.document.Handle(),
+                NativePaintFragmentCursor::FromHandle(&frame.fragments),
+                point,
+            ),
             _ => Cursor::kDefault,
         };
         // The embedding restores the active Page's current cursor when routing
@@ -4283,7 +4321,7 @@ impl Page {
         // Keep Chromium's last committed fragment snapshot resident until DOM
         // synchronization classifies the mutation. Tree/constraint mutations
         // invalidate it inside LayoutEngine; a single subtree update retains
-        // it so native layout can replace only that exported fragment subtree.
+        // it so native layout can replace only that native fragment subtree.
 
         trace.set(
             "targeted_animation_paint",
@@ -4293,13 +4331,13 @@ impl Page {
             .then(|| {
                 let mut layout = self.state.layout_engine.borrow_mut();
                 if animation_paint_nodes.is_empty() {
-                    crate::persistent_layout::ExportPaintOnlyDocumentWithEngine(
+                    crate::persistent_layout::PopulatePaintDataWithEngine(
                         &mut layout,
                         &mut self.state.document.borrow_mut(),
                         &self.state.interaction.borrow(),
                     )
                 } else {
-                    crate::persistent_layout::ExportTargetedPaintOnlyDocumentWithEngine(
+                    crate::persistent_layout::RefreshTargetedPaintDataWithEngine(
                         &mut layout,
                         &self.state.document.borrow(),
                         &animation_paint_nodes,
@@ -4311,24 +4349,89 @@ impl Page {
             "paint_only_geometry_reused",
             paint_only_fragments.is_some() as u8 as f64,
         );
-        let mut layout_output = if let Some(fragments) = paint_only_fragments {
-            self.state
-                .layout_engine
-                .borrow_mut()
-                .TakePublishedPaintOutput(fragments)
+        let (mut layout_output, layout_advanced) = if let Some(fragments) = paint_only_fragments {
+            (
+                self.state
+                    .layout_engine
+                    .borrow_mut()
+                    .TakePublishedPaintOutput(fragments),
+                true,
+            )
         } else {
             trace.set("full_layout", 1.0);
-            self.state
+            if let Some(frame) = self.frame.as_mut() {
+                // LocalFrameView and LayoutObject share one resident
+                // FragmentData lifecycle. Transfer Page's published owner
+                // before synchronizing mutations so a pure viewport resize can
+                // retain exact native fragment pointers.
+                self.state
+                    .layout_engine
+                    .borrow_mut()
+                    .AdoptPublishedLayoutResult(std::mem::take(&mut frame.fragments));
+            }
+            let layout_advanced = self
+                .state
                 .LayoutWithContainerQueries(LayoutUpdateKind::Paint);
-            self.state
+            (
+                self.state
+                    .layout_engine
+                    .borrow_mut()
+                    .TakePaintOutput()
+                    .expect("successful layout has fragments"),
+                layout_advanced,
+            )
+        };
+        trace.set("layout_advanced", layout_advanced as u8 as f64);
+        let layout_done = profile.map(|start| start.elapsed());
+        if !layout_advanced
+            && self.frame.is_some()
+            && !self.editing_paint_dirty
+            && !paint_resource_update_requires_repaint
+        {
+            // LayoutView::UpdateLayout proved the native tree and exported
+            // FragmentData clean. Chromium does not run PrePaint/Paint again
+            // for the duplicate viewport task; return the transferred owner
+            // to LocalFrameView and keep its committed display list.
+            trace.set("layout_clean_frame_retained", 1.0);
+            let fragments = self
+                .state
                 .layout_engine
                 .borrow_mut()
-                .TakePaintOutput()
-                .expect("successful layout has fragments")
-        };
+                .CommitRetainedPaint(layout_output);
+            let frame = self.frame.as_mut().unwrap();
+            frame.fragments = fragments;
+            if self.state.paint_resources_dirty.get() {
+                self.state.PublishPaintResources(frame);
+                trace.set("paint_resources_updated", 1.0);
+            }
+            if let Some(start) = profile {
+                let elapsed = start.elapsed();
+                eprintln!(
+                    "page-lifecycle-profile resources_ms={:.3} scroll_layout_paint_ms={:.3} layout_ms={:.3} paint_ms=0 total_ms={:.3} reused=true layout_clean=true scroll_records_reused={}",
+                    resources_done.unwrap().as_secs_f64() * 1000.0,
+                    (scroll_done.unwrap() - resources_done.unwrap()).as_secs_f64() * 1000.0,
+                    (layout_done.unwrap() - scroll_done.unwrap()).as_secs_f64() * 1000.0,
+                    elapsed.as_secs_f64() * 1000.0,
+                    reused_recordings
+                );
+            }
+            self.state.MarkLayoutCurrent();
+            frame.sequence += 1;
+            frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
+            self.state.scroll_only.set(false);
+            self.state.dirty.set(false);
+            self.state.document.borrow_mut().DidCommitPaint();
+            self.state.paint_resources_dirty.set(false);
+            if let Some(scripts) = &mut self.scripts {
+                scripts.DidPaint();
+            }
+            self.state.client.borrow_mut().DidPresentFrame(frame);
+            trace.set("presented", 1.0);
+            self.UpdateCursor();
+            return Ok(());
+        }
         layout_output = self.ReconcileResponsiveAutoSizes(layout_output)?;
         self.ConfigureDocumentImageContainers(&mut layout_output)?;
-        let layout_done = profile.map(|start| start.elapsed());
         self.state.document.borrow().EmitEditingState(
             self.state.layout_editing.clone(),
             |mutation| {
@@ -4340,10 +4443,10 @@ impl Page {
         );
         let paint_output = {
             trace.set("full_paint", 1.0);
-            self.state.paint_engine.borrow_mut().Paint(
-                layout_output.Fragments(),
-                self.state.layout_editing.PaintState(),
-            );
+            self.state
+                .paint_engine
+                .borrow_mut()
+                .Paint(&layout_output, self.state.layout_editing.PaintState());
             let document_image_requirements = self
                 .state
                 .paint_engine
@@ -4358,10 +4461,10 @@ impl Page {
                 // Background, mask and border-image target sizes are owned by
                 // Paint geometry. Re-record once after their typed SVG
                 // variants arrive so every display item names its exact key.
-                self.state.paint_engine.borrow_mut().Paint(
-                    layout_output.Fragments(),
-                    self.state.layout_editing.PaintState(),
-                );
+                self.state
+                    .paint_engine
+                    .borrow_mut()
+                    .Paint(&layout_output, self.state.layout_editing.PaintState());
             }
             let mut paint = self.state.paint_engine.borrow_mut();
             paint.CommitPaintResult()
@@ -4502,7 +4605,7 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
         ));
         page.UpdateFrameIfNeeded().unwrap();
         assert!(page.CurrentFrame().unwrap().sequence > before);
-        fn scroll_offset(fragment: &FragmentNode, id: u64) -> Option<Offset> {
+        fn scroll_offset(fragment: &FragmentPaintData, id: u64) -> Option<Offset> {
             if fragment.node_id == id {
                 return Some(fragment.paint.scroll_offset);
             }

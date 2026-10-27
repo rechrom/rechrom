@@ -5,7 +5,7 @@ struct Client;
 impl PageClient for Client {}
 
 fn fragment_geometry(
-    node: &layoutng_assembly::fragment_tree::FragmentNode,
+    node: &layoutng_assembly::fragment_tree::FragmentPaintData,
     wanted: u64,
     parent: layoutng_assembly::internal::layout_input::Offset,
 ) -> Option<(

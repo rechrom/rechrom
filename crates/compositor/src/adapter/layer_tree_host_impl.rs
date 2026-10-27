@@ -851,10 +851,6 @@ pub enum HostAnimationSequence {
 pub trait HostTraceValue: crate::adapter::property_types::PropertyTrace {
     fn ToFormattedJSON(&self) -> String;
 }
-impl<K: Ord, V> crate::adapter::commit_types::AnimatedImageFrameIndexMap
-    for std::collections::BTreeMap<K, V>
-{
-}
 
 // Merge these method declarations into HostImplServices<B>.
 pub trait HostImplHServices<B: HostImplTypes> {
@@ -2011,21 +2007,6 @@ pub mod host_impl_chunk_c {
     // Source dependency: components/viz/common/view_transition_element_resource_id.h.
     pub type HostViewTransitionElementResourceRects =
         HashMap<ViewTransitionElementResourceId, RectF>;
-    // Source dependency: components/viz/common/view_transition_element_resource_id.h:53-59,79-80.
-    // Native Hash() includes token/local id and deliberately omits scope_snapshot.
-    // Invalid source ids are default-constructed. Normalize invalid values because
-    // the public Rust boundary must also satisfy its existing invalid-id Eq rule.
-    impl std::hash::Hash for ViewTransitionElementResourceId {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            if self.IsValid() {
-                self.transition_token.hash(state);
-                self.local_id.hash(state);
-            } else {
-                Option::<[u64; 2]>::None.hash(state);
-                0_u32.hash(state);
-            }
-        }
-    }
     // Required HostImplTypes supertrait. Shared original associated types additionally
     // require ColorSpace:HostColorSpace, ColorSpaceCache:HostColorSpaceCache<ColorSpace>,
     // DisplayColorSpaces:HostDisplayColorSpaces<ColorSpace>, Layer:HostTileLayer<Self>,

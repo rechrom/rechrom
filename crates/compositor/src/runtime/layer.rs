@@ -274,7 +274,7 @@ use crate::adapter::{
     geometry::Size,
     layer_impl::LayerType,
     layer_tree_impl::{LayerTreeTypes, PropertyTreesFor},
-    occlusion::{OcclusionDrawProperties, OcclusionLayer, OcclusionMaskFilterInfo},
+    occlusion::OcclusionLayer,
     property_types::{MaskFilterInfo, ViewTransitionElementResourceId},
 };
 impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> CompositorLayer<B> {
@@ -291,18 +291,6 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> CompositorLay
             Self::Picture(layer) => layer.GetDamageRectForDispatch(),
             _ => self.impl_base().GetDamageRect(),
         }
-    }
-}
-impl OcclusionMaskFilterInfo for MaskFilterInfo {
-    fn IsEmpty(&self) -> bool {
-        MaskFilterInfo::IsEmpty(self)
-    }
-}
-impl<T: crate::adapter::occlusion::OcclusionTransform> OcclusionDrawProperties
-    for crate::cc::layers::draw_properties::DrawProperties<T>
-{
-    fn mask_filter_info(&self) -> &dyn OcclusionMaskFilterInfo {
-        &self.mask_filter_info
     }
 }
 impl<B> DrawLayer<B::Transform> for CompositorLayer<B>
@@ -436,7 +424,7 @@ where
     B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes,
     B::Transform: crate::adapter::damage_context::DamageTransform,
 {
-    type Types = B;
+    type Trees = PropertyTreesFor<B>;
     fn id(&self) -> i32 {
         self.impl_base().id()
     }
@@ -505,7 +493,7 @@ impl<B> OcclusionLayer<B::Transform, i32> for CompositorLayer<B>
 where
     B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes,
 {
-    type Types = B;
+    type Trees = PropertyTreesFor<B>;
     fn render_target(&self, trees: &PropertyTreesFor<B>) -> i32 {
         self.impl_base()
             .render_target_effect_tree_index_for_property_trees(trees)
@@ -531,8 +519,11 @@ where
     fn draw_opacity(&self) -> f32 {
         self.impl_base().draw_properties().opacity
     }
-    fn draw_properties(&self) -> &dyn OcclusionDrawProperties {
-        self.impl_base().draw_properties()
+    fn MaskFilterInfoIsEmpty(&self) -> bool {
+        self.impl_base()
+            .draw_properties()
+            .mask_filter_info
+            .IsEmpty()
     }
     fn VisibleOpaqueRegion(&self) -> crate::cc::base::simple_enclosed_region::SimpleEnclosedRegion {
         self.impl_base().VisibleOpaqueRegion()

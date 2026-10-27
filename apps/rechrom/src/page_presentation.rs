@@ -1,7 +1,25 @@
 //! Completed Page output transport. Page owns the only compositor and renderer.
 use crate::{chrome::DragRegion, engine::Viewport};
-use std::sync::{mpsc, Arc};
+use std::{
+    sync::{mpsc, Arc},
+    time::Instant,
+};
 pub(crate) type Document = (u64, u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ResizeProvenance {
+    pub id: u64,
+    pub queued_at: Instant,
+    pub samples: usize,
+}
+impl ResizeProvenance {
+    pub(crate) fn merge(&mut self, next: Self) {
+        if next.queued_at < self.queued_at {
+            self.id = next.id;
+            self.queued_at = next.queued_at;
+        }
+        self.samples = self.samples.saturating_add(next.samples);
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ContentFrameProvenance {
     pub sequence: u64,
@@ -12,6 +30,8 @@ pub(crate) struct ContentFrameProvenance {
     pub main_frame_epoch: u64,
     /// Last impl scroll callback incorporated by this Page output.
     pub compositor_scroll_sequence: u64,
+    /// App-owned live-resize transaction represented by this content frame.
+    pub resize: Option<ResizeProvenance>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameProvenance {

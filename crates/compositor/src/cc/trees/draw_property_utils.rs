@@ -18,7 +18,7 @@ use crate::adapter::{
     property_types::{MaskFilterInfo, ViewTransitionElementResourceId},
 };
 use crate::cc::base::math_util::MathUtil;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 // Source: cc/trees/draw_property_utils.cc:52-55.
 fn ToEnclosingClipRect(rect: RectF) -> Rect {
     ToEnclosingRectIgnoringError(rect, 0.00001)
@@ -469,27 +469,19 @@ fn LayerNeedsUpdate<C: DrawContext>(
     p: &DrawPropertyTrees<C>,
     main_thread: bool,
 ) -> bool {
-    if !layer_is_drawn {
-        return false;
-    }
-    if !layer.draws_content() {
-        return false;
-    }
-    if layer.bounds(p).IsEmpty()
-        && !p
-            .effect_tree()
-            .Node(layer.effect_tree_index())
-            .filters
-            .HasReferenceFilter()
-    {
-        return false;
-    }
-    if layer.should_check_backface_visibility()
-        && IsLayerBackFaceVisible::<C>(context, layer, p, main_thread)
-    {
-        return false;
-    }
-    true
+    compositor_draw::draw_property_policy::LayerNeedsUpdate(
+        layer_is_drawn,
+        || layer.draws_content(),
+        || layer.bounds(p).IsEmpty(),
+        || {
+            p.effect_tree()
+                .Node(layer.effect_tree_index())
+                .filters
+                .HasReferenceFilter()
+        },
+        || layer.should_check_backface_visibility(),
+        || IsLayerBackFaceVisible::<C>(context, layer, p, main_thread),
+    )
 }
 // Source: cc/trees/draw_property_utils.cc:535-550.
 fn MainLayerShouldBeSkipped<C: DrawContext>(
@@ -497,11 +489,12 @@ fn MainLayerShouldBeSkipped<C: DrawContext>(
     p: &DrawPropertyTrees<C>,
 ) -> bool {
     let effect = p.effect_tree().Node(layer.effect_tree_index());
-    if effect.HasRenderSurface() && effect.subtree_has_copy_request {
-        return false;
-    }
     let node = p.transform_tree().Node(layer.transform_tree_index());
-    !node.node_and_ancestors_are_animated_or_invertible || !effect.is_drawn
+    compositor_draw::draw_property_policy::MainLayerShouldBeSkipped(
+        effect.HasRenderSurface() && effect.subtree_has_copy_request,
+        node.node_and_ancestors_are_animated_or_invertible,
+        effect.is_drawn,
+    )
 }
 // Source: cc/trees/draw_property_utils.cc:552-560.
 fn LayerDrawableContentRect<C: DrawContext>(
@@ -509,13 +502,11 @@ fn LayerDrawableContentRect<C: DrawContext>(
     bounds: Rect,
     clip: Rect,
 ) -> Rect {
-    if layer.is_clipped() {
-        let mut rect = bounds;
-        rect.Intersect(clip);
-        rect
-    } else {
-        bounds
-    }
+    compositor_draw::draw_property_policy::LayerDrawableContentRect(
+        layer.is_clipped(),
+        bounds,
+        clip,
+    )
 }
 // Source: cc/trees/draw_property_utils.cc:562-582.
 fn SetSurfaceIsClipped<C: DrawContext>(p: &mut DrawPropertyTrees<C>, surface_id: i32) {
@@ -773,96 +764,155 @@ fn GetMaskFilterInfoPair<C: DrawContext>(
     }
     result
 }
-// Source: cc/trees/draw_property_utils.cc:781-856.
-fn UpdateRenderTarget<C: DrawContext>(context: &C, p: &mut DrawPropertyTrees<C>) {
-    let tree = p.effect_tree_mutable();
-    let mut last = kInvalidPropertyNodeId;
-    let mut resources = BTreeMap::new();
-    for i in kContentsRootPropertyNodeId..tree.size() as i32 {
-        {
-            let node = tree.MutableNode(i);
-            if node.view_transition_element_resource_id.IsValid() {
-                assert!(!resources.contains_key(&node.view_transition_element_resource_id));
-                resources.insert(node.view_transition_element_resource_id, i);
-            }
-            node.view_transition_target_id = kInvalidPropertyNodeId;
-        }
-        let target = if i == kContentsRootPropertyNodeId {
-            kContentsRootPropertyNodeId
-        } else {
-            let parent = tree.parent(tree.Node(i));
-            if parent.HasRenderSurface() {
-                tree.Node(i).parent_id
-            } else {
-                parent.target_id
-            }
-        };
-        let node = tree.MutableNode(i);
-        node.target_id = target;
-        if node.has_potential_backdrop_filter_animation || !node.backdrop_filters.AllowsLCDText() {
-            last = node.id;
-        }
-        node.lcd_text_disallowed_by_backdrop_filter = false;
+struct RenderTargetUpdateAdapter<'a, C: DrawContext> {
+    context: &'a C,
+    p: &'a mut DrawPropertyTrees<C>,
+}
+
+impl<C: DrawContext> compositor_tree::render_target_update::RenderTargetUpdateContext
+    for RenderTargetUpdateAdapter<'_, C>
+{
+    type Layer = C::Layer;
+    type Resource = ViewTransitionElementResourceId;
+
+    fn root_effect_id(&self) -> i32 {
+        kContentsRootPropertyNodeId
     }
-    if !resources.is_empty() {
-        for id in context.layers() {
-            let layer = context.layer(id);
-            let resource_id = layer.ViewTransitionResourceId();
-            if !resource_id.IsValid() {
-                continue;
-            }
-            let Some(&resource_node_id) = resources.get(&resource_id) else {
-                continue;
-            };
-            let layer_node = tree.Node(layer.effect_tree_index());
-            let target = if layer_node.HasRenderSurface() {
-                layer_node.id
-            } else {
-                layer_node.target_id
-            };
-            tree.MutableNode(resource_node_id).view_transition_target_id = target;
+
+    fn effect_node_count(&self) -> i32 {
+        self.p.effect_tree().size() as i32
+    }
+
+    fn effect_resource(&self, id: i32) -> Option<Self::Resource> {
+        let resource = self
+            .p
+            .effect_tree()
+            .Node(id)
+            .view_transition_element_resource_id;
+        resource.IsValid().then_some(resource)
+    }
+
+    fn clear_view_transition_target(&mut self, id: i32) {
+        self.p
+            .effect_tree_mutable()
+            .MutableNode(id)
+            .view_transition_target_id = kInvalidPropertyNodeId;
+    }
+
+    fn parent_target_state(
+        &self,
+        id: i32,
+    ) -> compositor_tree::render_target_update::ParentTargetState {
+        let tree = self.p.effect_tree();
+        let node = tree.Node(id);
+        let parent = tree.parent(node);
+        compositor_tree::render_target_update::ParentTargetState {
+            parent_id: node.parent_id,
+            parent_has_render_surface: parent.HasRenderSurface(),
+            parent_target_id: parent.target_id,
         }
     }
-    if last == kInvalidPropertyNodeId {
-        return;
+
+    fn set_target(&mut self, id: i32, target_id: i32) {
+        self.p.effect_tree_mutable().MutableNode(id).target_id = target_id;
     }
-    let mut current_target = tree.Node(last).target_id;
-    for i in (kContentsRootPropertyNodeId..last).rev() {
-        let node = tree.MutableNode(i);
-        node.lcd_text_disallowed_by_backdrop_filter = current_target <= i;
-        if node.id == current_target {
-            current_target = kInvalidPropertyNodeId;
-        }
-        if current_target == kInvalidPropertyNodeId
-            && (node.has_potential_backdrop_filter_animation
-                || !node.backdrop_filters.AllowsLCDText())
-        {
-            current_target = node.target_id;
-        }
+
+    fn backdrop_filter_disallows_lcd_text(&self, id: i32) -> bool {
+        let node = self.p.effect_tree().Node(id);
+        node.has_potential_backdrop_filter_animation || !node.backdrop_filters.AllowsLCDText()
+    }
+
+    fn set_lcd_text_disallowed_by_backdrop_filter(&mut self, id: i32, value: bool) {
+        self.p
+            .effect_tree_mutable()
+            .MutableNode(id)
+            .lcd_text_disallowed_by_backdrop_filter = value;
+    }
+
+    fn target(&self, id: i32) -> i32 {
+        self.p.effect_tree().Node(id).target_id
+    }
+
+    fn layer_count(&self) -> usize {
+        self.context.layer_count()
+    }
+
+    fn layer_at(&self, index: usize) -> Self::Layer {
+        self.context.layer_id_at(index)
+    }
+
+    fn layer_resource(&self, layer: Self::Layer) -> Option<Self::Resource> {
+        let resource = self.context.layer(layer).ViewTransitionResourceId();
+        resource.IsValid().then_some(resource)
+    }
+
+    fn layer_effect_id(&self, layer: Self::Layer) -> i32 {
+        self.context.layer(layer).effect_tree_index()
+    }
+
+    fn effect_has_render_surface(&self, id: i32) -> bool {
+        self.p.effect_tree().Node(id).HasRenderSurface()
+    }
+
+    fn set_view_transition_target(&mut self, id: i32, target_id: i32) {
+        self.p
+            .effect_tree_mutable()
+            .MutableNode(id)
+            .view_transition_target_id = target_id;
     }
 }
+
+// Source: cc/trees/draw_property_utils.cc:781-856.
+fn UpdateRenderTarget<C: DrawContext>(context: &C, p: &mut DrawPropertyTrees<C>) {
+    let mut adapter = RenderTargetUpdateAdapter { context, p };
+    compositor_tree::render_target_update::UpdateRenderTargets(&mut adapter);
+}
 // Source: cc/trees/draw_property_utils.cc:858-885.
-pub(crate) fn ComputeClips<C: DrawContext>(p: &mut DrawPropertyTrees<C>) {
-    debug_assert!(!p.transform_tree().needs_update());
-    if !p.clip_tree().needs_update() {
-        return;
+struct ClipTreeUpdateAdapter<'a, C: DrawContext> {
+    p: &'a mut DrawPropertyTrees<C>,
+}
+
+impl<C: DrawContext> compositor_tree::clip_tree_update::ClipTreeUpdateContext
+    for ClipTreeUpdateAdapter<'_, C>
+{
+    fn needs_update(&self) -> bool {
+        self.p.clip_tree().needs_update()
     }
-    for i in kViewportPropertyNodeId..p.clip_tree().size() as i32 {
-        p.clip_tree().Node(i).cached_clip_rects.borrow_mut().clear();
-        if i == kViewportPropertyNodeId {
-            let clip = p.clip_tree().Node(i).clip;
-            p.clip_tree_mutable()
-                .MutableNode(i)
-                .cached_accumulated_rect_in_screen_space = clip;
-            continue;
-        }
-        let node = p.clip_tree().Node(i);
-        let mut clip = p
+
+    fn first_node_id(&self) -> i32 {
+        kViewportPropertyNodeId
+    }
+
+    fn node_count(&self) -> i32 {
+        self.p.clip_tree().size() as i32
+    }
+
+    fn clear_node_cache(&mut self, id: i32) {
+        self.p
+            .clip_tree()
+            .Node(id)
+            .cached_clip_rects
+            .borrow_mut()
+            .clear();
+    }
+
+    fn initialize_viewport_clip(&mut self, id: i32) {
+        let clip = self.p.clip_tree().Node(id).clip;
+        self.p
+            .clip_tree_mutable()
+            .MutableNode(id)
+            .cached_accumulated_rect_in_screen_space = clip;
+    }
+
+    fn update_accumulated_clip(&mut self, id: i32) -> bool {
+        let node = self.p.clip_tree().Node(id);
+        let mut clip = self
+            .p
             .clip_tree()
             .parent(node)
             .cached_accumulated_rect_in_screen_space;
         let success = ApplyClipNodeToAccumulatedClip::<C>(
-            p,
+            self.p,
             true,
             kContentsRootPropertyNodeId,
             kRootPropertyNodeId,
@@ -870,12 +920,23 @@ pub(crate) fn ComputeClips<C: DrawContext>(p: &mut DrawPropertyTrees<C>) {
             &mut clip,
         );
         if success {
-            p.clip_tree_mutable()
-                .MutableNode(i)
+            self.p
+                .clip_tree_mutable()
+                .MutableNode(id)
                 .cached_accumulated_rect_in_screen_space = clip;
         }
+        success
     }
-    p.clip_tree_mutable().set_needs_update(false);
+
+    fn clear_needs_update(&mut self) {
+        self.p.clip_tree_mutable().set_needs_update(false);
+    }
+}
+
+pub(crate) fn ComputeClips<C: DrawContext>(p: &mut DrawPropertyTrees<C>) {
+    debug_assert!(!p.transform_tree().needs_update());
+    let mut adapter = ClipTreeUpdateAdapter::<C> { p };
+    compositor_tree::clip_tree_update::UpdateClipTree(&mut adapter);
 }
 // Source: cc/trees/draw_property_utils.cc:887-907.
 fn ComputeSurfaceDrawProperties<C: DrawContext>(p: &mut DrawPropertyTrees<C>, surface_id: i32) {
@@ -924,97 +985,6 @@ fn ComputeSurfaceDrawProperties<C: DrawContext>(p: &mut DrawPropertyTrees<C>, su
         .expect("surface")
         .SetMaskFilterInfo(pair.0, pair.1);
     SetSurfaceClipRect::<C>(p, surface_id);
-}
-// Source: cc/trees/draw_property_utils.cc:909-1009.
-fn AddSurfaceToRenderSurfaceList<C: DrawContext>(
-    context: &C,
-    id: i32,
-    list: &mut Vec<i32>,
-    p: &mut DrawPropertyTrees<C>,
-    captures: &mut Vec<i32>,
-) {
-    let (target, surface_effect_id, vt_target_id, vt_resource, filter_moves_pixels, contributes) = {
-        let surface = p.effect_tree().GetRenderSurface(id).unwrap();
-        let effect = p.effect_tree().Node(id);
-        (
-            surface.render_target(p),
-            surface.EffectTreeIndex(),
-            effect.view_transition_target_id,
-            effect.view_transition_element_resource_id,
-            effect.filters.HasFilterThatMovesPixels(),
-            p.effect_tree().ContributesToDrawnSurface(id),
-        )
-    };
-    let is_root = surface_effect_id == kContentsRootPropertyNodeId;
-    if vt_target_id != kInvalidPropertyNodeId {
-        assert!(!is_root);
-        assert!(vt_resource.IsValid());
-        let (vt_effect_id, vt_member) = {
-            let vt_target = p
-                .effect_tree()
-                .GetRenderSurface(vt_target_id)
-                .expect("view transition target");
-            (
-                vt_target.EffectTreeIndex(),
-                vt_target.is_render_surface_list_member(),
-            )
-        };
-        if !vt_member {
-            AddSurfaceToRenderSurfaceList::<C>(context, vt_effect_id, list, p, captures);
-        }
-    }
-    if !is_root
-        && !p
-            .effect_tree()
-            .GetRenderSurface(target)
-            .unwrap()
-            .is_render_surface_list_member()
-    {
-        AddSurfaceToRenderSurfaceList::<C>(context, target, list, p, captures);
-    }
-    {
-        let surface = p
-            .effect_tree_mutable()
-            .GetRenderSurfaceMutable(id)
-            .expect("surface");
-        surface.ClearAccumulatedContentRect();
-        surface.set_is_render_surface_list_member(true);
-        if context.MatchesCaptureViewTransitionToken(vt_resource) {
-            surface.set_has_view_transition_capture_contributions(true);
-        }
-        surface.set_contributes_to_drawn_surface(if is_root { false } else { contributes });
-    }
-    list.push(surface_effect_id);
-    if context.MatchesCaptureViewTransitionToken(vt_resource) {
-        captures.push(id);
-    }
-    ComputeSurfaceDrawProperties::<C>(p, id);
-    let allow_skipping = context.AllowUndamagedNonrootRenderPassToSkip();
-    let immune = p
-        .effect_tree()
-        .GetRenderSurface(id)
-        .expect("surface")
-        .CopyOfOutputRequired(p)
-        || filter_moves_pixels
-        || allow_skipping
-        || p.effect_tree()
-            .GetRenderSurface(id)
-            .expect("surface")
-            .IsUnbounded(p, context.enable_unbounded_element());
-    let nearest = if immune {
-        Some(id)
-    } else if is_root {
-        None
-    } else {
-        p.effect_tree()
-            .GetRenderSurface(target)
-            .unwrap()
-            .nearest_occlusion_immune_ancestor()
-    };
-    p.effect_tree_mutable()
-        .GetRenderSurfaceMutable(id)
-        .expect("surface")
-        .SetNearestOcclusionImmuneAncestor(nearest);
 }
 // Source: cc/trees/draw_property_utils.cc:1011-1031.
 fn SkipForInvertibility<C: DrawContext>(
@@ -1151,150 +1121,396 @@ fn AdjustLayerDrawPropertiesForPixelAlignmentOffset<C: DrawContext>(
     }
     ComputeLayerDrawableContentRect::<C>(context, id, p);
 }
-// Source: cc/trees/draw_property_utils.cc:1141-1262.
+struct InitialRenderSurfaceAdapter<'a, C: DrawContext> {
+    context: &'a mut C,
+    p: &'a mut DrawPropertyTrees<C>,
+}
+
+impl<C: DrawContext> compositor_draw::initial_render_surface_list::InitialRenderSurfaceContext
+    for InitialRenderSurfaceAdapter<'_, C>
+{
+    type Layer = C::Layer;
+    type Resource = ViewTransitionElementResourceId;
+
+    fn effect_node_count(&self) -> i32 {
+        self.p.effect_tree().size() as i32
+    }
+
+    fn reset_surface_state(&mut self, id: i32) {
+        if let Some(surface) = self.p.effect_tree_mutable().GetRenderSurfaceMutable(id) {
+            surface.set_is_render_surface_list_member(false);
+            surface.set_has_view_transition_capture_contributions(false);
+            surface.reset_num_contributors();
+        }
+    }
+
+    fn root_surface_id(&self) -> i32 {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(kContentsRootPropertyNodeId)
+            .unwrap()
+            .EffectTreeIndex()
+    }
+
+    fn surface_descriptor(
+        &self,
+        id: i32,
+    ) -> compositor_draw::initial_render_surface_list::SurfaceDescriptor {
+        let surface = self.p.effect_tree().GetRenderSurface(id).unwrap();
+        let effect = self.p.effect_tree().Node(id);
+        let resource = effect.view_transition_element_resource_id;
+        compositor_draw::initial_render_surface_list::SurfaceDescriptor {
+            effect_id: surface.EffectTreeIndex(),
+            target_id: surface.render_target(self.p),
+            view_transition_target_id: (effect.view_transition_target_id != kInvalidPropertyNodeId)
+                .then_some(effect.view_transition_target_id),
+            has_valid_view_transition_resource: resource.IsValid(),
+            capture_token_matches: self.context.MatchesCaptureViewTransitionToken(resource),
+            filter_moves_pixels: effect.filters.HasFilterThatMovesPixels(),
+            contributes_to_drawn_surface: self.p.effect_tree().ContributesToDrawnSurface(id),
+        }
+    }
+
+    fn surface_identity(
+        &self,
+        id: i32,
+    ) -> compositor_draw::initial_render_surface_list::SurfaceIdentity {
+        let surface = self.p.effect_tree().GetRenderSurface(id).unwrap();
+        compositor_draw::initial_render_surface_list::SurfaceIdentity {
+            effect_id: surface.EffectTreeIndex(),
+            is_list_member: surface.is_render_surface_list_member(),
+        }
+    }
+
+    fn initialize_surface(
+        &mut self,
+        id: i32,
+        is_root: bool,
+        descriptor: compositor_draw::initial_render_surface_list::SurfaceDescriptor,
+    ) {
+        let surface = self
+            .p
+            .effect_tree_mutable()
+            .GetRenderSurfaceMutable(id)
+            .expect("surface");
+        surface.ClearAccumulatedContentRect();
+        surface.set_is_render_surface_list_member(true);
+        if descriptor.capture_token_matches {
+            surface.set_has_view_transition_capture_contributions(true);
+        }
+        surface.set_contributes_to_drawn_surface(if is_root {
+            false
+        } else {
+            descriptor.contributes_to_drawn_surface
+        });
+    }
+
+    fn compute_surface_draw_properties(&mut self, id: i32) {
+        ComputeSurfaceDrawProperties::<C>(self.p, id);
+    }
+
+    fn surface_copy_output_required(&self, id: i32) -> bool {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(id)
+            .expect("surface")
+            .CopyOfOutputRequired(self.p)
+    }
+
+    fn allow_undamaged_nonroot_render_pass_to_skip(&self) -> bool {
+        self.context.AllowUndamagedNonrootRenderPassToSkip()
+    }
+
+    fn surface_is_unbounded(&self, id: i32) -> bool {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(id)
+            .expect("surface")
+            .IsUnbounded(self.p, self.context.enable_unbounded_element())
+    }
+
+    fn nearest_occlusion_immune_ancestor(&self, id: i32) -> Option<i32> {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(id)
+            .unwrap()
+            .nearest_occlusion_immune_ancestor()
+    }
+
+    fn set_nearest_occlusion_immune_ancestor(&mut self, id: i32, ancestor: Option<i32>) {
+        self.p
+            .effect_tree_mutable()
+            .GetRenderSurfaceMutable(id)
+            .expect("surface")
+            .SetNearestOcclusionImmuneAncestor(ancestor);
+    }
+
+    fn layer_count(&self) -> usize {
+        self.context.layer_count()
+    }
+
+    fn layer_at(&self, index: usize) -> Self::Layer {
+        self.context.layer_id_at(index)
+    }
+
+    fn prepare_layer(&mut self, layer: Self::Layer) {
+        self.context
+            .layer(layer)
+            .EnsureValidPropertyTreeIndices(self.p);
+        let layer = self.context.layer_mut(layer);
+        layer.set_contributes_to_drawn_render_surface(false);
+        layer.set_raster_even_if_not_drawn(false);
+    }
+
+    fn layer_eligibility(
+        &self,
+        id: Self::Layer,
+    ) -> compositor_draw::initial_render_surface_list::LayerEligibility {
+        let layer = self.context.layer(id);
+        let transform_id = layer.transform_tree_index();
+        compositor_draw::initial_render_surface_list::LayerEligibility {
+            is_root: self.context.IsRootLayer(id),
+            skip_draw: LayerShouldBeSkippedForDrawPropertiesComputation::<C>(
+                self.context,
+                layer,
+                self.p,
+            ),
+            skip_invertibility: SkipForInvertibility::<C>(layer, self.p),
+            will_change_transform: transform_id != kInvalidPropertyNodeId
+                && self
+                    .p
+                    .transform_tree()
+                    .Node(transform_id)
+                    .will_change_transform,
+        }
+    }
+
+    fn set_layer_raster_even_if_not_drawn(&mut self, layer: Self::Layer, value: bool) {
+        self.context
+            .layer_mut(layer)
+            .set_raster_even_if_not_drawn(value);
+    }
+
+    fn layer_draw_candidate(
+        &self,
+        id: Self::Layer,
+    ) -> compositor_draw::initial_render_surface_list::LayerDrawCandidate<Self::Resource> {
+        let layer = self.context.layer(id);
+        let effect_id = layer.effect_tree_index();
+        let resource = layer.ViewTransitionResourceId();
+        compositor_draw::initial_render_surface_list::LayerDrawCandidate {
+            target_id: layer.render_target(self.p).unwrap(),
+            view_transition_resource: resource.IsValid().then_some(resource),
+            needs_update: LayerNeedsUpdate::<C>(
+                self.context,
+                layer,
+                self.p.effect_tree().Node(effect_id).is_drawn,
+                self.p,
+                false,
+            ),
+        }
+    }
+
+    fn adjust_layer_for_pixel_alignment(&mut self, layer: Self::Layer) {
+        AdjustLayerDrawPropertiesForPixelAlignmentOffset::<C>(self.context, layer, self.p);
+    }
+
+    fn set_layer_contributes_to_drawn_surface(&mut self, layer: Self::Layer, value: bool) {
+        self.context
+            .layer_mut(layer)
+            .set_contributes_to_drawn_render_surface(value);
+    }
+
+    fn accumulate_layer_into_surface(&mut self, surface_id: i32, layer: Self::Layer) {
+        self.context
+            .AccumulateContentRectFromContributingLayer(self.p, surface_id, layer);
+    }
+
+    fn increment_surface_contributors(&mut self, surface_id: i32) {
+        self.p
+            .effect_tree_mutable()
+            .GetRenderSurfaceMutable(surface_id)
+            .unwrap()
+            .increment_num_contributors();
+    }
+
+    fn resource_matches_capture_token(&self, resource: Self::Resource) -> bool {
+        self.context.MatchesCaptureViewTransitionToken(resource)
+    }
+
+    fn clear_originating_surface_content_rect(&mut self, layer: Self::Layer) {
+        self.context
+            .layer_mut(layer)
+            .AsViewTransitionContentLayer()
+            .expect("source valid resource requires VT content subtype")
+            .SetOriginatingSurfaceContentRect(Rect::default());
+    }
+
+    fn capture_surface_descriptor(
+        &self,
+        id: i32,
+    ) -> compositor_draw::initial_render_surface_list::CaptureSurfaceDescriptor {
+        let surface = self.p.effect_tree().GetRenderSurface(id).unwrap();
+        compositor_draw::initial_render_surface_list::CaptureSurfaceDescriptor {
+            target_id: surface.render_target(self.p),
+            has_valid_resource: self
+                .p
+                .effect_tree()
+                .Node(id)
+                .view_transition_element_resource_id
+                .IsValid(),
+            has_capture_contributions: surface.has_view_transition_capture_contributions(),
+        }
+    }
+
+    fn capture_chain_surface(
+        &self,
+        id: i32,
+    ) -> compositor_draw::initial_render_surface_list::CaptureChainSurface {
+        let surface = self.p.effect_tree().GetRenderSurface(id).unwrap();
+        compositor_draw::initial_render_surface_list::CaptureChainSurface {
+            effect_id: surface.EffectTreeIndex(),
+            target_id: surface.render_target(self.p),
+            has_capture_contributions: surface.has_view_transition_capture_contributions(),
+        }
+    }
+
+    fn mark_surface_has_capture_contributions(&mut self, id: i32) {
+        self.p
+            .effect_tree_mutable()
+            .GetRenderSurfaceMutable(id)
+            .unwrap()
+            .set_has_view_transition_capture_contributions(true);
+    }
+}
+
+// Source: cc/trees/draw_property_utils.cc:909-1009,1141-1262.
 fn ComputeInitialRenderSurfaceList<C: DrawContext>(
     context: &mut C,
     p: &mut DrawPropertyTrees<C>,
     list: &mut Vec<i32>,
     content_layers: &mut BTreeMap<ViewTransitionElementResourceId, C::Layer>,
 ) {
-    let effect_count = p.effect_tree().size() as i32;
-    for i in kContentsRootPropertyNodeId..effect_count {
-        if let Some(surface) = p.effect_tree_mutable().GetRenderSurfaceMutable(i) {
-            surface.set_is_render_surface_list_member(false);
-            surface.set_has_view_transition_capture_contributions(false);
-            surface.reset_num_contributors();
-        }
+    let mut adapter = InitialRenderSurfaceAdapter { context, p };
+    let result =
+        compositor_draw::initial_render_surface_list::ComputeInitialRenderSurfaceList(&mut adapter);
+    list.extend_from_slice(&result.surface_list);
+    content_layers.extend(result.content_layers);
+}
+struct SurfaceContentRectAdapter<'a, C: DrawContext> {
+    context: &'a mut C,
+    p: &'a mut DrawPropertyTrees<C>,
+    max_texture_size: i32,
+    content_layers: &'a BTreeMap<ViewTransitionElementResourceId, C::Layer>,
+    content_rects: &'a mut Vec<(ViewTransitionElementResourceId, RectF)>,
+}
+
+impl<C: DrawContext> compositor_draw::render_surface_content::RenderSurfaceContentContext
+    for SurfaceContentRectAdapter<'_, C>
+{
+    type Resource = ViewTransitionElementResourceId;
+    type ContentRect = Rect;
+
+    fn is_root_surface(&self, id: i32) -> bool {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(id)
+            .unwrap()
+            .EffectTreeIndex()
+            == kContentsRootPropertyNodeId
     }
-    let mut captures = Vec::new();
-    let root = p
-        .effect_tree()
-        .GetRenderSurface(kContentsRootPropertyNodeId)
-        .unwrap()
-        .EffectTreeIndex();
-    AddSurfaceToRenderSurfaceList::<C>(context, root, list, p, &mut captures);
-    for index in 0..context.layer_count() {
-        let id = context.layer_id_at(index);
-        context.layer(id).EnsureValidPropertyTreeIndices(p);
-        {
-            let layer = context.layer_mut(id);
-            layer.set_contributes_to_drawn_render_surface(false);
-            layer.set_raster_even_if_not_drawn(false);
-        }
-        let is_root = context.IsRootLayer(id);
-        let (skip_draw, skip_invertibility, transform_id) = {
-            let layer = context.layer(id);
-            (
-                LayerShouldBeSkippedForDrawPropertiesComputation::<C>(context, layer, p),
-                SkipForInvertibility::<C>(layer, p),
-                layer.transform_tree_index(),
-            )
-        };
-        let skip_layer = !is_root && (skip_draw || skip_invertibility);
-        let will_change = transform_id != kInvalidPropertyNodeId
-            && p.transform_tree().Node(transform_id).will_change_transform;
-        context
-            .layer_mut(id)
-            .set_raster_even_if_not_drawn((skip_invertibility && !skip_draw) || will_change);
-        if skip_layer {
-            continue;
-        }
-        let (effect_id, target_id, resource, needs_update) = {
-            let layer = context.layer(id);
-            let effect_id = layer.effect_tree_index();
-            let drawn = p.effect_tree().Node(effect_id).is_drawn;
-            (
-                effect_id,
-                layer.render_target(p).unwrap(),
-                layer.ViewTransitionResourceId(),
-                LayerNeedsUpdate::<C>(context, layer, drawn, p, false),
-            )
-        };
-        let _ = effect_id;
-        if !needs_update {
-            continue;
-        }
-        let (target_effect_id, target_member) = {
-            let target = p.effect_tree().GetRenderSurface(target_id).unwrap();
-            (
-                target.EffectTreeIndex(),
-                target.is_render_surface_list_member(),
-            )
-        };
-        if !target_member {
-            AddSurfaceToRenderSurfaceList::<C>(context, target_effect_id, list, p, &mut captures);
-        }
-        AdjustLayerDrawPropertiesForPixelAlignmentOffset::<C>(context, id, p);
-        context
-            .layer_mut(id)
-            .set_contributes_to_drawn_render_surface(true);
-        context.AccumulateContentRectFromContributingLayer(p, target_id, id);
-        p.effect_tree_mutable()
+
+    fn set_root_content_rect_to_viewport(&mut self, id: i32) {
+        let viewport_clip = self.p.clip_tree().ViewportClip();
+        self.p
+            .effect_tree_mutable()
+            .GetRenderSurfaceMutable(id)
+            .unwrap()
+            .SetContentRectToViewport(viewport_clip);
+    }
+
+    fn calculate_surface_content_rect(&mut self, id: i32) {
+        self.context.CalculateContentRectFromAccumulatedContentRect(
+            self.p,
+            id,
+            self.max_texture_size,
+        );
+    }
+
+    fn render_target(&self, id: i32) -> i32 {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(id)
+            .unwrap()
+            .render_target(self.p)
+    }
+
+    fn target_is_surface_list_member(&self, target_id: i32) -> bool {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(target_id)
+            .unwrap()
+            .is_render_surface_list_member()
+    }
+
+    fn accumulate_surface_into_target(&mut self, target_id: i32, contributor_id: i32) {
+        self.context
+            .AccumulateContentRectFromContributingRenderSurface(self.p, target_id, contributor_id);
+    }
+
+    fn increment_target_contributors(&mut self, target_id: i32) {
+        self.p
+            .effect_tree_mutable()
             .GetRenderSurfaceMutable(target_id)
             .unwrap()
             .increment_num_contributors();
-        if !resource.IsValid() || context.MatchesCaptureViewTransitionToken(resource) {
-            continue;
-        }
-        context
-            .layer_mut(id)
-            .AsViewTransitionContentLayer()
-            .expect("source valid resource requires VT content subtype")
-            .SetOriginatingSurfaceContentRect(Rect::default());
-        content_layers.insert(resource, id);
     }
-    for id in captures {
-        assert!(p
+
+    fn view_transition_resource(&self, id: i32) -> Option<Self::Resource> {
+        let resource = self
+            .p
             .effect_tree()
             .Node(id)
-            .view_transition_element_resource_id
-            .IsValid());
-        let surface_target = {
-            let surface = p.effect_tree().GetRenderSurface(id).unwrap();
-            assert!(surface.has_view_transition_capture_contributions());
-            surface.render_target(p)
+            .view_transition_element_resource_id;
+        resource.IsValid().then_some(resource)
+    }
+
+    fn view_transition_content_rect(&self, id: i32, resource: Self::Resource) -> Self::ContentRect {
+        let surface = self.p.effect_tree().GetRenderSurface(id).unwrap();
+        let output = if self.context.MatchesCaptureViewTransitionToken(resource) {
+            surface.view_transition_capture_content_rect()
+        } else {
+            surface.content_rect()
         };
-        let mut target_id = surface_target;
-        loop {
-            let target = p.effect_tree().GetRenderSurface(target_id).unwrap();
-            if target.EffectTreeIndex() == root
-                || target.has_view_transition_capture_contributions()
-            {
-                break;
-            }
-            target_id = target.render_target(p);
-        }
-        let target_effect = p
-            .effect_tree()
-            .GetRenderSurface(target_id)
-            .unwrap()
-            .EffectTreeIndex();
-        if p.effect_tree()
-            .GetRenderSurface(target_id)
-            .unwrap()
-            .has_view_transition_capture_contributions()
-        {
-            let mut intermediate_id = surface_target;
-            loop {
-                let (effect_id, next) = {
-                    let intermediate = p.effect_tree().GetRenderSurface(intermediate_id).unwrap();
-                    (
-                        intermediate.EffectTreeIndex(),
-                        intermediate.render_target(p),
-                    )
-                };
-                if effect_id == target_effect {
-                    break;
-                }
-                p.effect_tree_mutable()
-                    .GetRenderSurfaceMutable(intermediate_id)
-                    .unwrap()
-                    .set_has_view_transition_capture_contributions(true);
-                intermediate_id = next;
-            }
+        surface
+            .SurfaceScale(self.p)
+            .InverseOrIdentity()
+            .MapRectInt(output)
+    }
+
+    fn record_view_transition_content_rect(
+        &mut self,
+        resource: Self::Resource,
+        rect: Self::ContentRect,
+    ) {
+        self.content_rects.push((resource, RectF::from(rect)));
+    }
+
+    fn update_originating_content_layer(
+        &mut self,
+        resource: Self::Resource,
+        rect: Self::ContentRect,
+    ) {
+        if let Some(&layer) = self.content_layers.get(&resource) {
+            self.context
+                .layer_mut(layer)
+                .AsViewTransitionContentLayer()
+                .expect("source valid resource requires VT content subtype")
+                .SetOriginatingSurfaceContentRect(rect);
         }
     }
 }
+
 // Source: cc/trees/draw_property_utils.cc:1264-1327.
 fn ComputeSurfaceContentRects<C: DrawContext>(
     context: &mut C,
@@ -1304,62 +1520,14 @@ fn ComputeSurfaceContentRects<C: DrawContext>(
     content_layers: &BTreeMap<ViewTransitionElementResourceId, C::Layer>,
     content_rects: &mut Vec<(ViewTransitionElementResourceId, RectF)>,
 ) {
-    for &id in list.iter().rev() {
-        let is_root = p
-            .effect_tree()
-            .GetRenderSurface(id)
-            .unwrap()
-            .EffectTreeIndex()
-            == kContentsRootPropertyNodeId;
-        if is_root {
-            let viewport_clip = p.clip_tree().ViewportClip();
-            p.effect_tree_mutable()
-                .GetRenderSurfaceMutable(id)
-                .unwrap()
-                .SetContentRectToViewport(viewport_clip);
-            continue;
-        }
-        context.CalculateContentRectFromAccumulatedContentRect(p, id, max_texture_size);
-        let target_id = p
-            .effect_tree()
-            .GetRenderSurface(id)
-            .unwrap()
-            .render_target(p);
-        debug_assert!(p
-            .effect_tree()
-            .GetRenderSurface(target_id)
-            .unwrap()
-            .is_render_surface_list_member());
-        context.AccumulateContentRectFromContributingRenderSurface(p, target_id, id);
-        p.effect_tree_mutable()
-            .GetRenderSurfaceMutable(target_id)
-            .unwrap()
-            .increment_num_contributors();
-        let vt = p.effect_tree().Node(id).view_transition_element_resource_id;
-        if !vt.IsValid() {
-            continue;
-        }
-        let rect = {
-            let surface = p.effect_tree().GetRenderSurface(id).unwrap();
-            let output = if context.MatchesCaptureViewTransitionToken(vt) {
-                surface.view_transition_capture_content_rect()
-            } else {
-                surface.content_rect()
-            };
-            surface
-                .SurfaceScale(p)
-                .InverseOrIdentity()
-                .MapRectInt(output)
-        };
-        content_rects.push((vt, RectF::from(rect)));
-        if let Some(&layer) = content_layers.get(&vt) {
-            context
-                .layer_mut(layer)
-                .AsViewTransitionContentLayer()
-                .expect("source valid resource requires VT content subtype")
-                .SetOriginatingSurfaceContentRect(rect);
-        }
-    }
+    let mut adapter = SurfaceContentRectAdapter {
+        context,
+        p,
+        max_texture_size,
+        content_layers,
+        content_rects,
+    };
+    compositor_draw::render_surface_content::ComputeSurfaceContentRects(&mut adapter, list);
 }
 // Source: cc/trees/draw_property_utils.cc:1329-1385.
 fn ComputeListOfNonEmptySurfaces<C: DrawContext>(
@@ -1368,91 +1536,82 @@ fn ComputeListOfNonEmptySurfaces<C: DrawContext>(
     initial: &[i32],
     final_list: &mut Vec<i32>,
 ) {
-    let mut removed = BTreeSet::new();
-    for &id in initial {
-        let (surface_effect, target_id, content_empty, copy_required) = {
+    use compositor_draw::render_surface_pruning::{
+        LayerContributorCandidate, PlanLayerContributorPruning, PlanRenderSurfacePruning,
+        RenderSurfacePruneCandidate,
+    };
+
+    let candidates = initial
+        .iter()
+        .map(|&id| {
             let surface = p.effect_tree().GetRenderSurface(id).unwrap();
-            (
-                surface.EffectTreeIndex(),
-                surface.render_target(p),
-                surface.content_rect().IsEmpty(),
-                surface.CopyOfOutputRequired(p),
-            )
-        };
-        let root = surface_effect == kContentsRootPropertyNodeId;
-        let target_member = p
-            .effect_tree()
-            .GetRenderSurface(target_id)
-            .unwrap()
-            .is_render_surface_list_member();
-        if !root
-            && ((content_empty && !p.effect_tree().Node(id).filters.HasReferenceFilter())
-                || (!target_member && !copy_required))
-        {
-            p.effect_tree_mutable()
-                .GetRenderSurfaceMutable(id)
-                .unwrap()
-                .set_is_render_surface_list_member(false);
-            removed.insert(id);
-            continue;
-        }
-        let mut undelete_id = target_id;
-        loop {
-            let (undelete_effect, next) = {
-                let undelete = p.effect_tree().GetRenderSurface(undelete_id).unwrap();
-                (undelete.EffectTreeIndex(), undelete.render_target(p))
-            };
-            if !removed.contains(&undelete_effect) {
-                break;
+            let surface_effect = surface.EffectTreeIndex();
+            let target_id = surface.render_target(p);
+            let content_is_empty = surface.content_rect().IsEmpty();
+            let is_root = surface_effect == kContentsRootPropertyNodeId;
+            RenderSurfacePruneCandidate {
+                id: surface_effect,
+                target_id,
+                is_root,
+                content_is_empty,
+                // Preserve the source's short circuit: reference filters are
+                // queried only for an empty, non-root surface.
+                has_reference_filter: (!is_root && content_is_empty)
+                    .then(|| p.effect_tree().Node(id).filters.HasReferenceFilter()),
+                target_is_surface_list_member: p
+                    .effect_tree()
+                    .GetRenderSurface(target_id)
+                    .unwrap()
+                    .is_render_surface_list_member(),
+                copy_output_required: surface.CopyOfOutputRequired(p),
             }
-            // The source sets `surface`, not target_to_undelete; preserve that write.
-            p.effect_tree_mutable()
-                .GetRenderSurfaceMutable(id)
-                .unwrap()
-                .set_is_render_surface_list_member(true);
-            final_list.push(undelete_effect);
-            removed.remove(&undelete_effect);
-            undelete_id = next;
-        }
-        final_list.push(id);
-    }
-    for &id in &removed {
-        let target_id = p
-            .effect_tree()
-            .GetRenderSurface(id)
+        })
+        .collect::<Vec<_>>();
+    let plan = PlanRenderSurfacePruning(&candidates);
+
+    for &id in &plan.nonmember_surfaces {
+        p.effect_tree_mutable()
+            .GetRenderSurfaceMutable(id)
             .unwrap()
-            .render_target(p);
+            .set_is_render_surface_list_member(false);
+    }
+    for &target_id in &plan.surface_contributor_decrement_targets {
         p.effect_tree_mutable()
             .GetRenderSurfaceMutable(target_id)
             .unwrap()
             .decrement_num_contributors();
     }
-    if !removed.is_empty() {
-        for index in 0..context.layer_count() {
-            let id = context.layer_id_at(index);
-            let target_id = {
+
+    if plan.requires_layer_cleanup() {
+        let layer_candidates = (0..context.layer_count())
+            .filter_map(|layer_index| {
+                let id = context.layer_id_at(layer_index);
                 let layer = context.layer(id);
-                if !layer.contributes_to_drawn_render_surface() {
-                    continue;
-                }
-                layer.render_target(p).unwrap()
-            };
-            if !p
-                .effect_tree()
-                .GetRenderSurface(target_id)
+                layer
+                    .contributes_to_drawn_render_surface()
+                    .then(|| LayerContributorCandidate {
+                        layer_index,
+                        target_id: layer.render_target(p).unwrap(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        let layer_plan = PlanLayerContributorPruning(&plan.nonmember_surfaces, &layer_candidates);
+        for (&layer_index, &target_id) in layer_plan
+            .dropped_layer_indices
+            .iter()
+            .zip(&layer_plan.contributor_decrement_targets)
+        {
+            let id = context.layer_id_at(layer_index);
+            context
+                .layer_mut(id)
+                .set_contributes_to_drawn_render_surface(false);
+            p.effect_tree_mutable()
+                .GetRenderSurfaceMutable(target_id)
                 .unwrap()
-                .is_render_surface_list_member()
-            {
-                context
-                    .layer_mut(id)
-                    .set_contributes_to_drawn_render_surface(false);
-                p.effect_tree_mutable()
-                    .GetRenderSurfaceMutable(target_id)
-                    .unwrap()
-                    .decrement_num_contributors();
-            }
+                .decrement_num_contributors();
         }
     }
+    final_list.extend_from_slice(&plan.final_surfaces);
 }
 // Source: cc/trees/draw_property_utils.cc:1387-1417.
 fn CalculateRenderSurfaceLayerList<C: DrawContext>(
@@ -1531,25 +1690,48 @@ const ALL_RENDER_SURFACE_REASONS: [RenderSurfaceReason; RenderSurfaceReason::kTe
     RenderSurfaceReason::kUnboundedElement,
 ];
 // Source: cc/trees/draw_property_utils.cc:1449-1465.
+struct VisibleLayerDrawAdapter<'a, C: DrawContext> {
+    context: &'a mut C,
+    p: &'a mut DrawPropertyTrees<C>,
+}
+
+impl<C: DrawContext> compositor_draw::draw_property_walk::VisibleLayerDrawContext
+    for VisibleLayerDrawAdapter<'_, C>
+{
+    type Layer = C::Layer;
+
+    fn compute_draw_transforms(&mut self, layer: Self::Layer) {
+        ComputeLayerDrawTransforms::<C>(self.context, layer, self.p);
+    }
+
+    fn clear_render_surface_common_ancestor_clip(&mut self, layer: Self::Layer) {
+        ClearRenderSurfaceCommonAncestorClip::<C>(self.context, layer, self.p);
+    }
+
+    fn compute_draw_opacity(&mut self, layer: Self::Layer) {
+        ComputeLayerDrawOpacity::<C>(self.context, layer, self.p);
+    }
+
+    fn update_render_surface_common_ancestor_clip(&mut self, layer: Self::Layer) {
+        UpdateRenderSurfaceCommonAncestorClip::<C>(self.context, layer, self.p);
+    }
+
+    fn compute_clip_and_visible_rect(&mut self, layer: Self::Layer) {
+        ComputeLayerClipAndVisibleRect::<C>(self.context, layer, self.p);
+    }
+
+    fn compute_drawable_content_rect(&mut self, layer: Self::Layer) {
+        ComputeLayerDrawableContentRect::<C>(self.context, layer, self.p);
+    }
+}
+
 fn ComputeDrawPropertiesOfVisibleLayers<C: DrawContext>(
     context: &mut C,
     list: &[C::Layer],
     p: &mut DrawPropertyTrees<C>,
 ) {
-    for &id in list {
-        ComputeLayerDrawTransforms::<C>(context, id, p);
-        ClearRenderSurfaceCommonAncestorClip::<C>(context, id, p);
-    }
-    for &id in list {
-        ComputeLayerDrawOpacity::<C>(context, id, p);
-        UpdateRenderSurfaceCommonAncestorClip::<C>(context, id, p);
-    }
-    for &id in list {
-        ComputeLayerClipAndVisibleRect::<C>(context, id, p);
-    }
-    for &id in list {
-        ComputeLayerDrawableContentRect::<C>(context, id, p);
-    }
+    let mut adapter = VisibleLayerDrawAdapter { context, p };
+    compositor_draw::draw_property_walk::ComputeDrawPropertiesOfVisibleLayers(&mut adapter, list);
 }
 // Source: cc/trees/draw_property_utils.cc:1469-1479.
 #[cfg(debug_assertions)]
@@ -1559,13 +1741,7 @@ fn NodeMayContainBackdropBlurFilter<
 >(
     node: &EffectNode<F, P>,
 ) -> bool {
-    matches!(
-        node.render_surface_reason,
-        RenderSurfaceReason::kMask
-            | RenderSurfaceReason::kTrilinearFiltering
-            | RenderSurfaceReason::kFilter
-            | RenderSurfaceReason::kBackdropFilter
-    )
+    compositor_draw::draw_property_policy::MayContainBackdropBlurFilter(node.render_surface_reason)
 }
 // Source: cc/trees/draw_property_utils.h:82-84; cc/trees/draw_property_utils.cc:1484-1518.
 pub fn LayerShouldBeSkippedForDrawPropertiesComputation<C: DrawContext>(
@@ -1577,25 +1753,20 @@ pub fn LayerShouldBeSkippedForDrawPropertiesComputation<C: DrawContext>(
     let id = layer.effect_tree_index();
     assert_ne!(id, kInvalidPropertyNodeId);
     let effect = tree.Node(id);
-    if effect.HasRenderSurface() && effect.subtree_has_copy_request {
-        return false;
-    }
-    if effect.subtree_hidden
-        && !effect.cache_render_surface
-        && !effect.subtree_capture_id.is_valid()
-    {
-        return true;
-    }
     let transform = p.transform_tree().Node(layer.transform_tree_index());
-    if !transform.node_and_ancestors_are_animated_or_invertible || !effect.is_drawn {
-        return true;
-    }
-    if context.enable_backface_visibility_interop() {
-        layer.should_check_backface_visibility()
-            && IsLayerBackFaceVisible::<C>(context, layer, p, false)
-    } else {
-        effect.hidden_by_backface_visibility
-    }
+    compositor_draw::draw_property_policy::ClassifyLayerSkip(
+        effect.HasRenderSurface() && effect.subtree_has_copy_request,
+        effect.subtree_hidden,
+        effect.cache_render_surface,
+        effect.subtree_capture_id.is_valid(),
+        transform.node_and_ancestors_are_animated_or_invertible,
+        effect.is_drawn,
+        context.enable_backface_visibility_interop(),
+        layer.should_check_backface_visibility(),
+        effect.hidden_by_backface_visibility,
+        || IsLayerBackFaceVisible::<C>(context, layer, p, false),
+    )
+    .is_some()
 }
 // Source: cc/trees/draw_property_utils.cc:1520-1523.
 pub fn IsLayerBackFaceVisibleForTesting<C: DrawContext>(
@@ -1619,21 +1790,63 @@ pub fn ConcatInverseSurfaceContentsScale<C: DrawContext>(
     }
 }
 // Source: cc/trees/draw_property_utils.h:54-55; cc/trees/draw_property_utils.cc:1535-1551.
+struct LayerUpdateListAdapter<'a, C: DrawContext> {
+    context: &'a C,
+    p: &'a DrawPropertyTrees<C>,
+}
+
+impl<C: DrawContext> compositor_draw::draw_property_walk::LayerUpdateListContext
+    for LayerUpdateListAdapter<'_, C>
+{
+    type Layer = C::Layer;
+
+    fn layer_count(&self) -> usize {
+        self.context.layer_count()
+    }
+
+    fn layer_at(&self, index: usize) -> Self::Layer {
+        self.context.layer_id_at(index)
+    }
+
+    fn ensure_valid_property_tree_indices(&self, layer: Self::Layer) {
+        self.context
+            .layer(layer)
+            .EnsureValidPropertyTreeIndices(self.p);
+    }
+
+    fn is_root_layer(&self, layer: Self::Layer, main_thread: bool) -> bool {
+        IsRootLayer::<C>(self.context, layer, main_thread)
+    }
+
+    fn should_skip_layer(&self, layer: Self::Layer, main_thread: bool) -> bool {
+        let layer = self.context.layer(layer);
+        if main_thread {
+            MainLayerShouldBeSkipped::<C>(layer, self.p)
+        } else {
+            LayerShouldBeSkippedForDrawPropertiesComputation::<C>(self.context, layer, self.p)
+        }
+    }
+
+    fn layer_needs_update(&self, layer: Self::Layer, main_thread: bool) -> bool {
+        let layer = self.context.layer(layer);
+        let drawn = self
+            .p
+            .effect_tree()
+            .Node(layer.effect_tree_index())
+            .is_drawn;
+        LayerNeedsUpdate::<C>(self.context, layer, drawn, self.p, main_thread)
+    }
+}
+
 pub fn FindMainLayersThatNeedUpdates<C: DrawContext>(
     context: &C,
     p: &DrawPropertyTrees<C>,
     list: &mut Vec<C::Layer>,
 ) {
-    for id in context.layers() {
-        let layer = context.layer(id);
-        if !IsRootLayer::<C>(context, id, true) && MainLayerShouldBeSkipped::<C>(layer, p) {
-            continue;
-        }
-        let drawn = p.effect_tree().Node(layer.effect_tree_index()).is_drawn;
-        if LayerNeedsUpdate::<C>(context, layer, drawn, p, true) {
-            list.push(id);
-        }
-    }
+    let adapter = LayerUpdateListAdapter { context, p };
+    let (updates, _) =
+        compositor_draw::draw_property_walk::FindLayersThatNeedUpdates(&adapter, true);
+    list.extend(updates);
 }
 // Source: cc/trees/draw_property_utils.h:54-55; cc/trees/draw_property_utils.cc:1553-1574.
 pub fn FindLayersThatNeedUpdates<C: DrawContext>(
@@ -1641,19 +1854,10 @@ pub fn FindLayersThatNeedUpdates<C: DrawContext>(
     p: &DrawPropertyTrees<C>,
     list: &mut Vec<C::Layer>,
 ) {
-    for id in context.layers() {
-        let layer = context.layer(id);
-        layer.EnsureValidPropertyTreeIndices(p);
-        if !IsRootLayer::<C>(context, id, false)
-            && LayerShouldBeSkippedForDrawPropertiesComputation::<C>(context, layer, p)
-        {
-            continue;
-        }
-        let drawn = p.effect_tree().Node(layer.effect_tree_index()).is_drawn;
-        if LayerNeedsUpdate::<C>(context, layer, drawn, p, false) {
-            list.push(id);
-        }
-    }
+    let adapter = LayerUpdateListAdapter { context, p };
+    let (updates, _) =
+        compositor_draw::draw_property_walk::FindLayersThatNeedUpdates(&adapter, false);
+    list.extend(updates);
 }
 // Source: cc/trees/draw_property_utils.cc:1576-1579.
 pub fn ComputeTransforms<T: PropertyTreeTransform>(
@@ -1668,41 +1872,69 @@ pub fn ComputeEffects<C: DrawContext>(
     tree: &mut EffectTree<C::Filters, C::Path, C::Surface, C::CopyRequest>,
     context: &mut EffectTreeContext<'_, C::Transform>,
 ) {
-    if !tree.needs_update() {
-        return;
+    let needs_update = tree.needs_update();
+    let end = tree.size() as i32;
+    let stats = compositor_tree::effect_tree_update::UpdateEffectTree(
+        needs_update,
+        kContentsRootPropertyNodeId,
+        end,
+        |id| tree.UpdateEffects(id, context),
+    );
+    if stats.updated {
+        tree.set_needs_update(false);
     }
-    for i in kContentsRootPropertyNodeId..tree.size() as i32 {
-        tree.UpdateEffects(i, context);
-    }
-    tree.set_needs_update(false);
 }
 // Source: cc/trees/draw_property_utils.h:48-48; cc/trees/draw_property_utils.cc:1590-1605.
-pub fn UpdatePropertyTrees<C: DrawContext>(context: &C, p: &mut DrawPropertyTrees<C>) {
-    if p.transform_tree().needs_update() {
-        p.clip_tree_mutable().set_needs_update(true);
-        p.effect_tree_mutable().set_needs_update(true);
+struct PropertyTreeUpdateAdapter<'a, C: DrawContext> {
+    context: &'a C,
+    p: &'a mut DrawPropertyTrees<C>,
+}
+
+impl<C: DrawContext> compositor_tree::property_tree_update::PropertyTreeUpdateContext
+    for PropertyTreeUpdateAdapter<'_, C>
+{
+    fn transform_tree_needs_update(&self) -> bool {
+        self.p.transform_tree().needs_update()
     }
-    let (tree, mut view) = p.transform_tree_with_context();
-    ComputeTransforms(tree, context.viewport_property_ids(), &mut view);
-    let (tree, mut view) = p.effect_tree_with_context(context);
-    ComputeEffects::<C>(tree, &mut view);
-    ComputeClips::<C>(p);
+
+    fn mark_clip_tree_needs_update(&mut self) {
+        self.p.clip_tree_mutable().set_needs_update(true);
+    }
+
+    fn mark_effect_tree_needs_update(&mut self) {
+        self.p.effect_tree_mutable().set_needs_update(true);
+    }
+
+    fn update_render_targets(&mut self) {
+        UpdateRenderTarget::<C>(self.context, self.p);
+    }
+
+    fn update_transforms(&mut self) {
+        let (tree, mut view) = self.p.transform_tree_with_context();
+        ComputeTransforms(tree, self.context.viewport_property_ids(), &mut view);
+    }
+
+    fn update_effects(&mut self) {
+        let (tree, mut view) = self.p.effect_tree_with_context(self.context);
+        ComputeEffects::<C>(tree, &mut view);
+    }
+
+    fn update_clips(&mut self) {
+        ComputeClips::<C>(self.p);
+    }
+}
+
+pub fn UpdatePropertyTrees<C: DrawContext>(context: &C, p: &mut DrawPropertyTrees<C>) {
+    let mut adapter = PropertyTreeUpdateAdapter::<C> { context, p };
+    compositor_tree::property_tree_update::UpdatePropertyTrees(&mut adapter, false);
 }
 // Source: cc/trees/draw_property_utils.cc:1607-1621.
 pub fn UpdatePropertyTreesAndRenderSurfaces<C: DrawContext>(
     context: &C,
     p: &mut DrawPropertyTrees<C>,
 ) {
-    if p.transform_tree().needs_update() {
-        p.clip_tree_mutable().set_needs_update(true);
-        p.effect_tree_mutable().set_needs_update(true);
-    }
-    UpdateRenderTarget::<C>(context, p);
-    let (tree, mut view) = p.transform_tree_with_context();
-    ComputeTransforms(tree, context.viewport_property_ids(), &mut view);
-    let (tree, mut view) = p.effect_tree_with_context(context);
-    ComputeEffects::<C>(tree, &mut view);
-    ComputeClips::<C>(p);
+    let mut adapter = PropertyTreeUpdateAdapter::<C> { context, p };
+    compositor_tree::property_tree_update::UpdatePropertyTrees(&mut adapter, true);
 }
 // Source: cc/trees/draw_property_utils.h:61-63; cc/trees/draw_property_utils.cc:1623-1636.
 pub fn DrawTransform<C: DrawContext>(
@@ -1836,84 +2068,136 @@ pub fn UpdatePageScaleFactor<C: DrawContext>(
     tree.set_needs_update(true, &mut context);
 }
 // Source: cc/trees/draw_property_utils.h:77-80; cc/trees/draw_property_utils.cc:1748-1809.
+struct DrawPropertyPipelineAdapter<'a, C: DrawContext> {
+    context: &'a mut C,
+    p: &'a mut DrawPropertyTrees<C>,
+    list: &'a mut Vec<i32>,
+}
+
+impl<C: DrawContext> compositor_draw::draw_property_pipeline::DrawPropertyPipelineContext
+    for DrawPropertyPipelineAdapter<'_, C>
+{
+    type Layer = C::Layer;
+
+    fn input_layer_count(&self) -> usize {
+        self.context.layer_count()
+    }
+
+    fn transform_node_count(&self) -> usize {
+        self.p.transform_tree().size()
+    }
+
+    fn effect_node_count(&self) -> usize {
+        self.p.effect_tree().size()
+    }
+
+    fn clip_node_count(&self) -> usize {
+        self.p.clip_tree().size()
+    }
+
+    fn clear_render_surface_list(&mut self) {
+        self.list.clear();
+    }
+
+    fn update_page_scale(&mut self) {
+        UpdatePageScaleFactor::<C>(
+            self.p,
+            self.context.PageScaleTransformNodeId(),
+            self.context.current_page_scale_factor(),
+        );
+    }
+
+    fn update_viewport_clip(&mut self) {
+        self.p
+            .clip_tree_mutable()
+            .SetViewportClip(RectF::from(self.context.GetDeviceViewport()));
+    }
+
+    fn update_root_transform_and_scale(&mut self) {
+        let (tree, mut view) = self.p.transform_tree_with_context();
+        tree.SetRootScaleAndTransform(
+            self.context.device_scale_factor(),
+            &self.context.DrawTransform(),
+            &mut view,
+        );
+        tree.set_external_page_scale_factor(self.context.external_page_scale_factor());
+    }
+
+    fn update_property_trees_and_render_surfaces(&mut self) {
+        UpdatePropertyTreesAndRenderSurfaces::<C>(self.context, self.p);
+    }
+
+    fn find_visible_layers(&mut self) -> Vec<Self::Layer> {
+        self.context
+            .TraceScope("draw_property_utils::FindLayersThatNeedUpdates", None);
+        let mut visible = Vec::new();
+        FindLayersThatNeedUpdates::<C>(self.context, self.p, &mut visible);
+        visible
+    }
+
+    fn compute_visible_layer_properties(&mut self, visible: &[Self::Layer]) {
+        self.context.TraceScope(
+            "draw_property_utils::ComputeDrawPropertiesOfVisibleLayers",
+            Some(visible.len()),
+        );
+        ComputeDrawPropertiesOfVisibleLayers::<C>(self.context, visible, self.p);
+    }
+
+    fn calculate_render_surface_list(&mut self) {
+        self.context
+            .TraceScope("CalculateRenderSurfaceLayerList", None);
+        let max_texture_size = self.context.max_texture_size();
+        CalculateRenderSurfaceLayerList::<C>(self.context, self.p, self.list, max_texture_size);
+    }
+
+    fn validate_no_double_background_blur(&self) -> bool {
+        #[cfg(debug_assertions)]
+        if self.context.log_on_ui_double_background_blur() {
+            return LogDoubleBackgroundBlur::<C>(self.context, self.p, self.list);
+        }
+        true
+    }
+
+    fn record_render_surface_reasons(&self) {
+        RecordRenderSurfaceReasonsForTracing::<C>(self.context, self.p, self.list);
+    }
+
+    fn render_surface_count(&self) -> usize {
+        self.list.len()
+    }
+
+    fn root_render_surface_exists(&self) -> bool {
+        self.p
+            .effect_tree()
+            .GetRenderSurface(kContentsRootPropertyNodeId)
+            .is_some()
+    }
+}
+
 pub fn CalculateDrawProperties<C: DrawContext>(
     context: &mut C,
     p: &mut DrawPropertyTrees<C>,
     list: &mut Vec<i32>,
     output_updates: Option<&mut Vec<C::Layer>>,
 ) {
-    list.clear();
-    let mut visible = Vec::new();
-    UpdatePageScaleFactor::<C>(
+    let mut adapter = DrawPropertyPipelineAdapter::<C> {
+        context,
         p,
-        context.PageScaleTransformNodeId(),
-        context.current_page_scale_factor(),
-    );
-    p.clip_tree_mutable()
-        .SetViewportClip(RectF::from(context.GetDeviceViewport()));
-    let (tree, mut view) = p.transform_tree_with_context();
-    tree.SetRootScaleAndTransform(
-        context.device_scale_factor(),
-        &context.DrawTransform(),
-        &mut view,
-    );
-    tree.set_external_page_scale_factor(context.external_page_scale_factor());
-    UpdatePropertyTreesAndRenderSurfaces::<C>(context, p);
-    {
-        context.TraceScope("draw_property_utils::FindLayersThatNeedUpdates", None);
-        FindLayersThatNeedUpdates::<C>(context, p, &mut visible);
-    }
-    {
-        context.TraceScope(
-            "draw_property_utils::ComputeDrawPropertiesOfVisibleLayers",
-            Some(visible.len()),
-        );
-        ComputeDrawPropertiesOfVisibleLayers::<C>(context, &visible, p);
-    }
-    {
-        context.TraceScope("CalculateRenderSurfaceLayerList", None);
-        let max_texture_size = context.max_texture_size();
-        CalculateRenderSurfaceLayerList::<C>(context, p, list, max_texture_size);
-    }
-    #[cfg(debug_assertions)]
-    if context.log_on_ui_double_background_blur() {
-        debug_assert!(LogDoubleBackgroundBlur::<C>(context, p, list));
-    }
-    RecordRenderSurfaceReasonsForTracing::<C>(context, p, list);
-    debug_assert!(p
-        .effect_tree()
-        .GetRenderSurface(kContentsRootPropertyNodeId)
-        .is_some());
+        list,
+    };
+    let (visible, _) =
+        compositor_draw::draw_property_pipeline::CalculateDrawProperties(&mut adapter);
     if let Some(output) = output_updates {
         *output = visible;
     }
 }
 // Source: cc/trees/draw_property_utils.h:92-93; cc/trees/draw_property_utils.cc:1811-1820.
 pub fn RasterScalesApproximatelyEqual(a: Vector2dF, b: Vector2dF) -> bool {
-    const THRESHOLD: f32 = 0.001 / 10000.0;
-    let difference = a - b;
-    difference.x().abs() <= THRESHOLD && difference.y().abs() <= THRESHOLD
+    compositor_draw::draw_property_policy::RasterScalesApproximatelyEqual(a, b)
 }
 // Source: cc/trees/draw_property_utils.cc:1822-1855.
 pub fn PixelAlignmentOffset<T: Transform>(screen: &T, target: &T) -> Option<Vector2dF> {
-    if !screen.IsScaleOrTranslation() || !target.IsScaleOrTranslation() {
-        return None;
-    }
-    if !RasterScalesApproximatelyEqual(screen.To2dScale(), target.To2dScale()) {
-        return None;
-    }
-    let subpixel = |f: f32| f - f.floor();
-    let screen_translation = screen.To2dTranslation();
-    let screen_x = subpixel(screen_translation.x());
-    let screen_y = subpixel(screen_translation.y());
-    let draw = target.To2dTranslation();
-    let draw_x = subpixel(draw.x());
-    let draw_y = subpixel(draw.y());
-    const THRESHOLD: f32 = 0.001;
-    if (screen_x - draw_x).abs() > THRESHOLD || (screen_y - draw_y).abs() > THRESHOLD {
-        return None;
-    }
-    Some(Vector2dF::new(screen_x, screen_y))
+    compositor_draw::draw_property_policy::PixelAlignmentOffset(screen, target)
 }
 // Source: cc/trees/draw_property_utils.cc:1858-1895.
 #[cfg(debug_assertions)]

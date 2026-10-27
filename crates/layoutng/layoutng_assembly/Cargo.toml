@@ -9,10 +9,16 @@ foundation = { package = "layoutng_foundation", path = "../layoutng_foundation" 
 font_engine = { path = "../../font_engine" }
 layoutng_geometry = { path = "../layoutng_geometry" }
 layoutng_style = { path = "../layoutng_style" }
-layoutng_mathml = { path = "../layoutng_mathml" }
+layout_invalidation = { path = "../layout_invalidation" }
+layout_reuse = { path = "../layout_reuse" }
+# `layout_fragment` is already the self-alias used by included translated
+# sources; this key names the standalone ownership boundary inside assembly.
+layout_fragment_boundary = { package = "layout_fragment", path = "../layout_fragment" }
+layout_commit = { path = "../layout_commit" }
+layout_algo_mathml = { path = "../layout_algo_mathml" }
 icu_bidi = { path = "../../icu_bidi" }
 cssom = { path = "../../cssom" }
-layoutng_custom = { path = "../layoutng_custom" }
+layout_algo_custom = { path = "../layout_algo_custom" }
 image_resource = { path = "../../image_resource" }
 skia = { path = "../../skia" }
 

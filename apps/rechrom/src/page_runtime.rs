@@ -3,10 +3,12 @@
 //! completed pixel allocations cross into the window presentation domain.
 use crate::{
     begin_frame_source::NativeBeginFrame,
-    engine::Viewport,
+    engine::{ResizeRequest, Viewport},
     page_dom::{chrome_hover_chain, element_id, find_id, set_hover_class},
     page_error::{error_kind, panic_error, PageError},
-    page_presentation::{ContentFrameProvenance, Document, FrameProvenance, PageFrame},
+    page_presentation::{
+        ContentFrameProvenance, Document, FrameProvenance, PageFrame, ResizeProvenance,
+    },
     window_runtime,
 };
 use browser::page::{
@@ -110,7 +112,7 @@ pub(crate) enum Command {
         main_frame_epoch: Option<u64>,
     },
     Main(MainThreadEvent),
-    Resize(Viewport),
+    Resize(ResizeRequest),
     ResizeTask,
     Active(bool),
     Patch(Patch),
@@ -175,7 +177,13 @@ impl WakingExecutor {
         let pending = self.pending.clone();
         let generation = self.generation.clone();
         let trace_name = self.trace_name;
+        // A posted task keeps the Page target identity of its origin turn.
+        // Chromium's trace task context crosses PostTask with the closure;
+        // without this scope, raster and compositor worker spans are recorded
+        // as target 0 and disappear from a target-scoped Performance trace.
+        let trace_context = browser_tracing::context();
         Box::new(move || {
+            let _trace_context = browser_tracing::scope(trace_context);
             let _task_trace = browser_tracing::span("compositor", trace_name);
             task();
             generation.fetch_add(1, Ordering::Release);
@@ -311,11 +319,11 @@ impl Handle {
             self.source.request_begin_frame();
         }
     }
-    pub fn resize(&self, viewport: Viewport) {
+    pub fn resize(&self, resize: ResizeRequest) {
         if self.failed() {
             return;
         }
-        self.send(Command::Resize(viewport));
+        self.send(Command::Resize(resize));
     }
     pub fn patch(&self, patch: Patch) {
         self.send(Command::Patch(patch));
@@ -569,6 +577,7 @@ struct ImplPresentation {
     required_main_frame_epoch: u64,
     responded_main_frame_epoch: u64,
     required_scroll_sequence: u64,
+    pending_resize: Option<ResizeProvenance>,
 }
 
 impl ImplPresentation {
@@ -587,6 +596,7 @@ impl ImplPresentation {
             required_main_frame_epoch: 0,
             responded_main_frame_epoch: 0,
             required_scroll_sequence: 0,
+            pending_resize: None,
         }
     }
 
@@ -606,6 +616,10 @@ impl ImplPresentation {
         }
     }
 
+    fn observe_resize(&mut self, resize: Option<ResizeProvenance>) {
+        merge_resize(&mut self.pending_resize, resize);
+    }
+
     fn needs_main_frame_for(&self, content: ContentFrameProvenance) -> bool {
         self.artifact.is_some()
             && content.main_frame_epoch <= self.responded_main_frame_epoch
@@ -619,7 +633,7 @@ impl ImplPresentation {
     fn commit(
         &mut self,
         artifact: Arc<paint::PaintArtifact>,
-        content: ContentFrameProvenance,
+        mut content: ContentFrameProvenance,
         viewport: Viewport,
     ) -> bool {
         // ProxyImpl::data_for_commit_ pairs a commit with the BeginMainFrame
@@ -633,6 +647,7 @@ impl ImplPresentation {
         {
             return false;
         }
+        content.resize = self.pending_resize.take();
         self.artifact = Some(artifact);
         self.content = Some(content);
         self.viewport = viewport;
@@ -718,7 +733,23 @@ impl ImplPresentation {
                 })?;
             submitted = true;
         }
+        if submitted {
+            if let Some(content) = &mut self.content {
+                content.resize = None;
+            }
+        }
         Ok(submitted)
+    }
+}
+
+fn merge_resize(target: &mut Option<ResizeProvenance>, incoming: Option<ResizeProvenance>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    if let Some(current) = target {
+        current.merge(incoming);
+    } else {
+        *target = Some(incoming);
     }
 }
 
@@ -736,6 +767,10 @@ fn run_presenter(
     document: Document,
     frames: mpsc::Sender<window_runtime::Command>,
 ) -> io::Result<()> {
+    let _target_scope = browser_tracing::scope(browser_tracing::Context {
+        target_id: if document.0 == 0 { 2 } else { 1 },
+        ..Default::default()
+    });
     let mut pixels = Arc::new(Vec::<u32>::new());
     let (recycle_sender, recycle_receiver) = mpsc::channel::<Arc<Vec<u32>>>();
     // A returned software target is useful for the next frame even when a
@@ -747,15 +782,18 @@ fn run_presenter(
     let mut recycled = None::<Vec<u32>>;
     let mut retained_target: Option<(u32, u32)> = None;
     let mut presentation_sequence = 0u64;
+    let mut pending_resize = None;
     while let Ok(first) = receiver.recv() {
         let PresenterCommand::Frame {
             frame,
-            content,
+            mut content,
             viewport,
         } = first
         else {
             break;
         };
+        let mut batch_resize = pending_resize.take();
+        merge_resize(&mut batch_resize, content.resize.take());
         let root_scroll_y = frame.frame.metadata.root_scroll_offset.y();
         let frame_token = frame.frame.metadata.frame_token;
         let is_handling_interaction = frame.frame.metadata.is_handling_interaction;
@@ -782,9 +820,10 @@ fn run_presenter(
             match command {
                 PresenterCommand::Frame {
                     frame,
-                    content,
+                    mut content,
                     viewport,
                 } => {
+                    merge_resize(&mut batch_resize, content.resize.take());
                     let root_scroll_y = frame.frame.metadata.root_scroll_offset.y();
                     let frame_token = frame.frame.metadata.frame_token;
                     let is_handling_interaction = frame.frame.metadata.is_handling_interaction;
@@ -811,7 +850,7 @@ fn run_presenter(
             }
         }
         let Some((
-            content,
+            mut content,
             viewport,
             root_scroll_y,
             frame_token,
@@ -819,11 +858,19 @@ fn run_presenter(
             full_root_damage,
         )) = latest
         else {
+            pending_resize = batch_resize;
             if stop {
                 break;
             }
             continue;
         };
+        content.resize = batch_resize.take();
+        let _resize_scope = content.resize.map(|resize| {
+            browser_tracing::scope(browser_tracing::Context {
+                task_id: resize.id,
+                ..Default::default()
+            })
+        });
         let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
             .is_some()
             .then(Instant::now);
@@ -903,6 +950,7 @@ fn run_presenter(
                                 recording_revision: content.recording_revision,
                                 main_frame_epoch: content.main_frame_epoch,
                                 compositor_scroll_sequence: content.compositor_scroll_sequence,
+                                resize: content.resize,
                             }),
                         },
                         viewport,
@@ -1250,8 +1298,15 @@ fn run_impl(
                 content,
                 viewport,
             } => {
+                let _resize_scope = content.resize.map(|resize| {
+                    browser_tracing::scope(browser_tracing::Context {
+                        task_id: resize.id,
+                        ..Default::default()
+                    })
+                });
                 let mut impl_trace = browser_tracing::span("compositor", "Impl.Commit");
                 if let Some(presentation) = presentation.as_mut() {
+                    presentation.observe_resize(content.resize);
                     impl_trace.set("content_main_frame_epoch", content.main_frame_epoch as f64);
                     impl_trace.set(
                         "required_main_frame_epoch",
@@ -1435,11 +1490,9 @@ struct DocumentQueue {
     token: u64,
     task_queued: bool,
     collection_queued: bool,
-    collection_token: Option<event_loop::TaskToken>,
     javascript_collection_queued: bool,
     resize_queued: bool,
-    pending_resize: Option<Viewport>,
-    last_latency_sensitive_at: Option<Instant>,
+    pending_resize: Option<ResizeRequest>,
 }
 struct SelectedCommand(Option<Command>);
 impl event_loop::EventLoopExecutor<Command, MainThreadEvent> for SelectedCommand {
@@ -1469,11 +1522,9 @@ impl DocumentQueue {
             token: 0,
             task_queued: false,
             collection_queued: false,
-            collection_token: None,
             javascript_collection_queued: false,
             resize_queued: false,
             pending_resize: None,
-            last_latency_sensitive_at: None,
         };
         queue.ordinary();
         queue
@@ -1498,14 +1549,12 @@ impl DocumentQueue {
     fn post(&mut self, command: Command) {
         use event_loop::*;
         let now = Instant::now();
-        if matches!(
-            &command,
-            Command::Input { .. } | Command::ExternalWheel { .. } | Command::Resize(_)
-        ) {
-            self.note_latency_sensitive_activity(now);
-        }
-        let command = if let Command::Resize(viewport) = command {
-            self.pending_resize = Some(viewport);
+        let command = if let Command::Resize(resize) = command {
+            if let Some(pending) = &mut self.pending_resize {
+                pending.merge(resize);
+            } else {
+                self.pending_resize = Some(resize);
+            }
             if self.resize_queued {
                 return;
             }
@@ -1533,15 +1582,6 @@ impl DocumentQueue {
             self.post_task(command, priority, None, now);
         }
     }
-    fn note_latency_sensitive_activity(&mut self, now: Instant) {
-        self.last_latency_sensitive_at = Some(now);
-        if let Some(token) = self.collection_token.take() {
-            self.engine
-                .Apply(event_loop::EventLoopMutation::CancelTask(token), now);
-            self.collection_queued = false;
-            self.schedule_collection(now);
-        }
-    }
     fn post_task(
         &mut self,
         command: Command,
@@ -1565,23 +1605,18 @@ impl DocumentQueue {
         token
     }
     fn schedule_collection(&mut self, now: Instant) {
-        // Chromium keeps continuous-input work priority-escalated for
-        // UserModel::kGestureEstimationLimit (100 ms) and services GC from
-        // idle/best-effort queues. This single owner has no idle deadline;
-        // apply the same horizon only to its background collector.
-        const INPUT_QUIET_PERIOD: Duration = Duration::from_millis(100);
-        let ready_at = self
-            .last_latency_sensitive_at
-            .map(|last| last + INPUT_QUIET_PERIOD)
-            .filter(|ready| *ready > now);
-        let token = self.post_task(
+        // cppgc posts its foreground incremental sweeper immediately at
+        // kUserVisible priority and also posts a delayed kUserBlocking
+        // fallback.  This single-owner heap needs only the first path: input
+        // and rendering still run before Normal tasks, while continuous input
+        // cannot cancel and perpetually postpone collection.
+        self.post_task(
             Command::CollectLayoutHeap,
-            event_loop::TaskPriority::Background,
-            ready_at,
+            event_loop::TaskPriority::Normal,
+            None,
             now,
         );
         self.collection_queued = true;
-        self.collection_token = Some(token);
     }
     fn next(
         &mut self,
@@ -1635,7 +1670,6 @@ impl DocumentQueue {
                     self.task_queued = false;
                 } else if matches!(command, Command::CollectLayoutHeap) {
                     self.collection_queued = false;
-                    self.collection_token = None;
                 } else if matches!(command, Command::CollectJavaScriptHeap) {
                     self.javascript_collection_queued = false;
                 } else if matches!(command, Command::ResizeTask) {
@@ -1839,6 +1873,7 @@ fn run_document(
     let mut hovered = Vec::new();
     let mut press_discarded = false;
     let mut resize_event_pending = false;
+    let mut pending_resize_provenance: Option<ResizeProvenance> = None;
     let mut queue = DocumentQueue::new();
     loop {
         let command = queue.next(&receiver, page.NextTaskDeadline(Instant::now()));
@@ -1847,9 +1882,14 @@ fn run_document(
                 browser_tracing::Context {
                     source_id: frame.source_id,
                     frame_id: frame.sequence_number,
+                    task_id: pending_resize_provenance.map_or(0, |resize| resize.id),
                     ..Default::default()
                 }
             }
+            Ok(Command::Resize(resize)) => browser_tracing::Context {
+                task_id: resize.trace_id(),
+                ..Default::default()
+            },
             _ => Default::default(),
         };
         let _scope = browser_tracing::scope(frame_context);
@@ -2059,13 +2099,37 @@ fn run_document(
                     source.request_compositor_main_frame();
                 }
             }
-            Ok(Command::Resize(next)) => {
+            Ok(Command::Resize(resize)) => {
+                let started = Instant::now();
+                let next = resize.viewport;
+                browser_tracing::interval(
+                    "resize",
+                    "ResizeDocumentQueue",
+                    resize.queued_at,
+                    started,
+                    &[("samples", resize.samples as f64)],
+                );
+                let mut trace = browser_tracing::span("resize", "Page.ResizeViewport");
+                trace.set("samples", resize.samples as f64);
+                trace.set("width", next.width as f64);
+                trace.set("height", next.height as f64);
+                trace.set("device_scale", next.scale);
                 viewport = next;
                 page.ResizeViewport(
                     f64::from(next.width) / next.scale,
                     f64::from(next.height) / next.scale,
                     next.scale,
                 )?;
+                let provenance = ResizeProvenance {
+                    id: resize.trace_id(),
+                    queued_at: resize.queued_at,
+                    samples: resize.samples,
+                };
+                if let Some(pending) = &mut pending_resize_provenance {
+                    pending.merge(provenance);
+                } else {
+                    pending_resize_provenance = Some(provenance);
+                }
                 resize_event_pending = true;
             }
             Ok(Command::ResizeTask) => unreachable!("DocumentQueue resolves resize tasks"),
@@ -2130,6 +2194,7 @@ fn run_document(
                                 recording_revision: frame.display_items.recording_revision,
                                 main_frame_epoch: completed_main_frame_epoch,
                                 compositor_scroll_sequence: frame.compositor_scroll_sequence,
+                                resize: pending_resize_provenance.take(),
                             },
                             viewport,
                         })
@@ -2169,6 +2234,7 @@ fn run_document(
                                     recording_revision: frame.display_items.recording_revision,
                                     main_frame_epoch: completed_main_frame_epoch,
                                     compositor_scroll_sequence: frame.compositor_scroll_sequence,
+                                    resize: pending_resize_provenance.take(),
                                 }),
                             },
                             viewport,
@@ -2270,53 +2336,72 @@ fn run_document(
 fn title(page: &Page) -> String {
     let owner = page.Document();
     let doc = owner.GetDocument();
-    fn text(doc: &dom::persistent_document::PersistentDocument, i: usize, out: &mut String) {
-        let n = doc.Node(i);
-        if n.Type() == dom::persistent_document::DOMNodeType::kText {
-            out.push_str(n.Data());
+    let mut pending = vec![doc.Root()];
+    let mut title = None;
+    while let Some(index) = pending.pop() {
+        let node = doc.Node(index);
+        if node.IsHTMLElement("title") {
+            title = Some(index);
+            break;
         }
-        for &c in n.Children() {
-            text(doc, c, out);
-        }
-    }
-    fn find(doc: &dom::persistent_document::PersistentDocument, i: usize) -> Option<usize> {
-        let n = doc.Node(i);
-        if n.IsHTMLElement("title") {
-            return Some(i);
-        }
-        n.Children().iter().find_map(|&c| find(doc, c))
+        pending.extend(node.Children().iter().rev().copied());
     }
     let mut value = String::new();
-    if let Some(i) = find(doc, doc.Root()) {
-        text(doc, i, &mut value);
+    if let Some(title) = title {
+        let mut pending = vec![title];
+        while let Some(index) = pending.pop() {
+            let node = doc.Node(index);
+            if node.Type() == dom::persistent_document::DOMNodeType::kText {
+                value.push_str(node.Data());
+            }
+            pending.extend(node.Children().iter().rev().copied());
+        }
     }
     value.trim().chars().take(100).collect()
 }
 fn drag_regions(page: &Page, viewport: Viewport) -> Vec<crate::chrome::DragRegion> {
-    use layoutng_assembly::{fragment_tree::FragmentNode, internal::layout_input::Offset};
+    use layoutng_assembly::{
+        internal::layout_input::Offset, layout_engine::NativePaintFragmentCursor,
+    };
     let mut regions = vec![crate::chrome::DragRegion {
         x: 92.0,
         y: 0.0,
         width: (f64::from(viewport.width) / viewport.scale - 92.0).max(0.0),
         height: 6.0,
     }];
-    fn bounds(f: &FragmentNode, id: u64, p: Offset) -> Option<crate::chrome::DragRegion> {
-        let o = Offset {
-            x: p.x + f.offset.x,
-            y: p.y + f.offset.y,
-        };
-        if f.node_id == id {
-            return Some(crate::chrome::DragRegion {
-                x: o.x,
-                y: o.y,
-                width: f.size.width,
-                height: f.size.height,
-            });
+    fn bounds(root: NativePaintFragmentCursor<'_>, id: u64) -> Option<crate::chrome::DragRegion> {
+        let mut pending = vec![(root, Offset::default())];
+        let mut visited = std::collections::HashSet::new();
+        while let Some((fragment, parent_offset)) = pending.pop() {
+            if fragment.fragment_instance_id != 0 && !visited.insert(fragment.fragment_instance_id)
+            {
+                continue;
+            }
+            let offset = Offset {
+                x: parent_offset.x + fragment.offset.x,
+                y: parent_offset.y + fragment.offset.y,
+            };
+            if fragment.node_id == id {
+                return Some(crate::chrome::DragRegion {
+                    x: offset.x,
+                    y: offset.y,
+                    width: fragment.size.width,
+                    height: fragment.size.height,
+                });
+            }
+            pending.extend(
+                fragment
+                    .Children()
+                    .into_iter()
+                    .rev()
+                    .map(|child| (child, offset)),
+            );
         }
-        f.children.iter().find_map(|c| bounds(c, id, o))
+        None
     }
     if let (Some(frame), Some(id)) = (page.CurrentFrame(), find_id(page, "dragspace")) {
-        if let Some(r) = bounds(&frame.fragments, id, Offset::default()) {
+        let root = NativePaintFragmentCursor::FromHandle(&frame.fragments);
+        if let Some(r) = bounds(root, id) {
             regions.push(r);
         }
     }
@@ -2370,18 +2455,24 @@ mod queue_tests {
     fn resize_tasks_coalesce_to_the_latest_viewport() {
         let (sender, receiver) = mpsc::channel();
         let mut queue = DocumentQueue::new();
-        for width in [900, 901, 902] {
+        let started = Instant::now();
+        for (sample, width) in [900, 901, 902].into_iter().enumerate() {
             sender
-                .send(Command::Resize(Viewport {
-                    width,
-                    height: 700,
-                    scale: 1.0,
-                }))
+                .send(Command::Resize(ResizeRequest::new(
+                    Viewport {
+                        width,
+                        height: 700,
+                        scale: 1.0,
+                    },
+                    started + Duration::from_millis(sample as u64),
+                )))
                 .unwrap();
         }
-        assert!(matches!(
-            queue.next(&receiver, None),
-            Ok(Command::Resize(Viewport { width: 902, .. }))
-        ));
+        let Ok(Command::Resize(resize)) = queue.next(&receiver, None) else {
+            panic!("expected a coalesced resize");
+        };
+        assert_eq!(resize.viewport.width, 902);
+        assert_eq!(resize.queued_at, started);
+        assert_eq!(resize.samples, 3);
     }
 }

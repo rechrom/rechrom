@@ -546,7 +546,7 @@ impl PageScripts {
     pub(super) fn Dispatch(
         &mut self,
         input: &interaction::input_event::InputEvent,
-        fragments: &FragmentNode,
+        fragments: NativePaintFragmentCursor<'_>,
     ) -> io::Result<interaction::interaction_engine::InteractionResult> {
         let engine = self.engine.clone();
         let bindings = self.web_api.DOMBindings().clone();

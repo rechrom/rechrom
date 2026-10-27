@@ -418,7 +418,10 @@ impl Host {
         self.toolbar_focused = false;
         if let Some(page) = &self.tabs.active.page {
             if self.tabs.active.viewport != Some(self.viewport) {
-                page.resize(self.content_viewport());
+                page.resize(crate::engine::ResizeRequest::new(
+                    self.content_viewport(),
+                    Instant::now(),
+                ));
             }
             page.visible(true);
         }
@@ -657,19 +660,41 @@ impl Host {
                 self.active_pages();
                 Ok(())
             }
-            Command::Resize(viewport) => {
+            Command::Resize(resize) => {
+                let _scope = browser_tracing::scope(browser_tracing::Context {
+                    target_id: 1,
+                    task_id: resize.trace_id(),
+                    ..Default::default()
+                });
+                let started = Instant::now();
+                browser_tracing::interval(
+                    "resize",
+                    "ResizeHostQueue",
+                    resize.queued_at,
+                    started,
+                    &[("samples", resize.samples as f64)],
+                );
+                let mut trace = browser_tracing::span("resize", "Host.Resize");
+                let viewport = resize.viewport;
+                trace.set("samples", resize.samples as f64);
+                trace.set("width", viewport.width as f64);
+                trace.set("height", viewport.height as f64);
+                trace.set("device_scale", viewport.scale);
                 if viewport.valid() {
                     self.viewport = viewport;
                     self.popup = None;
-                    self.toolbar.resize(Viewport {
+                    self.toolbar.resize(resize.with_viewport(Viewport {
                         height: viewport.toolbar_pixels(),
                         ..viewport
-                    });
+                    }));
                     if let Some(page) = &self.tabs.active.page {
-                        page.resize(self.content_viewport());
+                        page.resize(resize.with_viewport(self.content_viewport()));
                     }
                     self.tabs.active.viewport = Some(viewport);
                     self.scene();
+                    trace.set("accepted", 1.0);
+                } else {
+                    trace.set("accepted", 0.0);
                 }
                 Ok(())
             }

@@ -9,6 +9,9 @@ foundation = { package = "layoutng_foundation", path = "../layoutng_foundation" 
 font_engine = { path = "../../font_engine" }
 layoutng_geometry = { path = "../layoutng_geometry" }
 layoutng_style = { path = "../layoutng_style" }
+layout_invalidation = { path = "../layout_invalidation" }
+layout_reuse = { path = "../layout_reuse" }
+layout_commit = { path = "../layout_commit" }
 skia = { path = "../../skia" }
 
 [lib]

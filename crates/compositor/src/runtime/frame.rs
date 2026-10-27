@@ -746,8 +746,8 @@ impl<L> crate::adapter::throttle::RenderPassQuad<RenderPassId> for DrawQuad<L> {
             _ => panic!("native render-pass quad material invariant"),
         }
     }
-    fn resource_id(&self) -> ResourceId {
-        LayerImplDrawQuad::resource_id(self)
+    fn has_mask_resource(&self) -> bool {
+        LayerImplDrawQuad::resource_id(self).0 != 0
     }
 }
 impl<T, F, L> crate::adapter::throttle::ThrottleQuad<T, RenderPassId, F>

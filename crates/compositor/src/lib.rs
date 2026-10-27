@@ -20,6 +20,7 @@ pub mod cc;
 pub mod third_party;
 pub mod ui;
 
+pub mod performance;
 pub mod runtime;
 
 /// The default software compositor family used by the Page assembly. These
@@ -39,10 +40,10 @@ pub type NativeRasterResourceLease = dyn runtime::raster_execution::RasterResour
 /// The value submitted through LayerTreeFrameSink. Chromium carries the
 /// LocalSurfaceId beside each CompositorFrame; keeping that pair intact lets
 /// Viz reject an older resize generation instead of guessing from dimensions.
-pub struct NativeCompositorFrameSubmission {
-    pub local_surface_id: runtime::types::LocalSurfaceId,
-    pub frame: NativeCompositorFrame,
-}
+pub type NativeCompositorFrameSubmission = compositor_frame::CompositorFrameSubmission<
+    runtime::types::LocalSurfaceId,
+    NativeCompositorFrame,
+>;
 
 pub mod engine;
 pub use engine::{

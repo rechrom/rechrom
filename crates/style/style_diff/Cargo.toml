@@ -1,0 +1,8 @@
+[package]
+name = "style_diff"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+layoutng_style = { path = "../../layoutng/layoutng_style" }
+style_model = { path = "../style_model" }

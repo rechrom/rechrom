@@ -1,7 +1,7 @@
 // C++: font_engine/fonts/font_platform_data.h/.cc. HarfBuzzFace and its
 // back-reference remain GC members; OpenTypeFont and the native backend use
 // reference counting as in the source.
-use super::font_backend::FontBackend;
+use super::font_backend::{FontBackend, FontVariation};
 use super::font_orientation::{FontOrientation, IsVerticalAnyUpright, IsVerticalNonCJKUpright};
 use super::resolved_font_features::ResolvedFontFeatures;
 use super::shaping::harfbuzz_face::HarfBuzzFace;
@@ -15,6 +15,12 @@ use std::sync::Arc;
 pub struct FontPlatformData {
     typeface_: Option<Arc<OpenTypeFont>>,
     backend_: Option<Arc<dyn FontBackend>>,
+    /// Stable index into the immutable font-resource catalog shared by
+    /// Layout, Paint and Raster. Chromium carries this identity on the
+    /// platform typeface; keeping it here lets FragmentItem's retained font
+    /// cross lifecycle phases without consulting Layout's resolver again.
+    resource_face_index_: u32,
+    resource_variations_: Vec<FontVariation>,
     pub text_size_: f32,
     pub synthetic_bold_: bool,
     pub synthetic_italic_: bool,
@@ -33,6 +39,8 @@ impl Default for FontPlatformData {
         Self {
             typeface_: None,
             backend_: None,
+            resource_face_index_: 0,
+            resource_variations_: Vec::new(),
             text_size_: 0.0,
             synthetic_bold_: false,
             synthetic_italic_: false,
@@ -52,6 +60,8 @@ impl Clone for FontPlatformData {
         Self {
             typeface_: self.typeface_.clone(),
             backend_: self.backend_.clone(),
+            resource_face_index_: self.resource_face_index_,
+            resource_variations_: self.resource_variations_.clone(),
             text_size_: self.text_size_,
             synthetic_bold_: self.synthetic_bold_,
             synthetic_italic_: self.synthetic_italic_,
@@ -76,7 +86,7 @@ impl FontPlatformData {
 
     // cpp: font_engine/fonts/font_platform_data.cc:46-79
     pub fn with_text_size(&self, text_size: f32) -> Self {
-        Self::new(
+        let mut output = Self::new(
             self.typeface_
                 .clone()
                 .expect("empty font-cache key has no font data"),
@@ -88,7 +98,12 @@ impl FontPlatformData {
             self.resolved_font_features_.clone(),
             self.orientation_,
             self.unicode_ranges_.clone(),
-        )
+        );
+        output.resource_face_index_ = self.resource_face_index_;
+        output
+            .resource_variations_
+            .clone_from(&self.resource_variations_);
+        output
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -103,9 +118,19 @@ impl FontPlatformData {
         orientation: FontOrientation,
         unicode_ranges: Vec<(u32, u32)>,
     ) -> Self {
+        let resource_variations = typeface
+            .Variations()
+            .into_iter()
+            .map(|variation| FontVariation {
+                tag: variation.tag,
+                value: variation.value,
+            })
+            .collect();
         Self {
             typeface_: Some(typeface.WithSize(text_size as f64)),
             backend_: backend,
+            resource_face_index_: 0,
+            resource_variations_: resource_variations,
             text_size_: text_size,
             synthetic_bold_: synthetic_bold,
             synthetic_italic_: synthetic_italic,
@@ -131,6 +156,17 @@ impl FontPlatformData {
     }
     pub fn Backend(&self) -> Option<&dyn FontBackend> {
         self.backend_.as_deref()
+    }
+    pub fn ResourceFaceIndex(&self) -> u32 {
+        self.resource_face_index_
+    }
+    pub fn ResourceVariations(&self) -> &[FontVariation] {
+        &self.resource_variations_
+    }
+    pub fn SetResourceIdentity(&mut self, face_index: u32, variations: &[FontVariation]) {
+        self.resource_face_index_ = face_index;
+        self.resource_variations_.clear();
+        self.resource_variations_.extend_from_slice(variations);
     }
     pub fn Orientation(&self) -> FontOrientation {
         self.orientation_
@@ -228,6 +264,8 @@ impl PartialEq for FontPlatformData {
             && self.is_hash_table_deleted_value_ == other.is_hash_table_deleted_value_
             && self.synthetic_bold_ == other.synthetic_bold_
             && self.synthetic_italic_ == other.synthetic_italic_
+            && self.resource_face_index_ == other.resource_face_index_
+            && self.resource_variations_ == other.resource_variations_
             && self.avoid_embedded_bitmaps_ == other.avoid_embedded_bitmaps_
             && self.text_rendering_ == other.text_rendering_
             && self.resolved_font_features_ == other.resolved_font_features_

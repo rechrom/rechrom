@@ -4,12 +4,13 @@ use foundation::{
     kIndefiniteSize, EPosition, LayoutUnit, Length, MinimumValueForLength, WritingDirectionMode,
     WritingMode,
 };
-use layoutng_fragment_tree::physical_box_fragment::PhysicalBoxFragment;
+use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
 use layoutng_geometry::geometry::logical_offset::LogicalOffset;
 use layoutng_geometry::geometry::logical_size::{LogicalSize, ToPhysicalSize};
 use layoutng_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng/internal/relative_utils.cc:27-36
+#[inline(always)]
 fn ResolveInset(length: &Length, size: LayoutUnit) -> Option<LayoutUnit> {
     if length.IsAuto() || (length.HasPercent() && size == kIndefiniteSize) {
         None
@@ -20,6 +21,7 @@ fn ResolveInset(length: &Length, size: LayoutUnit) -> Option<LayoutUnit> {
 
 // cpp: layoutng/internal/relative_utils.h:16-22
 // cpp: layoutng/internal/relative_utils.cc:17-89
+#[inline(always)]
 pub fn ComputeRelativeOffset(
     child_style: &ComputedStyle,
     container_writing_direction: WritingDirectionMode,
@@ -75,6 +77,7 @@ pub fn ComputeRelativeOffset(
 
 // cpp: layoutng/internal/relative_utils.h:24-27
 // cpp: layoutng/internal/relative_utils.cc:91-100
+#[inline(always)]
 pub fn ComputeRelativeOffsetForBoxFragment(
     fragment: &PhysicalBoxFragment,
     container_writing_direction: WritingDirectionMode,

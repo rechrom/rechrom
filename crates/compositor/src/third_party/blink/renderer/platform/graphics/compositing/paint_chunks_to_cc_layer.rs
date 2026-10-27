@@ -16,7 +16,7 @@ use crate::{
         layer_tree_impl::SelectionBoundType,
         main_layer::LayerContext,
         paint_chunks_to_cc_layer::*,
-        paint_geometry::ChunkGeometryMapper,
+        paint_geometry::{ChunkGeometryMapper, PaintChunkView},
         pending_layer::{
             PendingClipNode, PendingEffectNode, PendingPaintChunk, PendingPaintChunkSubset,
             PendingPropertyTreeState, PendingTransformNode,
@@ -961,7 +961,11 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
             }
             self.TranslateForLayerOffsetOnce();
             self.chunk_to_layer_mapper_
-                .SwitchToChunkWithState(chunk, &state);
+                .SwitchToChunkWithState(
+                    &chunk.properties_unalias(),
+                    chunk.raster_effect_outset(),
+                    &state,
+                );
             if let Some(cull) = cull {
                 let visual = self
                     .chunk_to_layer_mapper_
@@ -1470,7 +1474,8 @@ impl<'a, 'c, B: PaintChunksTypes> LayerPropertiesUpdater<'a, 'c, B> {
                     || !self.top_non_composited_scrolls_.is_empty()))
                 || chunk.layer_selection_data().is_some()
             {
-                self.chunk_to_layer_mapper_.SwitchToChunk(chunk);
+                self.chunk_to_layer_mapper_
+                    .SwitchToChunk(chunk.properties_unalias(), chunk.raster_effect_outset());
             }
             if !self.selection_only_ {
                 if let Some(data) = chunk.hit_test_data() {

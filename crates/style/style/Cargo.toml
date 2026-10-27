@@ -1,0 +1,28 @@
+[package]
+name = "style"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+style_model = { path = "../style_model" }
+style_parser = { path = "../style_parser" }
+style_rules = { path = "../style_rules" }
+style_invalidation = { path = "../style_invalidation" }
+style_walk = { path = "../style_walk" }
+style_match = { path = "../style_match" }
+style_resolve = { path = "../style_resolve" }
+style_diff = { path = "../style_diff" }
+style_commit = { path = "../style_commit" }
+browser_tracing = { path = "../../tracing" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+layoutng_style = { path = "../../layoutng/layoutng_style" }
+font_engine = { path = "../../font_engine" }
+
+dom = { path = "../../dom" }
+cssom = { path = "../../cssom" }
+layoutng = { package = "layoutng_assembly", path = "../../layoutng/layoutng_assembly" }
+url = "2"
+
+[dev-dependencies]
+html = { path = "../../html" }
+image_resource = { path = "../../image_resource" }

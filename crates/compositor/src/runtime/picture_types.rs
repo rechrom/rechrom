@@ -141,13 +141,19 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingLayerTypes for Cpu
     }
 }
 impl<R: CpuSkiaBackend> TileTypes for CpuCompositorTypes<R> {
+    type ResourceId = crate::adapter::layer_tree_impl::ResourceId;
     type Resource = crate::cc::resources::resource_pool::InUsePoolResource<Self>;
     type RasterTransform = paint::RasterTransform;
     type RasterTask = dyn crate::cc::raster::tile_task::TileTaskImpl<
         crate::cc::tiles::tile_manager::RasterCompletion<Self>,
     >;
+    fn TaskContainsLCPCandidateImages(task: &Self::RasterTask) -> bool {
+        crate::cc::raster::tile_task::TileTaskImpl::TaskContainsLCPCandidateImages(task)
+    }
 }
-impl<R: CpuSkiaBackend> PictureLayerTilingTypes for CpuCompositorTypes<R> {
+impl<R: CpuSkiaBackend> compositor_tile::picture_layer_tiling_types::PictureLayerTilingTypes
+    for CpuCompositorTypes<R>
+{
     type RasterSource = paint::NativeRasterSource<R>;
     type RegionBackend = R;
     type OcclusionTransform = super::geometry::Transform<R>;

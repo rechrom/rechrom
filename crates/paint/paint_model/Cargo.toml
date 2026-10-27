@@ -1,0 +1,10 @@
+[package]
+name = "paint_model"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+image_resource = { path = "../../image_resource" }
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+serde_json = "1"

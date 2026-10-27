@@ -1,0 +1,13 @@
+[package]
+name = "style_resolve"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+font_engine = { path = "../../font_engine" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+layoutng_style = { path = "../../layoutng/layoutng_style" }
+style_model = { path = "../style_model" }
+style_match = { path = "../style_match" }
+style_parser = { path = "../style_parser" }

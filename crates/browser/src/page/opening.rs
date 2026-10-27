@@ -1,4 +1,4 @@
-use super::{PageScripts, PageState, ResourceClient};
+use super::{PageScripts, PageState, ResourceClient, ResourceReferenceDirty};
 use document_loader::ResourceFetcher;
 use open::{
     dynamic_scripts::DynamicScriptTasks, script_scheduler::ScriptLoadClient, OpenDocumentAdapter,
@@ -26,32 +26,46 @@ pub(super) fn ResolvePageStylesAndLoadResources(
     // bounded parser pump makes streaming input quadratic and publishes
     // arbitrary intermediate frames.  Keep discovery dirty until Page enters
     // UpdateFrameIfNeeded from BeginFrame.
-    let discover = rendering_opportunity && state.resource_references_dirty.replace(false);
+    let discovery = rendering_opportunity
+        .then(|| {
+            state
+                .resource_references_dirty
+                .replace(ResourceReferenceDirty::default())
+        })
+        .unwrap_or_default();
+    let discover = !discovery.IsEmpty();
     trace.set("discover", discover as u8 as f64);
+    trace.set("discovery_flags", discovery.0 as f64);
     if rendering_opportunity {
         state.ResolveStyles();
     }
     let style_before_done = elapsed();
     let mut images_discovered_done = style_before_done;
     let mut fonts_discovered_done = style_before_done;
-    if discover {
+    if discovery.Contains(ResourceReferenceDirty::STYLE_SHEETS) {
         // Scroll/caret/unchanged hover updates leave all resource references
         // intact. DOM and stylesheet changes still discover resources;
         // image completion only refreshes consumers. Completions are polled on
         // every pass with the existing event and admission budget.
         let style_discovery = browser_tracing::span("lifecycle", "Page.DiscoverStyleSheets");
         if let Err(error) = resources.QueueReferencedStyleSheets() {
-            state.resource_references_dirty.set(true);
+            state.MarkResourceReferencesDirty(discovery);
             return Err(error);
         }
         drop(style_discovery);
+    }
+    if discovery.Contains(ResourceReferenceDirty::IMAGES) {
         let image_discovery = browser_tracing::span("lifecycle", "Page.DiscoverImages");
         if let Err(error) = resources.QueueReferencedImages() {
-            state.resource_references_dirty.set(true);
+            state.MarkResourceReferencesDirty(ResourceReferenceDirty(
+                discovery.0 & (ResourceReferenceDirty::IMAGES | ResourceReferenceDirty::FONTS),
+            ));
             return Err(error);
         }
         drop(image_discovery);
         images_discovered_done = elapsed();
+    }
+    if discovery.Contains(ResourceReferenceDirty::FONTS) {
         let font_discovery = browser_tracing::span("lifecycle", "Page.DiscoverFonts");
         resources.PrepareFontFaces();
         resources.StartPendingFonts();

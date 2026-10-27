@@ -276,6 +276,19 @@ pub fn GraphemesClusterList(text: &StringView, graphemes: &mut [u32]) {
     if text.IsEmpty() {
         return;
     }
+    // Every printable ASCII code unit is a complete extended grapheme
+    // cluster.  Chromium delegates this to ICU's optimized character-break
+    // iterator; the translated iterator otherwise performs the full Unicode
+    // property walk and allocates two temporary vectors for every text
+    // fragment published after a resize.  Keep the common Latin document
+    // path allocation-free while preserving the Unicode path for controls,
+    // combining marks, surrogate pairs, emoji and CR/LF handling.
+    if (0..text.length()).all(|index| matches!(text[index as usize], 0x20..=0x7e)) {
+        for (index, cluster) in graphemes.iter_mut().enumerate() {
+            *cluster = index as u32;
+        }
+        return;
+    }
     let mut iterator = CharacterBreakIterator::new(text);
     let mut cluster = 0;
     let mut offset = 0;

@@ -4,6 +4,7 @@ pub mod character_break_iterator;
 pub mod character_layout_property_data;
 pub mod emoji_property_data;
 pub mod emoji_segmentation_category;
+mod fast_line_break_data;
 pub mod grapheme_break_property_data;
 pub(crate) mod harfbuzz;
 pub mod harfbuzz_shaper;

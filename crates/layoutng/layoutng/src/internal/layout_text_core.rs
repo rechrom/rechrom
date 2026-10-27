@@ -1,16 +1,6 @@
+//! Compatibility loader for inline LayoutText core behavior.
+
 #![allow(non_snake_case)]
 
-use super::layout_text::LayoutText;
-
-impl LayoutText {
-    // cpp: layoutng/internal/layout_text_core.cc:5-8
-    pub fn DetachAxHooks(&mut self) {
-        self.CheckIsNotDestroyed();
-        self.has_abstract_inline_text_box_ = false;
-    }
-
-    // cpp: layoutng/internal/layout_text_core.cc:10-12
-    pub fn ClearBlockFlowCachedData(&self) {
-        self.CheckIsNotDestroyed();
-    }
-}
+#[path = "../../../layout_algo_inline/src/native_layout_text_core.rs"]
+mod layout_algo_inline_native_layout_text_core;

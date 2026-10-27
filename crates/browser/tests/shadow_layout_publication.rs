@@ -6,7 +6,7 @@ mod native_test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use layoutng_assembly::fragment_tree::FragmentNode;
+use layoutng_assembly::fragment_tree::FragmentPaintData;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -130,7 +130,7 @@ fn id(page: &Page, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("missing native DOM node {name}"))
 }
 
-fn find(root: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+fn find(root: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
     if root.node_id == id {
         Some(root)
     } else {
@@ -138,7 +138,7 @@ fn find(root: &FragmentNode, id: u64) -> Option<&FragmentNode> {
     }
 }
 
-fn count(root: &FragmentNode, id: u64) -> usize {
+fn count(root: &FragmentPaintData, id: u64) -> usize {
     usize::from(root.node_id == id)
         + root
             .children
@@ -147,7 +147,7 @@ fn count(root: &FragmentNode, id: u64) -> usize {
             .sum::<usize>()
 }
 
-// Inline owners can legitimately have no separate FragmentNode. Inspect the
+// Inline owners can legitimately have no separate FragmentPaintData. Inspect the
 // retained native tree when checking uniqueness of the file status span.
 fn native_count(page: &Page, id: u64) -> usize {
     use layoutng_assembly::internal::{
@@ -170,7 +170,7 @@ fn native_count(page: &Page, id: u64) -> usize {
     count
 }
 
-fn published<'a>(page: &'a Page, name: &str) -> &'a FragmentNode {
+fn published<'a>(page: &'a Page, name: &str) -> &'a FragmentPaintData {
     find(&page.CurrentFrame().unwrap().fragments, id(page, name))
         .unwrap_or_else(|| panic!("native DOM node {name} has no published layout fragment"))
 }
@@ -642,7 +642,7 @@ fn shadow_style_width_and_text_mutations_preserve_older_published_frames() {
     });
 }
 
-fn glyph_ids(root: &FragmentNode) -> Vec<u32> {
+fn glyph_ids(root: &FragmentPaintData) -> Vec<u32> {
     root.paint
         .glyph_runs
         .iter()

@@ -2,8 +2,6 @@
 //! owned by another package. Nothing in this module counts as translated
 //! Chromium source.
 
-use std::collections::BTreeMap;
-
 pub mod animation_host;
 pub mod begin_frame;
 pub mod browser_controls;
@@ -70,16 +68,9 @@ pub mod tree_sync;
 pub mod unbounded;
 pub mod viewport;
 
-/// Platform-neutral counterpart of the structured dictionary accepted by
-/// Chromium tracing hooks. Tracing ownership remains outside compositor.
-#[derive(Clone, Debug, PartialEq)]
-pub enum TraceValue {
-    Bool(bool),
-    Integer(i64),
-    Float(f64),
-    String(String),
-    Dictionary(BTreeMap<String, TraceValue>),
-}
+/// Compatibility export for the platform-neutral structured trace value now
+/// owned by the scheduler package.
+pub use compositor_scheduler::TraceValue;
 pub mod content_layer_client_impl;
 pub mod picture_layer_tiling;
 pub mod tile_manager;

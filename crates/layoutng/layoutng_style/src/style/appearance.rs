@@ -24,37 +24,4 @@
  */
 
 // cpp: layoutng_style/style/appearance.h:30-61
-/// Resolved appearance values. kAuto must be resolved before layout.
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(non_camel_case_types)]
-pub enum AppearanceValue {
-    kNone,
-    kAuto,
-    kCheckbox,
-    kRadio,
-    kButton,
-    kListbox,
-    kMediaControl,
-    kMenulist,
-    kMenulistButton,
-    kMeter,
-    kProgressBar,
-    kSearchField,
-    kTextField,
-    kTextArea,
-    kInnerSpinButton,
-    kMediaSlider,
-    kMediaSliderThumb,
-    kMediaVolumeSlider,
-    kMediaVolumeSliderThumb,
-    kPushButton,
-    kSquareButton,
-    kSliderHorizontal,
-    kSliderThumbHorizontal,
-    kSliderThumbVertical,
-    kSearchFieldCancelButton,
-    kSliderVertical,
-    kBaseSelect,
-    kBase,
-}
+pub use foundation::AppearanceValue;

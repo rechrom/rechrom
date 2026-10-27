@@ -1882,6 +1882,77 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             .get_or_insert_with(|| io::Error::new(io::ErrorKind::Unsupported, message.into()));
     }
 
+    /// Replay a Paint-owned operation before its browser-neutral command
+    /// projection discards reference-filter graph ownership. Ordinary ops keep
+    /// using the common raster command path. A flat PaintRecord (notably an SVG
+    /// document image) has no compositor Effect traversal, so its filter scope
+    /// must build the same canonical filter graph directly at this adapter.
+    fn execute_native(
+        &mut self,
+        item: &paint::paint_engine::DisplayItem,
+        resources: &ResourceContext<'_>,
+        alpha: f32,
+    ) {
+        let mut command = item.to_skia();
+        command.flags_alpha = alpha;
+        command.color.alpha *= alpha;
+        if let Some(shader) = &mut command.paint_shader {
+            shader.flags_alpha *= alpha;
+            for stop in &mut shader.stops {
+                stop.color.alpha *= alpha;
+            }
+        }
+        if item.r#type != paint::paint_engine::DisplayItemType::kSaveLayerFilter
+            || !item.filters.iter().any(|operation| {
+                operation.r#type
+                    == layoutng_assembly::internal::paint_input::PaintFilterType::kReference
+            })
+        {
+            self.execute(&command, resources);
+            return;
+        }
+        if self.error.is_some() {
+            return;
+        }
+        let result = (|| -> io::Result<()> {
+            let reference_box = item.filter_reference_box.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "flat reference filter has no resolved reference box",
+                )
+            })?;
+            let filters =
+                paint::property_filter_operations::PropertyFilterOperations::from_authored(
+                    &item.filters,
+                    Some(reference_box),
+                    item.filter_reference_scale,
+                );
+            let filters = filters.canonical().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("flat reference filter: {error}"),
+                )
+            })?;
+            let matrix = self.target.local_to_device();
+            // SaveLayer restore paint starts opaque. DisplayItem::color is a
+            // draw-op value and defaults transparent; applying it here would
+            // discard the entire filtered layer.
+            let mut paint = SkPaint::default();
+            paint.setBlendMode(css_blend(command.blend_mode));
+            paint.setAlphaf(command.opacity);
+            paint.setImageFilter(BuildTranslatedFilterOperations(filters, &matrix)?);
+            let bounds =
+                (command.rect.width > 0. && command.rect.height > 0.).then(|| rect(command.rect));
+            self.target
+                .save_layer(bounds.as_ref(), Some(&paint))
+                .map(|_| self.depth += 1)
+                .map_err(|error| raster_error("translated reference saveLayer failed", error))
+        })();
+        if let Err(error) = result {
+            self.error.get_or_insert(error);
+        }
+    }
+
     fn looped_shape(
         &mut self,
         outer: &compositor_core::adapter::geometry::RRectF,
@@ -2653,7 +2724,9 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             CommandKind::kDrawMask => self.draw_mask_layers(&item.mask_layers, resources),
             CommandKind::kSaveLayerFilter => (|| -> io::Result<()> {
                 let matrix = self.target.local_to_device();
-                let mut paint = command_paint(item, false);
+                let mut paint = SkPaint::default();
+                paint.setBlendMode(css_blend(item.blend_mode));
+                paint.setAlphaf(item.opacity);
                 paint.setImageFilter(translated_command_filters(&item.filters, &matrix)?);
                 let bounds =
                     (item.rect.width > 0. && item.rect.height > 0.).then(|| rect(item.rect));
@@ -2967,29 +3040,15 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
             let draw_alpha = item.alpha * self.opacity;
             match item.op {
                 FoldedOp::Borrowed(CpuPaintOpRef::Native { op, record }) => {
-                    let mut command = op.to_skia();
-                    command.flags_alpha = item.alpha;
-                    command.color.alpha *= item.alpha;
-                    if let Some(shader) = &mut command.paint_shader {
-                        shader.flags_alpha *= item.alpha;
-                        for stop in &mut shader.stops {
-                            stop.color.alpha *= item.alpha;
-                        }
-                    }
-                    self.execute(&command, &resources(record.artifact()));
+                    self.execute_native(op, &resources(record.artifact()), item.alpha);
                 }
                 FoldedOp::Borrowed(CpuPaintOpRef::Converted(op)) => match op {
                     CpuPaintOp::NativeAtom(source) => {
-                        let mut command = source.op().to_skia();
-                        command.flags_alpha = item.alpha;
-                        command.color.alpha *= item.alpha;
-                        if let Some(shader) = &mut command.paint_shader {
-                            shader.flags_alpha *= item.alpha;
-                            for stop in &mut shader.stops {
-                                stop.color.alpha *= item.alpha;
-                            }
-                        }
-                        self.execute(&command, &resources(source.record().artifact()));
+                        self.execute_native(
+                            source.op(),
+                            &resources(source.record().artifact()),
+                            item.alpha,
+                        );
                     }
                     CpuPaintOp::DrawRect(value, flags) => {
                         if let Some(shader) = &flags.shader {
@@ -3494,7 +3553,7 @@ fn rasterize_paint_artifact(
     let replay_result = {
         let mut canvas = TranslatedCanvas::new(&mut target, false, 1.);
         for item in list.items.iter() {
-            canvas.execute(&item.to_skia(), &command_resources);
+            canvas.execute_native(item, &command_resources, 1.0);
         }
         canvas.unwind_to_depth(0);
         canvas.finish_replay()
@@ -3634,6 +3693,82 @@ impl RasterBackend for TranslatedSkiaBackend {
 #[cfg(all(test, target_vendor = "apple"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flat_paint_record_replays_reference_filter_with_paint_geometry() {
+        use layoutng_assembly::internal::{
+            layout_input_types::Color,
+            paint_input::{
+                PaintFilterOperation, PaintFilterType, SvgFilterGraph, SvgFilterInput,
+                SvgFilterPrimitive, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits,
+            },
+        };
+        use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect};
+
+        let reference = PaintFilterOperation {
+            r#type: PaintFilterType::kReference,
+            reference_graph: Some(Arc::new(SvgFilterGraph {
+                id: "offset".into(),
+                filter_units: SvgFilterUnits::kUserSpaceOnUse,
+                primitive_units: SvgFilterUnits::kUserSpaceOnUse,
+                region: SvgFilterRegion::default(),
+                primitives: vec![SvgFilterPrimitive {
+                    input: SvgFilterInput::kSourceGraphic,
+                    result: "shifted".into(),
+                    region: SvgFilterRegion::default(),
+                    linear_rgb: false,
+                    kind: SvgFilterPrimitiveKind::kOffset { dx: 2.0, dy: 0.0 },
+                }],
+                fill_paint: None,
+                stroke_paint: None,
+                unsupported: None,
+            })),
+            ..Default::default()
+        };
+        let box_rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        let artifact = PaintArtifact {
+            items: Arc::new(vec![
+                DisplayItem {
+                    r#type: DisplayItemType::kSaveLayerFilter,
+                    filters: vec![reference],
+                    filter_reference_box: Some(box_rect),
+                    ..Default::default()
+                },
+                DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    rect: PaintRect {
+                        x: 2.0,
+                        y: 2.0,
+                        width: 4.0,
+                        height: 4.0,
+                    },
+                    color: Color {
+                        red: 1.0,
+                        green: 0.0,
+                        blue: 0.0,
+                        alpha: 1.0,
+                    },
+                    ..Default::default()
+                },
+                DisplayItem {
+                    r#type: DisplayItemType::kRestore,
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+
+        let pixels = rasterize_paint_artifact(&artifact, 16, 16, 1.0, true)
+            .expect("flat reference filter replay");
+        let alpha = |x: usize, y: usize| pixels[(y * 16 + x) * 4 + 3];
+        assert_eq!(alpha(2, 3), 0, "source position must be shifted");
+        assert_ne!(alpha(5, 3), 0, "reference-filter output must be drawn");
+    }
 
     #[test]
     fn partial_transparent_playback_preserves_clean_pixels() {

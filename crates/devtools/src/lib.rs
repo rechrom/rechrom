@@ -3,7 +3,7 @@ use base64::Engine;
 use browser_tracing::{Snapshot, StartOptions};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{
@@ -786,10 +786,32 @@ fn dispatch(request: Value) -> Result<ApiResult, String> {
 
 /// Stage durations are inclusive; nested categories must not be added together.
 /// Active/incomplete spans are reported separately and excluded from percentiles.
+fn performance_owner<'a>(name: &'a str, category: &'a str) -> &'a str {
+    let Some((prefix, _)) = name.split_once('.') else {
+        return category;
+    };
+    if matches!(
+        prefix,
+        "layout_invalidation" | "layout_reuse" | "layout_fragment" | "layout_commit"
+    ) || prefix.strip_prefix("layout_algo_").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+    }) {
+        prefix
+    } else {
+        category
+    }
+}
+
 pub fn analyze_snapshot(snapshot: &Snapshot) -> Value {
     let mut groups: BTreeMap<(String, String), Vec<u64>> = BTreeMap::new();
+    let mut category_self_times: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    let mut owner_self_times: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     let mut incomplete = 0usize;
     let mut frames: BTreeMap<(u64, u64, u64), (bool, bool, bool)> = BTreeMap::new();
+    let mut resize_transactions = BTreeMap::<u64, (u64, usize)>::new();
     for span in &snapshot.spans {
         if span.context.frame_id != 0 {
             let frame = frames
@@ -809,8 +831,8 @@ pub fn analyze_snapshot(snapshot: &Snapshot) -> Value {
                 "LayoutEngine.Layout"
                     | "LayoutEngine.RunLayout"
                     | "LayoutEngine.NativeLayout"
-                    | "LayoutEngine.LayoutWithoutExport"
-                    | "LayoutEngine.ExportFragments"
+                    | "LayoutEngine.RunNativeLayoutWithoutPublication"
+                    | "LayoutEngine.PopulatePaintData"
                     | "Paint.RecordPaint"
                     | "PaintLayerPainter.Paint"
                     | "PaintEngine.Paint"
@@ -826,17 +848,88 @@ pub fn analyze_snapshot(snapshot: &Snapshot) -> Value {
             incomplete += 1;
             continue;
         }
+        if span.name == "ResizeToPresentationComplete" {
+            let id = if span.context.task_id == 0 {
+                span.id
+            } else {
+                span.context.task_id
+            };
+            let samples = span.fields.get("samples").copied().unwrap_or(1.0).max(0.0) as usize;
+            resize_transactions
+                .entry(id)
+                .and_modify(|transaction| {
+                    if span.duration_ns < transaction.0 {
+                        *transaction = (span.duration_ns, samples);
+                    }
+                })
+                .or_insert((span.duration_ns, samples));
+        }
         groups
             .entry((span.category.to_string(), span.name.to_string()))
             .or_default()
             .push(span.duration_ns);
     }
+    // Attribute synchronous wall time to the innermost recorded package span.
+    // Subtract only direct children: their inclusive intervals already contain
+    // every deeper descendant, and each child contributes its own self time to
+    // the category that owns it. This makes category totals additive without
+    // double-counting nested spans from the same package.
+    let complete = snapshot
+        .spans
+        .iter()
+        .filter(|span| !span.incomplete)
+        .map(|span| (span.id, span))
+        .collect::<HashMap<_, _>>();
+    let mut child_intervals = HashMap::<u64, Vec<(u64, u64)>>::new();
+    for child in complete.values() {
+        let Some(parent) = complete.get(&child.parent_id) else {
+            continue;
+        };
+        if child.thread_id != parent.thread_id {
+            continue;
+        }
+        let parent_end = parent.start_ns.saturating_add(parent.duration_ns);
+        let child_start = child.start_ns.max(parent.start_ns);
+        let child_end = child
+            .start_ns
+            .saturating_add(child.duration_ns)
+            .min(parent_end);
+        if child_start < child_end {
+            child_intervals
+                .entry(parent.id)
+                .or_default()
+                .push((child_start, child_end));
+        }
+    }
+    for span in complete.values() {
+        let mut intervals = child_intervals.remove(&span.id).unwrap_or_default();
+        intervals.sort_unstable();
+        let mut covered_ns = 0u64;
+        let mut covered_until = 0u64;
+        for (start, end) in intervals {
+            let uncovered_start = start.max(covered_until);
+            if uncovered_start < end {
+                covered_ns = covered_ns.saturating_add(end - uncovered_start);
+                covered_until = end;
+            }
+        }
+        category_self_times
+            .entry(span.category.clone())
+            .or_default()
+            .push(span.duration_ns.saturating_sub(covered_ns));
+        owner_self_times
+            .entry(performance_owner(&span.name, &span.category).to_string())
+            .or_default()
+            .push(span.duration_ns.saturating_sub(covered_ns));
+    }
     let mut stages: Vec<Value> = groups
         .into_iter()
         .map(|((category, name), durations)| {
             let mut stage = duration_statistics(durations);
+            let owner = performance_owner(&name, &category).to_string();
             stage["category"] = json!(category);
             stage["name"] = json!(name);
+            stage["owner"] = json!(owner);
             stage
         })
         .collect();
@@ -846,12 +939,56 @@ pub fn analyze_snapshot(snapshot: &Snapshot) -> Value {
             .unwrap_or(0.0)
             .total_cmp(&a["total_ms"].as_f64().unwrap_or(0.0))
     });
+    let mut categories = category_self_times
+        .into_iter()
+        .map(|(category, durations)| {
+            let mut stats = duration_statistics(durations);
+            stats["category"] = json!(category);
+            stats
+        })
+        .collect::<Vec<_>>();
+    categories.sort_by(|a, b| {
+        b["total_ms"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&a["total_ms"].as_f64().unwrap_or(0.0))
+    });
+    let mut owners = owner_self_times
+        .into_iter()
+        .map(|(owner, durations)| {
+            let mut stats = duration_statistics(durations);
+            stats["owner"] = json!(owner);
+            stats
+        })
+        .collect::<Vec<_>>();
+    owners.sort_by(|a, b| {
+        b["total_ms"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&a["total_ms"].as_f64().unwrap_or(0.0))
+    });
+    let resize_durations = resize_transactions
+        .values()
+        .map(|transaction| transaction.0)
+        .collect::<Vec<_>>();
+    let resize_samples = resize_transactions
+        .values()
+        .map(|transaction| transaction.1)
+        .sum::<usize>();
+    let resize_transaction_count = resize_transactions.len();
+    let mut resize = duration_statistics(resize_durations);
+    resize["measurement"] = json!("ingress_to_presentation_complete");
+    resize["samples"] = json!(resize_samples);
+    resize["coalesced_samples"] = json!(resize_samples.saturating_sub(resize_transaction_count));
     json!({"recording_id":snapshot.recording_id,"active":snapshot.active,
         "duration_ms":snapshot.duration_ns as f64 / 1_000_000.0,
         "dropped_events":snapshot.dropped_events,"incomplete_spans":incomplete,
         "cache_hit_frames":frames.values().filter(|frame| frame.0).count(),
         "pure_cached_scroll_frames":frames.values().filter(|frame| frame.0 && !frame.1 && frame.2).count(),
-        "duration_kind":"inclusive","percentile_method":"nearest_rank","stages":stages,
+        "duration_kind":"inclusive","category_duration_kind":"exclusive",
+        "owner_duration_kind":"exclusive","percentile_method":"nearest_rank",
+        "resize":resize,
+        "stages":stages,"categories":categories,"owners":owners,
         "smoothness":smoothness::analyze(snapshot)})
 }
 
@@ -912,6 +1049,126 @@ mod tests {
         assert_eq!(result["over_16ms"], 2);
         assert_eq!(result["total_ms"], 134.0);
         assert_eq!(duration_statistics(vec![])["max_ms"], 0.0);
+    }
+
+    #[test]
+    fn resize_summary_counts_the_first_presented_frame_per_transaction() {
+        let resize_span = |id, task_id, duration_ns, samples| {
+            let mut fields = BTreeMap::new();
+            fields.insert("samples".into(), samples);
+            browser_tracing::RecordedSpan {
+                id,
+                parent_id: 0,
+                thread_id: 1,
+                category: "resize".into(),
+                name: "ResizeToPresentationComplete".into(),
+                start_ns: 0,
+                duration_ns,
+                incomplete: false,
+                context: browser_tracing::Context {
+                    task_id,
+                    ..Default::default()
+                },
+                fields,
+                text: None,
+            }
+        };
+        let summary = analyze_snapshot(&Snapshot {
+            version: 1,
+            recording_id: 1,
+            active: false,
+            duration_ns: 100_000_000,
+            dropped_events: 0,
+            spans: vec![
+                resize_span(1, 10, 12_000_000, 3.0),
+                resize_span(2, 10, 25_000_000, 3.0),
+                resize_span(3, 20, 20_000_000, 1.0),
+            ],
+            instants: vec![],
+        });
+        assert_eq!(summary["resize"]["count"], 2);
+        assert_eq!(summary["resize"]["samples"], 4);
+        assert_eq!(summary["resize"]["coalesced_samples"], 2);
+        assert_eq!(summary["resize"]["p50_ms"], 12.0);
+        assert_eq!(summary["resize"]["p95_ms"], 20.0);
+    }
+
+    #[test]
+    fn category_totals_use_exclusive_nested_time() {
+        let span =
+            |id, parent_id, category: &str, start_ns, duration_ns| browser_tracing::RecordedSpan {
+                id,
+                parent_id,
+                thread_id: 1,
+                category: category.into(),
+                name: format!("{category}.{id}"),
+                start_ns,
+                duration_ns,
+                incomplete: false,
+                context: Default::default(),
+                fields: Default::default(),
+                text: None,
+            };
+        let summary = analyze_snapshot(&Snapshot {
+            version: 1,
+            recording_id: 1,
+            active: false,
+            duration_ns: 100_000_000,
+            dropped_events: 0,
+            spans: vec![
+                span(1, 0, "style", 0, 100_000_000),
+                span(2, 1, "style_resolve", 20_000_000, 60_000_000),
+                span(3, 2, "style_match", 30_000_000, 20_000_000),
+            ],
+            instants: vec![],
+        });
+        let categories = summary["categories"].as_array().unwrap();
+        let total = |category: &str| {
+            categories
+                .iter()
+                .find(|value| value["category"] == category)
+                .unwrap()["total_ms"]
+                .as_f64()
+                .unwrap()
+        };
+        assert_eq!(total("style"), 40.0);
+        assert_eq!(total("style_resolve"), 40.0);
+        assert_eq!(total("style_match"), 20.0);
+        assert_eq!(summary["category_duration_kind"], "exclusive");
+    }
+
+    #[test]
+    fn layout_package_prefix_owns_stage_and_self_time_statistics() {
+        assert_eq!(
+            performance_owner("layout_algo_grid.Layout", "layout"),
+            "layout_algo_grid"
+        );
+        assert_eq!(performance_owner("LayoutEngine.Layout", "layout"), "layout");
+        let summary = analyze_snapshot(&Snapshot {
+            version: 1,
+            recording_id: 1,
+            active: false,
+            duration_ns: 5_000_000,
+            dropped_events: 0,
+            spans: vec![browser_tracing::RecordedSpan {
+                id: 1,
+                parent_id: 0,
+                thread_id: 1,
+                category: "layout".into(),
+                name: "layout_reuse.PassSummary".into(),
+                start_ns: 0,
+                duration_ns: 5_000_000,
+                incomplete: false,
+                context: Default::default(),
+                fields: Default::default(),
+                text: None,
+            }],
+            instants: vec![],
+        });
+        assert_eq!(summary["stages"][0]["owner"], "layout_reuse");
+        assert_eq!(summary["owners"][0]["owner"], "layout_reuse");
+        assert_eq!(summary["owners"][0]["total_ms"], 5.0);
+        assert_eq!(summary["owner_duration_kind"], "exclusive");
     }
     #[test]
     fn http_request_limits_and_partial_reads() {

@@ -19,14 +19,7 @@ use crate::{
 };
 use foundation::{AtomicString, Length, MakeGarbageCollected, Persistent};
 
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontSmoothing {
-    kAuto,
-    kNone,
-    kAntialiased,
-    kSubpixelAntialiased,
-}
+pub use foundation::FontSmoothing;
 
 // cpp: layoutng/internal/layout_input.h:1018-1023
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,16 +294,8 @@ struct FontCatalog {
     backend_factory: Option<Arc<dyn FontBackendFactory>>,
 }
 
-#[derive(Clone, Copy)]
-struct FontDataLocation {
-    source: usize,
-    position: usize,
-    face_index: usize,
-}
-
 struct ResolvedFontData {
     font: Persistent<SimpleFontData>,
-    variations: Vec<FontVariation>,
 }
 
 // The catalog and initialized data remain owned by the resolved Font even
@@ -324,9 +309,7 @@ struct ResolvedFontSource {
     orientation: FontOrientation,
     selections: Vec<FontFaceSelection>,
     fonts: Vec<OnceCell<ResolvedFontData>>,
-    source_index: usize,
     queries: Rc<RefCell<Option<FontQueryCollector>>>,
-    locations: Rc<RefCell<HashMap<*const SimpleFontData, FontDataLocation>>>,
 }
 
 impl FontFallbackSource for ResolvedFontSource {
@@ -386,18 +369,10 @@ impl FontFallbackSource for ResolvedFontSource {
                     self.orientation,
                     face.unicode_ranges.clone(),
                 ));
+                unsafe { &mut *platform }.SetResourceIdentity(index as u32, &variations);
                 let simple = SimpleFontData::Create(platform);
-                self.locations.borrow_mut().insert(
-                    simple,
-                    FontDataLocation {
-                        source: self.source_index,
-                        position,
-                        face_index: index,
-                    },
-                );
                 ResolvedFontData {
                     font: Persistent::from_ptr(simple),
-                    variations,
                 }
             })
             .font
@@ -490,7 +465,6 @@ pub struct FontResolver {
     fonts_: Vec<InputFontEntry>,
     sources: Vec<Rc<ResolvedFontSource>>,
     queries: Rc<RefCell<Option<FontQueryCollector>>>,
-    locations: Rc<RefCell<HashMap<*const SimpleFontData, FontDataLocation>>>,
 }
 
 // cpp: third_party/blink/renderer/core/css/font_size_functions.cc:132-168
@@ -558,7 +532,6 @@ impl FontResolver {
             fonts_: Vec::new(),
             sources: Vec::new(),
             queries: Rc::new(RefCell::new(None)),
-            locations: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -610,28 +583,20 @@ impl FontResolver {
             orientation: request.orientation,
             selections: order.to_vec(),
             fonts: order.iter().map(|_| OnceCell::new()).collect(),
-            source_index: self.sources.len(),
             queries: self.queries.clone(),
-            locations: self.locations.clone(),
         });
         self.sources.push(source.clone());
         source
     }
 
     fn FaceIndexFor(&self, font: *const SimpleFontData) -> usize {
-        self.locations
-            .borrow()
-            .get(&font)
-            .expect("font face index")
-            .face_index
+        assert!(!font.is_null(), "font face index");
+        unsafe { &*font }.PlatformData().ResourceFaceIndex() as usize
     }
 
     fn VariationsFor(&self, font: *const SimpleFontData) -> &[FontVariation] {
-        let location = *self.locations.borrow().get(&font).expect("font variations");
-        &self.sources[location.source].fonts[location.position]
-            .get()
-            .expect("resolved font")
-            .variations
+        assert!(!font.is_null(), "font variations");
+        unsafe { &*font }.PlatformData().ResourceVariations()
     }
 }
 

@@ -699,9 +699,9 @@ fn image_notification_does_not_hide_simultaneous_dom_invalidation() {
 fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
     crate::native_test_thread::run(|| {
         fn find(
-            root: &layoutng_assembly::fragment_tree::FragmentNode,
+            root: &layoutng_assembly::fragment_tree::FragmentPaintData,
             id: u64,
-        ) -> Option<&layoutng_assembly::fragment_tree::FragmentNode> {
+        ) -> Option<&layoutng_assembly::fragment_tree::FragmentPaintData> {
             if root.node_id == id {
                 return Some(root);
             }

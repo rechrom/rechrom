@@ -1,9 +1,6 @@
-use foundation::LayoutUnit;
+//! Compatibility facade for the table column-location value.
 
-// cpp: layoutng/internal/table_column_location.h:12-17
-#[derive(Clone, Copy, PartialEq)]
-pub struct TableColumnLocation {
-    pub offset: LayoutUnit,
-    pub size: LayoutUnit,
-    pub is_collapsed: bool,
-}
+#[path = "../../../layout_algo_table/src/native_table_column_location.rs"]
+mod layout_algo_table_native_table_column_location;
+
+pub use layout_algo_table_native_table_column_location::*;

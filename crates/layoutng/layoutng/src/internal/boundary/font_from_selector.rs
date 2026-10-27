@@ -1,3 +1,8 @@
+//! Selector-backed font construction and family-chain projection.
+//!
+//! The layout boundary projects `FontDescription` into the neutral resolver
+//! contract. FontEngine owns selection and caching.
+
 #![allow(non_snake_case)]
 
 use font_engine::{Font, FontDescription, FontFamily, FontSelector};
@@ -10,6 +15,7 @@ use super::native_input::CurrentNativeFontResolver;
 // C++ defines Font::Font(description, selector) here. A free Rust constructor
 // keeps that cross-crate implementation in its Bazel source owner.
 // cpp: layoutng/internal/boundary/font_from_selector.cc:12-28
+#[inline(never)]
 pub fn FontFromSelector(description: &FontDescription, _selector: *mut FontSelector) -> Font {
     let vertical = description.IsVerticalAnyUpright();
     let mut families = Vec::<String>::new();

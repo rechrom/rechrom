@@ -1,7 +1,15 @@
 #![allow(non_snake_case)]
 
 use dom::StyleSource;
-use layoutng_assembly::fragment_tree::FragmentNode;
+use layout_algo_block::assembly::InstallBlockAlgorithm;
+use layout_algo_flex::assembly::InstallFlexAlgorithm;
+use layout_algo_float::assembly::InstallFloatAlgorithm;
+use layout_algo_forms::assembly::InstallFormsAlgorithm;
+use layout_algo_list::assembly::InstallListModule;
+use layout_algo_replaced::assembly::InstallReplacedAlgorithm;
+use layout_algo_svg::assembly::InstallSvgModule;
+use layout_fragment::LayoutResultHandle;
+use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::internal::boundary::assembly::InstallLayoutBoundary;
 use layoutng_assembly::internal::layout_input::{
     ConstraintSpace, OverscrollType, Size, ViewportGeometry,
@@ -11,13 +19,6 @@ use layoutng_assembly::internal::layout_input_types::{
 };
 use layoutng_assembly::layout_assembly::LayoutAssembly;
 pub use layoutng_assembly::layout_engine::LayoutEngine;
-use layoutng_block::assembly::InstallBlockAlgorithm;
-use layoutng_flex::assembly::InstallFlexAlgorithm;
-use layoutng_float::assembly::InstallFloatAlgorithm;
-use layoutng_forms::assembly::InstallFormsAlgorithm;
-use layoutng_list::assembly::InstallListModule;
-use layoutng_replaced::assembly::InstallReplacedAlgorithm;
-use layoutng_svg::assembly::InstallSvgModule;
 #[cfg(any(feature = "source_paint", test))]
 use std::cell::RefCell;
 use std::io;
@@ -57,10 +58,10 @@ mod user_agent_styles;
 pub fn CreateLayoutAssembly() -> LayoutAssembly {
     let mut assembly = LayoutAssembly::default();
     InstallBlockAlgorithm(&mut assembly);
-    layoutng_multicol::assembly::InstallMulticolAlgorithm(&mut assembly);
+    layout_algo_multicol::assembly::InstallMulticolAlgorithm(&mut assembly);
     InstallFlexAlgorithm(&mut assembly);
-    layoutng_grid::assembly::InstallGridAlgorithm(&mut assembly);
-    layoutng_table::assembly::InstallTableAlgorithm(&mut assembly);
+    layout_algo_grid::assembly::InstallGridAlgorithm(&mut assembly);
+    layout_algo_table::assembly::InstallTableAlgorithm(&mut assembly);
     InstallFloatAlgorithm(&mut assembly);
     InstallFormsAlgorithm(&mut assembly);
     InstallReplacedAlgorithm(&mut assembly);
@@ -69,12 +70,103 @@ pub fn CreateLayoutAssembly() -> LayoutAssembly {
     #[cfg(feature = "inline_layout")]
     {
         layoutng_assembly::assembly::InstallInlineAlgorithm(&mut assembly);
-        layoutng_block::block_inline_layout::InstallBlockInlineSupport(&mut assembly);
-        layoutng_out_of_flow::assembly::InstallOutOfFlowAlgorithm(&mut assembly);
+        layout_algo_block::block_inline_layout::InstallBlockInlineSupport(&mut assembly);
+        layout_algo_out_of_flow::assembly::InstallOutOfFlowAlgorithm(&mut assembly);
     }
     InstallLayoutBoundary(&mut assembly);
 
     assembly
+}
+
+#[cfg(test)]
+#[test]
+fn installed_layout_algorithms_keep_their_performance_owner() {
+    let assembly = CreateLayoutAssembly();
+    let entries = [
+        ("block", assembly.algorithms.block, "layout_algo_block"),
+        ("flex", assembly.algorithms.flex, "layout_algo_flex"),
+        ("grid", assembly.algorithms.grid, "layout_algo_grid"),
+        ("table", assembly.algorithms.table, "layout_algo_table"),
+        (
+            "table_row",
+            assembly.algorithms.table_row,
+            "layout_algo_table",
+        ),
+        (
+            "table_section",
+            assembly.algorithms.table_section,
+            "layout_algo_table",
+        ),
+        (
+            "replaced",
+            assembly.algorithms.replaced,
+            "layout_algo_replaced",
+        ),
+        (
+            "fieldset",
+            assembly.algorithms.fieldset,
+            "layout_algo_forms",
+        ),
+        (
+            "multicol",
+            assembly.algorithms.multicol,
+            "layout_algo_multicol",
+        ),
+    ];
+    for (slot, entry, owner) in entries {
+        assert_eq!(entry.performance_owner, Some(owner), "{slot} owner");
+        assert!(entry.layout.is_some(), "{slot} layout entry");
+        assert!(entry.measure.is_some(), "{slot} measure entry");
+    }
+
+    let mut support_owners = vec![
+        (
+            "table_support",
+            assembly.algorithms.table_support.performance_owner,
+            "layout_algo_table",
+        ),
+        (
+            "float_support",
+            assembly.algorithms.float_support.performance_owner,
+            "layout_algo_float",
+        ),
+        (
+            "replaced_sizing",
+            assembly.algorithms.replaced_sizing.performance_owner,
+            "layout_algo_replaced",
+        ),
+        (
+            "list_support",
+            assembly.algorithms.list_support.performance_owner,
+            "layout_algo_list",
+        ),
+        (
+            "forms_support",
+            assembly.algorithms.forms_support.performance_owner,
+            "layout_algo_forms",
+        ),
+        (
+            "svg_support",
+            assembly.algorithms.svg_support.performance_owner,
+            "layout_algo_svg",
+        ),
+    ];
+    #[cfg(feature = "inline_layout")]
+    support_owners.extend([
+        (
+            "inline_support",
+            assembly.algorithms.inline_support.performance_owner,
+            "layout_algo_inline",
+        ),
+        (
+            "out_of_flow_support",
+            assembly.algorithms.out_of_flow_support.performance_owner,
+            "layout_algo_out_of_flow",
+        ),
+    ]);
+    for (slot, actual, expected) in support_owners {
+        assert_eq!(actual, Some(expected), "{slot} owner");
+    }
 }
 
 /// Assemble an isolated SVG document with the browser's retained UA rules.
@@ -163,19 +255,31 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
 /// First static-page profile: block elements, embedded CSS, solid colors and
 /// borders. Other page features report unsupported at their owning boundary.
 pub fn RenderHtml(source: &str, width: u32, height: u32) -> Vec<u8> {
-    let fragments = LayoutStaticHtml(source, width, height).expect("HTML render failed");
-    RenderFragmentPng(&fragments, width, height)
+    let (_, artifact) =
+        LayoutStaticHtmlWithPaint(source, width, height).expect("HTML render failed");
+    RenderArtifactPng(&artifact, width, height)
 }
 
-fn RenderFragmentPng(fragments: &FragmentNode, width: u32, height: u32) -> Vec<u8> {
-    let rgba =
-        raster::RasterizePaintArtifact(&paint::paint_engine::Paint(fragments), width, height);
+fn RenderArtifactPng(
+    artifact: &paint::paint_engine::PaintArtifact,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let rgba = raster::RasterizePaintArtifact(artifact, width, height);
     raster::EncodeRgbaPng(&rgba, width, height)
 }
 
 /// Resource-free diagnostic layout used by inline HTML unit tests. Anything
 /// that can load an external resource must enter through Page/OpenEngine.
-fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<FragmentNode> {
+fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<LayoutResultHandle> {
+    LayoutStaticHtmlWithPaint(source, width, height).map(|(fragments, _)| fragments)
+}
+
+fn LayoutStaticHtmlWithPaint(
+    source: &str,
+    width: u32,
+    height: u32,
+) -> io::Result<(LayoutResultHandle, paint::paint_engine::PaintArtifact)> {
     let resource_document = html::Parse(source);
     let mut sheets = Vec::new();
     for style_source in &resource_document.style_sources {
@@ -221,10 +325,14 @@ fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<Fragmen
         &mut space,
         &mut font_session,
     );
-    let fragments = layout
-        .TakeLayoutResult()
+    let layout_output = layout
+        .TakePaintOutput()
         .expect("completed font/layout transaction");
-    Ok(std::rc::Rc::try_unwrap(fragments).unwrap_or_else(|shared| (*shared).clone()))
+    let mut paint_engine = paint::paint_engine::PaintEngine::new();
+    paint_engine.Paint(&layout_output, Default::default());
+    let paint_output = paint_engine.CommitPaintResult();
+    let (fragments, artifact) = layout.CommitPaint(layout_output, paint_output, None);
+    Ok((fragments, (*artifact).clone()))
 }
 
 pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
@@ -239,13 +347,13 @@ pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
 }
 
 pub fn RenderUrl(url: &str, width: u32, height: u32) -> std::io::Result<Vec<u8>> {
-    let fragments = LayoutUrl(url, width, height)?;
-    Ok(RenderFragmentPng(&fragments, width, height))
+    let artifact = BuildSourceDisplayListUrl(url, width, height)?;
+    Ok(RenderArtifactPng(&artifact, width, height))
 }
 
 /// Navigate through the persistent Page and drain tasks as the source CLI does.
 #[cfg(feature = "source_paint")]
-pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<FragmentNode> {
+pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<LayoutResultHandle> {
     let mut page = page::OpenUrl(
         url,
         width,
@@ -254,12 +362,12 @@ pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<FragmentNode>
     )?;
     page.RunTask()?;
     page.CurrentFrame()
-        .map(|frame| frame.fragments.as_ref().clone())
+        .map(|frame| frame.fragments.clone())
         .ok_or_else(|| io::Error::other("page has no frame"))
 }
 
 #[cfg(not(feature = "source_paint"))]
-pub fn LayoutUrl(_: &str, _: u32, _: u32) -> io::Result<FragmentNode> {
+pub fn LayoutUrl(_: &str, _: u32, _: u32) -> io::Result<LayoutResultHandle> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "URL layout requires the source_paint Page lifecycle",
@@ -301,7 +409,7 @@ mod tests {
             .join("../../../layoutng/src/pixel_testdata/algorithm_profiles/svg.html");
         let url = format!("file://{}", fixture.display());
         let root = LayoutUrl(&url, 400, 320).unwrap();
-        fn inspect(node: &FragmentNode, shapes: &mut usize) {
+        fn inspect(node: &FragmentPaintData, shapes: &mut usize) {
             if node.paint.svg_shape.is_some() {
                 *shapes += 1;
             }

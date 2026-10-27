@@ -19,6 +19,11 @@ use crate::{
     cc::resources::resource_pool::ResourcePool,
     NativeCompositorTypes,
 };
+use compositor_resource::client_resource_lifecycle::{
+    ApplyReturnedClientResources, ClientResourceImport, DrainClientResourcesForShutdown,
+    ExportableClientResource, PrepareClientResourcesForExport, ReleaseAllExportedClientResources,
+    ReturnedClientResource,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -37,6 +42,56 @@ struct Imported {
     marked_for_deletion: bool,
     returned_sync_token: RasterSyncToken,
     returned_lost: bool,
+}
+impl ClientResourceImport<RasterSyncToken> for Imported {
+    fn ExportedCount(&self) -> i32 {
+        self.exported_count
+    }
+    fn SetExportedCount(&mut self, count: i32) {
+        self.exported_count = count;
+    }
+    fn ReturnedLost(&self) -> bool {
+        self.returned_lost
+    }
+    fn SetReturnedLost(&mut self, lost: bool) {
+        self.returned_lost = lost;
+    }
+    fn MarkedForDeletion(&self) -> bool {
+        self.marked_for_deletion
+    }
+    fn SetReturnedSyncToken(&mut self, token: RasterSyncToken) {
+        self.returned_sync_token = token;
+    }
+}
+impl ExportableClientResource for Imported {
+    type Transferable = RasterTransferableResource;
+
+    fn Transferable(&self) -> &Self::Transferable {
+        &self.resource
+    }
+    fn ExportTokenHasData(&self) -> bool {
+        self.resource.sync_token.HasData()
+    }
+    fn ExportTokenIsVerified(&self) -> bool {
+        self.resource.sync_token.verified_flush
+    }
+    fn IncrementExportedCount(&mut self) {
+        self.exported_count += 1;
+    }
+}
+impl ReturnedClientResource<RasterSyncToken> for RasterReturnedResource {
+    fn Id(&self) -> ResourceId {
+        self.id
+    }
+    fn Count(&self) -> i32 {
+        self.count
+    }
+    fn Lost(&self) -> bool {
+        self.lost
+    }
+    fn SyncToken(&self) -> &RasterSyncToken {
+        &self.sync_token
+    }
 }
 struct ProviderState {
     release_capabilities: Option<ReleaseCapabilities>,
@@ -265,16 +320,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
         // Source dependency: client_resource_provider.cc:409-435.
         let releases = {
             let mut state = self.0.lock().expect("native client resource provider");
-            state
-                .imports
-                .drain()
-                .map(|(_, mut imported)| {
-                    debug_assert!(imported.marked_for_deletion);
-                    debug_assert!(imported.exported_count != 0);
-                    imported.returned_lost = true;
-                    imported
-                })
-                .collect()
+            DrainClientResourcesForShutdown(&mut state.imports)
         };
         // Host destruction has already destroyed ResourcePool. Its weak-bound
         // release tasks expire; still-live UI callbacks use this call's client.
@@ -289,29 +335,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
         // Source dependency: client_resource_provider.cc:275-341.
         let releases = {
             let mut state = self.0.lock().expect("native client resource provider");
-            let mut releases = Vec::with_capacity(resources.len());
-            for returned in resources {
-                let Some(imported) = state.imports.get_mut(&returned.id) else {
-                    continue;
-                };
-                debug_assert!(imported.exported_count >= returned.count);
-                assert!(returned.count > 0, "native returned count must be positive");
-                imported.exported_count -= returned.count;
-                imported.returned_lost |= returned.lost;
-                if imported.exported_count != 0 {
-                    continue;
-                }
-                // RasterReturnedResource already contains the actual EndImport
-                // completion token produced by the transported shared image.
-                if returned.sync_token.HasData() {
-                    imported.returned_sync_token = returned.sync_token;
-                }
-                if !imported.marked_for_deletion {
-                    continue;
-                }
-                releases.push(state.imports.remove(&returned.id).unwrap());
-            }
-            releases
+            ApplyReturnedClientResources(&mut state.imports, resources).0
         };
         Self::RunReleases(releases, pool, client);
     }
@@ -325,18 +349,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
         // retain visits the resident entries once, without ID relookup/snapshot.
         let releases = {
             let mut state = self.0.lock().expect("native client resource provider");
-            state
-                .imports
-                .extract_if(|_, imported| {
-                    if imported.exported_count == 0 {
-                        return false;
-                    }
-                    imported.exported_count = 0;
-                    imported.returned_lost |= lose;
-                    imported.marked_for_deletion
-                })
-                .map(|(_, imported)| imported)
-                .collect()
+            ReleaseAllExportedClientResources(&mut state.imports, lose).0
         };
         Self::RunReleases(releases, pool, client);
     }
@@ -350,24 +363,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
         // come from a real in-process image completion capability, not a GPU
         // stream; verification checks the existing verified token value.
         let mut state = self.0.lock().expect("native client resource provider");
-        output.reserve(resources.len());
-        for id in resources {
-            let imported = state
-                .imports
-                .get_mut(id)
-                .expect("source imported export resource");
-            if interface.0 != 0 {
-                assert!(
-                    !imported.resource.sync_token.HasData()
-                        || imported.resource.sync_token.verified_flush,
-                    "CPU image completion token must be verified by its native producer"
-                );
-            } else {
-                debug_assert!(!imported.resource.sync_token.verified_flush);
-            }
-            output.push(imported.resource.clone());
-            imported.exported_count += 1;
-        }
+        PrepareClientResourcesForExport(&mut state.imports, resources, output, interface.0 != 0);
     }
 }
 

@@ -12,7 +12,6 @@ use foundation::{
     GCedHeapVector, HeapVector, IsLtr, LayoutUnit, MakeGarbageCollected, String, StringView,
     TextDirection,
 };
-use std::cell::{Ref, RefMut};
 use std::ffi::c_void;
 
 impl ShapeResult {
@@ -45,21 +44,19 @@ impl ShapeResult {
     }
 
     // cpp: font_engine/fonts/shaping/shape_result_position.cc:60-73
-    pub fn CharacterData(&self, offset: u32) -> Ref<'_, ShapeResultCharacterData> {
+    pub fn CharacterData(&self, offset: u32) -> &ShapeResultCharacterData {
         debug_assert!(offset >= self.StartIndex() && offset < self.EndIndex());
-        debug_assert!(!self.character_position_.borrow().empty());
-        Ref::map(self.character_position_.borrow(), |data| {
-            &data[(offset - self.StartIndex()) as usize]
-        })
+        let data = self.character_position_.get();
+        debug_assert!(!data.empty());
+        &data[(offset - self.StartIndex()) as usize]
     }
 
-    pub fn CharacterDataMut(&self, offset: u32) -> RefMut<'_, ShapeResultCharacterData> {
+    pub fn CharacterDataMut(&mut self, offset: u32) -> &mut ShapeResultCharacterData {
         debug_assert!(offset >= self.StartIndex() && offset < self.EndIndex());
-        debug_assert!(!self.character_position_.borrow().empty());
-        let index = (offset - self.StartIndex()) as usize;
-        RefMut::map(self.character_position_.borrow_mut(), |data| {
-            &mut data[index]
-        })
+        let start = self.StartIndex();
+        let data = self.character_position_.get_mut();
+        debug_assert!(!data.empty());
+        &mut data[(offset - start) as usize]
     }
 
     // cpp: font_engine/fonts/shaping/shape_result_position.cc:75-95
@@ -389,7 +386,9 @@ impl ShapeResult {
         };
         let mut mono_advance = TextRunLayoutUnit::new();
         let mut mono_glyph_count = 0u32;
-        let mut character_position = self.character_position_.borrow_mut();
+        // SAFETY: this is ShapeResult's single const-mutable cache build. No
+        // shared character-position view is retained across this call.
+        let character_position = unsafe { self.character_position_.get_mut_from_shared() };
         for run_ptr in &self.runs_ {
             let Some(run) = (unsafe { run_ptr.Get().as_ref() }) else {
                 continue;
@@ -476,17 +475,20 @@ impl ShapeResult {
     // cpp: font_engine/fonts/shaping/shape_result_position.cc:370-385
     pub fn EnsurePositionData(&self, allow_compaction: bool) {
         {
-            let data = self.character_position_.borrow();
+            let data = self.character_position_.get();
             if !data.empty() && (allow_compaction || data.size() == self.num_characters_) {
                 return;
             }
         }
-        *self.character_position_.borrow_mut() = HeapVector::with_size(self.num_characters_);
+        // SAFETY: the empty/outdated cache is replaced before recalculation;
+        // no character-position reference escapes this synchronous method.
+        *unsafe { self.character_position_.get_mut_from_shared() } =
+            HeapVector::with_size(self.num_characters_);
         self.RecalcCharacterPositions(allow_compaction);
     }
 
     pub fn RecalcCharacterPositions(&self, allow_compaction: bool) {
-        debug_assert!(!self.character_position_.borrow().empty());
+        debug_assert!(!self.character_position_.get().empty());
         if self.IsLtr() {
             self.ComputePositionData::<false>(allow_compaction);
         } else {
@@ -496,7 +498,7 @@ impl ShapeResult {
 
     // cpp: font_engine/fonts/shaping/shape_result_position.cc:387-435
     pub fn CachedOffsetForPosition(&self, x: LayoutUnit) -> u32 {
-        debug_assert!(!self.character_position_.borrow().empty());
+        debug_assert!(!self.character_position_.get().empty());
         let rtl = self.IsRtl();
         let length = self.NumCharacters();
         if x <= 0 {
@@ -505,8 +507,8 @@ impl ShapeResult {
         if x >= self.width_.get() {
             return if !rtl { length } else { 0 };
         }
-        let data = self.character_position_.borrow();
-        if data.size() == 1 && self.NumCharacters() > 1 {
+        let data = self.character_position_.get().as_slice();
+        if data.len() == 1 && self.NumCharacters() > 1 {
             let advance_raw = i64::from(data.first().unwrap().advance().RawValue());
             if advance_raw <= 0 {
                 return 0;
@@ -517,7 +519,6 @@ impl ShapeResult {
             if offset >= length {
                 offset = length - 1;
             }
-            drop(data);
             while offset + 1 < length && self.CachedPositionForOffset(offset + 1) <= x {
                 offset += 1;
             }
@@ -526,15 +527,20 @@ impl ShapeResult {
             }
             return offset;
         }
-        debug_assert_eq!(data.size(), length);
+        debug_assert_eq!(data.len(), length as usize);
         let mut low = 0u32;
         let mut high = length - 1;
         while low <= high {
             let midpoint = low + (high - low) / 2;
-            let x_position = data[midpoint as usize].x_position();
-            if x_position <= x
-                && (midpoint + 1 == length || data[midpoint as usize + 1].x_position() > x)
-            {
+            // Chromium indexes a contiguous WTF::Vector directly here. The
+            // loop maintains midpoint < length, and the second access is
+            // guarded by midpoint + 1 < length, so use the equivalent raw
+            // slice access instead of repeating Rust bounds checks on every
+            // binary-search probe.
+            let x_position = unsafe { data.get_unchecked(midpoint as usize) }.x_position();
+            let is_last_match = midpoint + 1 == length
+                || unsafe { data.get_unchecked(midpoint as usize + 1) }.x_position() > x;
+            if x_position <= x && is_last_match {
                 if !rtl {
                     return midpoint;
                 }
@@ -545,7 +551,13 @@ impl ShapeResult {
                 };
             }
             if x < x_position {
-                high = midpoint.wrapping_sub(1);
+                // A well-formed position table starts at zero, but keep the
+                // release build memory-safe if a malformed table violates
+                // that Chromium invariant.
+                if midpoint == 0 {
+                    break;
+                }
+                high = midpoint - 1;
             } else {
                 low = midpoint + 1;
             }
@@ -556,7 +568,7 @@ impl ShapeResult {
     // cpp: font_engine/fonts/shaping/shape_result_position.cc:437-464
     pub fn CachedPositionForOffset(&self, offset: u32) -> LayoutUnit {
         debug_assert!(offset <= self.num_characters_);
-        let data = self.character_position_.borrow();
+        let data = self.character_position_.get();
         debug_assert!(!data.empty());
         let rtl = self.IsRtl();
         let length = self.NumCharacters();
@@ -604,7 +616,7 @@ impl ShapeResult {
         if self.IsRtl() {
             return self.NextSafeToBreakOffset(offset);
         }
-        let data = self.character_position_.borrow();
+        let data = self.character_position_.get();
         debug_assert!(!data.empty());
         let adjusted = offset.wrapping_sub(self.start_index_);
         let length = self.NumCharacters();
@@ -625,7 +637,7 @@ impl ShapeResult {
         if self.IsRtl() {
             return self.PreviousSafeToBreakOffset(offset);
         }
-        let data = self.character_position_.borrow();
+        let data = self.character_position_.get();
         debug_assert!(!data.empty());
         let adjusted = offset.wrapping_sub(self.start_index_);
         let length = self.NumCharacters();

@@ -27,24 +27,37 @@ use skia::{
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-impl ImageRect for Rect {
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ImageRectValue(Rect);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ImageFloatRectValue(RectF);
+
+impl ImageRect for ImageRectValue {
     fn IsEmpty(self) -> bool {
-        self.IsEmpty()
+        self.0.IsEmpty()
     }
     fn Union(&mut self, r: Self) {
-        self.Union(r)
+        self.0.Union(r.0)
     }
 }
-impl ImageFloatRect for RectF {
-    type Rect = Rect;
+impl ImageFloatRect for ImageFloatRectValue {
+    type Rect = ImageRectValue;
     fn MakeWH(w: i32, h: i32) -> Self {
-        Self::new(0., 0., w as f32, h as f32)
+        Self(RectF::new(0., 0., w as f32, h as f32))
     }
-    fn FromRect(r: Rect) -> Self {
-        Self::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
+    fn FromRect(r: ImageRectValue) -> Self {
+        Self(RectF::new(
+            r.0.x as f32,
+            r.0.y as f32,
+            r.0.width as f32,
+            r.0.height as f32,
+        ))
     }
-    fn roundOut(self) -> Rect {
-        ToEnclosingRect(self)
+    fn roundOut(self) -> ImageRectValue {
+        ImageRectValue(ToEnclosingRect(self.0))
     }
 }
 #[derive(Clone)]
@@ -116,13 +129,15 @@ fn stroke_inflation_radius(
         SkStrokeRec::GetInflationRadius(join, miter, cap, width)
     }
 }
-impl ImageMatrix<RectF> for ImageMapMatrix {
+impl ImageMatrix<ImageFloatRectValue> for ImageMapMatrix {
     fn Identity() -> Self {
         Self(SkM44::default())
     }
     // Source: SkMatrix.cpp:559-599; SkMatrix.h:1126-1147. The legacy
     // RectToRect entry used by cc returns identity for an empty source rect.
-    fn RectToRect(s: RectF, d: RectF, center: bool) -> Self {
+    fn RectToRect(s: ImageFloatRectValue, d: ImageFloatRectValue, center: bool) -> Self {
+        let s = s.0;
+        let d = d.0;
         if s.IsEmpty() {
             return Self::Identity();
         }
@@ -162,14 +177,14 @@ impl ImageMatrix<RectF> for ImageMapMatrix {
     }
 }
 pub(crate) struct MapSpatialIndex(RTree<usize>);
-impl ImageSpatialIndex<Rect> for MapSpatialIndex {
-    fn Build(n: usize, rect: impl Fn(usize) -> Rect) -> Self {
+impl ImageSpatialIndex<ImageRectValue> for MapSpatialIndex {
+    fn Build(n: usize, rect: impl Fn(usize) -> ImageRectValue) -> Self {
         let mut t = RTree::new();
-        t.Build(n, rect, |i| i);
+        t.Build(n, |i| rect(i).0, |i| i);
         Self(t)
     }
-    fn Search(&self, rect: &Rect, out: &mut Vec<usize>) {
-        self.0.Search(rect, |i, _| out.push(*i));
+    fn Search(&self, rect: &ImageRectValue, out: &mut Vec<usize>) {
+        self.0.Search(&rect.0, |i, _| out.push(*i));
     }
 }
 pub(crate) struct MapSequence(std::thread::ThreadId);
@@ -188,8 +203,8 @@ pub(crate) struct NativeDiscardableBackend {
 impl DiscardableImageTypes for NativeDiscardableBackend {
     type Id = PaintImageId;
     type ScrollOffsets = ScrollOffsetMap;
-    type Rect = Rect;
-    type FloatRect = RectF;
+    type Rect = ImageRectValue;
+    type FloatRect = ImageFloatRectValue;
     type Matrix = ImageMapMatrix;
     type FilterQuality = CpuFilterQuality;
     type DecodingMode = ImageDecodingMode;
@@ -207,10 +222,11 @@ impl DiscardableImageTypes for NativeDiscardableBackend {
     fn NewDrawImage(
         image: CpuPaintImage,
         dark: bool,
-        source: Rect,
+        source: ImageRectValue,
         quality: CpuFilterQuality,
         m: ImageMapMatrix,
     ) -> CpuDrawImage {
+        let source = source.0;
         // Source: cc/paint/draw_image.cc:14-27,50-61; native scale extraction
         // preserves signed diagonal scale until an affine component appears.
         let mut scale = Vector2dF::new(m.0.rc(0, 0), m.0.rc(1, 1));
@@ -461,9 +477,9 @@ impl ImageGatheringCanvas<NativeDiscardableBackend> for MapCanvas {
             ImageMapMatrix(self.0.as_ref().canvas_ref().getLocalToDevice())
         }
     }
-    fn getDeviceClipBounds(&self) -> Rect {
+    fn getDeviceClipBounds(&self) -> ImageRectValue {
         let r = self.0.as_ref().canvas_ref().getDeviceClipBounds();
-        Rect::FromBounds(r.fLeft, r.fTop, r.fRight, r.fBottom)
+        ImageRectValue(Rect::FromBounds(r.fLeft, r.fTop, r.fRight, r.fBottom))
     }
 }
 #[derive(Clone, Copy)]
@@ -502,8 +518,8 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
     type Shader<'a> = MapShader<'a>;
     type Filter<'a> = &'a dyn paint::cc::paint::filter_operation::PaintFilter;
     type SkottieImages<'a> = std::iter::Empty<(CpuPaintImage, CpuFilterQuality)>;
-    fn MakeNoDrawCanvas(&self, r: Rect) -> MapCanvas {
-        make_canvas(r)
+    fn MakeNoDrawCanvas(&self, r: ImageRectValue) -> MapCanvas {
+        make_canvas(r.0)
     }
     fn HasDiscardableImages(&self, b: &CpuPaintOpBuffer<SkRegion>) -> bool {
         b.canonical_metadata().has_discardable_images()
@@ -538,10 +554,16 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
     fn ComputePaintRect(
         &self,
         op: CpuPaintOpRef<'_, SkRegion>,
-        clip: Rect,
+        clip: ImageRectValue,
         ctm: &ImageMapMatrix,
-    ) -> Rect {
-        paint::cc::paint::paint_op::ComputePaintRect(&PaintRectProjection { op, clip, ctm })
+    ) -> ImageRectValue {
+        ImageRectValue(paint::cc::paint::paint_op::ComputePaintRect(
+            &PaintRectProjection {
+                op,
+                clip: clip.0,
+                ctm,
+            },
+        ))
     }
     fn Flags<'a>(&'a self, op: CpuPaintOpRef<'a, SkRegion>) -> Self::Flags<'a> {
         op
@@ -600,8 +622,8 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
             _ => unreachable!("source flags subtype"),
         }
     }
-    fn ImageSourceRect(&self, op: CpuPaintOpRef<'_, SkRegion>) -> RectF {
-        match op {
+    fn ImageSourceRect(&self, op: CpuPaintOpRef<'_, SkRegion>) -> ImageFloatRectValue {
+        ImageFloatRectValue(match op {
             CpuPaintOpRef::Native { op, .. } => RectF::new(
                 op.source_rect.x as f32,
                 op.source_rect.y as f32,
@@ -609,10 +631,10 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
                 op.source_rect.height as f32,
             ),
             _ => unreachable!("source image subtype"),
-        }
+        })
     }
-    fn ImageDestinationRect(&self, op: CpuPaintOpRef<'_, SkRegion>) -> RectF {
-        match op {
+    fn ImageDestinationRect(&self, op: CpuPaintOpRef<'_, SkRegion>) -> ImageFloatRectValue {
+        ImageFloatRectValue(match op {
             CpuPaintOpRef::Native { op, .. } => RectF::new(
                 op.rect.x as f32,
                 op.rect.y as f32,
@@ -620,12 +642,12 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
                 op.rect.height as f32,
             ),
             _ => unreachable!("source image subtype"),
-        }
+        })
     }
     fn SkottieImages<'a>(&'a self, _: CpuPaintOpRef<'a, SkRegion>) -> Self::SkottieImages<'a> {
         unreachable!("this CPU family has no Skottie op")
     }
-    fn SkottieNativeSize(&self, _: CpuPaintOpRef<'_, SkRegion>) -> RectF {
+    fn SkottieNativeSize(&self, _: CpuPaintOpRef<'_, SkRegion>) -> ImageFloatRectValue {
         unreachable!("no Skottie subtype")
     }
     fn ScrollingBuffer<'a>(
@@ -731,7 +753,11 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
         });
         !animated
     }
-    fn ShaderRasterizationTileRect(&self, _: MapShader<'_>, _: &ImageMapMatrix) -> Option<RectF> {
+    fn ShaderRasterizationTileRect(
+        &self,
+        _: MapShader<'_>,
+        _: &ImageMapMatrix,
+    ) -> Option<ImageFloatRectValue> {
         unreachable!("animated pattern records require their actual timeline/record owner and are rejected before PAC")
     }
     fn ShaderRecord<'a>(&'a self, _: MapShader<'a>) -> &'a CpuPaintOpBuffer<SkRegion> {
@@ -749,7 +775,7 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
     fn FilterSnapshotWithImages(
         &self,
         _: Self::Filter<'_>,
-        _: &mut dyn FnMut(CpuPaintImage, RectF, CpuFilterQuality),
+        _: &mut dyn FnMut(CpuPaintImage, ImageFloatRectValue, CpuFilterQuality),
     ) {
         unreachable!("reference/reflection image owner is a typed PaintInput blocker")
     }
@@ -924,7 +950,7 @@ impl NativeImageMap {
     ) -> CpuDiscardableImageMap {
         let mut map = DiscardableImageMap::Generate(
             buffer,
-            bounds,
+            ImageRectValue(bounds),
             offsets,
             decoding,
             worklets,
@@ -962,10 +988,12 @@ impl CpuDiscardableImageMapValue for NativeImageMap {
         &self.animated
     }
     fn GetRectsForImage(&self, id: PaintImageId) -> &[Rect] {
-        self.map.GetRectsForImage(id)
+        let values = self.map.GetRectsForImage(id);
+        // ImageRectValue is a transparent ownership-boundary wrapper.
+        unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<Rect>(), values.len()) }
     }
     fn GetDiscardableImagesInRect(&self, rect: &Rect) -> Vec<&CpuDrawImage> {
-        self.map.GetDiscardableImagesInRect(rect)
+        self.map.GetDiscardableImagesInRect(&ImageRectValue(*rect))
     }
 }
 

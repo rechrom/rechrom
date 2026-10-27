@@ -30,7 +30,11 @@ fn open() -> Page {
     page
 }
 
-fn walk(node: &layoutng_assembly::fragment_tree::FragmentNode, parent: Offset, wanted: &[u64]) {
+fn walk(
+    node: &layoutng_assembly::fragment_tree::FragmentPaintData,
+    parent: Offset,
+    wanted: &[u64],
+) {
     let absolute = Offset {
         x: parent.x + node.offset.x,
         y: parent.y + node.offset.y,

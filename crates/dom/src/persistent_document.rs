@@ -828,9 +828,12 @@ pub struct PersistentDocument {
     // this document setting for the UA-only -internal-textarea-auto value.
     text_areas_are_resizable: bool,
     scripting_enabled: bool,
-    // cpp: Settings::GetDefaultFontSize, consumed by
-    // LayoutThemeFontProvider::DefaultFontSize for system-font shorthands.
+    // cpp: Settings::GetDefaultFontSize/GetDefaultFixedFontSize. The
+    // proportional value is also consumed by LayoutThemeFontProvider for
+    // system-font shorthands; both values belong to the document settings
+    // owner and are passed into Style's FontBuilder conversion boundary.
     default_font_size: f32,
+    default_fixed_font_size: f32,
     document_types: HashMap<u64, DOMDocumentType>,
     template_contents: HashMap<u64, usize>,
     // cpp: element.h:1129-1132; shadow_root.h:97-110.  Shadow roots are not
@@ -982,6 +985,7 @@ impl PersistentDocument {
             text_areas_are_resizable: true,
             scripting_enabled: false,
             default_font_size: 16.0,
+            default_fixed_font_size: 13.0,
             document_types: HashMap::new(),
             template_contents: HashMap::new(),
             shadow_roots: HashMap::new(),
@@ -1244,6 +1248,12 @@ impl PersistentDocument {
         // provider applies its zero/uninitialised fallback and minimum when it
         // resolves the pending value, not when the setting changes.
         self.default_font_size = value;
+    }
+    pub fn DefaultFixedFontSize(&self) -> f32 {
+        self.default_fixed_font_size
+    }
+    pub fn SetDefaultFixedFontSize(&mut self, value: f32) {
+        self.default_fixed_font_size = value;
     }
     pub fn SetCompatibilityMode(&mut self, mode: CompatibilityMode) {
         self.compatibility = mode;

@@ -519,14 +519,9 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         }
         {
             let (tree, mut context) = self.property_trees.effect_tree_with_context(features);
-            if tree.needs_update() {
-                for id in
-                    crate::cc::trees::property_ids::kContentsRootPropertyNodeId..tree.size() as i32
-                {
-                    tree.UpdateEffects(id, &mut context);
-                }
-                tree.set_needs_update(false);
-            }
+            crate::cc::trees::draw_property_utils::ComputeEffects::<
+                super::draw::DrawContext<'_, B<R>>,
+            >(tree, &mut context);
         }
         crate::cc::trees::draw_property_utils::ComputeClips::<super::draw::DrawContext<'_, B<R>>>(
             &mut self.property_trees,

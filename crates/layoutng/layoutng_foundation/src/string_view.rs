@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use crate::blink_string::BlinkStringStorage;
 use crate::String;
 use std::fmt;
 use std::ops::Index;
@@ -18,16 +19,14 @@ pub extern "Rust" fn StringViewIs8Bit(view: &StringView) -> bool {
 // cpp: foundation/blink_base/wtf/text/string_view.h:113-145,219-226
 #[derive(Clone, Debug)]
 pub struct StringView {
-    units: Arc<[u16]>,
-    latin1: Option<Arc<[u8]>>,
-    null: bool,
+    storage: Option<Arc<BlinkStringStorage>>,
     offset: usize,
     length: usize,
 }
 
 impl PartialEq for StringView {
     fn eq(&self, other: &Self) -> bool {
-        self.null == other.null && self.Span16() == other.Span16()
+        self.IsNull() == other.IsNull() && self.Span16() == other.Span16()
     }
 }
 
@@ -36,9 +35,7 @@ impl Eq for StringView {}
 impl Default for StringView {
     fn default() -> Self {
         Self {
-            units: Arc::from([]),
-            latin1: None,
-            null: true,
+            storage: None,
             offset: 0,
             length: 0,
         }
@@ -53,13 +50,8 @@ impl StringView {
             .checked_add(length as usize)
             .expect("StringView range overflow");
         assert!(end <= units.len(), "StringView range exceeds string length");
-        Self {
-            units: Arc::from(&units[start..end]),
-            latin1: None,
-            null: false,
-            offset: 0,
-            length: length as usize,
-        }
+        let source = String::from_utf16(&units);
+        Self::from_blink_string_range(&source, start as u32, length)
     }
 
     // cpp: foundation/blink_base/wtf/text/string_view.h:134-145,258-260
@@ -70,11 +62,8 @@ impl StringView {
             .expect("StringView range overflow");
         let units = source.Span16().unwrap_or_default();
         assert!(end <= units.len(), "StringView range exceeds string length");
-        let (units, latin1) = source.SharedViewStorage();
         Self {
-            units,
-            latin1,
-            null: source.IsNull(),
+            storage: source.SharedViewStorage(),
             offset: start,
             length: length as usize,
         }
@@ -87,19 +76,25 @@ impl StringView {
         self.length == 0
     }
     pub fn IsNull(&self) -> bool {
-        self.null
+        self.storage.is_none()
     }
     pub fn Is8Bit(&self) -> bool {
-        self.latin1.is_some()
+        self.storage
+            .as_ref()
+            .is_some_and(|storage| storage.latin1.is_some())
     }
     pub fn Span8(&self) -> Option<&[u8]> {
-        self.latin1
+        self.storage
             .as_ref()
+            .and_then(|storage| storage.latin1.as_ref())
             .map(|bytes| &bytes[self.offset..self.offset + self.length])
     }
     // Compatibility projection for consumers still expecting UTF-16.
     pub fn Span16(&self) -> &[u16] {
-        &self.units[self.offset..self.offset + self.length]
+        let Some(storage) = &self.storage else {
+            return &[];
+        };
+        &storage.units[self.offset..self.offset + self.length]
     }
 
     // cpp: foundation/blink_base/wtf/text/string_view.cc:347-357
@@ -155,9 +150,7 @@ impl StringView {
             .expect("StringView range overflow");
         assert!(start <= self.length && end <= self.length);
         Self {
-            units: self.units.clone(),
-            latin1: self.latin1.clone(),
-            null: self.null,
+            storage: self.storage.clone(),
             offset: self.offset + start,
             length: end - start,
         }
@@ -165,7 +158,7 @@ impl StringView {
 
     // cpp: foundation/blink_base/wtf/text/string_view.cc:272-282
     pub fn ToString(&self) -> String {
-        if self.null {
+        if self.IsNull() {
             String::default()
         } else if let Some(bytes) = self.Span8() {
             String::from_latin1(bytes)
@@ -176,7 +169,7 @@ impl StringView {
 
     // cpp: foundation/blink_base/wtf/text/string_view.cc:414-452
     pub fn EncodeForDebugging(&self) -> String {
-        if self.null {
+        if self.IsNull() {
             return String::from("<null>");
         }
         let mut encoded = std::string::String::from("\"");
@@ -201,15 +194,9 @@ impl StringView {
 
 impl From<&str> for StringView {
     fn from(value: &str) -> Self {
-        let units: Arc<[u16]> = Arc::from(value.encode_utf16().collect::<Vec<_>>());
-        let length = units.len();
-        Self {
-            units,
-            latin1: None,
-            null: false,
-            offset: 0,
-            length,
-        }
+        let units: Vec<u16> = value.encode_utf16().collect();
+        let source = String::from_utf16(&units);
+        Self::from(&source)
     }
 }
 
@@ -300,10 +287,9 @@ mod tests {
         let original = StringView::from(&backing);
         let middle = original.Substring(1, 3);
         let nested = middle.Substring(1, 1);
-        assert!(Arc::ptr_eq(&original.units, &nested.units));
         assert!(Arc::ptr_eq(
-            original.latin1.as_ref().unwrap(),
-            nested.latin1.as_ref().unwrap()
+            original.storage.as_ref().unwrap(),
+            nested.storage.as_ref().unwrap()
         ));
         assert_eq!(nested.Span8(), Some(&[0xe9][..]));
         assert_eq!(nested.Span16(), &[0xe9]);
@@ -319,7 +305,10 @@ mod tests {
 
         let original = StringView::from("x😀yz");
         let pair = original.Substring(1, 2);
-        assert!(Arc::ptr_eq(&original.units, &pair.units));
+        assert!(Arc::ptr_eq(
+            original.storage.as_ref().unwrap(),
+            pair.storage.as_ref().unwrap()
+        ));
         assert_eq!(pair.CodePointAt(0), 0x1f600);
         assert_eq!(pair.CodePointAt(1), 0x1f600);
         assert_eq!(pair.NextCodePointOffset(0), 2);

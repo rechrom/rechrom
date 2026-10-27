@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use foundation::{
-    kIndefiniteSize, AtomicString, LayoutUnit, MakeGarbageCollected, MarginStrut, Member, StrCat,
-    String as BlinkString, TextDirection, Visitor, WritingDirectionMode, WritingMode,
+    kIndefiniteSize, AtomicString, LayoutUnit, MarginStrut, Member, StrCat, String as BlinkString,
+    TextDirection, Visitor, WritingDirectionMode, WritingMode,
 };
 use layoutng_geometry::geometry::bfc_offset::BfcOffset;
 use layoutng_geometry::geometry::box_sides::LogicalBoxSides;
@@ -978,6 +978,7 @@ pub struct ConstraintSpace {
 
 impl Clone for ConstraintSpace {
     // cpp: layoutng/internal/constraint_space.h:115-121
+    #[inline(always)]
     fn clone(&self) -> Self {
         Self {
             available_size_: self.available_size_,
@@ -989,6 +990,12 @@ impl Clone for ConstraintSpace {
         }
     }
 }
+
+#[path = "../../../layout_algo_fragmentation/src/native_constraint_space_fragmentation.rs"]
+mod layout_algo_fragmentation_native_constraint_space_fragmentation;
+
+#[path = "../../../layout_algo_inline/src/native_constraint_space_block_in_inline.rs"]
+mod layout_algo_inline_native_constraint_space_block_in_inline;
 
 impl ConstraintSpace {
     // cpp: layoutng/internal/constraint_space.h:806-808
@@ -1017,19 +1024,6 @@ impl ConstraintSpace {
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.exclusion_space_);
         visitor.Trace(&self.rare_data_);
-    }
-
-    // cpp: layoutng/internal/constraint_space.h:142-152
-    pub fn CloneWithoutFragmentation(&self) -> Self {
-        debug_assert!(self.HasBlockFragmentation());
-        let mut copy = self.clone();
-        let rare_data = copy.rare_data_.Get();
-        debug_assert!(!rare_data.is_null());
-        let mut cloned_rare_data = unsafe { &*rare_data }.clone();
-        cloned_rare_data.block_direction_fragmentation_type = FragmentationType::kFragmentNone;
-        cloned_rare_data.is_block_fragmentation_forced_off = true;
-        copy.rare_data_ = Member::from_ptr(MakeGarbageCollected(cloned_rare_data));
-        copy
     }
 
     // cpp: layoutng/internal/constraint_space.h:154
@@ -1749,31 +1743,6 @@ const _: () = assert!(
 );
 
 impl ConstraintSpace {
-    // cpp: layoutng/internal/constraint_space.cc:29-55
-    pub fn CloneForBlockInInlineIfNeeded<'a>(
-        &'a self,
-        space: &'a mut Option<ConstraintSpace>,
-    ) -> &'a ConstraintSpace {
-        if self.ShouldTextBoxTrimNodeEnd() {
-            *space = Some(self.clone());
-            let copy = space.as_mut().unwrap();
-            let original_rare_data = copy.rare_data_.Get();
-            debug_assert!(!original_rare_data.is_null());
-            let mut rare_data = unsafe { &*original_rare_data }.clone();
-            if self.ShouldForceTextBoxTrimEnd() {
-                rare_data.should_force_text_box_trim_end = false;
-            } else {
-                rare_data.should_text_box_trim_node_end = false;
-                rare_data.should_text_box_trim_fragmentainer_end = false;
-            }
-            copy.rare_data_ = Member::from_ptr(MakeGarbageCollected(rare_data));
-            copy
-        } else {
-            debug_assert!(!self.ShouldForceTextBoxTrimEnd());
-            self
-        }
-    }
-
     // cpp: layoutng/internal/constraint_space.cc:55-61
     pub fn ToString(&self) -> BlinkString {
         let bfc_offset = self.GetBfcOffset();

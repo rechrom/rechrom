@@ -151,7 +151,10 @@ impl App {
         let viewport = self.viewport();
         self.drag_geometry_valid.set(false);
         if viewport.valid() {
-            self.send(Command::Resize(viewport));
+            self.send(Command::Resize(crate::engine::ResizeRequest::new(
+                viewport,
+                Instant::now(),
+            )));
         }
         // The viewport update schedules its own full layout/paint/presentation.
         // Native exposure redraws are handled separately by RedrawRequested.

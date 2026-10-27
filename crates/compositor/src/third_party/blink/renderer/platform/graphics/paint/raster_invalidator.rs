@@ -258,7 +258,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                 continue;
             }
             let Some(matched_index) = self.MatchNewChunkToOldChunk(new, old_index) else {
-                mapper.SwitchToChunk(new);
+                mapper.SwitchToChunk(new.properties_unalias(), new.raster_effect_outset());
                 new_infos.push(PaintChunkInfo::new(
                     self.layer_bounds_,
                     &mapper,
@@ -305,7 +305,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                     index,
                 ));
             } else {
-                mapper.SwitchToChunk(new);
+                mapper.SwitchToChunk(new.properties_unalias(), new.raster_effect_outset());
                 new_infos.push(PaintChunkInfo::new(
                     self.layer_bounds_,
                     &mapper,
@@ -553,7 +553,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             if Self::ShouldSkipForRasterInvalidation(chunk, state, m) {
                 continue;
             }
-            mapper.SwitchToChunk(chunk);
+            mapper.SwitchToChunk(chunk.properties_unalias(), chunk.raster_effect_outset());
             infos.push(PaintChunkInfo::new(
                 bounds,
                 &mapper,

@@ -7,7 +7,6 @@ use interaction::{
     Interaction, InteractionOutput,
 };
 use javascript::javascript_runtime::{JavaScriptException, JavaScriptHostRuntime};
-use layoutng_assembly::fragment_tree::FragmentNode;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -115,7 +114,7 @@ impl PageInteraction {
                     })
             });
                 let scoped = focus_engine.WithScopedListeners(listeners);
-                scoped.Dispatch(
+                scoped.DispatchTargeted(
                     &InputEvent::Focus(FocusEvent {
                         r#type: if focus {
                             FocusEventType::kFocus
@@ -126,7 +125,6 @@ impl PageInteraction {
                         related_target_node_id: None,
                     }),
                     &focus_document,
-                    &FragmentNode::default(),
                 );
             })));
         // cpp: browser/browser.cc:668-670

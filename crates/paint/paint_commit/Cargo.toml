@@ -1,0 +1,12 @@
+[package]
+name = "paint_commit"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+paint_model = { path = "../paint_model" }
+paint_record = { path = "../paint_record" }
+prepaint = { path = "../prepaint" }

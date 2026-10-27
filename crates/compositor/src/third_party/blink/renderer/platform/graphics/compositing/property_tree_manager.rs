@@ -35,6 +35,13 @@ use crate::cc::{
         transform_node::TransformNode,
     },
 };
+pub use compositor_layerize::property_tree_policy::{Alignment, CcEffectType};
+use compositor_layerize::property_tree_policy::{
+    EffectSurfaceSource, IsConditionalRenderSurfaceReason,
+    RenderSurfaceReasonForEffect as ClassifyRenderSurfaceReason,
+    ResolveConditionalRenderSurfaceReasons, TransformAlignmentNode,
+    TransformsMayBe2dAxisMisaligned as ClassifyTransformAxisMisalignment,
+};
 use std::collections::HashSet;
 
 // Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.h:38-40.
@@ -45,39 +52,6 @@ pub type StackTransformPaintPropertyNodeVector<B> =
 // PropertyTreeManagerClient is represented by the exact typed call boundary
 // in adapter::property_tree_manager; implementations remain owned by the
 // PaintArtifactCompositor which receives these callbacks in Chromium.
-
-// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.h:228-245.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CcEffectType(u8);
-impl CcEffectType {
-    pub const kEffect: Self = Self(0);
-    pub const kSyntheticForNonTrivialClip: Self = Self(1 << 0);
-    pub const kSyntheticFor2dAxisAlignment: Self = Self(1 << 1);
-
-    pub const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 != 0
-    }
-}
-impl std::ops::BitOr for CcEffectType {
-    type Output = Self;
-    fn bitor(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-}
-impl std::ops::BitOrAssign for CcEffectType {
-    fn bitor_assign(&mut self, other: Self) {
-        self.0 |= other.0;
-    }
-}
-
-// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.h:247-318.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Alignment {
-    #[default]
-    kAligned,
-    kMisaligned,
-    kUnknown,
-}
 
 pub struct EffectState<B: PropertyTreeManagerTypes> {
     pub effect: Option<B::EffectNode>,
@@ -1667,14 +1641,13 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
 
         let compositor_element_id = next_effect.GetCompositorElementId();
         if compositor_element_id.IsValid() && !has_multiple_groups {
-            debug_assert!(
-                self.layer_context_
-                    .Host(self.host_id_)
-                    .property_trees()
-                    .effect_tree()
-                    .FindNodeFromElementId(compositor_element_id)
-                    .is_none()
-            );
+            debug_assert!(self
+                .layer_context_
+                .Host(self.host_id_)
+                .property_trees()
+                .effect_tree()
+                .FindNodeFromElementId(compositor_element_id)
+                .is_none());
             self.layer_context_
                 .HostMut(self.host_id_)
                 .property_trees_mut()
@@ -1804,7 +1777,6 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
         let mut effect_layer_counts = vec![0_i32; tree_size];
         let mut has_text = vec![false; tree_size];
         let mut has_video = vec![false; tree_size];
-        let mut has_child_surface = vec![false; tree_size];
 
         for layer in layers {
             if layer.draws_content(self.layer_context_) {
@@ -1820,42 +1792,13 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
             .HostMut(self.host_id_)
             .property_trees_mut()
             .effect_tree_mutable();
-        for id in ((kSecondaryRootPropertyNodeId + 1) as usize..tree_size).rev() {
-            let effect = effect_tree.MutableNode(id as i32);
-            if effect.render_surface_reason == RenderSurfaceReason::kNone
-                && effect.needs_effect_for_2d_scale_transform
-                && effect_layer_counts[id] >= 2
-                && !has_text[id]
-                && !has_video[id]
-            {
-                effect.render_surface_reason =
-                    RenderSurfaceReason::k2DScaleTransformWithCompositedDescendants;
-            }
-
-            if effect_layer_counts[id] < 2
-                && IsConditionalRenderSurfaceReason(effect.render_surface_reason)
-                && (effect.render_surface_reason != RenderSurfaceReason::kBlendModeDstIn
-                    || !(has_child_surface[id] || effect.is_fast_rounded_corner))
-            {
-                effect.render_surface_reason = RenderSurfaceReason::kNone;
-            }
-
-            let parent_id = effect.parent_id as usize;
-            debug_assert_ne!(-1, effect_layer_counts[parent_id]);
-            if effect.HasRenderSurface() {
-                effect_layer_counts[parent_id] += 1;
-                has_child_surface[parent_id] = true;
-            } else {
-                effect_layer_counts[parent_id] += effect_layer_counts[id];
-                has_child_surface[parent_id] |= has_child_surface[id];
-            }
-            has_text[parent_id] |= has_text[id];
-
-            #[cfg(debug_assertions)]
-            {
-                effect_layer_counts[id] = -1;
-            }
-        }
+        ResolveConditionalRenderSurfaceReasons(
+            effect_tree.nodes_mut(),
+            (kSecondaryRootPropertyNodeId + 1) as usize,
+            &mut effect_layer_counts,
+            &mut has_text,
+            &has_video,
+        );
     }
 
     // Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:1490-1508.
@@ -2004,105 +1947,113 @@ fn IsNodeOnAncestorChain<B: PropertyTreeManagerTypes>(
     false
 }
 
-// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:400-412.
-fn TransformsToAncestorHaveNonAxisAlignedActiveAnimation<B: PropertyTreeManagerTypes>(
-    descendant: &B::TransformNode,
-    ancestor: &B::TransformNode,
-) -> bool {
-    if descendant == ancestor {
-        return false;
-    }
-    let mut node = descendant.clone();
-    while &node != ancestor {
-        if node.HasActiveTransformAnimation() && !node.TransformAnimationIsAxisAligned() {
-            return true;
-        }
-        node = node
-            .UnaliasedParent()
-            .expect("ancestor must be on the unaliased transform chain");
-    }
-    false
+// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:414-427.
+enum TransformAlignmentNodeAdapter<'a, B: PropertyTreeManagerTypes> {
+    Borrowed(&'a B::TransformNode),
+    Owned(B::TransformNode),
 }
 
-// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:414-427.
+impl<B: PropertyTreeManagerTypes> TransformAlignmentNodeAdapter<'_, B> {
+    fn node(&self) -> &B::TransformNode {
+        match self {
+            Self::Borrowed(node) => node,
+            Self::Owned(node) => node,
+        }
+    }
+}
+
+impl<B: PropertyTreeManagerTypes> Clone for TransformAlignmentNodeAdapter<'_, B> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Borrowed(node) => Self::Borrowed(node),
+            Self::Owned(node) => Self::Owned(node.clone()),
+        }
+    }
+}
+
+impl<B: PropertyTreeManagerTypes> PartialEq for TransformAlignmentNodeAdapter<'_, B> {
+    fn eq(&self, other: &Self) -> bool {
+        self.node() == other.node()
+    }
+}
+
+impl<B: PropertyTreeManagerTypes> TransformAlignmentNode for TransformAlignmentNodeAdapter<'_, B> {
+    fn HasActiveTransformAnimation(&self) -> bool {
+        self.node().HasActiveTransformAnimation()
+    }
+    fn TransformAnimationIsAxisAligned(&self) -> bool {
+        self.node().TransformAnimationIsAxisAligned()
+    }
+    fn UnaliasedParent(&self) -> Option<Self> {
+        self.node().UnaliasedParent().map(Self::Owned)
+    }
+    fn LowestCommonAncestor(&self, other: &Self) -> Self {
+        Self::Owned(self.node().PropertyTreeLowestCommonAncestor(other.node()))
+    }
+    fn ProjectionToPreserves2dAxisAlignment(&self, destination: &Self) -> bool {
+        B::SourceToDestinationProjection(self.node(), destination.node()).Preserves2dAxisAlignment()
+    }
+}
+
 fn TransformsMayBe2dAxisMisaligned<B: PropertyTreeManagerTypes>(
     a: &B::TransformNode,
     b: &B::TransformNode,
 ) -> bool {
-    if a == b {
-        return false;
-    }
-    if !B::SourceToDestinationProjection(a, b).Preserves2dAxisAlignment() {
-        return true;
-    }
-    let lca = a.PropertyTreeLowestCommonAncestor(b);
-    TransformsToAncestorHaveNonAxisAlignedActiveAnimation::<B>(a, &lca)
-        || TransformsToAncestorHaveNonAxisAlignedActiveAnimation::<B>(b, &lca)
-}
-
-// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:429-437.
-fn IsConditionalRenderSurfaceReason(reason: RenderSurfaceReason) -> bool {
-    matches!(
-        reason,
-        RenderSurfaceReason::kBlendModeDstIn
-            | RenderSurfaceReason::kOpacity
-            | RenderSurfaceReason::kOpacityAnimation
+    ClassifyTransformAxisMisalignment(
+        &TransformAlignmentNodeAdapter::<B>::Borrowed(a),
+        &TransformAlignmentNodeAdapter::<B>::Borrowed(b),
     )
 }
 
-// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:1312-1324.
-fn ConditionalRenderSurfaceReasonForEffect<B: PropertyTreeManagerTypes>(
-    effect: &B::EffectNode,
-) -> RenderSurfaceReason {
-    if effect.BlendMode() == BlendMode::kDstIn {
-        return RenderSurfaceReason::kBlendModeDstIn;
+// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:1326-1365.
+struct EffectSurfaceSourceAdapter<'a, B: PropertyTreeManagerTypes>(&'a B::EffectNode);
+
+impl<B: PropertyTreeManagerTypes> EffectSurfaceSource for EffectSurfaceSourceAdapter<'_, B> {
+    fn has_filter(&self) -> bool {
+        self.0.HasFilter()
     }
-    if effect.Opacity() != 1.0 {
-        return RenderSurfaceReason::kOpacity;
+    fn will_change_filter(&self) -> bool {
+        self.0.RequiresCompositingForWillChangeFilter()
     }
-    if effect.HasActiveOpacityAnimation() {
-        return RenderSurfaceReason::kOpacityAnimation;
+    fn active_filter_animation(&self) -> bool {
+        self.0.HasActiveFilterAnimation()
     }
-    RenderSurfaceReason::kNone
+    fn has_backdrop_filter(&self) -> bool {
+        self.0.HasBackdropFilter()
+    }
+    fn will_change_backdrop_filter(&self) -> bool {
+        self.0.RequiresCompositingForWillChangeBackdropFilter()
+    }
+    fn active_backdrop_filter_animation(&self) -> bool {
+        self.0.HasActiveBackdropFilterAnimation()
+    }
+    fn blend_mode(&self) -> BlendMode {
+        self.0.BlendMode()
+    }
+    fn has_view_transition_resource(&self) -> bool {
+        self.0.HasValidViewTransitionElementResourceId()
+    }
+    fn unbounded_element(&self) -> bool {
+        self.0.RequiresCompositingForUnboundedElement()
+    }
+    fn flattens_3d_scene(&self) -> bool {
+        self.0.FlattensAtLeafOf3DScene()
+    }
+    fn has_element_capture(&self) -> bool {
+        self.0.HasElementCaptureId()
+    }
+    fn opacity(&self) -> f32 {
+        self.0.Opacity()
+    }
+    fn active_opacity_animation(&self) -> bool {
+        self.0.HasActiveOpacityAnimation()
+    }
 }
 
-// Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:1326-1365.
 fn RenderSurfaceReasonForEffect<B: PropertyTreeManagerTypes>(
     effect: &B::EffectNode,
 ) -> RenderSurfaceReason {
-    if effect.HasFilter() || effect.RequiresCompositingForWillChangeFilter() {
-        return RenderSurfaceReason::kFilter;
-    }
-    if effect.HasActiveFilterAnimation() {
-        return RenderSurfaceReason::kFilterAnimation;
-    }
-    if effect.HasBackdropFilter() || effect.RequiresCompositingForWillChangeBackdropFilter() {
-        return RenderSurfaceReason::kBackdropFilter;
-    }
-    if effect.HasActiveBackdropFilterAnimation() {
-        return RenderSurfaceReason::kBackdropFilterAnimation;
-    }
-    if !matches!(effect.BlendMode(), BlendMode::kSrcOver | BlendMode::kDstIn) {
-        return RenderSurfaceReason::kBlendMode;
-    }
-    if effect.HasValidViewTransitionElementResourceId() {
-        return RenderSurfaceReason::kViewTransitionParticipant;
-    }
-    if effect.RequiresCompositingForUnboundedElement() {
-        return RenderSurfaceReason::kUnboundedElement;
-    }
-    if effect.FlattensAtLeafOf3DScene() {
-        return RenderSurfaceReason::k3dTransformFlattening;
-    }
-    if effect.HasElementCaptureId() {
-        return RenderSurfaceReason::kSubtreeIsBeingCaptured;
-    }
-    let conditional_reason = ConditionalRenderSurfaceReasonForEffect::<B>(effect);
-    debug_assert!(
-        conditional_reason == RenderSurfaceReason::kNone
-            || IsConditionalRenderSurfaceReason(conditional_reason)
-    );
-    conditional_reason
+    ClassifyRenderSurfaceReason(&EffectSurfaceSourceAdapter::<B>(effect))
 }
 
 // Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:68-71.

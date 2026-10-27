@@ -1,0 +1,24 @@
+[package]
+name = "layout_fragment"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+foundation = { package = "layoutng_foundation", path = "../layoutng_foundation" }
+font_engine = { path = "../../font_engine" }
+image_resource = { path = "../../image_resource" }
+
+[lib]
+path = "src/package.rs"
+
+# Pending Bazel dependencies: layoutng:internal_headers and shared_api,
+# foundation APIs: blink_base, blink_geometry, core_export, graphics_types,
+# layout_features, style_values and the transitive PaintLayer declaration;
+# remaining native font behavior; icu_bidi:unicode_headers.
+# layoutng_inline: OffsetMapping type and the three InlineItemsData algorithm
+# methods declared in the fragment-tree header but defined in that package.
+# The native translated modules still have reciprocal declarations with
+# layoutng and are composed by layoutng_assembly. The standalone crate owns
+# the opaque result lifetime boundary; native dereferencing stays in the
+# assembly adapter until those concrete declarations are split.

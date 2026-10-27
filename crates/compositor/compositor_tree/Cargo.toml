@@ -1,0 +1,9 @@
+[package]
+name = "compositor_tree"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+paint_model = { path = "../../paint/paint_model" }

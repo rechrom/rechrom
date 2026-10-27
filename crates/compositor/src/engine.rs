@@ -373,3 +373,51 @@ impl CompositorEngine {
         self.assembly.Poll()
     }
 }
+
+#[cfg(test)]
+mod public_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn compositor_engine_command_effect_boundary_signatures_stay_stable() {
+        let _: fn(
+            CompositorConfig,
+            CompositorExecutors,
+        ) -> Result<CompositorEngine, CompositorError> = CompositorEngine::new;
+        let _: fn(
+            &mut CompositorEngine,
+            Arc<PaintArtifact>,
+            CompositorViewportState,
+        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Commit;
+        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
+            CompositorEngine::RequestMainFrame;
+        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
+            CompositorEngine::FinishMainFrameWithoutUpdates;
+        let _: fn(
+            &mut CompositorEngine,
+            BeginFrameArgs,
+        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::BeginFrame;
+        let _: fn(
+            &mut CompositorEngine,
+            CompositorInput,
+        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Input;
+        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
+            CompositorEngine::DidReceiveFrameAck;
+        let _: fn(
+            &mut CompositorEngine,
+            u32,
+            CompositorFrameTimingDetails,
+        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::DidPresentFrame;
+        let _: fn(
+            &mut CompositorEngine,
+            Vec<RasterReturnedResource>,
+        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::ReclaimResources;
+        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
+            CompositorEngine::Poll;
+
+        fn frame_boundary(output: CompositorOutput) -> Option<NativeCompositorFrameSubmission> {
+            output.frame
+        }
+        let _: fn(CompositorOutput) -> Option<NativeCompositorFrameSubmission> = frame_boundary;
+    }
+}

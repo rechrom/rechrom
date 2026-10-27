@@ -22,34 +22,10 @@ use crate::cc::{
     },
     trees::{compositor_commit_data::CompositorCommitData, scroll_node::ScrollNode},
 };
+pub use compositor_input::input_handler_types::{
+    InputFeature, ScrollInputType, ScrollTrackingType, ScrollingThread,
+};
 use std::collections::BTreeMap;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollInputType {
-    kTouchscreen,
-    kWheel,
-    kAutoscroll,
-    kScrollbar,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollTrackingType {
-    kWheelScroll,
-    kTouchScroll,
-    kScrollbarScroll,
-    kMaxType,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollingThread {
-    kCompositor,
-    kMain,
-    kRaster,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InputFeature {
-    WaitForLateScrollEvents,
-    OverscrollEffectOnNonRootScrollers,
-    SnapFlingNearExtremes,
-    LimitScrollDeltaToScrollerSize,
-}
 #[derive(Clone, Debug)]
 pub struct InputHandlerWeak {
     pub owner_id: u64,
@@ -60,19 +36,7 @@ impl InputHandlerWeak {
         self.alive.upgrade().is_some()
     }
 }
-/// Non-owning identity of a node in the current resident active ScrollTree.
-/// Resolving a value must validate both tree allocation identity and index.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InputScrollNodeId {
-    pub tree: super::layer_tree_impl::LayerTreeId,
-    pub index: i32,
-}
-/// Non-owning identity of a layer in a resident canonical LayerTreeImpl.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InputLayerId {
-    pub tree: super::layer_tree_impl::LayerTreeId,
-    pub id: i32,
-}
+pub use compositor_input::input_types::{InputLayerId, InputScrollNodeId};
 pub trait InputSettings {
     fn enable_fluent_overlay_scrollbar(&self) -> bool;
     fn is_for_embedded_frame(&self) -> bool;
