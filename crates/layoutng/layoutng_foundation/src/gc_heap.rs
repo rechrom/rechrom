@@ -195,6 +195,7 @@ impl Drop for Allocation {
 // individual trace/finalizer metadata, while their storage comes from a page.
 const REGULAR_PAGE_SIZE: usize = 128 * 1024;
 const REGULAR_PAGE_ALIGNMENT: usize = 16;
+const REGULAR_PAGE_CACHE_SIZE: usize = 1024;
 const REGULAR_SIZE_CLASSES: [usize; 31] = [
     16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024,
     1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3584, 4096, 4608,
@@ -277,6 +278,14 @@ impl RegularSizeClass {
 struct HeapAllocator {
     regular: Vec<RegularSizeClass>,
     regular_pages: TrustedIdentityHashMap<usize, (usize, usize)>,
+    regular_page_cache: Box<[RegularPageCacheEntry; REGULAR_PAGE_CACHE_SIZE]>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RegularPageCacheEntry {
+    base: usize,
+    class: u8,
+    page: u32,
 }
 
 enum PooledAddress {
@@ -293,7 +302,16 @@ impl HeapAllocator {
                 .map(RegularSizeClass::new)
                 .collect(),
             regular_pages: TrustedIdentityHashMap::default(),
+            regular_page_cache: Box::new(
+                [RegularPageCacheEntry::default(); REGULAR_PAGE_CACHE_SIZE],
+            ),
         }
+    }
+
+    #[inline(always)]
+    fn page_cache_slot(base: usize) -> usize {
+        debug_assert!(REGULAR_PAGE_CACHE_SIZE.is_power_of_two());
+        ((base >> 17) ^ (base >> 29)) & (REGULAR_PAGE_CACHE_SIZE - 1)
     }
 
     fn allocate(&mut self, layout: Layout) -> (NonNull<u8>, Option<PooledSlot>) {
@@ -309,6 +327,11 @@ impl HeapAllocator {
                     debug_assert_eq!(base & (REGULAR_PAGE_SIZE - 1), 0);
                     let old = self.regular_pages.insert(base, (class, page as usize));
                     debug_assert!(old.is_none());
+                    self.regular_page_cache[Self::page_cache_slot(base)] = RegularPageCacheEntry {
+                        base,
+                        class: class as u8,
+                        page,
+                    };
                 }
                 return (
                     address,
@@ -354,8 +377,14 @@ impl HeapAllocator {
 
     fn find_index(&self, address: usize, objects: &[Option<Allocation>]) -> PooledAddress {
         let base = address & !(REGULAR_PAGE_SIZE - 1);
-        let Some(&(class, page_index)) = self.regular_pages.get(&base) else {
-            return PooledAddress::NotPooled;
+        let cached = self.regular_page_cache[Self::page_cache_slot(base)];
+        let (class, page_index) = if base != 0 && cached.base == base {
+            (cached.class as usize, cached.page as usize)
+        } else {
+            let Some(&(class, page_index)) = self.regular_pages.get(&base) else {
+                return PooledAddress::NotPooled;
+            };
+            (class, page_index)
         };
         let size_class = &self.regular[class];
         let page = &size_class.pages[page_index];
