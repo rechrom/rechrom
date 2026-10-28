@@ -55,7 +55,9 @@ use super::{
 };
 use crate::{
     adapter::{
-        layer_tree_host_impl::*, layer_tree_impl::LayerTreeHostId, main_layer::MainLayerHostId,
+        layer_tree_host_impl::*,
+        layer_tree_impl::{Color4f, LayerTreeHostId},
+        main_layer::MainLayerHostId,
         property_tree::PropertyTreesOwnerId,
     },
     cc::{
@@ -350,7 +352,7 @@ pub(crate) fn Create(
     ));
     let settings = options.settings;
     let scheduler_settings = settings.ToSchedulerSettings(options.picture.as_ref());
-    let main = CpuMainLayerHost::new(
+    let mut main = CpuMainLayerHost::new(
         MainLayerHostId(owner),
         PropertyTreesOwnerId::FromOwnerValue(owner),
         main_animations.identity(),
@@ -358,6 +360,17 @@ pub(crate) fn Create(
         config.thread,
         endpoint.clone(),
     );
+    if config.transparent_background {
+        // Chromium's WebLayerTreeView forwards the embedder background color
+        // to LayerTreeHost. An alpha-zero root keeps popup Pages compositable
+        // over the document instead of producing an opaque white fill quad.
+        main.pending_commit_state_mut().background_color = Color4f {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        };
+    }
     let image_worker_task_runner: <NativeCompositorTypes as HostImplTypes>::ImageWorkerTaskRunner =
         Arc::new(super::execution::EngineSequencedTaskRunner::new(
             executors.compositor.clone(),

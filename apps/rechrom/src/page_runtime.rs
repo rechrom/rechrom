@@ -387,6 +387,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let impl_executor = threads.compositor_executor.clone();
     let impl_raster_executor = threads.raster_executor.clone();
     let impl_viewport = params.viewport;
+    let impl_transparent = params.transparent;
     std::thread::Builder::new()
         .name(format!("page-compositor-{}-{}", document.0, document.1))
         .stack_size(16 * 1024 * 1024)
@@ -405,6 +406,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     active_artifact,
                     document,
                     impl_viewport,
+                    impl_transparent,
                     impl_executor,
                     impl_raster_executor,
                     impl_source,
@@ -770,6 +772,7 @@ fn run_impl(
     active_artifact: Arc<AtomicBool>,
     document: Document,
     viewport: Viewport,
+    transparent: bool,
     executor: Arc<dyn executor::Executor>,
     raster_executor: Arc<dyn executor::Executor>,
     source: Arc<dyn BeginFrameSource>,
@@ -791,7 +794,8 @@ fn run_impl(
         pump_generation.clone(),
         "RasterExecutor.Task",
     ));
-    let pipeline = PageRenderPipeline::new_external(compositor_executor, raster_executor);
+    let pipeline =
+        PageRenderPipeline::new_external(compositor_executor, raster_executor, transparent);
     let reclaim_sender = self_sender.clone();
     let reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync> =
         Arc::new(move |resources| {

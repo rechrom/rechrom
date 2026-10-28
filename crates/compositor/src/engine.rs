@@ -74,6 +74,9 @@ pub struct CompositorExecutors {
 #[derive(Clone, Debug)]
 pub struct CompositorConfig {
     pub thread: bool,
+    /// Whether the root render pass preserves alpha instead of filling the
+    /// viewport with the default opaque background.
+    pub transparent_background: bool,
     pub raster_task_limit: usize,
     /// Maximum number of independent task-graph drains offered to the
     /// embedding's raster executor. The executor remains authoritative for
@@ -84,6 +87,7 @@ impl Default for CompositorConfig {
     fn default() -> Self {
         Self {
             thread: false,
+            transparent_background: false,
             raster_task_limit: 32,
             raster_worker_limit: 8,
         }

@@ -175,6 +175,7 @@ pub struct PageRenderPipeline {
     surface_parameters: Option<(u32, u32, u32)>,
     rendered_surface: Option<viz::native::SurfaceId>,
     external_presentation: bool,
+    transparent_background: bool,
     outbound_frames: std::collections::VecDeque<NativeCompositorFrameSubmission>,
     deferred_effects: Vec<CompositorMainThreadEffect>,
     begin_frame_sequence: u64,
@@ -209,14 +210,14 @@ pub type PageCompositorFrame = NativeCompositorFrameSubmission;
 pub type PageReturnedResource = compositor::runtime::resources::RasterReturnedResource;
 impl PageRenderPipeline {
     pub fn new(executor: Arc<dyn executor::Executor>) -> Self {
-        Self::NewWithPresentation(executor.clone(), executor, false)
+        Self::NewWithPresentation(executor.clone(), executor, false, false)
     }
 
     pub fn new_with_executors(
         compositor: Arc<dyn executor::Executor>,
         raster: Arc<dyn executor::Executor>,
     ) -> Self {
-        Self::NewWithPresentation(compositor, raster, false)
+        Self::NewWithPresentation(compositor, raster, false, false)
     }
 
     /// Builds only the Page-owned cc producer. The embedder's shared Viz service
@@ -225,14 +226,16 @@ impl PageRenderPipeline {
     pub fn new_external(
         compositor: Arc<dyn executor::Executor>,
         raster: Arc<dyn executor::Executor>,
+        transparent_background: bool,
     ) -> Self {
-        Self::NewWithPresentation(compositor, raster, true)
+        Self::NewWithPresentation(compositor, raster, true, transparent_background)
     }
 
     fn NewWithPresentation(
         compositor_executor: Arc<dyn executor::Executor>,
         raster_executor: Arc<dyn executor::Executor>,
         external_presentation: bool,
+        transparent_background: bool,
     ) -> Self {
         static NEXT_COMMAND_BUFFER: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
@@ -252,6 +255,7 @@ impl PageRenderPipeline {
             surface_parameters: None,
             rendered_surface: None,
             external_presentation,
+            transparent_background,
             outbound_frames: Default::default(),
             deferred_effects: Vec::new(),
             begin_frame_sequence: 0,
@@ -338,7 +342,10 @@ impl PageRenderPipeline {
             let ui_raster = raster_provider.clone();
             self.compositor = Some(
                 CompositorEngine::new(
-                    CompositorConfig::default(),
+                    CompositorConfig {
+                        transparent_background: self.transparent_background,
+                        ..Default::default()
+                    },
                     CompositorExecutors {
                         compositor: executor.clone(),
                         raster: self.raster_executor.clone(),

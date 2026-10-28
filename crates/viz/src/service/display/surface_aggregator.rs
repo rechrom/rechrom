@@ -67,6 +67,7 @@ struct PrewalkResult {
 
 #[derive(Default)]
 pub struct SurfaceAggregator {
+    previous_root_placements_: BTreeMap<SurfaceId, Rect>,
     previous_contained_surfaces_: BTreeSet<CoreSurfaceId>,
     previous_contained_frame_sinks_: BTreeMap<FrameSinkId, LocalSurfaceId>,
     contained_surfaces_: BTreeSet<CoreSurfaceId>,
@@ -812,6 +813,10 @@ impl SurfaceAggregator {
         let result = self.AggregateImpl(manager, damage, ids, output_rect, placements);
         match &result {
             Ok(output) => {
+                self.previous_root_placements_ = placements
+                    .iter()
+                    .map(|placement| (placement.surface_id, placement.destination))
+                    .collect();
                 self.root_damage_rect_ = output
                     .frame
                     .SurfaceDamageRects()
@@ -841,6 +846,25 @@ impl SurfaceAggregator {
         output_rect: DeviceRect,
         placements: &[SurfacePlacement],
     ) -> Result<VizOutput, VizError> {
+        // Added, removed, and moved root Surfaces expose pixels that were
+        // covered by the previous aggregate. Chromium forces damage for these
+        // presentation changes so a retained output buffer redraws the root
+        // underneath a dismissed popup.
+        let current_root_placements: BTreeMap<_, _> = placements
+            .iter()
+            .map(|placement| (placement.surface_id, placement.destination))
+            .collect();
+        let mut placement_damage = Rect::default();
+        for (&surface, &destination) in &self.previous_root_placements_ {
+            if current_root_placements.get(&surface) != Some(&destination) {
+                placement_damage.Union(destination);
+            }
+        }
+        for (&surface, &destination) in &current_root_placements {
+            if self.previous_root_placements_.get(&surface) != Some(&destination) {
+                placement_damage.Union(destination);
+            }
+        }
         let mut placed = BTreeSet::new();
         let mut passes = Vec::new();
         let mut resources = BTreeMap::new();
@@ -898,6 +922,28 @@ impl SurfaceAggregator {
                 &mut roots,
                 &mut receipt,
             )?;
+        }
+
+        if !placement_damage.IsEmpty() {
+            if !prewalk
+                .surface_damage_rects
+                .iter()
+                .any(|damage| damage.Contains(placement_damage))
+            {
+                self.AddSurfaceDamageToDamageList(placement_damage, &mut prewalk);
+            }
+            prewalk.root_damage.Union(placement_damage);
+            for root in &roots {
+                let mut overlap = root.destination;
+                overlap.Intersect(placement_damage);
+                if overlap.IsEmpty() {
+                    continue;
+                }
+                if let Some(pass) = passes.iter_mut().find(|pass| pass.id == root.pass_id) {
+                    pass.damage_rect = pass.output_rect;
+                    pass.has_damage_from_contributing_content = true;
+                }
+            }
         }
 
         self.contained_surfaces_ = prewalk.contained_surfaces.clone();

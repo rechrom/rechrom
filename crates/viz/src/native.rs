@@ -419,4 +419,34 @@ mod tests {
         assert_eq!(output.DamagePixels(), 20);
         assert_eq!(output.Frame().SurfaceDamageRects(), &[partial_damage]);
     }
+
+    #[test]
+    fn removing_overlaid_root_surface_damages_the_root_below_it() {
+        let document = SurfaceId(1);
+        let popup = SurfaceId(2);
+        let destination = DeviceRect::new(0, 0, 10, 10);
+        let placement = |surface_id| SurfacePlacement {
+            surface_id,
+            destination,
+        };
+        let mut viz = VizEngine::New();
+        viz.SubmitFrame(document, frame(1, destination, true))
+            .unwrap();
+        viz.SubmitFrame(popup, frame(1, destination, true))
+            .unwrap();
+        let initial = viz
+            .Aggregate(
+                destination,
+                &[placement(document), placement(popup)],
+            )
+            .unwrap();
+        viz.DidDraw(initial);
+
+        let output = viz
+            .Aggregate(destination, &[placement(document)])
+            .unwrap();
+        assert_eq!(output.DamagePixels(), 100);
+        assert_eq!(output.Frame().SurfaceDamageRects(), &[destination]);
+        assert_eq!(output.Frame().RenderPasses()[0].DamageRect(), destination);
+    }
 }

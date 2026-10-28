@@ -342,15 +342,18 @@ pub(crate) fn publish(
     // planes into one host target (for example toolbar and document
     // surfaces). They are BGRA bitmaps in device pixels, so routing every
     // unscaled plane back through SkImage/Canvas turns a row copy into a full
-    // image draw. Keep the same kSrc ordering and damage clipping while
-    // copying those planes directly into the borrowed output buffer.
+    // image draw. Opaque planes can keep the same kSrc ordering and damage
+    // clipping while copying directly into the borrowed output buffer.
+    // Transparent roots must go through Skia so that their clear pixels do
+    // not erase the roots below them.
     let direct_roots = target.format == PixelFormat::Bgra8888
         && root_passes.iter().all(|(pass, destination)| {
             let source = pass.OutputRect();
             let Some(backing) = backings.get(&pass.RenderPassId()) else {
                 return false;
             };
-            source.width == destination.width
+            !pass.has_transparent_background
+                && source.width == destination.width
                 && source.height == destination.height
                 && backing.rect.width >= source.width
                 && backing.rect.height >= source.height
@@ -412,7 +415,8 @@ pub(crate) fn publish(
         let backing = backings
             .get(&pass.RenderPassId())
             .ok_or_else(|| io::Error::other("completed translated root pass is unavailable"))?;
-        if destination == full_bounds
+        if !pass.has_transparent_background
+            && destination == full_bounds
             && backing.drawn_rect.width == destination.width
             && backing.drawn_rect.height == destination.height
         {
@@ -520,7 +524,11 @@ pub(crate) fn publish(
         output.save();
         output.clip_rect(&rect(damage), SkClipOp::kIntersect, false);
         let mut paint = SkPaint::default();
-        paint.setBlendMode(SkBlendMode::kSrc);
+        paint.setBlendMode(if pass.has_transparent_background {
+            SkBlendMode::kSrcOver
+        } else {
+            SkBlendMode::kSrc
+        });
         paint.setAntiAlias(false);
         let sampling = if destination.width == backing.drawn_rect.width
             && destination.height == backing.drawn_rect.height
