@@ -2041,6 +2041,7 @@ version = "0.0.1"
 name = "layout_algo_grid"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
  "font_engine",
  "layoutng_assembly",
  "layoutng_foundation",
@@ -3356,6 +3357,7 @@ dependencies = [
  "browser_tracing",
  "bytemuck",
  "cc",
+ "compositor",
  "devtools",
  "document_image",
  "dom",

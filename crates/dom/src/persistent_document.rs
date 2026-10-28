@@ -6507,15 +6507,37 @@ impl PersistentDocument {
             self.resolved_styles.remove(&self.arena[node].id);
             return;
         }
-        self.style_state
-            .layout_style_nodes
-            .insert(self.arena[node].id);
-        self.style_state
-            .layout_tree_roots
-            .insert(self.arena[node].id);
-        self.style_state
-            .paint_style_nodes
-            .insert(self.arena[node].id);
+        // Style recalc clears a suppressed subtree parent-first. Once an
+        // ancestor is queued for attachment, that transaction owns every
+        // descendant's layout and paint removal; enqueueing each cleared child
+        // repeats local lookup work before attachment roots are coalesced.
+        let covered_by_attachment_ancestor = self.style_state.layout_inputs_require_tree || {
+            let mut ancestor = self.FlatTreeParentElement(node);
+            let mut covered = false;
+            while let Some(index) = ancestor {
+                if self
+                    .style_state
+                    .layout_tree_roots
+                    .contains(&self.arena[index].id)
+                {
+                    covered = true;
+                    break;
+                }
+                ancestor = self.FlatTreeParentElement(index);
+            }
+            covered
+        };
+        if !covered_by_attachment_ancestor {
+            self.style_state
+                .layout_style_nodes
+                .insert(self.arena[node].id);
+            self.style_state
+                .layout_tree_roots
+                .insert(self.arena[node].id);
+            self.style_state
+                .paint_style_nodes
+                .insert(self.arena[node].id);
+        }
         if self.AffectsSVGResourceClients(node) {
             self.style_state.layout_inputs_require_tree = true;
         }

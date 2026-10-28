@@ -165,8 +165,10 @@ pub struct PageRenderPipeline {
     executor: Arc<PageCompositorExecutor>,
     raster_executor: Arc<PageCompositorExecutor>,
     raster_engine: RasterEngine,
-    viz: viz::native::VizEngine,
-    renderer: renderer::Renderer<RendererSkiaBackend>,
+    // Present only for synchronous embedding. External Page producers stop at
+    // CompositorFrame and submit into the window-owned shared Viz service.
+    viz: Option<viz::native::VizEngine>,
+    renderer: Option<renderer::Renderer<RendererSkiaBackend>>,
     surface: viz::native::SurfaceId,
     next_surface: u64,
     local_surface_id: Option<compositor::runtime::types::LocalSurfaceId>,
@@ -205,201 +207,62 @@ pub struct CompositorWheelResult {
 }
 pub type PageCompositorFrame = NativeCompositorFrameSubmission;
 pub type PageReturnedResource = compositor::runtime::resources::RasterReturnedResource;
-
-/// Viz and software Renderer state owned by a Page presentation sequence.
-/// It consumes the Page's move-only CompositorFrame output without access to
-/// Blink, PaintEngine, cc trees, tiles, or input scheduling.
-pub struct PageFramePresenter {
-    viz: viz::native::VizEngine,
-    renderer: renderer::Renderer<RendererSkiaBackend>,
-    surface: viz::native::SurfaceId,
-    next_surface: u64,
-    local_surface_id: Option<compositor::runtime::types::LocalSurfaceId>,
-    surface_parameters: Option<(u32, u32, u32)>,
-    rendered_surface: Option<viz::native::SurfaceId>,
-}
-impl PageFramePresenter {
-    pub fn new() -> Self {
-        Self {
-            viz: viz::native::VizEngine::New(),
-            renderer: renderer::Renderer::new(RendererSkiaBackend::default()),
-            surface: viz::native::SurfaceId(1),
-            next_surface: 2,
-            local_surface_id: None,
-            surface_parameters: None,
-            rendered_surface: None,
-        }
-    }
-
-    pub fn Submit(
-        &mut self,
-        submission: PageCompositorFrame,
-    ) -> io::Result<(
-        bool,
-        Vec<compositor::runtime::resources::RasterReturnedResource>,
-        bool,
-    )> {
-        let local_surface_id = submission.local_surface_id;
-        let frame = submission.frame;
-        let root = frame
-            .render_pass_list
-            .last()
-            .ok_or_else(|| io::Error::other("compositor frame has no root render pass"))?;
-        let parameters = (
-            root.output_rect.width.max(0) as u32,
-            root.output_rect.height.max(0) as u32,
-            frame.metadata.device_scale_factor.to_bits(),
-        );
-        // A full root damage rect makes the previous host target irrelevant.
-        // Pass this fact across the Viz/Renderer boundary so the embedding can
-        // acquire fresh storage without cloning an immutable in-flight frame.
-        let full_root_damage = root.damage_rect == root.output_rect;
-        let mut returned = Vec::new();
-        if let Some(current) = self.local_surface_id {
-            let same_embed = current.embed_token == local_surface_id.embed_token;
-            // Chromium compares the two independently allocated, wrapping
-            // sequence numbers rather than lexicographically ordering them.
-            // Source: components/viz/common/surfaces/local_surface_id.cc:47-70.
-            if same_embed && !local_surface_id.IsSameOrNewerThan(&current) {
-                returned.extend(frame.resource_list.iter().map(
-                    compositor::runtime::resources::RasterTransferableResource::ToReturnedResource,
-                ));
-                return Ok((false, returned, false));
-            }
-        }
-        let generation_changed = self
-            .local_surface_id
-            .is_some_and(|current| current != local_surface_id);
-        if !generation_changed
-            && self
-                .surface_parameters
-                .is_some_and(|current| current != parameters)
-        {
-            return Err(io::Error::other(
-                "CompositorFrame dimensions changed without a new LocalSurfaceId",
-            ));
-        }
-        if generation_changed {
-            // Chromium allocates a new LocalSurfaceId whenever size or device
-            // scale changes.  Mirror that generation boundary at this Page's
-            // Viz adapter so render-pass backings and retained damage cannot
-            // cross between incompatible surface coordinate spaces.
-            // Source: components/viz/common/surfaces/
-            //         parent_local_surface_id_allocator.cc:74-96.
-            if let Some(resources) = self.viz.DestroySurface(self.surface) {
-                returned.extend(resources);
-            }
-            self.surface = viz::native::SurfaceId(self.next_surface);
-            self.next_surface = self.next_surface.wrapping_add(1).max(1);
-        }
-        self.local_surface_id = Some(local_surface_id);
-        self.surface_parameters = Some(parameters);
-        returned.extend(
-            self.viz
-                .SubmitFrame(self.surface, frame)
-                .map_err(|error| io::Error::other(error.to_string()))?
-                .returned_resources,
-        );
-        Ok((true, returned, full_root_damage))
-    }
-
-    pub fn RenderCurrent(
-        &mut self,
-        width: u32,
-        height: u32,
-        target: Vec<u32>,
-        retained: bool,
-    ) -> io::Result<(RenderUpdate, Vec<u32>)> {
-        let output = viz::native::DeviceRect::new(0, 0, width as i32, height as i32);
-        let placement = viz::native::SurfacePlacement {
-            surface_id: self.surface,
-            destination: output,
-        };
-        let mut aggregated = self
-            .viz
-            .Aggregate(output, &[placement])
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        let (update, target) = self.renderer.Render(
-            &mut aggregated,
-            renderer_skia::RenderTarget {
-                width,
-                height,
-                pixels: target,
-                format: PixelFormat::Bgra8888,
-                row_stride: width as usize,
-                retained: retained && self.rendered_surface == Some(self.surface),
-            },
-        )?;
-        self.viz.DidDraw(aggregated);
-        self.rendered_surface = Some(self.surface);
-        Ok((update, target.pixels))
-    }
-}
 impl PageRenderPipeline {
     pub fn new(executor: Arc<dyn executor::Executor>) -> Self {
-        Self::NewWithPresentation(executor.clone(), executor, false).0
+        Self::NewWithPresentation(executor.clone(), executor, false)
     }
 
     pub fn new_with_executors(
         compositor: Arc<dyn executor::Executor>,
         raster: Arc<dyn executor::Executor>,
     ) -> Self {
-        Self::NewWithPresentation(compositor, raster, false).0
+        Self::NewWithPresentation(compositor, raster, false)
     }
 
-    /// Builds the cc producer and the Viz/Renderer consumer as separate owners.
-    /// Moving the consumer to a Page renderer sequence preserves Chromium's
-    /// FrameSink boundary: impl-thread input submits owned CompositorFrames and
-    /// never waits for software drawing to finish.
+    /// Builds only the Page-owned cc producer. The embedder's shared Viz service
+    /// consumes the move-only CompositorFrame after the FrameSink boundary, so
+    /// impl-thread input never waits for display aggregation or drawing.
     pub fn new_external(
         compositor: Arc<dyn executor::Executor>,
         raster: Arc<dyn executor::Executor>,
     ) -> Self {
-        Self::NewWithPresentation(compositor, raster, true).0
+        Self::NewWithPresentation(compositor, raster, true)
     }
 
     fn NewWithPresentation(
         compositor_executor: Arc<dyn executor::Executor>,
         raster_executor: Arc<dyn executor::Executor>,
         external_presentation: bool,
-    ) -> (Self, PageFramePresenter) {
+    ) -> Self {
         static NEXT_COMMAND_BUFFER: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
         let command_buffer = NEXT_COMMAND_BUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let raster_engine = RasterEngine::new(command_buffer, 64 * 1024 * 1024);
-        let presenter = PageFramePresenter::new();
-        let renderer = if external_presentation {
-            renderer::Renderer::new(RendererSkiaBackend::default())
-        } else {
-            renderer::Renderer::new(RendererSkiaBackend::default())
-        };
-        (
-            Self {
-                compositor: None,
-                executor: Arc::new(PageCompositorExecutor::new(compositor_executor)),
-                raster_executor: Arc::new(PageCompositorExecutor::new(raster_executor)),
-                raster_engine,
-                viz: viz::native::VizEngine::New(),
-                renderer,
-                surface: viz::native::SurfaceId(1),
-                next_surface: 2,
-                local_surface_id: None,
-                surface_parameters: None,
-                rendered_surface: None,
-                external_presentation,
-                outbound_frames: Default::default(),
-                deferred_effects: Vec::new(),
-                begin_frame_sequence: 0,
-                needs_begin_frames: false,
-                work_pending: false,
-                input_frame_issued_since_physical: false,
-                input_frame_pump_pending: false,
-                owner_turn_pending: false,
-                pending: None,
-                presentable: None,
-            },
-            presenter,
-        )
+        Self {
+            compositor: None,
+            executor: Arc::new(PageCompositorExecutor::new(compositor_executor)),
+            raster_executor: Arc::new(PageCompositorExecutor::new(raster_executor)),
+            raster_engine,
+            viz: (!external_presentation).then(viz::native::VizEngine::New),
+            renderer: (!external_presentation)
+                .then(|| renderer::Renderer::new(RendererSkiaBackend::default())),
+            surface: viz::native::SurfaceId(1),
+            next_surface: 2,
+            local_surface_id: None,
+            surface_parameters: None,
+            rendered_surface: None,
+            external_presentation,
+            outbound_frames: Default::default(),
+            deferred_effects: Vec::new(),
+            begin_frame_sequence: 0,
+            needs_begin_frames: false,
+            work_pending: false,
+            input_frame_issued_since_physical: false,
+            input_frame_pump_pending: false,
+            owner_turn_pending: false,
+            pending: None,
+            presentable: None,
+        }
     }
 
     fn SubmitInternalFrame(
@@ -443,7 +306,12 @@ impl PageRenderPipeline {
             ));
         }
         if generation_changed {
-            if let Some(resources) = self.viz.DestroySurface(self.surface) {
+            if let Some(resources) = self
+                .viz
+                .as_mut()
+                .expect("internal presentation owns Viz")
+                .DestroySurface(self.surface)
+            {
                 returned.extend(resources);
             }
             self.surface = viz::native::SurfaceId(self.next_surface);
@@ -454,6 +322,8 @@ impl PageRenderPipeline {
         self.surface_parameters = Some(parameters);
         returned.extend(
             self.viz
+                .as_mut()
+                .expect("internal presentation owns Viz")
                 .SubmitFrame(self.surface, frame)
                 .map_err(|error| io::Error::other(error.to_string()))?
                 .returned_resources,
@@ -1243,22 +1113,28 @@ impl PageRenderPipeline {
         let (update, viz_output) = {
             let mut viz_output = self
                 .viz
+                .as_mut()
+                .expect("internal presentation owns Viz")
                 .Aggregate(output, &[placement])
                 .map_err(|error| io::Error::other(error.to_string()))?;
             let aggregated_at = profile_started.map(|_| std::time::Instant::now());
             let aggregate_damage_pixels = viz_output.DamagePixels();
             let owned_target = target.to_vec();
-            let (update, rendered_target) = self.renderer.Render(
-                &mut viz_output,
-                renderer_skia::RenderTarget {
-                    width,
-                    height,
-                    pixels: owned_target,
-                    format,
-                    row_stride: stride,
-                    retained: retained && self.rendered_surface == Some(surface),
-                },
-            )?;
+            let (update, rendered_target) = self
+                .renderer
+                .as_mut()
+                .expect("internal presentation owns Renderer")
+                .Render(
+                    &mut viz_output,
+                    renderer_skia::RenderTarget {
+                        width,
+                        height,
+                        pixels: owned_target,
+                        format,
+                        row_stride: stride,
+                        retained: retained && self.rendered_surface == Some(surface),
+                    },
+                )?;
             target.copy_from_slice(&rendered_target.pixels);
             if let (Some(started), Some(committed), Some(aggregated)) =
                 (profile_started, committed_at, aggregated_at)
@@ -1277,7 +1153,10 @@ impl PageRenderPipeline {
             }
             (update, viz_output)
         };
-        self.viz.DidDraw(viz_output);
+        self.viz
+            .as_mut()
+            .expect("internal presentation owns Viz")
+            .DidDraw(viz_output);
         self.rendered_surface = Some(surface);
         Ok(update)
     }

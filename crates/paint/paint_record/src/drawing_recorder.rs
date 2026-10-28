@@ -18,10 +18,11 @@ impl<'c, 'o> DrawingRecorder<'c, 'o> {
         context: &'c RefCell<PaintContext<'o>>,
         node: &PaintTreeNode<'_>,
         item_type: DisplayItemIdType,
+        client_visual_rect: PaintRect,
     ) -> bool {
         context
             .borrow_mut()
-            .UseCachedDrawingIfPossible(node, item_type)
+            .UseCachedDrawingIfPossible(node, item_type, client_visual_rect)
     }
 
     pub(crate) fn new(

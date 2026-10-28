@@ -51,6 +51,7 @@ viz = { path = "../viz" }
 
 [dev-dependencies]
 layoutng_style = { path = "../layoutng/layoutng_style" }
+raster = { path = "../raster", features = ["artifact_test_support"] }
 
 [features]
 default = ["inline_layout"]

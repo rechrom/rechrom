@@ -1,9 +1,7 @@
-//! Completed Page output transport. Page owns the only compositor and renderer.
+//! Page compositor output transported to the window-owned Viz service.
 use crate::{chrome::DragRegion, engine::Viewport};
-use std::{
-    sync::{mpsc, Arc},
-    time::Instant,
-};
+use browser::page::{PageCompositorFrame, PageReturnedResource};
+use std::{sync::Arc, time::Instant};
 pub(crate) type Document = (u64, u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ResizeProvenance {
@@ -38,7 +36,8 @@ pub(crate) struct FrameProvenance {
     pub document: Document,
     pub content: Option<ContentFrameProvenance>,
 }
-/// Host-owned completed pixels, not an intermediate compositor/raster job.
+/// A Page's move-only FrameSink submission. The window display owns the sole
+/// Viz/Renderer service and returns resources to this Page's compositor.
 pub(crate) struct PageFrame {
     pub provenance: FrameProvenance,
     pub viewport: Viewport,
@@ -46,14 +45,13 @@ pub(crate) struct PageFrame {
     /// this through aggregation so the platform presenter can apply its
     /// native interaction-frame presentation policy.
     pub is_handling_interaction: bool,
-    pub pixels: Arc<Vec<u32>>,
-    pub recycler: Option<mpsc::Sender<Arc<Vec<u32>>>>,
+    pub frame: PageCompositorFrame,
+    pub reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
 }
-impl Drop for PageFrame {
-    fn drop(&mut self) {
-        if let Some(recycler) = self.recycler.take() {
-            let pixels = std::mem::take(&mut self.pixels);
-            let _ = recycler.send(pixels);
+impl PageFrame {
+    pub(crate) fn Reclaim(&self, resources: Vec<PageReturnedResource>) {
+        if !resources.is_empty() {
+            (self.reclaim)(resources);
         }
     }
 }

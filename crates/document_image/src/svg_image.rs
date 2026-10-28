@@ -1090,6 +1090,76 @@ fn ParseAnimationShorthand(value: &str) -> Option<AnimationShorthand> {
     (!result.name.is_empty() && result.duration > 0.0 && result.iterations > 0.0).then_some(result)
 }
 
+// Production Style expands the animation shorthand into its longhands before
+// projecting accepted declarations into CSSOM. Consume that typed projection
+// directly; the shorthand case remains for callers which construct a CSSOM
+// rule without a parsed backing owner.
+fn ParseAnimationDeclarations(declarations: &[CSSDeclaration]) -> Option<AnimationShorthand> {
+    let mut result = AnimationShorthand {
+        duration: 0.0,
+        delay: 0.0,
+        iterations: 1.0,
+        easing: "ease".into(),
+        ..Default::default()
+    };
+    let mut found = false;
+    for declaration in declarations {
+        let property = declaration.property.to_ascii_lowercase();
+        let first = declaration
+            .value
+            .split(',')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        match property.as_str() {
+            "animation" | "-webkit-animation" => {
+                if let Some(shorthand) = ParseAnimationShorthand(&declaration.value) {
+                    result = shorthand;
+                    found = true;
+                }
+            }
+            "animation-name" | "-webkit-animation-name" => {
+                result.name = if first.eq_ignore_ascii_case("none") {
+                    String::new()
+                } else {
+                    first.to_owned()
+                };
+                found = true;
+            }
+            "animation-duration" | "-webkit-animation-duration" => {
+                if let Some(seconds) = Seconds(first) {
+                    result.duration = seconds.max(0.0);
+                    found = true;
+                }
+            }
+            "animation-delay" | "-webkit-animation-delay" => {
+                if let Some(seconds) = Seconds(first) {
+                    result.delay = seconds;
+                    found = true;
+                }
+            }
+            "animation-iteration-count" | "-webkit-animation-iteration-count" => {
+                if first.eq_ignore_ascii_case("infinite") {
+                    result.iterations = f64::INFINITY;
+                    found = true;
+                } else if let Ok(iterations) = first.parse::<f64>() {
+                    result.iterations = iterations.max(0.0);
+                    found = true;
+                }
+            }
+            "animation-timing-function" | "-webkit-animation-timing-function" => {
+                if !first.is_empty() {
+                    result.easing = first.to_ascii_lowercase();
+                    found = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    (found && !result.name.is_empty() && result.duration > 0.0 && result.iterations > 0.0)
+        .then_some(result)
+}
+
 fn KeyframeOffset(value: &str) -> Option<f64> {
     let value = value.trim().to_ascii_lowercase();
     match value.as_str() {
@@ -1180,7 +1250,7 @@ fn CollectAnimations(
         if document.Node(index).Type() != dom::persistent_document::DOMNodeType::kElement {
             continue;
         }
-        let mut shorthand = None;
+        let mut declarations = Vec::new();
         for sheet in document.ActiveStyleSheets() {
             for rule in &sheet.rules {
                 if !rule.media_conditions.iter().all(|condition| {
@@ -1196,18 +1266,12 @@ fn CollectAnimations(
                 {
                     continue;
                 }
-                for declaration in &rule.declarations {
-                    if declaration.property.eq_ignore_ascii_case("animation")
-                        || declaration
-                            .property
-                            .eq_ignore_ascii_case("-webkit-animation")
-                    {
-                        shorthand = ParseAnimationShorthand(&declaration.value);
-                    }
-                }
+                declarations.extend(rule.declarations.iter().cloned());
             }
         }
-        let Some(animation) = shorthand else { continue };
+        let Some(animation) = ParseAnimationDeclarations(&declarations) else {
+            continue;
+        };
         let Some(keyframes) = definitions
             .get(&animation.name)
             .filter(|frames| !frames.is_empty())

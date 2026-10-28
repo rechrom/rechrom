@@ -275,20 +275,26 @@ pub fn RenderHtml(source: &str, width: u32, height: u32) -> Vec<u8> {
     )
     .expect("HTML render navigation failed");
     page.RunTask().expect("HTML render task failed");
-    let artifact = page
-        .CurrentFrame()
-        .map(|frame| (*frame.display_items).clone())
-        .expect("HTML render produced no frame");
-    RenderArtifactPng(&artifact, width, height)
+    RenderPagePng(&mut page, width, height).expect("HTML render presentation failed")
 }
 
-fn RenderArtifactPng(
-    artifact: &paint::paint_engine::PaintArtifact,
-    width: u32,
-    height: u32,
-) -> Vec<u8> {
-    let rgba = raster::RasterizePaintArtifact(artifact, width, height);
-    raster::EncodeRgbaPng(&rgba, width, height)
+fn RenderPagePng(page: &mut page::Page, width: u32, height: u32) -> io::Result<Vec<u8>> {
+    let mut pixels = vec![0u32; width as usize * height as usize];
+    page.PaintInto(
+        width,
+        height,
+        1.0,
+        &mut pixels,
+        renderer_skia::PixelFormat::Rgba8888,
+        width as usize,
+    )?;
+    // Rgba8888 is packed as host N32 with red in the low byte; serialize the
+    // completed Renderer target into the byte order consumed by PNG encoding.
+    let rgba = pixels
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    Ok(raster::EncodeRgbaPng(&rgba, width, height))
 }
 
 pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
@@ -303,8 +309,14 @@ pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
 }
 
 pub fn RenderUrl(url: &str, width: u32, height: u32) -> std::io::Result<Vec<u8>> {
-    let artifact = BuildSourceDisplayListUrl(url, width, height)?;
-    Ok(RenderArtifactPng(&artifact, width, height))
+    let mut page = page::OpenUrl(
+        url,
+        width,
+        height,
+        std::rc::Rc::new(RefCell::new(page::NullPageClient)),
+    )?;
+    page.RunTask()?;
+    RenderPagePng(&mut page, width, height)
 }
 
 /// Navigate through the persistent Page and drain tasks as the source CLI does.
@@ -339,9 +351,7 @@ pub fn BuildSourceDisplayListUrl(
 }
 
 pub fn RenderUrlTranslatedPng(url: &str, width: u32, height: u32) -> io::Result<Vec<u8>> {
-    let display_list = BuildSourceDisplayListUrl(url, width, height)?;
-    let rgba = raster::RasterizePaintArtifact(&display_list, width, height);
-    Ok(raster::EncodeRgbaPng(&rgba, width, height))
+    RenderUrl(url, width, height)
 }
 
 #[cfg(test)]

@@ -233,6 +233,11 @@ pub struct RecordedDisplayItem {
     pub scrollbar: Option<ScrollbarDisplayItemData>,
     pub kind: RecordedDisplayItemKind,
     pub id: paint_model::display_item_id::DisplayItemId,
+    /// The client visual rect supplied when the PaintRecord was created.
+    /// ObjectPaintInvalidator compares this geometry before PaintController
+    /// moves a cached DrawingDisplayItem. Keep the producer value separate
+    /// from `visual_rect`, which may be tightened to the recorded operations.
+    pub client_visual_rect: PaintRect,
     pub visual_rect: PaintRect,
     pub visual_rect_is_accurate: bool,
     pub draws_content: bool,

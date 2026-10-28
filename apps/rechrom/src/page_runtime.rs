@@ -1,6 +1,6 @@
 //! One independent Page domain. Document tasks and Page rendering execute only
 //! on its document owner. Frame delivery merely enqueues rendering opportunities;
-//! completed pixel allocations cross into the window presentation domain.
+//! move-only CompositorFrames cross into the window-owned Viz domain.
 use crate::{
     begin_frame_source::NativeBeginFrame,
     engine::{ResizeRequest, Viewport},
@@ -11,10 +11,7 @@ use crate::{
     },
     window_runtime,
 };
-use browser::page::{
-    CompositorMainThreadEffect, PageCompositorFrame, PageFramePresenter, PageRenderPipeline,
-    PageReturnedResource,
-};
+use browser::page::{CompositorMainThreadEffect, PageRenderPipeline, PageReturnedResource};
 use browser::page::{Page, PageClient};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use foundation::begin_frame::BeginFrameSource;
@@ -144,7 +141,6 @@ pub(crate) enum ImplCommand {
         samples: usize,
     },
     Reclaim(Vec<PageReturnedResource>),
-    RendererFailed(String),
     Stop,
 }
 
@@ -202,14 +198,6 @@ impl executor::Executor for WakingExecutor {
         self.inner.execute_after(delay, self.wrapped(task))
     }
 }
-enum PresenterCommand {
-    Frame {
-        frame: PageCompositorFrame,
-        content: ContentFrameProvenance,
-        viewport: Viewport,
-    },
-    Stop,
-}
 #[derive(Clone, Copy)]
 pub(crate) enum MainThreadEvent {
     BeginFrame {
@@ -225,7 +213,6 @@ struct FrameDemand {
     active_artifact: Arc<AtomicBool>,
     native: Arc<dyn BeginFrameSource>,
     compositor: mpsc::Sender<ImplCommand>,
-    external_compositor: bool,
 }
 impl FrameDemand {
     /// A request originating from cc's SEND_BEGIN_MAIN_FRAME already has a
@@ -237,7 +224,7 @@ impl FrameDemand {
 }
 impl BeginFrameSource for FrameDemand {
     fn request_begin_frame(&self) {
-        if self.external_compositor && self.active_artifact.load(Ordering::Acquire) {
+        if self.active_artifact.load(Ordering::Acquire) {
             // LayerTreeHost requests a commit; ProxyImpl's scheduler opens the
             // matching rendering opportunity through
             // request_compositor_main_frame(). A forwarded compositor request
@@ -249,7 +236,7 @@ impl BeginFrameSource for FrameDemand {
             // Bootstrap has no active cc tree to schedule against. Preserve
             // direct delivery until the first PaintArtifact is admitted.
             let newly_requested = !self.requested.swap(true, Ordering::AcqRel);
-            if newly_requested && self.external_compositor {
+            if newly_requested {
                 let _ = self.compositor.send(ImplCommand::RequestMainFrame);
             }
         }
@@ -371,7 +358,6 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         active_artifact: active_artifact.clone(),
         native: params.source.clone(),
         compositor: impl_sender.clone(),
-        external_compositor: !params.controls,
     });
     // The parent registers Surface placement before enabling frame delivery.
     let visible = Arc::new(AtomicBool::new(false));
@@ -401,7 +387,6 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let impl_executor = threads.compositor_executor.clone();
     let impl_raster_executor = threads.raster_executor.clone();
     let impl_viewport = params.viewport;
-    let impl_external_compositor = !params.controls;
     std::thread::Builder::new()
         .name(format!("page-compositor-{}-{}", document.0, document.1))
         .stack_size(16 * 1024 * 1024)
@@ -420,7 +405,6 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     active_artifact,
                     document,
                     impl_viewport,
-                    impl_external_compositor,
                     impl_executor,
                     impl_raster_executor,
                     impl_source,
@@ -569,7 +553,9 @@ impl From<io::Error> for RuntimeFailure {
 }
 struct ImplPresentation {
     pipeline: PageRenderPipeline,
-    presenter: mpsc::Sender<PresenterCommand>,
+    frames: mpsc::Sender<window_runtime::Command>,
+    document: Document,
+    reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
     artifact: Option<Arc<paint::PaintArtifact>>,
     content: Option<ContentFrameProvenance>,
     viewport: Viewport,
@@ -583,12 +569,16 @@ struct ImplPresentation {
 impl ImplPresentation {
     fn new(
         pipeline: PageRenderPipeline,
-        presenter: mpsc::Sender<PresenterCommand>,
+        frames: mpsc::Sender<window_runtime::Command>,
+        document: Document,
+        reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
         viewport: Viewport,
     ) -> Self {
         Self {
             pipeline,
-            presenter,
+            frames,
+            document,
+            reclaim,
             artifact: None,
             content: None,
             viewport,
@@ -721,15 +711,25 @@ impl ImplPresentation {
                     },
                 })
                 .unwrap_or(self.viewport);
-            self.presenter
-                .send(PresenterCommand::Frame {
-                    frame,
-                    content,
-                    viewport,
-                })
+            let is_handling_interaction = frame.frame.metadata.is_handling_interaction;
+            self.frames
+                .send(window_runtime::Command::Display(
+                    crate::display::Message::Prepare {
+                        submitted: PageFrame {
+                            provenance: FrameProvenance {
+                                document: self.document,
+                                content: Some(content),
+                            },
+                            viewport,
+                            is_handling_interaction,
+                            frame,
+                            reclaim: self.reclaim.clone(),
+                        },
+                    },
+                ))
                 .map_err(|_| RuntimeFailure {
                     stage: "compositor",
-                    error: io::Error::other("Page renderer stopped"),
+                    error: io::Error::other("window display stopped"),
                 })?;
             submitted = true;
         }
@@ -760,217 +760,8 @@ fn only_requests_main_frame(effects: &[CompositorMainThreadEffect]) -> bool {
             .all(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame))
 }
 
-fn run_presenter(
-    receiver: mpsc::Receiver<PresenterCommand>,
-    mut presenter: PageFramePresenter,
-    compositor: mpsc::Sender<ImplCommand>,
-    document: Document,
-    frames: mpsc::Sender<window_runtime::Command>,
-) -> io::Result<()> {
-    let _target_scope = browser_tracing::scope(browser_tracing::Context {
-        target_id: if document.0 == 0 { 2 } else { 1 },
-        ..Default::default()
-    });
-    let mut pixels = Arc::new(Vec::<u32>::new());
-    let (recycle_sender, recycle_receiver) = mpsc::channel::<Arc<Vec<u32>>>();
-    // A returned software target is useful for the next frame even when a
-    // top-level resize changed its exact pixel count.  Keeping one buffer for
-    // every observed size makes a live-resize gesture retain hundreds of
-    // full-window allocations (several gigabytes on a Retina display).
-    // Chromium's resource pool releases incompatible backings; this
-    // single-page presenter only needs the most recently returned target.
-    let mut recycled = None::<Vec<u32>>;
-    let mut retained_target: Option<(u32, u32)> = None;
-    let mut presentation_sequence = 0u64;
-    let mut pending_resize = None;
-    while let Ok(first) = receiver.recv() {
-        let PresenterCommand::Frame {
-            frame,
-            mut content,
-            viewport,
-        } = first
-        else {
-            break;
-        };
-        let mut batch_resize = pending_resize.take();
-        merge_resize(&mut batch_resize, content.resize.take());
-        let root_scroll_y = frame.frame.metadata.root_scroll_offset.y();
-        let frame_token = frame.frame.metadata.frame_token;
-        let is_handling_interaction = frame.frame.metadata.is_handling_interaction;
-        let (accepted, returned, full_root_damage) = presenter.Submit(frame)?;
-        if !returned.is_empty() {
-            let _ = compositor.send(ImplCommand::Reclaim(returned));
-        }
-        let mut latest = accepted.then_some((
-            content,
-            viewport,
-            root_scroll_y,
-            frame_token,
-            is_handling_interaction,
-            full_root_damage,
-        ));
-        let mut coalesced = 0usize;
-        let mut stop = false;
-        // Raster immediately when a compositor frame is available. If raster
-        // fell behind, retain only the newest queued Surface before starting
-        // the next draw. Chromium's tile/raster workers run ahead of the
-        // display pulse; VSync chooses among completed frames, it does not
-        // delay the start of raster work.
-        while let Ok(command) = receiver.try_recv() {
-            match command {
-                PresenterCommand::Frame {
-                    frame,
-                    mut content,
-                    viewport,
-                } => {
-                    merge_resize(&mut batch_resize, content.resize.take());
-                    let root_scroll_y = frame.frame.metadata.root_scroll_offset.y();
-                    let frame_token = frame.frame.metadata.frame_token;
-                    let is_handling_interaction = frame.frame.metadata.is_handling_interaction;
-                    let (accepted, returned, full_root_damage) = presenter.Submit(frame)?;
-                    if !returned.is_empty() {
-                        let _ = compositor.send(ImplCommand::Reclaim(returned));
-                    }
-                    if accepted {
-                        coalesced += usize::from(latest.is_some());
-                        latest = Some((
-                            content,
-                            viewport,
-                            root_scroll_y,
-                            frame_token,
-                            is_handling_interaction,
-                            full_root_damage,
-                        ));
-                    }
-                }
-                PresenterCommand::Stop => {
-                    stop = true;
-                    break;
-                }
-            }
-        }
-        let Some((
-            mut content,
-            viewport,
-            root_scroll_y,
-            frame_token,
-            is_handling_interaction,
-            full_root_damage,
-        )) = latest
-        else {
-            pending_resize = batch_resize;
-            if stop {
-                break;
-            }
-            continue;
-        };
-        content.resize = batch_resize.take();
-        let _resize_scope = content.resize.map(|resize| {
-            browser_tracing::scope(browser_tracing::Context {
-                task_id: resize.id,
-                ..Default::default()
-            })
-        });
-        let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
-            .then(Instant::now);
-        let mut render_trace = browser_tracing::span("raster", "PagePresenter.RenderCurrent");
-        render_trace.set("coalesced", coalesced as f64);
-        render_trace.set("frame_token", frame_token as f64);
-        render_trace.set("root_scroll_y", f64::from(root_scroll_y));
-        let pixel_count = viewport.width as usize * viewport.height as usize;
-        if full_root_damage {
-            // This draw overwrites the complete target, so the Presenter no
-            // longer needs its retained predecessor. Release that strong
-            // reference before receiving the Display's returned PageFrame;
-            // otherwise Arc::try_unwrap below necessarily fails for the very
-            // allocation we want to reuse and every scroll frame allocates
-            // and zeroes another full-screen buffer.
-            pixels = Arc::new(Vec::new());
-            retained_target = None;
-        }
-        for returned in recycle_receiver.try_iter() {
-            if let Ok(returned) = Arc::try_unwrap(returned) {
-                recycled = Some(returned);
-            }
-        }
-        if full_root_damage {
-            // Display returns a Page output only after it has copied that
-            // complete immutable frame into the host target. Full root damage
-            // overwrites every pixel, so a returned allocation can become the
-            // next target without cloning or clearing a full-screen buffer.
-            let mut target = recycled
-                .take()
-                .unwrap_or_else(|| Vec::with_capacity(pixel_count));
-            target.resize(pixel_count, 0);
-            pixels = Arc::new(target);
-        }
-        // Partial damage requires the exact retained predecessor. A recycled
-        // full-damage target may be older, so publish the complete root into it
-        // even though its allocation itself can be reused without clearing.
-        let retained =
-            !full_root_damage && retained_target == Some((viewport.width, viewport.height));
-        let target = Arc::make_mut(&mut pixels);
-        if target.len() != pixel_count {
-            target.resize(pixel_count, 0);
-        }
-        let owned_target = std::mem::take(target);
-        let (update, owned_target) =
-            presenter.RenderCurrent(viewport.width, viewport.height, owned_target, retained)?;
-        pixels = Arc::new(owned_target);
-        render_trace.set("direct_root_target", update.direct_root_target as u8 as f64);
-        render_trace.set("retained", retained as u8 as f64);
-        render_trace.set("full_root_damage", full_root_damage as u8 as f64);
-        render_trace.set("width", viewport.width as f64);
-        render_trace.set("height", viewport.height as f64);
-        if let Some(started) = profile {
-            eprintln!(
-                "page-presenter-profile total_ms={:.3} coalesced={} width={} height={} root_scroll_y={:.3} frame_token={}",
-                started.elapsed().as_secs_f64() * 1000.0,
-                coalesced,
-                viewport.width,
-                viewport.height,
-                root_scroll_y,
-                frame_token,
-            );
-        }
-        retained_target = Some((viewport.width, viewport.height));
-        presentation_sequence = presentation_sequence
-            .wrapping_add(1)
-            .max(content.sequence)
-            .max(1);
-        frames
-            .send(window_runtime::Command::Display(
-                crate::display::Message::Prepare {
-                    submitted: PageFrame {
-                        provenance: FrameProvenance {
-                            document,
-                            content: Some(ContentFrameProvenance {
-                                sequence: presentation_sequence,
-                                recording_revision: content.recording_revision,
-                                main_frame_epoch: content.main_frame_epoch,
-                                compositor_scroll_sequence: content.compositor_scroll_sequence,
-                                resize: content.resize,
-                            }),
-                        },
-                        viewport,
-                        is_handling_interaction,
-                        pixels: pixels.clone(),
-                        recycler: Some(recycle_sender.clone()),
-                    },
-                },
-            ))
-            .map_err(|_| io::Error::other("window display stopped"))?;
-        if stop {
-            break;
-        }
-    }
-    Ok(())
-}
-
 // The Page impl executor owns cc scheduling and input. Its move-only frame
-// output crosses the Page FrameSink queue to a Page-owned Viz/Renderer
-// sequence, so software drawing cannot stall impl-thread wheel dispatch.
+// output crosses the Page FrameSink queue to the window-owned Viz sequence.
 fn run_impl(
     receiver: mpsc::Receiver<ImplCommand>,
     self_sender: mpsc::Sender<ImplCommand>,
@@ -979,13 +770,11 @@ fn run_impl(
     active_artifact: Arc<AtomicBool>,
     document: Document,
     viewport: Viewport,
-    external_compositor: bool,
     executor: Arc<dyn executor::Executor>,
     raster_executor: Arc<dyn executor::Executor>,
     source: Arc<dyn BeginFrameSource>,
     frames: mpsc::Sender<window_runtime::Command>,
 ) -> Result<(), RuntimeFailure> {
-    let mut presenter_sender = None;
     let pump_pending = Arc::new(AtomicBool::new(false));
     let pump_generation = Arc::new(AtomicU64::new(0));
     let compositor_executor: Arc<dyn executor::Executor> = Arc::new(WakingExecutor::new(
@@ -1002,35 +791,13 @@ fn run_impl(
         pump_generation.clone(),
         "RasterExecutor.Task",
     ));
-    let mut presentation = if external_compositor {
-        let pipeline = PageRenderPipeline::new_external(compositor_executor, raster_executor);
-        let (sender, presenter_receiver) = mpsc::channel();
-        let presenter_self = self_sender.clone();
-        std::thread::Builder::new()
-            .name(format!("page-renderer-{}-{}", document.0, document.1))
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                crate::engine::set_page_thread_presentation_priority();
-                let presenter = PageFramePresenter::new();
-                if let Err(error) = run_presenter(
-                    presenter_receiver,
-                    presenter,
-                    presenter_self.clone(),
-                    document,
-                    frames,
-                ) {
-                    let _ = presenter_self.send(ImplCommand::RendererFailed(error.to_string()));
-                }
-            })
-            .map_err(|error| RuntimeFailure {
-                stage: "renderer",
-                error: io::Error::other(error.to_string()),
-            })?;
-        presenter_sender = Some(sender.clone());
-        Some(ImplPresentation::new(pipeline, sender, viewport))
-    } else {
-        None
-    };
+    let pipeline = PageRenderPipeline::new_external(compositor_executor, raster_executor);
+    let reclaim_sender = self_sender.clone();
+    let reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync> =
+        Arc::new(move |resources| {
+            let _ = reclaim_sender.send(ImplCommand::Reclaim(resources));
+        });
+    let mut presentation = ImplPresentation::new(pipeline, frames, document, reclaim, viewport);
     let mut main_frame_epoch = 0u64;
     let mut queued_commands = VecDeque::new();
     // Once input from a snapshot has run ahead of an already observed
@@ -1134,9 +901,7 @@ fn run_impl(
             .position(|command| matches!(command, ImplCommand::Tick(_)));
         let urgent = queued_commands
             .iter()
-            .position(|command| {
-                matches!(command, ImplCommand::Stop | ImplCommand::RendererFailed(_))
-            })
+            .position(|command| matches!(command, ImplCommand::Stop))
             .or_else(|| tick_due_after_input.then_some(pending_tick).flatten())
             .or_else(|| {
                 queued_commands
@@ -1155,16 +920,7 @@ fn run_impl(
         }
         match command {
             ImplCommand::Stop => {
-                if let Some(sender) = presenter_sender.take() {
-                    let _ = sender.send(PresenterCommand::Stop);
-                }
                 break 'commands;
-            }
-            ImplCommand::RendererFailed(message) => {
-                return Err(RuntimeFailure {
-                    stage: "renderer",
-                    error: io::Error::other(message),
-                });
             }
             ImplCommand::Pump => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Pump");
@@ -1174,41 +930,39 @@ fn run_impl(
                 // origin-sequence wakeups and posts one follow-up only when
                 // work arrived after the drain began.
                 let observed_generation = pump_generation.load(Ordering::Acquire);
-                if let Some(presentation) = presentation.as_mut() {
-                    let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
-                        .is_some()
-                        .then(Instant::now);
-                    let result = presentation.pipeline.Pump()?;
-                    if let Some(started) = profile {
-                        eprintln!(
-                            "page-compositor-pump-profile total_ms={:.3} submitted={} effects={}",
-                            started.elapsed().as_secs_f64() * 1000.0,
-                            result.submitted,
-                            result.effects.len(),
-                        );
-                    }
-                    if !result.effects.is_empty() {
-                        presentation.observe_main_thread_effects(&result.effects);
-                        let requested = result.effects.iter().any(|effect| {
-                            matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
-                        });
-                        let epoch = requested.then(|| {
-                            main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
-                            presentation.require_main_frame(main_frame_epoch);
-                            main_frame_epoch
-                        });
-                        let _ = main.send(Command::CompositorEffects {
-                            effects: result.effects,
-                            main_frame_epoch: epoch,
-                        });
-                    }
-                    // AcceptOutput already moved any produced compositor frame
-                    // into the Page FrameSink queue. A submitted impl frame is
-                    // not a new PaintArtifact commit; publish() will drain it
-                    // through flush_frames() while preserving an independently
-                    // pending main-thread commit, if one exists.
-                    let _ = presentation.publish()?;
+                let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
+                    .is_some()
+                    .then(Instant::now);
+                let result = presentation.pipeline.Pump()?;
+                if let Some(started) = profile {
+                    eprintln!(
+                        "page-compositor-pump-profile total_ms={:.3} submitted={} effects={}",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                        result.submitted,
+                        result.effects.len(),
+                    );
                 }
+                if !result.effects.is_empty() {
+                    presentation.observe_main_thread_effects(&result.effects);
+                    let requested = result.effects.iter().any(|effect| {
+                        matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                    });
+                    let epoch = requested.then(|| {
+                        main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                        presentation.require_main_frame(main_frame_epoch);
+                        main_frame_epoch
+                    });
+                    let _ = main.send(Command::CompositorEffects {
+                        effects: result.effects,
+                        main_frame_epoch: epoch,
+                    });
+                }
+                // AcceptOutput already moved any produced compositor frame
+                // into the Page FrameSink queue. A submitted impl frame is
+                // not a new PaintArtifact commit; publish() will drain it
+                // through flush_frames() while preserving an independently
+                // pending main-thread commit, if one exists.
+                let _ = presentation.publish()?;
                 pump_pending.store(false, Ordering::Release);
                 if pump_generation.load(Ordering::Acquire) != observed_generation
                     && !pump_pending.swap(true, Ordering::AcqRel)
@@ -1219,8 +973,42 @@ fn run_impl(
             }
             ImplCommand::RequestMainFrame => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.RequestMainFrame");
-                if let Some(presentation) = presentation.as_mut() {
-                    let result = presentation.pipeline.RequestMainFrame()?;
+                let result = presentation.pipeline.RequestMainFrame()?;
+                if !result.effects.is_empty() {
+                    let direct_main_frame = only_requests_main_frame(&result.effects);
+                    presentation.observe_main_thread_effects(&result.effects);
+                    let requested_main_frame = result.effects.iter().any(|effect| {
+                        matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                    });
+                    let epoch = requested_main_frame.then(|| {
+                        main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                        presentation.require_main_frame(main_frame_epoch);
+                        main_frame_epoch
+                    });
+                    if direct_main_frame {
+                        // ProxyImpl posts a pure BeginMainFrame directly;
+                        // there are no compositor deltas for Page to apply
+                        // in a preceding task.
+                        requested.store(true, Ordering::Release);
+                        source.request_begin_frame();
+                    } else {
+                        let _ = main.send(Command::CompositorEffects {
+                            effects: result.effects,
+                            main_frame_epoch: epoch,
+                        });
+                    }
+                }
+                let _ = presentation.publish()?;
+            }
+            ImplCommand::Reclaim(resources) => {
+                let _impl_trace = browser_tracing::span("compositor", "Impl.Reclaim");
+                presentation.pipeline.ReclaimResources(resources)?;
+                let _ = presentation.flush_frames()?;
+            }
+            ImplCommand::Tick(frame) => {
+                let _impl_trace = browser_tracing::span("compositor", "Impl.Tick");
+                if presentation.pipeline.NeedsBeginFrames() {
+                    let result = presentation.pipeline.BeginPhysicalFrame(frame.args)?;
                     if !result.effects.is_empty() {
                         let direct_main_frame = only_requests_main_frame(&result.effects);
                         presentation.observe_main_thread_effects(&result.effects);
@@ -1233,11 +1021,7 @@ fn run_impl(
                             main_frame_epoch
                         });
                         if direct_main_frame {
-                            // ProxyImpl posts a pure BeginMainFrame directly;
-                            // there are no compositor deltas for Page to apply
-                            // in a preceding task.
                             requested.store(true, Ordering::Release);
-                            source.request_begin_frame();
                         } else {
                             let _ = main.send(Command::CompositorEffects {
                                 effects: result.effects,
@@ -1245,48 +1029,10 @@ fn run_impl(
                             });
                         }
                     }
-                    let _ = presentation.publish()?;
                 }
-            }
-            ImplCommand::Reclaim(resources) => {
-                let _impl_trace = browser_tracing::span("compositor", "Impl.Reclaim");
-                if let Some(presentation) = presentation.as_mut() {
-                    presentation.pipeline.ReclaimResources(resources)?;
-                    let _ = presentation.flush_frames()?;
-                }
-            }
-            ImplCommand::Tick(frame) => {
-                let _impl_trace = browser_tracing::span("compositor", "Impl.Tick");
-                if let Some(presentation) = presentation.as_mut() {
-                    if presentation.pipeline.NeedsBeginFrames() {
-                        let result = presentation.pipeline.BeginPhysicalFrame(frame.args)?;
-                        if !result.effects.is_empty() {
-                            let direct_main_frame = only_requests_main_frame(&result.effects);
-                            presentation.observe_main_thread_effects(&result.effects);
-                            let requested_main_frame = result.effects.iter().any(|effect| {
-                                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
-                            });
-                            let epoch = requested_main_frame.then(|| {
-                                main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
-                                presentation.require_main_frame(main_frame_epoch);
-                                main_frame_epoch
-                            });
-                            if direct_main_frame {
-                                requested.store(true, Ordering::Release);
-                            } else {
-                                let _ = main.send(Command::CompositorEffects {
-                                    effects: result.effects,
-                                    main_frame_epoch: epoch,
-                                });
-                            }
-                        }
-                    }
-                    let _ = presentation.publish()?;
-                }
+                let _ = presentation.publish()?;
                 if requested.swap(false, Ordering::AcqRel) {
-                    let main_frame_epoch = presentation
-                        .as_ref()
-                        .map_or(0, |presentation| presentation.required_main_frame_epoch);
+                    let main_frame_epoch = presentation.required_main_frame_epoch;
                     let _ = main.send(Command::Main(MainThreadEvent::BeginFrame {
                         frame,
                         main_frame_epoch,
@@ -1305,60 +1051,58 @@ fn run_impl(
                     })
                 });
                 let mut impl_trace = browser_tracing::span("compositor", "Impl.Commit");
-                if let Some(presentation) = presentation.as_mut() {
-                    presentation.observe_resize(content.resize);
-                    impl_trace.set("content_main_frame_epoch", content.main_frame_epoch as f64);
-                    impl_trace.set(
-                        "required_main_frame_epoch",
-                        presentation.required_main_frame_epoch as f64,
-                    );
-                    impl_trace.set(
-                        "responded_main_frame_epoch",
-                        presentation.responded_main_frame_epoch as f64,
-                    );
-                    impl_trace.set(
-                        "content_scroll_sequence",
-                        content.compositor_scroll_sequence as f64,
-                    );
-                    impl_trace.set(
-                        "required_scroll_sequence",
-                        presentation.required_scroll_sequence as f64,
-                    );
-                    // Chromium admits a main-tree update to ProxyImpl only as
-                    // the response to a dispatched BeginMainFrame.  Page may
-                    // produce animation artifacts between those transactions;
-                    // committing one directly would advance SyncedProperty's
-                    // reflected slot with an old absolute scroll base.
-                    let request_main = presentation.needs_main_frame_for(content);
-                    if request_main {
-                        let result = presentation.pipeline.RequestMainFrame()?;
-                        presentation.observe_main_thread_effects(&result.effects);
-                        let requested = result.effects.iter().any(|effect| {
-                            matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                presentation.observe_resize(content.resize);
+                impl_trace.set("content_main_frame_epoch", content.main_frame_epoch as f64);
+                impl_trace.set(
+                    "required_main_frame_epoch",
+                    presentation.required_main_frame_epoch as f64,
+                );
+                impl_trace.set(
+                    "responded_main_frame_epoch",
+                    presentation.responded_main_frame_epoch as f64,
+                );
+                impl_trace.set(
+                    "content_scroll_sequence",
+                    content.compositor_scroll_sequence as f64,
+                );
+                impl_trace.set(
+                    "required_scroll_sequence",
+                    presentation.required_scroll_sequence as f64,
+                );
+                // Chromium admits a main-tree update to ProxyImpl only as
+                // the response to a dispatched BeginMainFrame.  Page may
+                // produce animation artifacts between those transactions;
+                // committing one directly would advance SyncedProperty's
+                // reflected slot with an old absolute scroll base.
+                let request_main = presentation.needs_main_frame_for(content);
+                if request_main {
+                    let result = presentation.pipeline.RequestMainFrame()?;
+                    presentation.observe_main_thread_effects(&result.effects);
+                    let requested = result.effects.iter().any(|effect| {
+                        matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                    });
+                    let epoch = requested.then(|| {
+                        main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                        presentation.require_main_frame(main_frame_epoch);
+                        main_frame_epoch
+                    });
+                    if !result.effects.is_empty() {
+                        let _ = main.send(Command::CompositorEffects {
+                            effects: result.effects,
+                            main_frame_epoch: epoch,
                         });
-                        let epoch = requested.then(|| {
-                            main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
-                            presentation.require_main_frame(main_frame_epoch);
-                            main_frame_epoch
-                        });
-                        if !result.effects.is_empty() {
-                            let _ = main.send(Command::CompositorEffects {
-                                effects: result.effects,
-                                main_frame_epoch: epoch,
-                            });
-                        }
                     }
-                    let unsolicited = presentation.is_unsolicited(content);
-                    impl_trace.set("unsolicited", unsolicited as u8 as f64);
-                    if !unsolicited {
-                        let accepted = presentation.commit(artifact, content, viewport);
-                        impl_trace.set("accepted", accepted as u8 as f64);
-                        if accepted {
-                            active_artifact.store(true, Ordering::Release);
-                        }
-                    }
-                    let _ = presentation.publish()?;
                 }
+                let unsolicited = presentation.is_unsolicited(content);
+                impl_trace.set("unsolicited", unsolicited as u8 as f64);
+                if !unsolicited {
+                    let accepted = presentation.commit(artifact, content, viewport);
+                    impl_trace.set("accepted", accepted as u8 as f64);
+                    if accepted {
+                        active_artifact.store(true, Ordering::Release);
+                    }
+                }
+                let _ = presentation.publish()?;
             }
             ImplCommand::Wheel {
                 mut wheel,
@@ -1387,14 +1131,6 @@ fn run_impl(
                         WheelPhase::kCancelled => 4.0,
                     },
                 );
-                let Some(presentation) = presentation.as_mut() else {
-                    let _ = main.send(Command::Input {
-                        input: InputEvent::Wheel(wheel),
-                        queued_at,
-                        samples,
-                    });
-                    continue;
-                };
                 let mut result = presentation.pipeline.Wheel(&wheel)?;
                 input_trace.set("compositor_owned", result.compositor_owned as u8 as f64);
                 input_trace.set("submitted", result.submitted as u8 as f64);
@@ -1448,35 +1184,29 @@ fn run_impl(
                 let _ = presentation.flush_frames()?;
             }
         }
-        if let Some(presentation) = presentation.as_mut() {
-            let effects = presentation.pipeline.TakeMainThreadEffects();
-            if !effects.is_empty() {
-                presentation.observe_main_thread_effects(&effects);
-                let requested = effects
-                    .iter()
-                    .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
-                let epoch = requested.then(|| {
-                    main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
-                    presentation.require_main_frame(main_frame_epoch);
-                    main_frame_epoch
-                });
-                let _ = main.send(Command::CompositorEffects {
-                    effects,
-                    main_frame_epoch: epoch,
-                });
-            }
+        let effects = presentation.pipeline.TakeMainThreadEffects();
+        if !effects.is_empty() {
+            presentation.observe_main_thread_effects(&effects);
+            let requested = effects
+                .iter()
+                .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
+            let epoch = requested.then(|| {
+                main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                presentation.require_main_frame(main_frame_epoch);
+                main_frame_epoch
+            });
+            let _ = main.send(Command::CompositorEffects {
+                effects,
+                main_frame_epoch: epoch,
+            });
         }
-        if presentation
-            .as_ref()
-            .is_some_and(|presentation| presentation.pipeline.NeedsPump())
+        if presentation.pipeline.NeedsPump()
             && !pump_pending.swap(true, Ordering::AcqRel)
             && self_sender.send(ImplCommand::Pump).is_err()
         {
             pump_pending.store(false, Ordering::Release);
         }
-        if presentation.as_ref().is_some_and(|presentation| {
-            presentation.needs_publish || presentation.pipeline.NeedsBeginFrames()
-        }) {
+        if presentation.needs_publish || presentation.pipeline.NeedsBeginFrames() {
             source.request_begin_frame();
         }
     }
@@ -1854,7 +1584,7 @@ fn run_document(
         client,
         threads,
     )?;
-    page.SetExternalCompositor(!params.controls);
+    page.SetExternalCompositor(true);
     page.SetBeginFrameSource(Some(source.clone()));
     let wake_pending = Arc::new(AtomicBool::new(false));
     let pending = wake_pending.clone();
@@ -2185,85 +1915,20 @@ fn run_document(
                 completed_main_frame_epoch,
             );
             if published != Some(identity) {
-                if !params.controls {
-                    impl_sender
-                        .send(ImplCommand::Commit {
-                            artifact: frame.display_items.clone(),
-                            content: ContentFrameProvenance {
-                                sequence: frame.sequence,
-                                recording_revision: frame.display_items.recording_revision,
-                                main_frame_epoch: completed_main_frame_epoch,
-                                compositor_scroll_sequence: frame.compositor_scroll_sequence,
-                                resize: pending_resize_provenance.take(),
-                            },
-                            viewport,
-                        })
-                        .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
-                    published = Some(identity);
-                } else {
-                    let render_started = std::env::var_os("BROWSER_PROFILE_INPUT")
-                        .is_some()
-                        .then(std::time::Instant::now);
-                    let mut pixels = vec![0u32; viewport.width as usize * viewport.height as usize];
-                    let allocated_at = render_started.map(|_| std::time::Instant::now());
-                    let ready = match page.PaintInto(
-                        viewport.width,
-                        viewport.height,
-                        viewport.scale,
-                        &mut pixels,
-                        renderer_skia::PixelFormat::Bgra8888,
-                        viewport.width as usize,
-                    ) {
-                        Ok(_) => true,
-                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                            // The Page has retained this commit. Retry through the
-                            // same frame-demand owner, keeping the last completed
-                            // surface visible until a presentable frame exists.
-                            source.request_begin_frame();
-                            false
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    if ready {
-                        let painted_at = render_started.map(|_| std::time::Instant::now());
-                        let completed = PageFrame {
-                            provenance: FrameProvenance {
-                                document: params.document,
-                                content: Some(ContentFrameProvenance {
-                                    sequence: frame.sequence,
-                                    recording_revision: frame.display_items.recording_revision,
-                                    main_frame_epoch: completed_main_frame_epoch,
-                                    compositor_scroll_sequence: frame.compositor_scroll_sequence,
-                                    resize: pending_resize_provenance.take(),
-                                }),
-                            },
-                            viewport,
-                            is_handling_interaction: false,
-                            pixels: Arc::new(pixels),
-                            recycler: None,
-                        };
-                        params
-                            .frames
-                            .send(window_runtime::Command::Display(
-                                crate::display::Message::Prepare {
-                                    submitted: completed,
-                                },
-                            ))
-                            .map_err(|_| io::Error::other("window display stopped"))?;
-                        if let (Some(started), Some(allocated), Some(painted)) =
-                            (render_started, allocated_at, painted_at)
-                        {
-                            eprintln!(
-                            "page-publish-profile allocate_ms={:.3} paint_ms={:.3} send_ms={:.3} total_ms={:.3}",
-                            (allocated - started).as_secs_f64() * 1000.0,
-                            (painted - allocated).as_secs_f64() * 1000.0,
-                            painted.elapsed().as_secs_f64() * 1000.0,
-                            started.elapsed().as_secs_f64() * 1000.0,
-                            );
-                        }
-                        published = Some(identity);
-                    }
-                }
+                impl_sender
+                    .send(ImplCommand::Commit {
+                        artifact: frame.display_items.clone(),
+                        content: ContentFrameProvenance {
+                            sequence: frame.sequence,
+                            recording_revision: frame.display_items.recording_revision,
+                            main_frame_epoch: completed_main_frame_epoch,
+                            compositor_scroll_sequence: frame.compositor_scroll_sequence,
+                            resize: pending_resize_provenance.take(),
+                        },
+                        viewport,
+                    })
+                    .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
+                published = Some(identity);
                 if params.document.0 == 0 {
                     (params.events)(
                         params.document,

@@ -78,9 +78,9 @@ compositor, Viz, Renderer, Page, or `RasterEngine`. The adapter that implements
 The public allocation/playback/publication boundary is backend independent, but
 the current private replay seam carries the selected `skia` region and
 retained path values. Producer-authored paths are converted once when
-compositor records are lowered. A standalone PaintArtifact replay utility
-exists for diagnostics and PNG fixtures; production tile raster still enters
-only through `RasterEngine`.
+compositor records are lowered. Direct PaintArtifact replay is compiled only
+for raster/browser tests through `artifact_test_support`; the production API
+enters only through `RasterEngine`.
 
 Replacement therefore proceeds behind the existing engine boundary:
 

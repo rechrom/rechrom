@@ -302,16 +302,21 @@ fn shared_selector_sessions_refresh_scope_and_shadow_tree_state() {
 #[test]
 fn canonical_candidate_signatures_preserve_cascade_and_diagnostic_fallbacks() {
     let _heap = foundation::LayoutHeapScope::new();
-    let a = RetainedRuleSignature::new(vec![(2, 10, 9), (1, 100, 8)], true);
+    let id = |rule_identity| crate::resolver::production_style_resolver::ProductionRuleIdentity {
+        sheet_identity: 1,
+        sheet_revision: 1,
+        rule_identity,
+    };
+    let a = RetainedRuleSignature::new(vec![(id(2), 10, 9), (id(1), 100, 8)], true);
     assert!(a.Equivalent(&RetainedRuleSignature::new(
-        vec![(1, 100, 8), (2, 10, 9)],
+        vec![(id(1), 100, 8), (id(2), 10, 9)],
         true
     )));
     for (values, complete) in [
-        (vec![(1, 100, 8), (2, 10, 9)], false),
-        (vec![(1, 100, 8), (2, 11, 9)], true),
-        (vec![(1, 100, 8), (2, 10, 8)], true),
-        (vec![(1, 100, 8), (2, 10, 9), (2, 10, 9)], true),
+        (vec![(id(1), 100, 8), (id(2), 10, 9)], false),
+        (vec![(id(1), 100, 8), (id(2), 11, 9)], true),
+        (vec![(id(1), 100, 8), (id(2), 10, 8)], true),
+        (vec![(id(1), 100, 8), (id(2), 10, 9), (id(2), 10, 9)], true),
     ] {
         assert!(!a.Equivalent(&RetainedRuleSignature::new(values, complete)));
     }

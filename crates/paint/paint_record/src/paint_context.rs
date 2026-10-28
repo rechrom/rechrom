@@ -226,6 +226,7 @@ pub struct PaintContext<'o> {
     pub cache_rejected_uncacheable: usize,
     pub cache_rejected_just_created: usize,
     pub cache_rejected_invalid: usize,
+    pub cache_rejected_geometry: usize,
     pub cache_rejected_missing_id: usize,
     pub cache_rejected_missing_previous: usize,
     pub walk_metrics: paint_model::PaintWalkMetrics,
@@ -276,6 +277,7 @@ impl<'o> PaintContext<'o> {
             cache_rejected_uncacheable: 0,
             cache_rejected_just_created: 0,
             cache_rejected_invalid: 0,
+            cache_rejected_geometry: 0,
             cache_rejected_missing_id: 0,
             cache_rejected_missing_previous: 0,
             walk_metrics: Default::default(),
@@ -328,6 +330,7 @@ impl<'o> PaintContext<'o> {
             cache_rejected_uncacheable: 0,
             cache_rejected_just_created: 0,
             cache_rejected_invalid: 0,
+            cache_rejected_geometry: 0,
             cache_rejected_missing_id: 0,
             cache_rejected_missing_previous: 0,
             walk_metrics: Default::default(),
@@ -407,6 +410,7 @@ impl<'o> PaintContext<'o> {
         &mut self,
         node: &PaintTreeNode<'_>,
         item_type: DisplayItemIdType,
+        client_visual_rect: PaintRect,
     ) -> bool {
         let fragment = node
             .fragment
@@ -424,6 +428,7 @@ impl<'o> PaintContext<'o> {
                 fragment.paint.display_item_client_owner_node_id,
                 fragment.paint.display_item_client_debug_name.clone(),
             )),
+            Some(client_visual_rect),
         )
     }
 
@@ -432,6 +437,7 @@ impl<'o> PaintContext<'o> {
         id: DisplayItemId,
         client: DisplayItemClientInfo,
         debug: Option<(i32, Arc<str>)>,
+        client_visual_rect: Option<PaintRect>,
     ) -> bool {
         self.cache_attempts += 1;
         let invalidated = !matches!(
@@ -443,6 +449,7 @@ impl<'o> PaintContext<'o> {
             client.is_cacheable,
             client.is_just_created,
             invalidated,
+            true,
         ) == paint_reuse::CacheDecision::Record
         {
             if !client.is_cacheable {
@@ -467,6 +474,18 @@ impl<'o> PaintContext<'o> {
             return false;
         };
         let old = &previous.display_items[index];
+        let geometry_matches = client_visual_rect.is_none_or(|rect| rect == old.client_visual_rect);
+        if paint_reuse::DecideDisplayItemReuse(
+            true,
+            client.is_cacheable,
+            client.is_just_created,
+            invalidated,
+            geometry_matches,
+        ) == paint_reuse::CacheDecision::Record
+        {
+            self.cache_rejected_geometry += 1;
+            return false;
+        }
         let old_record = &previous.items[old.record_begin..old.record_end];
         let record_begin = self.output.items.len();
         Arc::make_mut(&mut self.output.items).extend_from_slice(old_record);
@@ -576,6 +595,7 @@ impl<'o> PaintContext<'o> {
             kind: RecordedDisplayItemKind::Drawing,
             scroll_translation: None,
             id,
+            client_visual_rect: item.rect,
             visual_rect,
             visual_rect_is_accurate,
             draws_content: true,
@@ -700,6 +720,7 @@ impl<'o> PaintContext<'o> {
             .take()
             .expect("DrawingRecorder must be active");
         let record_end = self.output.items.len();
+        let client_visual_rect = visual_rect;
         let (mut visual_rect, tightened) = if kind == RecordedDisplayItemKind::Drawing {
             TightenDrawingVisualRect(
                 visual_rect,
@@ -771,6 +792,7 @@ impl<'o> PaintContext<'o> {
             kind,
             scroll_translation,
             id,
+            client_visual_rect,
             visual_rect,
             visual_rect_is_accurate,
             draws_content,
@@ -1666,6 +1688,7 @@ mod opaque_record_tests {
             scrollbar: None,
             kind: RecordedDisplayItemKind::Drawing,
             id,
+            client_visual_rect: visual_rect,
             visual_rect,
             visual_rect_is_accurate: true,
             draws_content: true,
@@ -1694,9 +1717,22 @@ mod opaque_record_tests {
             Default::default(),
             Some(previous.clone()),
         );
-        assert!(context.UseCachedDrawingWithClient(id, client, None));
+        assert!(context.UseCachedDrawingWithClient(id, client, None, None));
         drop(context);
         assert_eq!(cached.display_items[0].visual_rect, visual_rect);
+
+        let mut moved = PaintRecording::default();
+        let mut context = PaintContext::WithEditingAndCache(
+            &mut moved,
+            Default::default(),
+            Some(previous.clone()),
+        );
+        let moved_rect = PaintRect {
+            x: visual_rect.x + 1.0,
+            ..visual_rect
+        };
+        assert!(!context.UseCachedDrawingWithClient(id, client, None, Some(moved_rect),));
+        assert_eq!(context.cache_rejected_geometry, 1);
 
         let mut invalid = PaintRecording::default();
         let mut context =
@@ -1705,7 +1741,7 @@ mod opaque_record_tests {
             invalidation_reason: Some(foundation::PaintInvalidationReason::kLayout),
             ..client
         };
-        assert!(!context.UseCachedDrawingWithClient(id, invalid_client, None));
+        assert!(!context.UseCachedDrawingWithClient(id, invalid_client, None, None));
     }
 
     #[test]

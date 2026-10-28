@@ -915,6 +915,13 @@ pub(crate) enum ProductionProjectionRule<'a> {
 }
 
 impl ProductionProjectionRule<'_> {
+    pub(crate) fn Identity(&self) -> usize {
+        match self {
+            Self::Style(rule) => Rc::as_ptr(&rule.rule) as usize,
+            Self::NestedDeclarations(rule) => Rc::as_ptr(rule.rule.InnerStyleRule()) as usize,
+        }
+    }
+
     pub(crate) fn SourceOrder(&self) -> u32 {
         match self {
             Self::Style(rule) => rule.source_order,
@@ -1054,12 +1061,7 @@ impl ProductionStyleSheet {
             .enumerate()
             .map(|(index, rule)| {
                 let properties = rule.Properties();
-                let identity = match rule {
-                    ProductionProjectionRule::Style(rule) => Some(Rc::as_ptr(&rule.rule) as usize),
-                    ProductionProjectionRule::NestedDeclarations(rule) => {
-                        Some(Rc::as_ptr(rule.rule.InnerStyleRule()) as usize)
-                    }
-                };
+                let identity = Some(rule.Identity());
                 (
                     identity,
                     index,

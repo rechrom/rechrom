@@ -5,8 +5,8 @@ use std::{io, num::NonZeroU32, sync::Arc};
 pub(crate) type WindowTarget =
     WindowSurface<std::sync::Arc<winit::window::Window>, std::sync::Arc<winit::window::Window>>;
 
-/// Host allocation/presentation choice. Both targets consume the same Viz
-/// Page output through native Skia placement; offscreen owns ordinary CPU memory.
+/// Host allocation/presentation choice. Both targets consume the one completed
+/// window-level Renderer output; offscreen owns ordinary CPU memory.
 pub(crate) enum DisplayTarget {
     Native(WindowTarget),
     Offscreen,
@@ -36,33 +36,21 @@ impl DisplayTarget {
         matches!(self, Self::Native(_))
     }
 
-    pub(crate) fn render_page_surfaces(
+    pub(crate) fn prepare_rendered_pixels(
         &mut self,
-        pages: &[(
-            &crate::page_presentation::PageFrame,
-            crate::page_presentation::DeviceRect,
-        )],
+        pixels: &[u32],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
+        damage_pixels: usize,
     ) -> io::Result<PreparedDisplayTarget> {
         match self {
             Self::Native(target) => target
-                .render_page_surfaces(pages, viewport, present_sequence)
+                .prepare_rendered_pixels(pixels, viewport, present_sequence, damage_pixels)
                 .map(PreparedDisplayTarget::Native),
-            Self::Offscreen => {
-                let mut pixels = vec![0u32; viewport.width as usize * viewport.height as usize];
-                draw_page_surfaces(
-                    pages,
-                    &mut pixels,
-                    viewport.width as usize,
-                    viewport,
-                    PixelFormat::Bgra8888,
-                )?;
-                Ok(PreparedDisplayTarget::Offscreen {
-                    pixels,
-                    row_stride: viewport.width as usize,
-                })
-            }
+            Self::Offscreen => Ok(PreparedDisplayTarget::Offscreen {
+                pixels: pixels.to_vec(),
+                row_stride: viewport.width as usize,
+            }),
         }
     }
 
@@ -97,13 +85,15 @@ impl DisplayTarget {
     }
 }
 
-/// Page output already passed its own Viz and Renderer. Window embedding
-/// performs same-scale image placement without PaintArtifact or cc owners.
+#[cfg(test)]
+struct TestPagePixels {
+    viewport: crate::engine::Viewport,
+    pixels: Vec<u32>,
+}
+
+#[cfg(test)]
 fn draw_page_surfaces(
-    pages: &[(
-        &crate::page_presentation::PageFrame,
-        crate::page_presentation::DeviceRect,
-    )],
+    pages: &[(&TestPagePixels, crate::page_presentation::DeviceRect)],
     pixels: &mut [u32],
     stride: usize,
     viewport: crate::engine::Viewport,
@@ -162,11 +152,9 @@ fn draw_page_surfaces(
     Ok(())
 }
 
+#[cfg(test)]
 fn placements_cover_viewport(
-    pages: &[(
-        &crate::page_presentation::PageFrame,
-        crate::page_presentation::DeviceRect,
-    )],
+    pages: &[(&TestPagePixels, crate::page_presentation::DeviceRect)],
     viewport: crate::engine::Viewport,
 ) -> bool {
     let width = viewport.width as i64;
@@ -312,15 +300,13 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         Ok(())
     }
 
-    /// Place completed Page surfaces into a prepared native buffer.
-    pub(crate) fn render_page_surfaces(
+    /// Copy the completed window Renderer target into a prepared native buffer.
+    pub(crate) fn prepare_rendered_pixels(
         &mut self,
-        pages: &[(
-            &crate::page_presentation::PageFrame,
-            crate::page_presentation::DeviceRect,
-        )],
+        rendered_pixels: &[u32],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
+        damage_pixels: usize,
     ) -> io::Result<PreparedWindowFrame> {
         let mut frame_trace = browser_tracing::span("present", "PrepareWindowFrame");
         frame_trace.set("present_sequence", present_sequence as f64);
@@ -352,7 +338,20 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         let pixels = buffer.pixels_mut();
         #[cfg(not(target_os = "macos"))]
         let pixels = buffer.as_mut_slice();
-        draw_page_surfaces(pages, pixels, row_stride, viewport, format)?;
+        if rendered_pixels.len() < viewport.width as usize * viewport.height as usize {
+            return Err(io::Error::other("incomplete Renderer target"));
+        }
+        for (source, target) in rendered_pixels
+            .chunks_exact(viewport.width as usize)
+            .zip(pixels.chunks_exact_mut(row_stride))
+        {
+            target[..viewport.width as usize].copy_from_slice(source);
+            if format == PixelFormat::Bgrx8888 {
+                for pixel in &mut target[..viewport.width as usize] {
+                    *pixel &= 0x00ff_ffff;
+                }
+            }
+        }
         static OPTICAL_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let optical_probe = *OPTICAL_PROBE.get_or_init(|| {
             std::env::var_os("BROWSER_PRESENTATION_PROBE").is_some_and(|v| v == "1")
@@ -368,10 +367,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
                 present_sequence,
             );
         }
-        frame_trace.set(
-            "damage_pixels",
-            viewport.width as f64 * viewport.height as f64,
-        );
+        frame_trace.set("damage_pixels", damage_pixels as f64);
 
         frame_trace.set("succeeded", 1.0);
         #[cfg(target_os = "macos")]
@@ -670,24 +666,14 @@ fn rgba_to_window_rgb(dst: &mut [u32], src: &[u8]) {
 mod tests {
     use super::*;
 
-    fn page_frame(
-        width: u32,
-        height: u32,
-        pixels: Vec<u32>,
-    ) -> crate::page_presentation::PageFrame {
-        crate::page_presentation::PageFrame {
-            provenance: crate::page_presentation::FrameProvenance {
-                document: (1, 1),
-                content: None,
-            },
+    fn page_frame(width: u32, height: u32, pixels: Vec<u32>) -> TestPagePixels {
+        TestPagePixels {
             viewport: crate::engine::Viewport {
                 width,
                 height,
                 scale: 1.0,
             },
-            is_handling_interaction: false,
-            pixels: Arc::new(pixels),
-            recycler: None,
+            pixels,
         }
     }
 
@@ -734,12 +720,12 @@ mod tests {
                 .content
                 .pixels()
                 .chunks_exact(4)
-                .all(|pixel| pixel == [0x7f, 0x3a, 0x91, 255]));
+                .all(|pixel| pixel == [0x91, 0x3a, 0x7f, 255]));
             assert!(frame
                 .toolbar
                 .pixels()
                 .chunks_exact(4)
-                .all(|pixel| pixel == [0x11, 0x22, 0x33, 255]));
+                .all(|pixel| pixel == [0x33, 0x22, 0x11, 255]));
         }
     }
 

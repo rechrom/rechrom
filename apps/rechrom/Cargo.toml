@@ -27,6 +27,7 @@ devtools = { path = "../../crates/devtools" }
 foundation = { package = "layoutng_foundation", path = "../../crates/layoutng/layoutng_foundation" }
 paint = { path = "../../crates/paint" }
 browser = { path = "../../crates/browser" }
+compositor = { path = "../../crates/compositor" }
 renderer_skia = { path = "../../crates/renderer_skia" }
 renderer = { path = "../../crates/renderer" }
 viz = { path = "../../crates/viz" }

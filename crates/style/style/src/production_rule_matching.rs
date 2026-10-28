@@ -10,7 +10,7 @@
 
 use crate::active_style_sheets::ActiveStyleSheet;
 use crate::cascade_layer_map::CascadeLayerMap;
-use crate::css_selector::{CSSSelector, PseudoType};
+use crate::css_selector::{CSSSelector, MatchType, PseudoType, RelationType};
 use crate::element_rule_collector::{
     AddRuleSetToRuleSetGroupList, ElementRuleCollector, MatchRequest,
 };
@@ -27,7 +27,7 @@ use crate::resolver::{
     production_container_runtime::ProductionContainerRuntime,
 };
 use crate::rule_set::{RuleData, RuleSet};
-use dom::persistent_document::DOMNodeType;
+use dom::persistent_document::{CompatibilityMode, DOMNamespace, DOMNodeType};
 use dom::Document;
 use foundation::{AtomicString, EInsideLink};
 use layoutng_style::style::computed_style_constants::PseudoId;
@@ -39,7 +39,7 @@ use std::{
 #[derive(Clone)]
 pub(crate) struct ProductionTransferredRule {
     pub sheet_index: usize,
-    pub position: u32,
+    pub rule_identity: usize,
     pub specificity: u32,
     pub proximity: u32,
     pub matched: MatchedProperties,
@@ -64,6 +64,102 @@ pub(crate) struct ProductionRuleMatchReport {
 pub(crate) struct ProductionRuleMatchCollection {
     pub report: ProductionRuleMatchReport,
     pub rules: Vec<ProductionTransferredRule>,
+}
+
+/// RuleSet's strongest subject-compound key. Both normal collection and
+/// changed-RuleSet invalidation use this as a lossless precondition before
+/// invoking SelectorChecker.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ProductionSelectorBucket {
+    Id(String),
+    Class(String),
+    Attribute(String),
+    Tag(String),
+    CustomPseudo(String),
+    Universal,
+}
+
+pub(crate) fn ProductionSelectorBucketForComplexSubject(
+    subject: crate::css_selector::CSSSelectorComplex<'_>,
+) -> ProductionSelectorBucket {
+    let mut class_name = None;
+    let mut attribute = None;
+    let mut tag = None;
+    for selector in subject.SimpleSelectors() {
+        match selector.Match() {
+            MatchType::kId => {
+                return ProductionSelectorBucket::Id(selector.Value().Utf8());
+            }
+            MatchType::kClass if class_name.is_none() => {
+                class_name = Some(selector.Value().Utf8());
+            }
+            MatchType::kAttributeExact
+            | MatchType::kAttributeSet
+            | MatchType::kAttributeHyphen
+            | MatchType::kAttributeList
+            | MatchType::kAttributeContain
+            | MatchType::kAttributeBegin
+            | MatchType::kAttributeEnd
+                if attribute.is_none() =>
+            {
+                attribute = Some(selector.Attribute().LocalName().Utf8());
+            }
+            MatchType::kTag if tag.is_none() => {
+                tag = Some(selector.TagQName().LocalName().Utf8());
+            }
+            _ => {}
+        }
+        if !matches!(
+            selector.Relation(),
+            RelationType::kSubSelector | RelationType::kPseudoChild
+        ) {
+            break;
+        }
+    }
+    class_name
+        .map(ProductionSelectorBucket::Class)
+        .or_else(|| attribute.map(ProductionSelectorBucket::Attribute))
+        .or_else(|| tag.map(ProductionSelectorBucket::Tag))
+        .unwrap_or(ProductionSelectorBucket::Universal)
+}
+
+impl ProductionSelectorBucket {
+    pub(crate) fn Matches(&self, document: &Document, index: usize, quirks: bool) -> bool {
+        let node = document.Node(index);
+        match self {
+            Self::CustomPseudo(expected) => document
+                .ShadowPseudoId(index)
+                .is_some_and(|name| name == expected),
+            Self::Id(expected) => node.FindAttribute("id").is_some_and(|attribute| {
+                if quirks {
+                    attribute.value.eq_ignore_ascii_case(expected)
+                } else {
+                    attribute.value == *expected
+                }
+            }),
+            Self::Class(expected) => node.FindAttribute("class").is_some_and(|attribute| {
+                attribute.value.split_ascii_whitespace().any(|class_name| {
+                    if quirks {
+                        class_name.eq_ignore_ascii_case(expected)
+                    } else {
+                        class_name == expected
+                    }
+                })
+            }),
+            Self::Attribute(expected) => node
+                .Attributes()
+                .iter()
+                .any(|attribute| attribute.local_name == *expected),
+            Self::Tag(expected) => {
+                if node.Namespace() == DOMNamespace::kHTML {
+                    node.Name().eq_ignore_ascii_case(expected)
+                } else {
+                    node.Name() == expected
+                }
+            }
+            Self::Universal => true,
+        }
+    }
 }
 
 /// cpp: StyleEngine::ApplyRuleSetInvalidationForElement / AnyRuleCausesInvalidation.
@@ -159,6 +255,21 @@ pub(crate) fn InvalidateProductionRuleSets(
         }
         return None;
     }
+    // RuleSet::AddRuleToRuleSet uses the strongest key in the selector's
+    // subject compound. ApplyRuleSetInvalidationForElement reaches
+    // SelectorChecker only when that same bucket can match the element. This
+    // keeps the required subtree walk while avoiding a full collector for
+    // unrelated subjects. Complex selectors without a lossless key stay in
+    // the universal bucket; ::part keeps its dedicated complete walk below.
+    let subject_buckets = unique_rule_sets
+        .iter()
+        .flat_map(|rules| rules.AllRuleData())
+        .map(|data| ProductionSelectorBucketForComplexSubject(data.Selector()))
+        .collect::<HashSet<_>>();
+    let checks_every_element =
+        invalidates_parts || subject_buckets.contains(&ProductionSelectorBucket::Universal);
+    trace.set("subject_buckets", subject_buckets.len() as f64);
+    trace.set("checks_every_element", f64::from(checks_every_element));
     // cpp: StyleEngine::ApplyRuleSetInvalidationForTreeScope descends into
     // shadow trees when changed rules address UA implementation elements.
     // ElementRuleCollector checks the UA bucket before rejecting ordinary
@@ -184,10 +295,20 @@ pub(crate) fn InvalidateProductionRuleSets(
                 .filter(|&index| document.Node(index).FindAttribute("part").is_some()),
         );
     }
+    let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
+    let mut candidate_elements = 0usize;
     for &index in elements {
         if !crosses_ua_shadow && document.TreeScopeRoot(index) != document.Root() {
             continue;
         }
+        if !checks_every_element
+            && !subject_buckets
+                .iter()
+                .any(|bucket| bucket.Matches(document, index, quirks))
+        {
+            continue;
+        }
+        candidate_elements += 1;
         let context = ProductionElementResolveContext { element: index };
         let recalc = ProductionStyleRecalcContext::ForElement(document, index, None);
         let filter = runtime.SelectorFilterForElement(index);
@@ -226,6 +347,7 @@ pub(crate) fn InvalidateProductionRuleSets(
             }
         }
     }
+    trace.set("candidate_elements", candidate_elements as f64);
     trace.set("invalidated", invalidated.len() as f64);
     Some(invalidated)
 }
@@ -524,7 +646,7 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
         .zip(collector.MatchedResult().GetMatchedProperties()[first_result..].iter())
         .map(|(rule, matched)| ProductionTransferredRule {
             sheet_index: inputs[rule.StyleSheetIndex()].sheet_index,
-            position: rule.PositionInStyleSheet(),
+            rule_identity: Rc::as_ptr(rule.Rule()) as usize,
             specificity: rule.Specificity(),
             proximity: rule.Proximity(),
             matched: matched.clone(),
@@ -641,7 +763,7 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
         .zip(collector.MatchedResult().GetMatchedProperties()[first_result..].iter())
         .map(|(rule, matched)| ProductionTransferredRule {
             sheet_index: inputs[rule.StyleSheetIndex()].sheet_index,
-            position: rule.PositionInStyleSheet(),
+            rule_identity: Rc::as_ptr(rule.Rule()) as usize,
             specificity: rule.Specificity(),
             proximity: rule.Proximity(),
             matched: matched.clone(),

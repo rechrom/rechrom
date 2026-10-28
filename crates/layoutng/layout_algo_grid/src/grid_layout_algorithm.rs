@@ -354,26 +354,46 @@ impl GridLayoutAlgorithm {
             *intrinsic = self.CalculateIntrinsicBlockSize(unsafe { &**items }, data);
             return layout_subtree;
         }
-        let resolver = self.BuildGridLineResolver(&GridArea::default(), None, true);
-        let mut tree = if node.ChildLayoutBlockedByDisplayLock() {
-            BuildGridSizingTreeIgnoringChildren(self, &resolver, SizingConstraint::kLayout, false)
-        } else {
-            BuildGridSizingTree(self, &resolver, Some(oof), SizingConstraint::kLayout, false)
+        let resolver = {
+            let _trace = browser_tracing::span("layout", "layout_algo_grid.BuildLineResolver");
+            self.BuildGridLineResolver(&GridArea::default(), None, true)
         };
-        self.InitializeTrackSizesTree(&mut tree, None);
+        let mut tree = {
+            let _trace = browser_tracing::span("layout", "layout_algo_grid.BuildSizingTree");
+            if node.ChildLayoutBlockedByDisplayLock() {
+                BuildGridSizingTreeIgnoringChildren(
+                    self,
+                    &resolver,
+                    SizingConstraint::kLayout,
+                    false,
+                )
+            } else {
+                BuildGridSizingTree(self, &resolver, Some(oof), SizingConstraint::kLayout, false)
+            }
+        };
+        {
+            let _trace = browser_tracing::span("layout", "layout_algo_grid.InitializeTracks");
+            self.InitializeTrackSizesTree(&mut tree, None);
+        }
         let mut additional = false;
-        self.CompleteTrackSizingAlgorithmTree(
-            kForColumns,
-            SizingConstraint::kLayout,
-            &mut tree,
-            &mut additional,
-        );
-        self.CompleteTrackSizingAlgorithmTree(
-            kForRows,
-            SizingConstraint::kLayout,
-            &mut tree,
-            &mut additional,
-        );
+        {
+            let _trace = browser_tracing::span("layout", "layout_algo_grid.SizeColumns");
+            self.CompleteTrackSizingAlgorithmTree(
+                kForColumns,
+                SizingConstraint::kLayout,
+                &mut tree,
+                &mut additional,
+            );
+        }
+        {
+            let _trace = browser_tracing::span("layout", "layout_algo_grid.SizeRows");
+            self.CompleteTrackSizingAlgorithmTree(
+                kForRows,
+                SizingConstraint::kLayout,
+                &mut tree,
+                &mut additional,
+            );
+        }
         let data = tree.LayoutData(0);
         *intrinsic =
             self.CalculateIntrinsicBlockSize(unsafe { &*tree.GetGridItems(0) }, unsafe { &*data });
@@ -445,7 +465,9 @@ impl GridLayoutAlgorithm {
                 false,
             );
         }
-        self.CompleteFinalBaselineAlignment(&mut tree);
+        if tree.HasBaselines() {
+            self.CompleteFinalBaselineAlignment(&mut tree);
+        }
         *items = tree.GetGridItems(0);
         MakeGarbageCollected(GridLayoutSubtree::new(tree.FinalizeTree(), 0))
     }
@@ -1139,14 +1161,16 @@ impl GridLayoutAlgorithm {
     ) {
         let subtree = GridSizingSubtree::new(tree, 0);
         ValidateMinMaxSizesCache(self.Node(), &subtree, direction);
-        self.ComputeBaselineAlignment(
-            tree.FinalizeTree(),
-            &subtree,
-            &kNoSubgriddedItemData,
-            Some(direction),
-            constraint,
-            false,
-        );
+        if tree.HasBaselines() {
+            self.ComputeBaselineAlignment(
+                tree.FinalizeTree(),
+                &subtree,
+                &kNoSubgriddedItemData,
+                Some(direction),
+                constraint,
+                false,
+            );
+        }
         self.CompleteTrackSizingAlgorithm(
             &subtree,
             &kNoSubgriddedItemData,
@@ -2390,6 +2414,7 @@ impl GridLayoutAlgorithm {
                 intrinsic += self.BorderScrollbarPadding().BlockSum();
             }
         } else {
+            let _trace = browser_tracing::span("layout", "layout_algo_grid.ComputeGeometry");
             subtree = self.ComputeGridGeometry(&mut items, &mut intrinsic, &mut oofs);
         }
         let data = unsafe { &*unsafe { &*subtree }.LayoutData() };
@@ -2452,6 +2477,7 @@ impl GridLayoutAlgorithm {
                 &mut first_gap,
             );
         } else {
+            let _trace = browser_tracing::span("layout", "layout_algo_grid.PlaceItems");
             self.PlaceGridItems(
                 unsafe { &*items },
                 unsafe { &*subtree },

@@ -109,7 +109,7 @@ fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
             paint::paint_engine::DocumentPaintArtifactRecord,
         >(&next.record)
         .unwrap();
-        assert!(old_record.artifact.items != next_record.artifact.items);
+        assert!(old_record.artifact != next_record.artifact);
         assert_eq!(created.initial_frame.revision, 1);
         assert!(!Arc::ptr_eq(&created.initial_frame.record, &next.record));
     });

@@ -14,6 +14,7 @@ skia = { path = "../skia" }
 
 [features]
 default = []
+artifact_test_support = []
 
 [dev-dependencies]
 font_engine = { path = "../font_engine" }

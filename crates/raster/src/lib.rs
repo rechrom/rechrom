@@ -1,4 +1,4 @@
-//! Native cc-selected raster execution and external replay helpers.
+//! Native cc-selected raster execution.
 //!
 //! The compositor selects tile work and consumes only opaque resource
 //! identities. This crate executes immutable paint records through its private
@@ -14,7 +14,8 @@ pub use png::EncodeRgbaPng;
 pub use reflection_mask::CompileReflectionMaskLayers;
 
 pub mod native;
+pub use native::{MapResourceForRead, RasterEngine, RasterReadView};
+#[cfg(any(test, feature = "artifact_test_support"))]
 pub use native::{
-    MapResourceForRead, RasterEngine, RasterReadView, RasterizePaintArtifact,
-    RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,
+    RasterizePaintArtifact, RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,
 };

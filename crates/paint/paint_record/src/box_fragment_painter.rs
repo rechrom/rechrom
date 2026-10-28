@@ -206,6 +206,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     DisplayItemIdType::kBoxDecorationBackground,
+                    decoration_visual_rect,
                 );
             let background_recorder = (has_box_decoration && !cached_box_decoration).then(|| {
                 DrawingRecorder::new(
@@ -3208,7 +3209,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             visual_rect
         });
         if visual_rect.is_some_and(|_| {
-            DrawingRecorder::UseCachedDrawingIfPossible(self.context, self.node, drawing_type)
+            DrawingRecorder::UseCachedDrawingIfPossible(
+                self.context,
+                self.node,
+                drawing_type,
+                visual_rect.unwrap(),
+            )
         }) {
             return;
         }

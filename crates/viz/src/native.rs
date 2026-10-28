@@ -340,3 +340,83 @@ impl VizEngine {
         self.pending_swaps.remove(&id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use compositor_core::runtime::frame::RenderPassId;
+
+    fn frame(token: u32, damage: DeviceRect, contributing_damage: bool) -> NativeCompositorFrame {
+        let rect = DeviceRect::new(0, 0, 10, 10);
+        let mut pass = compositor_core::NativeCompositorRenderPass::default();
+        pass.id = RenderPassId(1);
+        pass.output_rect = rect;
+        pass.damage_rect = damage;
+        pass.has_damage_from_contributing_content = contributing_damage;
+        let mut frame = NativeCompositorFrame::default();
+        frame.metadata.frame_token = token;
+        frame.metadata.device_scale_factor = 1.0;
+        frame.render_pass_list.push(Box::new(pass));
+        frame
+    }
+
+    #[test]
+    fn drawn_surface_damage_is_not_replayed_when_another_surface_updates() {
+        let first = SurfaceId(1);
+        let second = SurfaceId(2);
+        let placement = |surface_id, x| SurfacePlacement {
+            surface_id,
+            destination: DeviceRect::new(x, 0, 10, 10),
+        };
+        let mut viz = VizEngine::New();
+        let full_damage = DeviceRect::new(0, 0, 10, 10);
+        viz.SubmitFrame(first, frame(1, full_damage, true)).unwrap();
+        let initial = viz
+            .Aggregate(DeviceRect::new(0, 0, 20, 10), &[placement(first, 0)])
+            .unwrap();
+        assert_eq!(initial.DamagePixels(), 100);
+        viz.DidDraw(initial);
+
+        viz.SubmitFrame(second, frame(1, full_damage, true))
+            .unwrap();
+        let next = viz
+            .Aggregate(
+                DeviceRect::new(0, 0, 20, 10),
+                &[placement(first, 0), placement(second, 10)],
+            )
+            .unwrap();
+        assert_eq!(next.DamagePixels(), 100);
+        assert_eq!(
+            next.Frame().SurfaceDamageRects(),
+            &[DeviceRect::new(10, 0, 10, 10)]
+        );
+        assert!(!next.Frame().RenderPasses()[0].has_damage_from_contributing_content);
+        assert!(next.Frame().RenderPasses()[1].has_damage_from_contributing_content);
+    }
+
+    #[test]
+    fn contributing_content_flag_preserves_partial_damage() {
+        let surface = SurfaceId(1);
+        let placement = SurfacePlacement {
+            surface_id: surface,
+            destination: DeviceRect::new(0, 0, 10, 10),
+        };
+        let full_damage = DeviceRect::new(0, 0, 10, 10);
+        let partial_damage = DeviceRect::new(0, 0, 2, 10);
+        let mut viz = VizEngine::New();
+        viz.SubmitFrame(surface, frame(1, full_damage, false))
+            .unwrap();
+        let initial = viz
+            .Aggregate(DeviceRect::new(0, 0, 10, 10), &[placement])
+            .unwrap();
+        viz.DidDraw(initial);
+
+        viz.SubmitFrame(surface, frame(2, partial_damage, true))
+            .unwrap();
+        let output = viz
+            .Aggregate(DeviceRect::new(0, 0, 10, 10), &[placement])
+            .unwrap();
+        assert_eq!(output.DamagePixels(), 20);
+        assert_eq!(output.Frame().SurfaceDamageRects(), &[partial_damage]);
+    }
+}

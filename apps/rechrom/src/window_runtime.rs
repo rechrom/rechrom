@@ -31,6 +31,13 @@ struct SurfaceReadiness {
 }
 
 impl SurfaceReadiness {
+    fn observe_page(&mut self, interaction: bool) -> bool {
+        self.interaction_damage |= interaction;
+        let all_ready = self.all_placed_surfaces_match();
+        self.ready_damage |= all_ready;
+        all_ready
+    }
+
     fn observe(&mut self, message: &display::Message) -> Option<bool> {
         match message {
             display::Message::Scene(scene) => {
@@ -42,10 +49,7 @@ impl SurfaceReadiness {
             display::Message::Prepare { submitted } => {
                 self.viewports
                     .insert(submitted.provenance.document, submitted.viewport);
-                self.interaction_damage |= submitted.is_handling_interaction;
-                let all_ready = self.all_placed_surfaces_match();
-                self.ready_damage |= all_ready;
-                Some(all_ready)
+                Some(self.observe_page(submitted.is_handling_interaction))
             }
             display::Message::Submit { .. }
             | display::Message::SwapAck(_)
@@ -336,27 +340,8 @@ mod tests {
     use super::*;
     use crate::{
         engine::Viewport,
-        page_presentation::{DeviceRect, FrameProvenance, PageFrame, Placement, Scene},
+        page_presentation::{DeviceRect, Placement, Scene},
     };
-
-    fn page(document: (u64, u64), width: u32, height: u32, interaction: bool) -> display::Message {
-        display::Message::Prepare {
-            submitted: PageFrame {
-                provenance: FrameProvenance {
-                    document,
-                    content: None,
-                },
-                viewport: Viewport {
-                    width,
-                    height,
-                    scale: 1.0,
-                },
-                is_handling_interaction: interaction,
-                pixels: Arc::new(Vec::new()),
-                recycler: None,
-            },
-        }
-    }
 
     #[test]
     fn resize_damage_waits_for_every_placed_surface() {
@@ -383,12 +368,36 @@ mod tests {
             metadata: Vec::new(),
         }));
 
-        assert_eq!(state.observe(&page(toolbar, 1000, 86, true)), Some(false));
+        state.viewports.insert(
+            toolbar,
+            Viewport {
+                width: 1000,
+                height: 86,
+                scale: 1.0,
+            },
+        );
+        assert!(!state.observe_page(true));
         assert!(!state.has_ready_damage());
         assert!(state.has_interaction_damage());
-        assert_eq!(state.observe(&page(content, 900, 614, false)), Some(false));
+        state.viewports.insert(
+            content,
+            Viewport {
+                width: 900,
+                height: 614,
+                scale: 1.0,
+            },
+        );
+        assert!(!state.observe_page(false));
         assert!(!state.has_ready_damage());
-        assert_eq!(state.observe(&page(content, 1000, 614, false)), Some(true));
+        state.viewports.insert(
+            content,
+            Viewport {
+                width: 1000,
+                height: 614,
+                scale: 1.0,
+            },
+        );
+        assert!(state.observe_page(false));
         assert!(state.has_ready_damage());
         assert!(state.has_interaction_damage());
 

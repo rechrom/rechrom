@@ -77,7 +77,7 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
     }
     if let Some(start) = profile {
         let elapsed = start.elapsed();
-        eprintln!("page-layout-phase-profile build_ms={:.3} layout_export_ms={:.3} heap_scope_exit_ms={:.3} total_ms={:.3}",
+        eprintln!("page-layout-phase-profile sync_ms={:.3} layout_engine_ms={:.3} heap_scope_exit_ms={:.3} total_ms={:.3}",
             build_done.unwrap().as_secs_f64() * 1000.0,
             (layout_done.unwrap() - build_done.unwrap()).as_secs_f64() * 1000.0,
             (elapsed - layout_done.unwrap()).as_secs_f64() * 1000.0,

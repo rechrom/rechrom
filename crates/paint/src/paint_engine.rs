@@ -167,6 +167,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         scrollbar: None,
         kind: RecordedDisplayItemKind::Drawing,
         id: Default::default(),
+        client_visual_rect: draw.rect,
         visual_rect: draw.rect,
         visual_rect_is_accurate: true,
         draws_content: true,
@@ -555,6 +556,10 @@ fn RecordPaint(
         context.borrow().cache_rejected_invalid as f64,
     );
     trace.set(
+        "cache_rejected_geometry",
+        context.borrow().cache_rejected_geometry as f64,
+    );
+    trace.set(
         "cache_rejected_missing_id",
         context.borrow().cache_rejected_missing_id as f64,
     );
@@ -569,6 +574,7 @@ fn RecordPaint(
         rejected_uncacheable: context.borrow().cache_rejected_uncacheable,
         rejected_just_created: context.borrow().cache_rejected_just_created,
         rejected_invalid: context.borrow().cache_rejected_invalid,
+        rejected_geometry: context.borrow().cache_rejected_geometry,
         rejected_missing_id: context.borrow().cache_rejected_missing_id,
         rejected_missing_previous: context.borrow().cache_rejected_missing_previous,
     };
@@ -582,6 +588,7 @@ fn RecordPaint(
             ("reused", reuse.reused as f64),
             ("hit_rate", reuse.hit_rate()),
             ("invalid", reuse.rejected_invalid as f64),
+            ("geometry", reuse.rejected_geometry as f64),
             ("missing_id", reuse.rejected_missing_id as f64),
             ("missing_previous", reuse.rejected_missing_previous as f64),
         ],

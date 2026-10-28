@@ -4,9 +4,10 @@
 #![allow(non_snake_case)]
 mod backend;
 mod translated;
+pub use translated::{BuildTranslatedFilterOperations, ReplayDisplayItemListIntoTranslatedTarget};
+#[cfg(any(test, feature = "artifact_test_support"))]
 pub use translated::{
-    BuildTranslatedFilterOperations, RasterizePaintArtifact, RasterizePaintArtifactTransparent,
-    RasterizePaintArtifactWithScale, ReplayDisplayItemListIntoTranslatedTarget,
+    RasterizePaintArtifact, RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,
 };
 mod ui_translated;
 use backend::{RasterBackend, RasterBackendTarget};

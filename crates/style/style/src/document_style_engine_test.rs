@@ -16,6 +16,75 @@ fn node(owner: &dom::DOM, id: &str) -> usize {
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap()
 }
+
+#[test]
+fn viewport_media_non_inherited_change_skips_unchanged_descendants() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut markup = String::from(
+        "<!doctype html><div class=shell><aside class=side><h1>Cards</h1><p>Static</p></aside><main class=grid>",
+    );
+    for card in 0..360 {
+        markup.push_str(&format!(
+            "<article class='card c{}'><h2>Title</h2><p>Copy</p><code>{card:03}</code></article>",
+            card % 7
+        ));
+    }
+    markup.push_str("</main></div>");
+    let mut owner = html::html_parser::ParseHTML(&markup);
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
+        "body{margin:0;background:#eef2f7;font:14px/1.4 system-ui;color:#182230}\
+         .shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}\
+         .side{padding:24px;background:#183b5b;color:white}\
+         .grid{padding:24px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}\
+         .card{background:white;border:2px solid #9db4c8;border-radius:8px;padding:12px;min-height:120px}\
+         .card h2{margin:0 0 6px;font-size:16px}.card p{margin:0 0 8px}\
+         .c1{border-color:#da7869}.c2{border-color:#70a98f}.c3{border-color:#ac88c7}\
+         @media(max-width:1050px){.shell{grid-template-columns:170px 1fr}.grid{grid-template-columns:repeat(3,minmax(0,1fr));padding:18px}}",
+    ));
+    let mut wide = media();
+    wide.viewport_width = 1180.0;
+    wide.large_viewport_width = 1180.0;
+    let mut narrow = wide.clone();
+    narrow.viewport_width = 920.0;
+    narrow.large_viewport_width = 920.0;
+    let ua = crate::ParseUserAgentCSSWithRole(
+        "@media screen {h2{display:block}p{display:block}code{font-family:monospace}}",
+        cssom::CSSUserAgentStyleSheetRole::kHTML,
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine
+        .Update(&mut owner, &wide, std::slice::from_ref(&ua))
+        .unwrap();
+    owner.GetDocumentMut().InvalidateAllStyles();
+    engine
+        .Update(&mut owner, &wide, std::slice::from_ref(&ua))
+        .unwrap();
+    let viewport_styles = (0..owner.GetDocument().NodeCount())
+        .filter_map(|index| owner.GetDocument().ResolvedStyleFor(index))
+        .filter(|style| unsafe { &*style.native_style.Get() }.HasViewportUnits())
+        .count();
+    assert_eq!(viewport_styles, 1);
+    engine
+        .Update(&mut owner, &narrow, std::slice::from_ref(&ua))
+        .unwrap();
+    let stats = &owner.GetDocument().StyleState().stats;
+    assert!(
+        stats.resolved_nodes <= 2,
+        "nested UA rule positions must survive a viewport-only media change: {stats:?}"
+    );
+
+    owner
+        .GetDocumentMut()
+        .AppendStyleSheet(crate::ParseCSS(".new-rule-that-matches-nothing{color:red}"));
+    engine
+        .Update(&mut owner, &narrow, std::slice::from_ref(&ua))
+        .unwrap();
+    let stats = &owner.GetDocument().StyleState().stats;
+    assert!(
+        stats.resolved_nodes <= 2,
+        "stable rule identities must survive a sheet insertion after the media change: {stats:?}"
+    );
+}
 fn font_size(owner: &dom::DOM, index: usize) -> f32 {
     unsafe {
         &*owner
@@ -3525,6 +3594,55 @@ fn incremental_explicit_inheritance_and_display_suppression_follow_parent_change
     assert_eq!(native_pointer(&owner, grandchild), grandchild_style);
     assert_eq!(unsafe { &*grandchild_style }.Opacity(), 0.3);
 }
+
+#[test]
+fn display_suppression_queues_one_attachment_root_for_cleared_descendants() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut markup = String::from("<!doctype html><main id=parent>");
+    for depth in 0..1_000 {
+        markup.push_str(&format!("<div id=n{depth}>"));
+    }
+    for _ in 0..1_000 {
+        markup.push_str("</div>");
+    }
+    markup.push_str("</main><section id=unrelated></section>");
+    let mut owner = html::html_parser::ParseHTML(&markup);
+    let parent = node(&owner, "parent");
+    let deepest = node(&owner, "n999");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(owner.GetDocument().ResolvedStyleFor(deepest).is_some());
+    owner
+        .GetDocumentMut()
+        .StyleStateMut()
+        .layout_tree_roots
+        .clear();
+    owner
+        .GetDocumentMut()
+        .StyleStateMut()
+        .layout_style_nodes
+        .clear();
+    owner
+        .GetDocumentMut()
+        .StyleStateMut()
+        .paint_style_nodes
+        .clear();
+    owner
+        .GetDocumentMut()
+        .StyleStateMut()
+        .layout_inputs_require_tree = false;
+
+    set_attribute(&mut owner, parent, "style", "display:none");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(owner.GetDocument().ResolvedStyleFor(parent).is_none());
+    assert!(owner.GetDocument().ResolvedStyleFor(deepest).is_none());
+    let state = owner.GetDocument().StyleState();
+    assert_eq!(state.layout_tree_roots.len(), 1);
+    assert_eq!(state.layout_style_nodes.len(), 1);
+    assert_eq!(state.paint_style_nodes.len(), 1);
+}
+
 #[test]
 fn incremental_child_state_and_sibling_selectors_invalidate_beyond_the_container() {
     let _heap = foundation::LayoutHeapScope::new();
@@ -4321,6 +4439,206 @@ fn inherited_custom_property_change_skips_unrelated_variable_consumers() {
     assert!(
         stats.resolved_nodes <= 2,
         "unrelated var() consumers must retain their native style: {stats:?}"
+    );
+}
+
+#[test]
+fn inherited_custom_property_change_skips_unrelated_pseudo_variable_consumers() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut markup = String::from(
+        "<!doctype html><style>.carrier::before{content:'';color:var(--tone)}</style>\
+         <main id=parent style='--size:31px;--tone:blue'>",
+    );
+    for depth in 0..1_000 {
+        markup.push_str(&format!("<div id=n{depth} class=carrier>"));
+    }
+    markup.push_str("<span id=consumer style='width:var(--size)'></span>");
+    for _ in 0..1_000 {
+        markup.push_str("</div>");
+    }
+    markup.push_str("</main>");
+    let mut owner = html::html_parser::ParseHTML(&markup);
+    let parent = node(&owner, "parent");
+    let unrelated = node(&owner, "n500");
+    let consumer = node(&owner, "consumer");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, consumer), 31.0);
+    let unrelated_style = owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap();
+
+    set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert!(std::sync::Arc::ptr_eq(
+        &unrelated_style,
+        &owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap()
+    ));
+    let stats = &owner.GetDocument().StyleState().stats;
+    assert!(
+        stats.resolved_nodes <= 2,
+        "unrelated pseudo var() consumers must retain their native style: {stats:?}"
+    );
+}
+
+#[test]
+fn inherited_custom_property_change_skips_proven_suppressed_elements() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut markup =
+        String::from("<!doctype html><main id=parent style='--size:31px;--tone:blue'>");
+    for depth in 0..1_000 {
+        markup.push_str(&format!(
+            "<div id=n{depth} style='display:none;color:var(--tone)'></div>"
+        ));
+    }
+    markup.push_str("<span id=consumer style='width:var(--size)'></span></main>");
+    let mut owner = html::html_parser::ParseHTML(&markup);
+    let parent = node(&owner, "parent");
+    let suppressed = node(&owner, "n500");
+    let consumer = node(&owner, "consumer");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(owner.GetDocument().ResolvedStyleFor(suppressed).is_none());
+    assert_eq!(native_width(&owner, consumer), 31.0);
+
+    set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert!(owner.GetDocument().ResolvedStyleFor(suppressed).is_none());
+    let stats = &owner.GetDocument().StyleState().stats;
+    assert!(
+        stats.resolved_nodes <= 2,
+        "suppressed elements with unrelated var() dependencies must retain their proof: {stats:?}"
+    );
+}
+
+#[test]
+fn shadow_sheet_change_preserves_unrelated_document_dependency_proofs() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut markup =
+        String::from("<!doctype html><main id=parent style='--size:31px;--tone:blue'>");
+    for depth in 0..1_000 {
+        markup.push_str(&format!(
+            "<span id=n{depth} style='color:var(--tone)'></span>"
+        ));
+    }
+    markup
+        .push_str("<i id=consumer style='width:var(--size)'></i></main><x-host id=host></x-host>");
+    let mut owner = html::html_parser::ParseHTML(&markup);
+    let parent = node(&owner, "parent");
+    let unrelated = node(&owner, "n500");
+    let consumer = node(&owner, "consumer");
+    let host = node(&owner, "host");
+    let shadow = owner
+        .GetDocumentMut()
+        .AttachShadowRoot(host, dom::persistent_document::DOMShadowRootMode::kOpen);
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let unrelated_style = owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap();
+    let identity = owner
+        .GetDocumentMut()
+        .RegisterConstructedStyleSheet(crate::ParseCSS(":host{height:19px}"))
+        .unwrap();
+    owner
+        .GetDocumentMut()
+        .SetAdoptedStyleSheets(shadow, vec![identity])
+        .unwrap();
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+
+    set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert!(std::sync::Arc::ptr_eq(
+        &unrelated_style,
+        &owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap()
+    ));
+    assert!(
+        owner.GetDocument().StyleState().stats.resolved_nodes <= 2,
+        "a shadow-only sheet change must retain document-scope variable dependency proofs"
+    );
+}
+
+#[test]
+fn incremental_inline_update_preserves_custom_property_dependency_proof() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style>.carrier::before{content:'';color:var(--tone)}</style>\
+         <main id=parent style='--size:31px;--tone:blue'>\
+         <div id=target class=carrier style='width:10px'></div>\
+         <span id=consumer style='width:var(--size)'></span></main>",
+    );
+    let parent = node(&owner, "parent");
+    let target = node(&owner, "target");
+    let consumer = node(&owner, "consumer");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let old = owner
+        .GetDocument()
+        .Node(target)
+        .FindAttribute("style")
+        .unwrap()
+        .value
+        .clone();
+    let crate::CSSDeclarationMutation::ChangedIndependent(value) =
+        crate::SetCSSDeclaration(&old, "width", "20px", "").unwrap()
+    else {
+        panic!("width replacement must be eligible for incremental inline style update");
+    };
+    let target_id = owner.GetDocument().Node(target).Id();
+    owner
+        .ApplyMutation(&dom::dom_mutation::DOMMutation {
+            target_node_id: target_id,
+            name: "style".into(),
+            value,
+            inline_style_independent: true,
+            ..Default::default()
+        })
+        .unwrap();
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(
+        engine.TranslatedRuleShadowStats().incremental_style_updates,
+        1
+    );
+    assert_eq!(native_width(&owner, target), 20.0);
+    let target_style = owner.GetDocument().ResolvedStyleHandle(target).unwrap();
+
+    set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert!(std::sync::Arc::ptr_eq(
+        &target_style,
+        &owner.GetDocument().ResolvedStyleHandle(target).unwrap()
+    ));
+    assert!(
+        owner.GetDocument().StyleState().stats.resolved_nodes <= 2,
+        "incremental inline style must retain unrelated variable dependency proof"
+    );
+}
+
+#[test]
+fn suppressed_element_recalculates_when_its_display_variable_changes() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><main id=parent style='--visibility:none'>\
+         <div id=target style='display:var(--visibility)'></div></main>",
+    );
+    let parent = node(&owner, "parent");
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(owner.GetDocument().ResolvedStyleFor(target).is_none());
+
+    set_attribute(&mut owner, parent, "style", "--visibility:block");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
+    assert!(resolved.generates_box);
+    assert_eq!(
+        unsafe { &*resolved.native_style.Get() }.Display(),
+        EDisplay::kBlock
     );
 }
 

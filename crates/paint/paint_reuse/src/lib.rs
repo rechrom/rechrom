@@ -22,6 +22,7 @@ pub struct PaintReuseMetrics {
     pub rejected_uncacheable: usize,
     pub rejected_just_created: usize,
     pub rejected_invalid: usize,
+    pub rejected_geometry: usize,
     pub rejected_missing_id: usize,
     pub rejected_missing_previous: usize,
 }
@@ -41,8 +42,9 @@ pub fn DecideDisplayItemReuse(
     is_cacheable: bool,
     client_is_just_created: bool,
     invalidated: bool,
+    geometry_matches: bool,
 ) -> CacheDecision {
-    if has_previous && is_cacheable && !client_is_just_created && !invalidated {
+    if has_previous && is_cacheable && !client_is_just_created && !invalidated && geometry_matches {
         CacheDecision::Reuse
     } else {
         CacheDecision::Record

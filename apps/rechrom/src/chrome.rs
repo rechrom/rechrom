@@ -68,14 +68,6 @@ pub fn popup_document(rows: &[(String, String, String)], width: f64, x: f64) -> 
         r#"<!doctype html><html><head><style>*{{box-sizing:border-box}}html,body{{margin:0;width:100%;height:100%;background:transparent;font:13px sans-serif;color:#202124}}#popup{{position:absolute;left:{x}px;top:4px;width:{width}px;padding:8px 0;background:#fff;border:1px solid #dadce0;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.2)}}button{{display:flex;align-items:center;width:100%;height:32px;padding:0 16px;background:transparent;border:0;text-align:left;color:#202124;font:13px sans-serif;cursor:default}}button.hovered{{background:#e8eaed}}button:focus{{background:#e8eaed}}.label{{flex:1;min-width:0;white-space:nowrap;overflow:hidden}}.shortcut{{margin-left:16px;color:#5f6368;font-size:12px}}</style></head><body><div id="popup">{entries}</div></body></html>"#
     )
 }
-/// Compose independent Page recordings for the explicit readback host.
-pub fn content_with_popup(
-    content: Option<&paint::PaintArtifact>,
-    popup: &paint::PaintArtifact,
-) -> std::io::Result<paint::PaintArtifact> {
-    paint::paint_engine::PaintArtifact::WithFontOnlyOverlay(content, popup)
-}
-
 pub fn reload_icon(loading: bool) -> &'static str {
     if loading {
         include_str!("chrome_icons/close.svg")

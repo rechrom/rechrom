@@ -1,4 +1,4 @@
-//! Final display compositor state.
+//! Final display compositor state with one Viz/Renderer service shared by all Pages.
 //!
 //! This module owns the native surface and display resources, but deliberately
 //! knows nothing about threads, channels, or executors. `PresentationRuntime`
@@ -8,6 +8,8 @@ use crate::{
     engine::{Output, UserEvent, Viewport},
     window_surface::{DisplayTarget, PreparedDisplayTarget},
 };
+use browser::page::PageReturnedResource;
+use renderer_skia::{PixelFormat, RendererSkiaBackend};
 use std::{collections::BTreeMap, io, sync::Arc, time::Instant};
 
 pub(crate) enum Message {
@@ -27,7 +29,12 @@ pub(crate) enum Effect {
 }
 
 struct PageSurface {
-    frame: SubmittedFrame,
+    surface: viz::native::SurfaceId,
+    local_surface_id: compositor::runtime::types::LocalSurfaceId,
+    viewport: Viewport,
+    provenance: FrameProvenance,
+    is_handling_interaction: bool,
+    reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
 }
 struct PreparedDisplayFrame {
     output: PreparedDisplayTarget,
@@ -40,11 +47,16 @@ struct PreparedDisplayFrame {
 
 pub(crate) struct Display {
     target: DisplayTarget,
+    viz: viz::native::VizEngine,
+    renderer: renderer::Renderer<RendererSkiaBackend>,
     pages: BTreeMap<Document, PageSurface>,
     scene: Option<Scene>,
     pending: Option<()>,
     prepared: Option<PreparedDisplayFrame>,
     sequence: u64,
+    next_surface: u64,
+    rendered_pixels: Vec<u32>,
+    rendered_viewport: Option<Viewport>,
     notify: Arc<dyn Fn(UserEvent) + Send + Sync>,
     diagnostic_output: Option<Output>,
     pending_swap: Option<u64>,
@@ -54,11 +66,16 @@ impl Display {
     pub(crate) fn New(target: DisplayTarget, output: Output, capture_frames: bool) -> Self {
         Self {
             target,
+            viz: viz::native::VizEngine::New(),
+            renderer: renderer::Renderer::new(RendererSkiaBackend::default()),
             pages: BTreeMap::new(),
             scene: None,
             pending: None,
             prepared: None,
             sequence: 0,
+            next_surface: 1,
+            rendered_pixels: Vec::new(),
+            rendered_viewport: None,
             notify: output.notify.clone(),
             diagnostic_output: capture_frames.then_some(output),
             pending_swap: None,
@@ -109,16 +126,30 @@ impl Display {
         if self
             .pages
             .get(&requested)
-            .is_some_and(|page| page.frame.provenance.content.is_some())
+            .is_some_and(|page| page.provenance.content.is_some())
         {
             return Some(requested);
         }
         // DelegatedFrameHost's previous Surface remains visible during a new
         // document's first commit. The fallback is local to that embedding view.
         self.pages.iter().rev().find_map(|(&document, page)| {
-            (document.0 == requested.0 && page.frame.provenance.content.is_some())
-                .then_some(document)
+            (document.0 == requested.0 && page.provenance.content.is_some()).then_some(document)
         })
+    }
+
+    fn Reclaim(
+        reclaim: &Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
+        resources: Vec<PageReturnedResource>,
+    ) {
+        if !resources.is_empty() {
+            reclaim(resources);
+        }
+    }
+
+    fn DestroyPageSurface(&mut self, page: PageSurface) {
+        if let Some(resources) = self.viz.DestroySurface(page.surface) {
+            Self::Reclaim(&page.reclaim, resources);
+        }
     }
 
     fn PrunePages(&mut self) {
@@ -133,17 +164,19 @@ impl Display {
         let removed: Vec<_> = self
             .pages
             .iter()
-            .filter_map(|(&document, page)| {
+            .filter_map(|(&document, _page)| {
                 (!scene.live_documents.contains(&document) && !retained.contains(&document))
                     .then_some(document)
             })
             .collect();
         for document in removed {
-            self.pages.remove(&document);
+            if let Some(page) = self.pages.remove(&document) {
+                self.DestroyPageSurface(page);
+            }
         }
     }
 
-    fn Prepare(&mut self, submitted: SubmittedFrame) -> io::Result<Vec<Effect>> {
+    fn Prepare(&mut self, mut submitted: SubmittedFrame) -> io::Result<Vec<Effect>> {
         let document = submitted.provenance.document;
         let resize = submitted
             .provenance
@@ -167,8 +200,87 @@ impl Display {
                 ),
             ],
         );
-        self.pages
-            .insert(document, PageSurface { frame: submitted });
+        let local_surface_id = submitted.frame.local_surface_id;
+        let parameters = submitted
+            .frame
+            .frame
+            .render_pass_list
+            .last()
+            .map(|pass| (pass.output_rect.width, pass.output_rect.height))
+            .ok_or_else(|| io::Error::other("compositor frame has no root render pass"))?;
+        if let Some(current) = self.pages.get(&document) {
+            let same_embed = current.local_surface_id.embed_token == local_surface_id.embed_token;
+            if same_embed && !local_surface_id.IsSameOrNewerThan(&current.local_surface_id) {
+                submitted.Reclaim(
+                    submitted
+                        .frame
+                        .frame
+                        .resource_list
+                        .iter()
+                        .map(|resource| resource.ToReturnedResource())
+                        .collect(),
+                );
+                return Ok(Vec::new());
+            }
+            if current.local_surface_id == local_surface_id
+                && (
+                    current.viewport.width as i32,
+                    current.viewport.height as i32,
+                ) != parameters
+            {
+                return Err(io::Error::other(
+                    "CompositorFrame dimensions changed without a new LocalSurfaceId",
+                ));
+            }
+        }
+        let generation_changed = self
+            .pages
+            .get(&document)
+            .is_some_and(|current| current.local_surface_id != local_surface_id);
+        let carried_resize = self
+            .pages
+            .get(&document)
+            .and_then(|current| current.provenance.content)
+            .and_then(|content| content.resize);
+        let surface = if generation_changed {
+            let previous = self.pages.remove(&document).expect("Page surface exists");
+            self.DestroyPageSurface(previous);
+            let surface = viz::native::SurfaceId(self.next_surface);
+            self.next_surface = self.next_surface.wrapping_add(1).max(1);
+            surface
+        } else if let Some(current) = self.pages.get(&document) {
+            current.surface
+        } else {
+            let surface = viz::native::SurfaceId(self.next_surface);
+            self.next_surface = self.next_surface.wrapping_add(1).max(1);
+            surface
+        };
+        if let (Some(resize), Some(content)) =
+            (carried_resize, submitted.provenance.content.as_mut())
+        {
+            if let Some(current) = &mut content.resize {
+                current.merge(resize);
+            } else {
+                content.resize = Some(resize);
+            }
+        }
+        let reclaim = submitted.reclaim.clone();
+        let submission = self
+            .viz
+            .SubmitFrame(surface, submitted.frame.frame)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        Self::Reclaim(&reclaim, submission.returned_resources);
+        self.pages.insert(
+            document,
+            PageSurface {
+                surface,
+                local_surface_id,
+                viewport: submitted.viewport,
+                provenance: submitted.provenance,
+                is_handling_interaction: submitted.is_handling_interaction,
+                reclaim,
+            },
+        );
         self.PrunePages();
         self.pending = Some(());
         Ok(vec![])
@@ -205,8 +317,8 @@ impl Display {
                 return Ok(());
             };
             let page = &self.pages[&document];
-            is_handling_interaction |= page.frame.is_handling_interaction;
-            let local = page.frame.viewport;
+            is_handling_interaction |= page.is_handling_interaction;
+            let local = page.viewport;
             // Desktop Chromium gives top-level resizes a zero-frame surface
             // deadline. Viz can therefore aggregate the previous child
             // surface immediately, without stretching it, while the renderer
@@ -220,9 +332,17 @@ impl Display {
             {
                 stale_surfaces += 1;
             }
-            placements.push((&page.frame, placement.destination));
+            placements.push(viz::native::SurfacePlacement {
+                surface_id: page.surface,
+                destination: viz::native::DeviceRect::new(
+                    placement.destination.x,
+                    placement.destination.y,
+                    local.width as i32,
+                    local.height as i32,
+                ),
+            });
             if placement.document.0 != 0 && placement.document.0 != u64::MAX {
-                provenance = page.frame.provenance;
+                provenance = page.provenance;
             }
         }
         if placements.is_empty() {
@@ -247,9 +367,39 @@ impl Display {
         prepare_trace.set("height", viewport.height as f64);
         prepare_trace.set("device_scale", viewport.scale);
         prepare_trace.set("stale_surfaces", stale_surfaces as f64);
-        let output = self
-            .target
-            .render_page_surfaces(&placements, viewport, sequence)?;
+        let output_rect =
+            viz::native::DeviceRect::new(0, 0, viewport.width as i32, viewport.height as i32);
+        let mut aggregate = self
+            .viz
+            .Aggregate(output_rect, &placements)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let damage_pixels = aggregate.DamagePixels();
+        let retained = self.rendered_viewport == Some(viewport);
+        let pixel_count = viewport.width as usize * viewport.height as usize;
+        self.rendered_pixels.resize(pixel_count, 0);
+        let target = std::mem::take(&mut self.rendered_pixels);
+        let (update, target) = self.renderer.Render(
+            &mut aggregate,
+            renderer_skia::RenderTarget {
+                width: viewport.width,
+                height: viewport.height,
+                pixels: target,
+                format: PixelFormat::Bgra8888,
+                row_stride: viewport.width as usize,
+                retained,
+            },
+        )?;
+        self.rendered_pixels = target.pixels;
+        self.rendered_viewport = Some(viewport);
+        self.viz.DidDraw(aggregate);
+        prepare_trace.set("direct_root_target", update.direct_root_target as u8 as f64);
+        prepare_trace.set("damage_pixels", damage_pixels as f64);
+        let output = self.target.prepare_rendered_pixels(
+            &self.rendered_pixels,
+            viewport,
+            sequence,
+            damage_pixels,
+        )?;
         self.prepared = Some(PreparedDisplayFrame {
             output,
             provenance,
@@ -262,7 +412,7 @@ impl Display {
             if let Some(content) = self
                 .pages
                 .get_mut(&provenance.document)
-                .and_then(|page| page.frame.provenance.content.as_mut())
+                .and_then(|page| page.provenance.content.as_mut())
             {
                 content.resize = None;
             }

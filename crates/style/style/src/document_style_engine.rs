@@ -25,6 +25,10 @@ use crate::{
         PersistentSelectorError, PersistentSelectorMatchSession, PersistentSelectorService,
     },
     production_css_value::{ProductionCSSValueDispatch, PropertyValue, Value},
+    production_rule_matching::{
+        ProductionSelectorBucket as SelectorBucket,
+        ProductionSelectorBucketForComplexSubject as SelectorBucketForComplexSubject,
+    },
     properties::{
         css_property::CSSProperty,
         longhand_dispatch::{LonghandApplicationError, ResolvePhysical},
@@ -292,7 +296,7 @@ struct MatchedRule {
     user_agent_pseudo_sheet: bool,
     specificity: u32,
     proximity: u32,
-    order: usize,
+    rule_identity: crate::resolver::production_style_resolver::ProductionRuleIdentity,
     /// Exact entry emitted by SortAndTransferMatchedRules.
     transferred: Option<crate::resolver::match_result::MatchedProperties>,
 }
@@ -322,10 +326,6 @@ fn ConsumeProductionRuleCollection(
     stats.candidates_considered += report.candidates_considered;
     stats.selector_matches += report.selector_matches;
     for transferred in collection.rules {
-        let sheet_base = sheets[..transferred.sheet_index]
-            .iter()
-            .map(|(sheet, _)| sheet.rules.len())
-            .sum::<usize>();
         stats.typed_declarations_used += 1;
         direct_rules.push(MatchedRule {
             user_agent_pseudo_sheet: transferred.matched.data_.origin == CascadeOrigin::kUserAgent
@@ -333,7 +333,11 @@ fn ConsumeProductionRuleCollection(
                     == Some(CSSUserAgentStyleSheetRole::kMarker),
             specificity: transferred.specificity,
             proximity: transferred.proximity,
-            order: sheet_base + transferred.position as usize + 1,
+            rule_identity: crate::resolver::production_style_resolver::ProductionRuleIdentity {
+                sheet_identity: sheets[transferred.sheet_index].0.Identity(),
+                sheet_revision: sheets[transferred.sheet_index].0.Revision(),
+                rule_identity: transferred.rule_identity,
+            },
             transferred: Some(transferred.matched),
         });
     }
@@ -452,98 +456,11 @@ struct StyleSelector {
     bucket: SelectorBucket,
 }
 
-#[derive(Clone)]
-enum SelectorBucket {
-    Id(String),
-    Class(String),
-    Attribute(String),
-    Tag(String),
-    CustomPseudo(String),
-    Universal,
-}
-
 fn SelectorBucketForSubject(selectors: &CSSSelectorList) -> SelectorBucket {
     let Some(subject) = selectors.First() else {
         return SelectorBucket::Universal;
     };
     SelectorBucketForComplexSubject(subject)
-}
-
-fn SelectorBucketForComplexSubject(
-    subject: crate::css_selector::CSSSelectorComplex<'_>,
-) -> SelectorBucket {
-    let mut class_name = None;
-    let mut attribute = None;
-    let mut tag = None;
-    for selector in subject.SimpleSelectors() {
-        match selector.Match() {
-            MatchType::kId => return SelectorBucket::Id(selector.Value().Utf8()),
-            MatchType::kClass if class_name.is_none() => class_name = Some(selector.Value().Utf8()),
-            MatchType::kAttributeExact
-            | MatchType::kAttributeSet
-            | MatchType::kAttributeHyphen
-            | MatchType::kAttributeList
-            | MatchType::kAttributeContain
-            | MatchType::kAttributeBegin
-            | MatchType::kAttributeEnd
-                if attribute.is_none() =>
-            {
-                attribute = Some(selector.Attribute().LocalName().Utf8())
-            }
-            MatchType::kTag if tag.is_none() => tag = Some(selector.TagQName().LocalName().Utf8()),
-            _ => {}
-        }
-        if !matches!(
-            selector.Relation(),
-            RelationType::kSubSelector | RelationType::kPseudoChild
-        ) {
-            break;
-        }
-    }
-    class_name
-        .map(SelectorBucket::Class)
-        .or_else(|| attribute.map(SelectorBucket::Attribute))
-        .or_else(|| tag.map(SelectorBucket::Tag))
-        .unwrap_or(SelectorBucket::Universal)
-}
-
-impl SelectorBucket {
-    fn Matches(&self, document: &Document, index: usize, quirks: bool) -> bool {
-        let node = document.Node(index);
-        match self {
-            Self::CustomPseudo(expected) => document
-                .ShadowPseudoId(index)
-                .is_some_and(|name| name == expected),
-            Self::Id(expected) => node.FindAttribute("id").is_some_and(|attribute| {
-                if quirks {
-                    attribute.value.eq_ignore_ascii_case(expected)
-                } else {
-                    attribute.value == *expected
-                }
-            }),
-            Self::Class(expected) => node.FindAttribute("class").is_some_and(|attribute| {
-                attribute.value.split_ascii_whitespace().any(|class_name| {
-                    if quirks {
-                        class_name.eq_ignore_ascii_case(expected)
-                    } else {
-                        class_name == expected
-                    }
-                })
-            }),
-            Self::Attribute(expected) => node
-                .Attributes()
-                .iter()
-                .any(|attribute| attribute.local_name == *expected),
-            Self::Tag(expected) => {
-                if node.Namespace() == DOMNamespace::kHTML {
-                    node.Name().eq_ignore_ascii_case(expected)
-                } else {
-                    node.Name() == expected
-                }
-            }
-            Self::Universal => true,
-        }
-    }
 }
 
 #[derive(Default)]
@@ -600,8 +517,9 @@ impl RuleCandidateBuckets {
     }
 }
 
-/// Equality-only invalidation metadata, never cascade ordering. Origin,
-/// layers, rule revisions and environment are guarded by the update context.
+/// Equality-only invalidation metadata, never cascade ordering. Each value
+/// carries the parser-owned StyleRule identity; origin, layers, rule revisions
+/// and environment are guarded by the update context.
 /// Preserve duplicates and specificity/proximity; incomplete channels always
 /// require ordinary resolution instead of manufacturing a matching signature.
 #[derive(Clone)]
@@ -609,15 +527,34 @@ struct RetainedRuleSignature {
     native_style_complete: bool,
     variable_dependencies: Option<Rc<RetainedVariableDependencies>>,
     base_len: usize,
-    values: Vec<(usize, u32, u32)>,
+    values: Vec<(
+        crate::resolver::production_style_resolver::ProductionRuleIdentity,
+        u32,
+        u32,
+    )>,
     complete: bool,
 }
 impl RetainedRuleSignature {
-    fn new(values: Vec<(usize, u32, u32)>, complete: bool) -> Self {
+    fn new(
+        values: Vec<(
+            crate::resolver::production_style_resolver::ProductionRuleIdentity,
+            u32,
+            u32,
+        )>,
+        complete: bool,
+    ) -> Self {
         let base_len = values.len();
         Self::with_base(values, base_len, complete)
     }
-    fn with_base(mut values: Vec<(usize, u32, u32)>, base_len: usize, complete: bool) -> Self {
+    fn with_base(
+        mut values: Vec<(
+            crate::resolver::production_style_resolver::ProductionRuleIdentity,
+            u32,
+            u32,
+        )>,
+        base_len: usize,
+        complete: bool,
+    ) -> Self {
         for (_, _, proximity) in &mut values {
             *proximity = crate::element_rule_collector::CanonicalMatchedRuleProximity(*proximity);
         }
@@ -639,7 +576,7 @@ impl RetainedRuleSignature {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RetainedVariableDependencies {
     referenced: HashSet<std::string::String>,
     local: HashSet<std::string::String>,
@@ -1707,13 +1644,6 @@ impl DocumentStyleEngine {
         let document_sheets_changed = changed_tree_scopes.contains(&document.Root())
             || !ua_unchanged
             || media_rule_sets_changed;
-        if !sheet_changes.is_empty() && !document_sheets_changed {
-            // This equality-only sidecar stores flattened rule positions.
-            // Revoke its certificates after reindexing; existing native styles
-            // stay valid. Recalc below visits only the affected shadow scopes,
-            // hosts/slotted elements and exposed descendant scopes.
-            self.matches.clear();
-        }
         let quirks_changed = self
             .environment
             .as_ref()
@@ -1861,7 +1791,6 @@ impl DocumentStyleEngine {
         let mut dirty = HashSet::new();
         let mut inline_dirty = HashSet::new();
         let mut candidates = HashSet::new();
-        let mut refreshed_matches = HashMap::new();
         let mut candidate_checks = 0;
         let mut incomplete_candidates = 0;
         if all_dirty {
@@ -2383,7 +2312,6 @@ impl DocumentStyleEngine {
                 );
                 let dirty_before_changed_sheets = dirty.len();
                 let mut native_invalidated_count = 0usize;
-                let mut signature_invalidated_count = 0usize;
                 let mut missing_old_match_count = 0usize;
                 // Blink runs ApplyRuleSetInvalidationForTreeScope in element
                 // traversal order and keeps SelectorFilter's ancestor stack in
@@ -2428,61 +2356,6 @@ impl DocumentStyleEngine {
                 if let Some(invalidated) = native_invalidated {
                     native_invalidated_count = invalidated.len();
                     dirty.extend(invalidated);
-                    // Numeric positions are only a projection of sheet-owned
-                    // rules. Reindex unchanged sheets by retained identity and
-                    // revision; never compare their old/new numeric positions.
-                    // Preserve positive old matches for a later removal batched
-                    // with a DOM mutation, even if this update changed no style.
-                    let mut new_offsets = HashMap::new();
-                    let mut offset = 1;
-                    for (sheet, _) in active_sheets.iter() {
-                        new_offsets
-                            .entry((sheet.Identity(), sheet.Revision()))
-                            .or_insert_with(std::collections::VecDeque::new)
-                            .push_back(offset);
-                        offset += sheet.rules.len();
-                    }
-                    let mut positions = vec![None];
-                    for (sheet, _) in self.active_sheets.iter() {
-                        let start = new_offsets
-                            .get_mut(&(sheet.Identity(), sheet.Revision()))
-                            .and_then(|offsets| offsets.pop_front());
-                        // A media-query result rebuilds the active RuleSet, but
-                        // it does not reorder the CSSStyleSheet's source rules.
-                        // The diff RuleSet above already invalidated elements
-                        // matching rules which entered or left the active set.
-                        // Keep every other retained signature at the same
-                        // source position. Treating the whole owning sheet as
-                        // reindexed turns a single breakpoint rule into a full
-                        // document recalc on large pages.
-                        let changed = !media_rule_sets_changed
-                            && precise_changes
-                                .as_ref()
-                                .unwrap()
-                                .contains(&(sheet.Identity(), sheet.Revision()));
-                        positions.extend((0..sheet.rules.len()).map(|local| {
-                            (!changed)
-                                .then_some(start)
-                                .flatten()
-                                .map(|start| start + local)
-                        }));
-                    }
-                    self.matches.retain(|index, signature| {
-                        if signature
-                            .values
-                            .iter()
-                            .any(|(order, _, _)| positions.get(*order).copied().flatten().is_none())
-                        {
-                            signature_invalidated_count += usize::from(dirty.insert(*index));
-                            return false;
-                        }
-                        for (order, _, _) in &mut signature.values {
-                            *order = positions[*order].unwrap();
-                        }
-                        signature.values[..signature.base_len].sort_unstable();
-                        signature.values[signature.base_len..].sort_unstable();
-                        true
-                    });
                     if old_sheets_changed {
                         for &index in &elements {
                             if dirty.contains(&index) {
@@ -2546,8 +2419,6 @@ impl DocumentStyleEngine {
                     dirty_before_changed_sheets as f64,
                 );
                 changed_sheets_trace.set("native_invalidated", native_invalidated_count as f64);
-                changed_sheets_trace
-                    .set("signature_invalidated", signature_invalidated_count as f64);
                 changed_sheets_trace.set(
                     "missing_old_match_invalidated",
                     missing_old_match_count as f64,
@@ -2559,7 +2430,6 @@ impl DocumentStyleEngine {
                     &[
                         ("dirty_before", dirty_before_changed_sheets as f64),
                         ("native_invalidated", native_invalidated_count as f64),
-                        ("signature_invalidated", signature_invalidated_count as f64),
                         (
                             "missing_old_match_invalidated",
                             missing_old_match_count as f64,
@@ -2567,8 +2437,6 @@ impl DocumentStyleEngine {
                         ("dirty_after", dirty.len() as f64),
                     ],
                 );
-                // Rule order in the retained match signatures changed. Refresh
-                // signatures for candidates instead of comparing unlike revisions.
             }
             // cpp: style_engine.cc:3225-3231. A ShadowRoot sheet collection
             // update invalidates its scoped subtree plus the exact elements
@@ -2918,7 +2786,6 @@ impl DocumentStyleEngine {
             self.active_sheet_scopes = active_sheet_scopes;
             self.environment = Some(environment);
             self.sheet_dependencies = sheet_dependencies;
-            self.matches.extend(refreshed_matches);
             FinishUpdate(
                 owner.GetDocumentMut(),
                 StyleUpdateStats {
@@ -2974,12 +2841,38 @@ impl DocumentStyleEngine {
             ..Default::default()
         };
         let mut custom_pass_through_nodes = 0usize;
+        let mut custom_pass_candidates = 0usize;
+        let mut custom_pass_rejected_dirty = 0usize;
+        let mut custom_pass_rejected_inherited = 0usize;
+        let mut custom_pass_rejected_explicit = 0usize;
+        let mut custom_pass_rejected_subtree = 0usize;
+        let mut custom_pass_rejected_ensure = 0usize;
+        let mut custom_pass_rejected_registry = 0usize;
+        let mut custom_pass_rejected_parent = 0usize;
+        let mut custom_pass_rejected_signature = 0usize;
+        let mut custom_pass_rejected_old_custom = 0usize;
+        let mut custom_pass_rejected_old_parent = 0usize;
+        let mut custom_pass_rejected_dependencies = 0usize;
+        let mut custom_pass_rejected_referenced_change = 0usize;
+        let mut custom_pass_variable_free = 0usize;
+        let mut custom_pass_exact_dependencies = 0usize;
+        let mut custom_pass_suppressed = 0usize;
+        let mut resolve_dirty = 0usize;
+        let mut resolve_inherited = 0usize;
+        let mut resolve_inherited_custom = 0usize;
+        let mut resolve_explicit = 0usize;
+        let mut resolve_subtree = 0usize;
+        let mut resolve_missing = 0usize;
+        let mut resolve_ensured = 0usize;
         let mut impact = StyleUpdateImpact::default();
-        let mut pending_matches = refreshed_matches;
+        let mut pending_matches = HashMap::new();
         let mut pending_values = HashMap::new();
         let mut pending_custom_properties = HashMap::new();
+        let mut retained_suppressed = HashSet::new();
         let mut pending_container_dependencies = Vec::new();
         let mut custom_properties = HashMap::<usize, Rc<CustomProperties>>::new();
+        let mut custom_property_change_cache =
+            HashMap::<(usize, usize), Rc<HashSet<std::string::String>>>::new();
         let mut root_font = media.em_size;
         while let Some((
             index,
@@ -3023,6 +2916,14 @@ impl DocumentStyleEngine {
                         child_subtree = true;
                     }
                     cleared.push(index);
+                    if self
+                        .matches
+                        .get(&index)
+                        .is_some_and(|signature| signature.native_style_complete)
+                        && self.custom_properties.contains_key(&index)
+                    {
+                        retained_suppressed.insert(index);
+                    }
                     next_parent = Some(index);
                     child_inherited = false;
                     child_custom = false;
@@ -3036,18 +2937,42 @@ impl DocumentStyleEngine {
                     let old_custom = self.custom_properties.get(&index).cloned();
                     let old_parent_custom =
                         parent_index.and_then(|parent| self.custom_properties.get(&parent));
-                    let custom_pass_through_base = inherited_custom
-                        && !dirty.contains(&index)
-                        && !inherited
-                        && !explicit
-                        && !subtree
-                        && ensure_target.is_none()
-                        && self.property_registry.IsEmpty()
-                        && inherited_custom_properties.is_some()
-                        && self
+                    let custom_pass_through_base = if !inherited_custom {
+                        false
+                    } else {
+                        custom_pass_candidates += 1;
+                        if dirty.contains(&index) {
+                            custom_pass_rejected_dirty += 1;
+                            false
+                        } else if inherited {
+                            custom_pass_rejected_inherited += 1;
+                            false
+                        } else if explicit {
+                            custom_pass_rejected_explicit += 1;
+                            false
+                        } else if subtree {
+                            custom_pass_rejected_subtree += 1;
+                            false
+                        } else if ensure_target.is_some() {
+                            custom_pass_rejected_ensure += 1;
+                            false
+                        } else if !self.property_registry.IsEmpty() {
+                            custom_pass_rejected_registry += 1;
+                            false
+                        } else if inherited_custom_properties.is_none() {
+                            custom_pass_rejected_parent += 1;
+                            false
+                        } else if !self
                             .matches
                             .get(&index)
-                            .is_some_and(|signature| signature.native_style_complete);
+                            .is_some_and(|signature| signature.native_style_complete)
+                        {
+                            custom_pass_rejected_signature += 1;
+                            false
+                        } else {
+                            true
+                        }
+                    };
                     // A variable-free node's computed map is exactly its
                     // parent's map. A variable-using node can also pass the
                     // update through when none of the changed parent names was
@@ -3057,76 +2982,125 @@ impl DocumentStyleEngine {
                     let pass_through_custom_properties = custom_pass_through_base
                         .then(|| {
                             let parent = inherited_custom_properties.as_ref()?;
-                            let style = old_native?;
-                            if !NativeStyleHasVariableDependencies(style) {
-                                return Some(parent.clone());
+                            if old_native
+                                .is_some_and(|style| !NativeStyleHasVariableDependencies(style))
+                            {
+                                custom_pass_variable_free += 1;
+                                return Some((parent.clone(), true));
                             }
-                            if NativePseudoStyleHasVariableDependencies(style) {
+                            let Some(old) = old_custom.as_ref() else {
+                                custom_pass_rejected_old_custom += 1;
                                 return None;
-                            }
-                            let old = old_custom.as_ref()?;
-                            let old_parent = old_parent_custom?;
-                            let dependencies =
-                                self.matches.get(&index)?.variable_dependencies.as_ref()?;
-                            let changed = ChangedCustomPropertyNames(old_parent, parent);
+                            };
+                            let Some(old_parent) = old_parent_custom else {
+                                custom_pass_rejected_old_parent += 1;
+                                return None;
+                            };
+                            let Some(dependencies) = self
+                                .matches
+                                .get(&index)
+                                .and_then(|signature| signature.variable_dependencies.as_ref())
+                            else {
+                                custom_pass_rejected_dependencies += 1;
+                                return None;
+                            };
+                            let key = (
+                                Rc::as_ptr(&old_parent.values) as usize,
+                                Rc::as_ptr(&parent.values) as usize,
+                            );
+                            let changed = custom_property_change_cache
+                                .entry(key)
+                                .or_insert_with(|| {
+                                    Rc::new(ChangedCustomPropertyNames(old_parent, parent))
+                                })
+                                .clone();
                             if changed
                                 .iter()
                                 .any(|name| dependencies.referenced.contains(name))
                             {
+                                custom_pass_rejected_referenced_change += 1;
                                 return None;
                             }
-                            Some(PatchInheritedCustomProperties(
-                                old,
-                                parent,
-                                &changed,
-                                &dependencies.local,
+                            custom_pass_exact_dependencies += 1;
+                            if old_native.is_none() {
+                                custom_pass_suppressed += 1;
+                            }
+                            let inherited_value_changed = changed
+                                .iter()
+                                .any(|name| !dependencies.local.contains(name));
+                            Some((
+                                PatchInheritedCustomProperties(
+                                    old,
+                                    parent,
+                                    &changed,
+                                    &dependencies.local,
+                                ),
+                                inherited_value_changed,
                             ))
                         })
                         .flatten();
                     let pass_through_custom = pass_through_custom_properties.is_some();
+                    let reason_dirty = dirty.contains(&index);
+                    let reason_inherited_custom = inherited_custom && !pass_through_custom;
+                    let reason_missing = old.is_none() && !pass_through_custom;
+                    let reason_ensured = old.is_some_and(|s| {
+                        s.native_style.Get().is_null()
+                            || unsafe { &*s.native_style.Get() }.IsEnsuredInDisplayNone()
+                    });
+                    let reason_explicit =
+                        explicit && old.is_none_or(|s| s.has_explicit_inheritance != Some(false));
                     let must_resolve = if ensure_target.is_some() {
                         ensure_path.contains(&index)
                     } else {
-                        dirty.contains(&index)
+                        reason_dirty
                             || inherited
-                            || inherited_custom && !pass_through_custom
+                            || reason_inherited_custom
                             || subtree
-                            || old.is_none_or(|s| {
-                                s.native_style.Get().is_null()
-                                    || unsafe { &*s.native_style.Get() }.IsEnsuredInDisplayNone()
-                            })
-                            || (explicit
-                                && old.is_none_or(|s| s.has_explicit_inheritance != Some(false)))
+                            || reason_missing
+                            || reason_ensured
+                            || reason_explicit
                     };
                     if !must_resolve {
-                        let old = old.unwrap();
-                        native.insert(index, old.native_style.clone());
                         let old_custom = old_custom.unwrap_or_default();
-                        let next_custom = if pass_through_custom {
+                        let (next_custom, next_custom_changed) = if pass_through_custom {
                             pass_through_custom_properties
                                 .expect("custom pass-through computed a retained map")
                         } else {
-                            old_custom.clone()
+                            (old_custom.clone(), false)
                         };
-                        child_custom = pass_through_custom
-                            && !CustomPropertiesEquivalent(&old_custom, &next_custom);
                         if pass_through_custom {
                             custom_pass_through_nodes += 1;
                             pending_custom_properties.insert(index, next_custom.clone());
                         }
                         custom_properties.insert(index, next_custom);
-                        let old_native = unsafe { &*old.native_style.Get() };
-                        none |= old_native.Display() == EDisplay::kNone
-                            && !UsesSVGHiddenContainer(document, index, old_native);
-                        if parent_index.is_none() {
-                            root_font = unsafe { &*old.native_style.Get() }
-                                .GetFontDescription()
-                                .SpecifiedSize();
+                        if let Some(old) = old {
+                            native.insert(index, old.native_style.clone());
+                            let old_native = unsafe { &*old.native_style.Get() };
+                            none |= old_native.Display() == EDisplay::kNone
+                                && !UsesSVGHiddenContainer(document, index, old_native);
+                            if parent_index.is_none() {
+                                root_font = old_native.GetFontDescription().SpecifiedSize();
+                            }
+                            child_custom = next_custom_changed;
+                        } else {
+                            // A retained suppressed node has no DOM ComputedStyle
+                            // or layout object. Its complete dependency sidecar
+                            // proves this inherited change cannot alter display.
+                            none = true;
+                            child_custom = false;
+                            retained_suppressed.insert(index);
                         }
                         next_parent = Some(index);
                         child_inherited = false;
                         child_explicit = false;
                     } else {
+                        resolve_dirty += reason_dirty as usize;
+                        resolve_inherited += inherited as usize;
+                        resolve_inherited_custom += reason_inherited_custom as usize;
+                        resolve_explicit += reason_explicit as usize;
+                        resolve_subtree += subtree as usize;
+                        resolve_missing += reason_missing as usize;
+                        resolve_ensured += reason_ensured as usize;
                         stats.resolved_nodes += 1;
                         let incremental_style = incremental_style_candidates.contains(&index)
                             && ensure_target.is_none()
@@ -3221,10 +3195,14 @@ impl DocumentStyleEngine {
                         collaborators.subject_node = Some(index);
                         collaborators.is_ensuring_style = ensure_target.is_some();
                         if incremental_style {
+                            let variable_dependencies =
+                                self.matches[&index].variable_dependencies.as_deref();
                             collaborators.incremental_style = Some(
                                     crate::resolver::production_style_resolver::ProductionIncrementalStyle {
                                         custom_properties: self.custom_properties.get(&index).cloned().unwrap_or_default(),
                                         matched_signatures: &self.matches[&index].values[..self.matches[&index].base_len],
+                                        referenced_custom_properties: variable_dependencies.map(|dependencies| &dependencies.referenced),
+                                        local_custom_properties: variable_dependencies.map(|dependencies| &dependencies.local),
                                     });
                         }
                         collaborators.container_runtime = Some(&container_runtime);
@@ -3360,10 +3338,10 @@ impl DocumentStyleEngine {
                                         output.custom_properties,
                                         output.matched_signatures,
                                         output.variable_dependencies_complete.then(|| {
-                                            Rc::new(RetainedVariableDependencies {
+                                            RetainedVariableDependencies {
                                                 referenced: output.referenced_custom_properties,
                                                 local: output.local_custom_properties,
-                                            })
+                                            }
                                         }),
                                     );
                                     self.translated_rule_shadow_stats
@@ -3387,7 +3365,7 @@ impl DocumentStyleEngine {
                             mut builder,
                             computed_custom,
                             mut matched_signatures,
-                            variable_dependencies,
+                            mut variable_dependencies,
                         ) = translated_output;
                         let values = HashMap::new();
                         let base_signature_len = matched_signatures.len();
@@ -3444,10 +3422,10 @@ impl DocumentStyleEngine {
                                 rules
                                     .rules
                                     .iter()
-                                    .filter(|rule| rule.order != 0 && rule.order != usize::MAX)
+                                    .filter(|rule| rule.rule_identity.rule_identity != 0)
                                     .map(|rule| {
                                         (
-                                            rule.order,
+                                            rule.rule_identity,
                                             rule.specificity | (((pseudo_index + 1) as u32) << 24),
                                             rule.proximity,
                                         )
@@ -3733,6 +3711,16 @@ impl DocumentStyleEngine {
                                                     as *mut ComputedStyle,
                                             ));
                                             let pointer = resolved_highlight.Get();
+                                            let native = unsafe { &*pointer };
+                                            if native.HasVariableDeclaration()
+                                                || native.HasVariableReference()
+                                            {
+                                                MergePseudoVariableDependencies(
+                                                    &mut variable_dependencies,
+                                                    output.variable_dependencies_complete,
+                                                    &output.referenced_custom_properties,
+                                                );
+                                            }
                                             match (pseudo_id, search_text, argument.as_ref()) {
                                                 (PseudoId::kPseudoIdSelection, _, _) => highlight_builder
                                                     .AccessHighlightData()
@@ -3785,15 +3773,6 @@ impl DocumentStyleEngine {
                                 }
                             }
                         }
-                        let mut signature = RetainedRuleSignature::with_base(
-                            matched_signatures,
-                            base_signature_len,
-                            ordinary_signature_complete
-                                && OrdinarySignatureElement(document, index),
-                        );
-                        signature.native_style_complete = true;
-                        signature.variable_dependencies = variable_dependencies;
-                        pending_matches.insert(index, signature);
                         let final_style = unsafe { &*style.Get() };
                         if parent.is_none() {
                             root_font = final_style.GetFontDescription().SpecifiedSize()
@@ -3801,6 +3780,18 @@ impl DocumentStyleEngine {
                         if ensure_target.is_none()
                             && !ShouldStoreComputedStyle(document, index, final_style)
                         {
+                            let mut signature = RetainedRuleSignature::with_base(
+                                matched_signatures,
+                                base_signature_len,
+                                ordinary_signature_complete
+                                    && OrdinarySignatureElement(document, index),
+                            );
+                            signature.native_style_complete = true;
+                            signature.variable_dependencies = variable_dependencies.map(Rc::new);
+                            pending_matches.insert(index, signature);
+                            pending_custom_properties.insert(index, computed_custom.clone());
+                            custom_properties.insert(index, computed_custom);
+                            retained_suppressed.insert(index);
                             if let Some(old) = old {
                                 if !unsafe { old.native_style.Get().as_ref() }
                                     .is_some_and(|style| style.IsEnsuredInDisplayNone())
@@ -3932,6 +3923,7 @@ impl DocumentStyleEngine {
                                     *kind,
                                     &resolved,
                                     &computed_custom,
+                                    &mut variable_dependencies,
                                     initial_root_ref,
                                     root_font,
                                     media,
@@ -4015,6 +4007,7 @@ impl DocumentStyleEngine {
                                     kind,
                                     parent_pseudo,
                                     parent_custom,
+                                    &mut variable_dependencies,
                                     old_marker,
                                     initial_root_ref,
                                     root_font,
@@ -4044,6 +4037,15 @@ impl DocumentStyleEngine {
                             }
                             generated_pseudo_trace.set("requested", pseudo_rules.len() as f64);
                             drop(generated_pseudo_trace);
+                            let mut signature = RetainedRuleSignature::with_base(
+                                matched_signatures,
+                                base_signature_len,
+                                ordinary_signature_complete
+                                    && OrdinarySignatureElement(document, index),
+                            );
+                            signature.native_style_complete = true;
+                            signature.variable_dependencies = variable_dependencies.map(Rc::new);
+                            pending_matches.insert(index, signature);
                             let mut finalize_trace = browser_tracing::span(
                                 "style_resolve",
                                 "StyleEngine.FinalizeResolvedStyle",
@@ -4320,9 +4322,11 @@ impl DocumentStyleEngine {
         let document = owner.GetDocumentMut();
         let _publish_trace = browser_tracing::span("style_commit", "StyleEngine.PublishStyles");
         for index in cleared {
-            self.matches.remove(&index);
-            self.cascade_values.remove(&index);
-            self.custom_properties.remove(&index);
+            if !retained_suppressed.contains(&index) {
+                self.matches.remove(&index);
+                self.cascade_values.remove(&index);
+                self.custom_properties.remove(&index);
+            }
             self.viewport_dependent_elements.remove(&index);
             self.container_dependent_elements.remove(&index);
         }
@@ -4364,6 +4368,50 @@ impl DocumentStyleEngine {
         update_trace.set(
             "custom_pass_through_nodes",
             custom_pass_through_nodes as f64,
+        );
+        browser_tracing::instant(
+            "style",
+            "StyleEngine.ResolveReasons",
+            &[
+                ("dirty", resolve_dirty as f64),
+                ("inherited", resolve_inherited as f64),
+                ("inherited_custom", resolve_inherited_custom as f64),
+                ("explicit", resolve_explicit as f64),
+                ("subtree", resolve_subtree as f64),
+                ("missing", resolve_missing as f64),
+                ("ensured", resolve_ensured as f64),
+            ],
+        );
+        browser_tracing::instant(
+            "style",
+            "StyleEngine.CustomPassBase",
+            &[
+                ("candidates", custom_pass_candidates as f64),
+                ("dirty", custom_pass_rejected_dirty as f64),
+                ("inherited", custom_pass_rejected_inherited as f64),
+                ("explicit", custom_pass_rejected_explicit as f64),
+                ("subtree", custom_pass_rejected_subtree as f64),
+                ("ensure", custom_pass_rejected_ensure as f64),
+                ("registry", custom_pass_rejected_registry as f64),
+                ("parent", custom_pass_rejected_parent as f64),
+            ],
+        );
+        browser_tracing::instant(
+            "style",
+            "StyleEngine.CustomPassDependencies",
+            &[
+                ("signature", custom_pass_rejected_signature as f64),
+                ("old_custom", custom_pass_rejected_old_custom as f64),
+                ("old_parent", custom_pass_rejected_old_parent as f64),
+                ("dependencies", custom_pass_rejected_dependencies as f64),
+                (
+                    "referenced_change",
+                    custom_pass_rejected_referenced_change as f64,
+                ),
+                ("variable_free", custom_pass_variable_free as f64),
+                ("exact", custom_pass_exact_dependencies as f64),
+                ("suppressed", custom_pass_suppressed as f64),
+            ],
         );
         Ok(impact)
     }
@@ -4728,7 +4776,6 @@ impl DocumentStyleEngine {
         let mut svg_user_agent = None;
         let mut mathml_user_agent = None;
         let mut author = Vec::new();
-        let mut sheet_bases = HashMap::<Option<usize>, usize>::new();
         for (sheet_index, &(sheet, origin)) in sheets.iter().enumerate() {
             let tree_scope_root = match origin {
                 CascadeOrigin::kUserAgent => None,
@@ -4739,9 +4786,6 @@ impl DocumentStyleEngine {
                 CascadeOrigin::kAuthor => sheet_scopes.get(sheet_index).copied().flatten(),
                 _ => None,
             };
-            let sheet_base = sheet_bases.entry(tree_scope_root).or_default();
-            let current_sheet_base = *sheet_base;
-            *sheet_base += sheet.rules.len();
             if !sheet.owner_media_conditions.iter().all(|condition| {
                 let query = self
                     .media_query_cache
@@ -4774,7 +4818,8 @@ impl DocumentStyleEngine {
                 crate::resolver::production_style_resolver::ProductionResolverRuleSetInput {
                     rule_set,
                     implicit_scope_trigger,
-                    sheet_base: current_sheet_base,
+                    sheet_identity: sheet.Identity(),
+                    sheet_revision: sheet.Revision(),
                     tree_scope_root,
                 };
             match origin {
@@ -5274,9 +5319,9 @@ impl DocumentStyleEngine {
             ordinary_complete && OrdinarySignatureElement(document, index),
         );
         self.matches.get(&index).is_none_or(|old| {
-            // Numeric rule IDs never compare across revisions. The only safe
-            // exception is no matched rules in either certified flat sheet;
-            // there are then neither rule values nor global sheet inputs.
+            // Rule identities never compare across a reparsed revision. The
+            // only safe exception is no matched rules in either certified flat
+            // sheet; there are then neither rule values nor global inputs.
             let comparable = context_unchanged
                 || (non_rule_context_unchanged
                     && old.values.is_empty()
@@ -5294,7 +5339,11 @@ impl DocumentStyleEngine {
         native: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
         custom: Option<&HashMap<usize, Rc<CustomProperties>>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
-    ) -> Vec<(usize, u32, u32)> {
+    ) -> Vec<(
+        crate::resolver::production_style_resolver::ProductionRuleIdentity,
+        u32,
+        u32,
+    )> {
         let selector_session = self.selectors.borrow_mut().StyleMatchSession(document);
         let values = DocumentMediaValues::new(document, media);
         let evaluator = crate::media_queries::media_query_backend::ForMediaValues(&values);
@@ -5333,6 +5382,21 @@ impl DocumentStyleEngine {
         };
         for (order, sheet_index, rule_index) in work {
             let (sheet, origin) = sheets[sheet_index];
+            let rule_identity = sheet
+                .ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()
+                .and_then(|typed| {
+                    typed
+                        .ProjectionRulesInSourceOrder()
+                        .get(rule_index)
+                        .map(|rule| rule.Identity())
+                })
+                .unwrap_or(order);
+            let rule_identity =
+                crate::resolver::production_style_resolver::ProductionRuleIdentity {
+                    sheet_identity: sheet.Identity(),
+                    sheet_revision: sheet.Revision(),
+                    rule_identity,
+                };
             if origin == CascadeOrigin::kUserAgent
                 && !UserAgentSheetAppliesToDocument(
                     sheet,
@@ -5394,7 +5458,11 @@ impl DocumentStyleEngine {
                         sheet.owner_node_id,
                         Some(&selector_session),
                     ) {
-                        matches.push((order, specificity | ((target as u32) << 24), proximity));
+                        matches.push((
+                            rule_identity,
+                            specificity | ((target as u32) << 24),
+                            proximity,
+                        ));
                     }
                 }
             }
@@ -6084,6 +6152,7 @@ impl DocumentStyleEngine {
         kind: PseudoStyleKind,
         originating: &ResolvedNodeStyle,
         originating_custom: &Rc<CustomProperties>,
+        variable_dependencies: &mut Option<RetainedVariableDependencies>,
         initial: &ComputedStyle,
         root: f32,
         media: &MediaValuesCachedData,
@@ -6275,6 +6344,13 @@ impl DocumentStyleEngine {
                 self.ResolveFontFeatureValues(&mut builder);
                 let mut style = Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
                 let native = unsafe { &*style.Get() };
+                if native.HasVariableDeclaration() || native.HasVariableReference() {
+                    MergePseudoVariableDependencies(
+                        variable_dependencies,
+                        output.variable_dependencies_complete,
+                        &output.referenced_custom_properties,
+                    );
+                }
                 if !has_nested_marker && !kind.IsNestedMarker() {
                     if let Some(old) = document.ResolvedStyleFor(index) {
                         let cached = unsafe { &*old.native_style.Get() }
@@ -6334,6 +6410,7 @@ impl DocumentStyleEngine {
         kind: PseudoStyleKind,
         originating: &PseudoElement,
         originating_custom: &Rc<CustomProperties>,
+        variable_dependencies: &mut Option<RetainedVariableDependencies>,
         _old_marker: Option<&PseudoElement>,
         initial: &ComputedStyle,
         root: f32,
@@ -6371,6 +6448,7 @@ impl DocumentStyleEngine {
                 kind,
                 &originating_style,
                 originating_custom,
+                variable_dependencies,
                 initial,
                 root,
                 media,
@@ -7592,7 +7670,7 @@ fn ContainerQueryDependent(style: &ComputedStyle) -> bool {
         })
 }
 
-/// Proves that the retained RuleSet positions are a complete ordinary-element
+/// Proves that the retained RuleSet identities are a complete ordinary-element
 /// match signature. This does not classify selector support or alter matching;
 /// it only decides whether a prior signature may be reused after a rule change.
 fn OrdinaryMatchedRuleSignaturesAreComplete(
@@ -7737,14 +7815,15 @@ fn PatchInheritedCustomProperties(
     changed: &HashSet<std::string::String>,
     local: &HashSet<std::string::String>,
 ) -> Rc<CustomProperties> {
-    if changed.is_empty() {
+    let inherited_changes = changed
+        .iter()
+        .filter(|name| !local.contains(*name))
+        .collect::<Vec<_>>();
+    if inherited_changes.is_empty() {
         return old.clone();
     }
     let mut patched = old.as_ref().clone();
-    for name in changed {
-        if local.contains(name) {
-            continue;
-        }
+    for name in inherited_changes {
         match parent.values.get(name).cloned() {
             Some(value) => patched.SetData(name.clone(), value),
             None => patched.RemoveData(name),
@@ -7779,6 +7858,20 @@ fn CustomPropertiesEquivalent(a: &CustomProperties, b: &CustomProperties) -> boo
             left, right,
         )
     })
+}
+
+fn MergePseudoVariableDependencies(
+    retained: &mut Option<RetainedVariableDependencies>,
+    complete: bool,
+    referenced: &HashSet<std::string::String>,
+) {
+    if !complete {
+        *retained = None;
+        return;
+    }
+    if let Some(retained) = retained {
+        retained.referenced.extend(referenced.iter().cloned());
+    }
 }
 
 fn FinishUpdate(document: &mut Document, stats: StyleUpdateStats, impact: StyleUpdateImpact) {

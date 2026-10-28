@@ -338,6 +338,69 @@ pub(crate) fn publish(
                 .map(|destination| (pass, destination))
         })
         .collect();
+    // A software Display commonly publishes several already-rasterized root
+    // planes into one host target (for example toolbar and document
+    // surfaces). They are BGRA bitmaps in device pixels, so routing every
+    // unscaled plane back through SkImage/Canvas turns a row copy into a full
+    // image draw. Keep the same kSrc ordering and damage clipping while
+    // copying those planes directly into the borrowed output buffer.
+    let direct_roots = target.format == PixelFormat::Bgra8888
+        && root_passes.iter().all(|(pass, destination)| {
+            let source = pass.OutputRect();
+            let Some(backing) = backings.get(&pass.RenderPassId()) else {
+                return false;
+            };
+            source.width == destination.width
+                && source.height == destination.height
+                && backing.rect.width >= source.width
+                && backing.rect.height >= source.height
+                && backing.drawn_rect.width == source.width
+                && backing.drawn_rect.height == source.height
+        });
+    if direct_roots {
+        if !target.retained {
+            target.pixels.fill(u32::MAX);
+        }
+        for (pass, destination) in &root_passes {
+            let source = pass.OutputRect();
+            let backing = backings
+                .get(&pass.RenderPassId())
+                .ok_or_else(|| io::Error::other("completed translated root pass is unavailable"))?;
+            let mut damage = if target.retained {
+                let damage = drawn_damage
+                    .get(&pass.RenderPassId())
+                    .copied()
+                    .unwrap_or_default();
+                Rect::new(
+                    destination
+                        .x
+                        .saturating_add(damage.x.saturating_sub(source.x)),
+                    destination
+                        .y
+                        .saturating_add(damage.y.saturating_sub(source.y)),
+                    damage.width,
+                    damage.height,
+                )
+            } else {
+                *destination
+            };
+            damage.Intersect(full_bounds);
+            if damage.IsEmpty() {
+                continue;
+            }
+            let source_x = damage.x.saturating_sub(destination.x) as usize;
+            let source_y = damage.y.saturating_sub(destination.y) as usize;
+            let row_pixels = damage.width as usize;
+            for row in 0..damage.height as usize {
+                let source_start = (source_y + row) * backing.rect.width as usize + source_x;
+                let target_start =
+                    (damage.y as usize + row) * target.row_stride + damage.x as usize;
+                target.pixels[target_start..target_start + row_pixels]
+                    .copy_from_slice(&backing.pixels[source_start..source_start + row_pixels]);
+            }
+        }
+        return Ok(());
+    }
     // SoftwareRenderer's usual Page output is one unscaled BGRA root pass.
     // Publishing it through a copied SkImage performs two full-frame memory
     // passes before the embedding even reaches its host target. The backing is

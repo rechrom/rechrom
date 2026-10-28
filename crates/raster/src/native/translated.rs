@@ -1,10 +1,8 @@
 //! Paint replay into the source-aligned `skia` Canvas.
 //!
-//! This receiver is private to `raster`.  It deliberately consumes the same
-//! cc-selected `RasterPlayback` as the legacy receiver and writes the same
-//! unpublished engine allocation.  Unsupported replay vocabulary is returned
-//! as an error; the engine never falls back to the legacy receiver after a
-//! partially executed command stream.
+//! This receiver is private to `raster`. It consumes cc-selected
+//! `RasterPlayback` and writes the engine's unpublished allocation. Unsupported
+//! replay vocabulary is returned as an error; there is no alternate receiver.
 
 use super::{backend::*, *};
 use crate::convert::{resources, ToSkia};
@@ -17,6 +15,7 @@ use compositor_core::{
         CpuPaintOpBuffer, CpuPaintOpRef, CpuPaintRecord, CpuPaintShader, RasterPlaybackParams,
     },
 };
+#[cfg(any(test, feature = "artifact_test_support"))]
 use paint::paint_engine::PaintArtifact;
 use raster_commands::commands::{
     self as command, CommandKind, DrawCommand, FontSmoothing, ImageInterpolationQuality,
@@ -3512,6 +3511,7 @@ pub fn ReplayDisplayItemListIntoTranslatedTarget(
     replay.finish_replay()
 }
 
+#[cfg(any(test, feature = "artifact_test_support"))]
 fn rasterize_paint_artifact(
     list: &PaintArtifact,
     width: u32,
@@ -3568,12 +3568,14 @@ fn rasterize_paint_artifact(
 /// Rasterize a Paint publication onto an opaque white RGBA target. This is a
 /// standalone inspection/export entry point; production tile raster continues
 /// to enter through [`RasterEngine`] with compositor-selected work.
+#[cfg(any(test, feature = "artifact_test_support"))]
 pub fn RasterizePaintArtifact(list: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
     rasterize_paint_artifact(list, width, height, 1., false)
         .expect("translated PaintArtifact rasterization failed")
 }
 
 /// Rasterize a Paint publication onto an opaque white scaled RGBA target.
+#[cfg(any(test, feature = "artifact_test_support"))]
 pub fn RasterizePaintArtifactWithScale(
     list: &PaintArtifact,
     width: u32,
@@ -3585,6 +3587,7 @@ pub fn RasterizePaintArtifactWithScale(
 }
 
 /// Rasterize a Paint publication onto a transparent RGBA target.
+#[cfg(any(test, feature = "artifact_test_support"))]
 pub fn RasterizePaintArtifactTransparent(list: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
     rasterize_paint_artifact(list, width, height, 1., true)
         .expect("translated transparent PaintArtifact rasterization failed")

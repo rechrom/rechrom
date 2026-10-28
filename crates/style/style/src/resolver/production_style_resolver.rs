@@ -1032,14 +1032,19 @@ pub(crate) enum ProductionStyleResolutionFailure {
 /// @scope for that CSSStyleSheet client. Keeping the trigger beside the RuleSet
 /// preserves ScopedStyleResolver::ImplicitScopeTrigger across the private
 /// StyleEngine/StyleResolver boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ProductionRuleIdentity {
+    pub sheet_identity: u64,
+    pub sheet_revision: u64,
+    pub rule_identity: usize,
+}
+
 #[derive(Clone)]
 pub(crate) struct ProductionResolverRuleSetInput {
     pub rule_set: Rc<RuleSet<Backend>>,
     pub implicit_scope_trigger: Option<usize>,
-    /// Number of style rules in preceding active sheets. This is retained only
-    /// for DocumentStyleEngine's matched-rule invalidation signature; cascade
-    /// order remains owned by ElementRuleCollector/MatchResult.
-    pub sheet_base: usize,
+    pub sheet_identity: u64,
+    pub sheet_revision: u64,
     /// TreeScope whose ScopedStyleResolver owns this CSSStyleSheet. `None` is
     /// the document scope for legacy direct callers.
     pub tree_scope_root: Option<usize>,
@@ -1050,7 +1055,8 @@ impl ProductionResolverRuleSetInput {
         Self {
             rule_set,
             implicit_scope_trigger: None,
-            sheet_base: 0,
+            sheet_identity: 0,
+            sheet_revision: 0,
             tree_scope_root: None,
         }
     }
@@ -1111,8 +1117,9 @@ impl ProductionRuleCollection {
             && self.inputs.iter().zip(inputs).all(|(old, new)| {
                 Rc::ptr_eq(&old.rule_set, &new.rule_set)
                     && old.implicit_scope_trigger == new.implicit_scope_trigger
+                    && old.sheet_identity == new.sheet_identity
+                    && old.sheet_revision == new.sheet_revision
                     && old.tree_scope_root == new.tree_scope_root
-                    && old.sheet_base == new.sheet_base
             })
     }
 }
@@ -1178,7 +1185,9 @@ impl ProductionDeclarationCache {
 /// semantics.
 pub(crate) struct ProductionIncrementalStyle<'a> {
     pub custom_properties: Rc<CustomProperties>,
-    pub matched_signatures: &'a [(usize, u32, u32)],
+    pub matched_signatures: &'a [(ProductionRuleIdentity, u32, u32)],
+    pub referenced_custom_properties: Option<&'a HashSet<std::string::String>>,
+    pub local_custom_properties: Option<&'a HashSet<std::string::String>>,
 }
 
 pub(crate) struct ProductionBaseStyleCollaborators<'a> {
@@ -1349,7 +1358,7 @@ struct ProductionRuleMatchingHost<'d> {
     local_custom_properties: RefCell<HashSet<std::string::String>>,
     variable_dependencies_complete: RefCell<bool>,
     base_style_metrics: RefCell<ProductionBaseStyleMetrics>,
-    matched_signatures: RefCell<Vec<(usize, u32, u32)>>,
+    matched_signatures: RefCell<Vec<(ProductionRuleIdentity, u32, u32)>>,
     failures: RefCell<Vec<ProductionStyleResolutionFailure>>,
     matched_properties_cache: ProductionMatchedPropertiesCache,
     // ComputedStyleBuilder stores StyleBaseData as a raw Oilpan Member. Keep
@@ -2578,7 +2587,11 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
             actual.MatchedRulesForTest().iter().filter_map(|rule| {
                 inputs.get(rule.StyleSheetIndex()).map(|input| {
                     (
-                        input.sheet_base + rule.PositionInStyleSheet() as usize + 1,
+                        ProductionRuleIdentity {
+                            sheet_identity: input.sheet_identity,
+                            sheet_revision: input.sheet_revision,
+                            rule_identity: Rc::as_ptr(rule.Rule()) as usize,
+                        },
                         rule.Specificity(),
                         rule.Proximity(),
                     )
@@ -3280,6 +3293,18 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                     self.matched_signatures
                         .borrow_mut()
                         .extend_from_slice(old.matched_signatures);
+                    if let (Some(referenced), Some(local)) = (
+                        old.referenced_custom_properties,
+                        old.local_custom_properties,
+                    ) {
+                        self.referenced_custom_properties
+                            .borrow_mut()
+                            .extend(referenced.iter().cloned());
+                        self.local_custom_properties
+                            .borrow_mut()
+                            .extend(local.iter().cloned());
+                        *self.variable_dependencies_complete.borrow_mut() = true;
+                    }
                     self.base_style_metrics
                         .borrow_mut()
                         .incremental_style_updates += 1;
@@ -4670,7 +4695,7 @@ pub(crate) struct ProductionResolveBaseStyleInputs<'a> {
 pub(crate) struct ProductionBaseStyleOutput {
     pub style: Rc<Persistent<ComputedStyle>>,
     pub custom_properties: Rc<CustomProperties>,
-    pub matched_signatures: Vec<(usize, u32, u32)>,
+    pub matched_signatures: Vec<(ProductionRuleIdentity, u32, u32)>,
     pub referenced_custom_properties: HashSet<std::string::String>,
     pub local_custom_properties: HashSet<std::string::String>,
     pub variable_dependencies_complete: bool,
@@ -4949,8 +4974,7 @@ pub(crate) fn ApplyBaseStyleForElement(
         })?;
     let matched_signatures = std::mem::take(&mut *host.matched_signatures.borrow_mut());
     let metrics = host.base_style_metrics.borrow().clone();
-    let variable_dependencies_complete =
-        *host.variable_dependencies_complete.borrow() && metrics.incremental_style_updates == 0;
+    let variable_dependencies_complete = *host.variable_dependencies_complete.borrow();
     let referenced_custom_properties =
         std::mem::take(&mut *host.referenced_custom_properties.borrow_mut());
     let local_custom_properties = std::mem::take(&mut *host.local_custom_properties.borrow_mut());
@@ -5036,8 +5060,7 @@ pub(crate) fn ResolveBaseStyleForElement(
         })?;
     let matched_signatures = std::mem::take(&mut *host.matched_signatures.borrow_mut());
     let metrics = host.base_style_metrics.borrow().clone();
-    let variable_dependencies_complete =
-        *host.variable_dependencies_complete.borrow() && metrics.incremental_style_updates == 0;
+    let variable_dependencies_complete = *host.variable_dependencies_complete.borrow();
     let referenced_custom_properties =
         std::mem::take(&mut *host.referenced_custom_properties.borrow_mut());
     let local_custom_properties = std::mem::take(&mut *host.local_custom_properties.borrow_mut());

@@ -216,6 +216,10 @@ impl GridSizingTree {
     pub fn LayoutData(&self, index: u32) -> *mut GridLayoutData {
         self.At(index).layout_data.Get()
     }
+    // Includes baseline alignment in descendant subgrids, not just the root.
+    pub fn HasBaselines(&self) -> bool {
+        self.tree_has_baselines_
+    }
     // cpp: layoutng_grid/grid_sizing_tree.cc:75-77
     pub fn FinalizeTree(&self) -> *const GridLayoutTree {
         self.FinalizeSubtreeAt(0)

@@ -207,7 +207,7 @@ impl SurfaceAggregator {
         &self,
         frame: &NativeCompositorFrame,
         pass_index: usize,
-        initial_damage: Rect,
+        pass_damage: &BTreeMap<RenderPassId, Rect>,
         force_full_damage: bool,
         visiting: &mut BTreeSet<RenderPassId>,
     ) -> Rect {
@@ -218,7 +218,10 @@ impl SurfaceAggregator {
         let mut damage = if force_full_damage {
             pass.output_rect
         } else {
-            UnionRect(initial_damage, pass.damage_rect)
+            pass_damage
+                .get(&pass.id)
+                .copied()
+                .unwrap_or(pass.damage_rect)
         };
 
         for quad in &pass.quad_list {
@@ -235,7 +238,7 @@ impl SurfaceAggregator {
             let mut child_damage = self.PrewalkRenderPass(
                 frame,
                 child_index,
-                Rect::default(),
+                pass_damage,
                 force_full_damage,
                 visiting,
             );
@@ -316,7 +319,7 @@ impl SurfaceAggregator {
                 output.height = output.height.min(self.max_render_target_size_);
             }
             let force_full = !damage_continuous
-                || RenderPassNeedsFullDamage(source, false)
+                || (!frame.frame_drawn && RenderPassNeedsFullDamage(source, false))
                 || self.full_damage_.contains(&surface_id);
             let pass_damage = SetRenderPassDamageRect(
                 source,
@@ -336,7 +339,7 @@ impl SurfaceAggregator {
                 frame.frame.metadata.content_color_usage,
                 source.has_transparent_background,
                 source.cache_render_pass,
-                source.has_damage_from_contributing_content,
+                !frame.frame_drawn && source.has_damage_from_contributing_content,
                 source.generate_mipmap,
             );
             copy.is_from_surface_root_pass = index + 1 == frame.frame.render_pass_list.len();
@@ -525,10 +528,7 @@ fn MapRectToDestination(source: Rect, destination: Rect, mut damage: Rect) -> Re
 
 // Source: components/viz/service/display/surface_aggregator.cc:268-423
 fn RenderPassNeedsFullDamage(pass: &NativeCompositorRenderPass, merge_state_changed: bool) -> bool {
-    pass.cache_render_pass
-        || !pass.copy_requests.is_empty()
-        || merge_state_changed
-        || pass.has_damage_from_contributing_content
+    pass.cache_render_pass || !pass.copy_requests.is_empty() || merge_state_changed
 }
 
 fn SetRenderPassDamageRect(
@@ -692,18 +692,29 @@ impl SurfaceAggregator {
         .map_err(VizError::Frame)?;
 
         let force_full = self.full_damage_.contains(&surface_id)
-            || self
-                .resolved_frames_
-                .get(&surface_id)
-                .is_none_or(|record| frame.frame_index != record.frame_index.wrapping_add(1));
+            || match self.resolved_frames_.get(&surface_id) {
+                None => true,
+                Some(record) if frame.frame_index == record.frame_index => false,
+                Some(record) => frame.frame_index != record.frame_index.wrapping_add(1),
+            };
         let root = resolved.root_pass().render_pass();
-        let base_damage = damage_tracker.Damage(surface_id, root.id, root.damage_rect);
+        let pass_damage: BTreeMap<_, _> = frame
+            .frame
+            .render_pass_list
+            .iter()
+            .map(|pass| {
+                (
+                    pass.id,
+                    damage_tracker.Damage(surface_id, pass.id, pass.damage_rect),
+                )
+            })
+            .collect();
         let mut visiting = BTreeSet::new();
         let root_index = frame.frame.render_pass_list.len() - 1;
         let mut surface_damage = self.PrewalkRenderPass(
             &frame.frame,
             root_index,
-            base_damage,
+            &pass_damage,
             force_full,
             &mut visiting,
         );
@@ -711,7 +722,7 @@ impl SurfaceAggregator {
             root,
             surface_damage,
             Rect::default(),
-            RenderPassNeedsFullDamage(root, false) || force_full,
+            (!frame.frame_drawn && RenderPassNeedsFullDamage(root, false)) || force_full,
         );
         if will_draw {
             result.root_damage.Union(surface_damage);
