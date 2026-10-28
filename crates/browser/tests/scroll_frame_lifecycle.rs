@@ -126,7 +126,7 @@ fn root_scroll_state(
 }
 
 #[test]
-fn phased_wheel_refreshes_cull_projection_after_end() {
+fn phased_wheel_refreshes_cull_projection_during_scroll() {
     native_test_thread::run(|| {
         use interaction::input_event::{WheelEvent, WheelPhase};
         use layoutng_assembly::internal::layout_input::Offset;
@@ -144,9 +144,11 @@ fn phased_wheel_refreshes_cull_projection_after_end() {
         let active = root_scroll_state(&page.CurrentFrame().unwrap().fragments).unwrap();
         assert!(active.0.y >= 700.0);
         assert_eq!(
-            active.1, initial.1,
-            "active wheel frames retain the old expanded paint interest rect"
+            active.1,
+            Some(active.0),
+            "active PrePaint refreshes cull projection at the hysteresis boundary"
         );
+        assert_ne!(active.1, initial.1);
 
         page.ScrollWheelDefault(&WheelEvent {
             phase: WheelPhase::kEnded,
@@ -157,9 +159,8 @@ fn phased_wheel_refreshes_cull_projection_after_end() {
         let ended = root_scroll_state(&page.CurrentFrame().unwrap().fragments).unwrap();
         assert_eq!(ended.0, active.0);
         assert_eq!(
-            ended.1,
-            Some(ended.0),
-            "wheel end runs one deferred CullRectUpdater projection"
+            ended.1, active.1,
+            "wheel end does not introduce a separate cull refresh path"
         );
     });
 }

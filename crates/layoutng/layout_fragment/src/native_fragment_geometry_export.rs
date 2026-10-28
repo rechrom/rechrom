@@ -208,9 +208,21 @@ pub(super) fn ExportBoxPaintGeometry(
             paint.scroll_size = Size::default();
         }
 
-        // Export the native scroll owner, not the unpropagated input CSS.
-        // Blink's UpdateScrollNode/UpdateScrollTranslation use this same area.
+        // The element input is the native tree's current, already-clamped
+        // offset and is also used by the retained scroll-property refresh.
+        // Generated scroll owners without element input read their local area.
         let area = layout_box.GetScrollableArea();
+        if !paint.has_source {
+            paint.scroll_offset = if area.is_null() {
+                Offset::default()
+            } else {
+                let current = unsafe { &*area }.GetScrollOffset();
+                Offset {
+                    x: current.x() as f64,
+                    y: current.y() as f64,
+                }
+            };
+        }
         let needs_local_scroll = !area.is_null()
             && layout_box.IsScrollContainer()
             && (layout_box.ScrollsOverflow() || paint.scroll_offset != Offset::default());

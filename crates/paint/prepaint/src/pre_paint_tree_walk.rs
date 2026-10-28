@@ -3315,7 +3315,7 @@ fn MarkOverlapCompositingLayers(node: &mut PaintTreeNode<'_>) -> bool {
 
 fn GatherFinalEffects(
     node: &PaintTreeNode<'_>,
-    effects: &mut BTreeMap<u64, Arc<EffectPaintPropertyNode>>,
+    effects: &mut BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
 ) {
     // Include only this owner's slots, not inherited physical effect snapshots.
     let count = usize::from(
@@ -3326,18 +3326,27 @@ fn GatherFinalEffects(
     ) + usize::from(node.applies_filter);
     let mut effect = node.properties.nodes.effect.clone();
     for _ in 0..count {
-        effects.insert(effect.id, effect.clone());
+        effects.insert(
+            Arc::as_ptr(&effect.lifecycle.identity) as usize,
+            effect.clone(),
+        );
         effect = effect.parent.as_ref().expect("local effect parent").clone();
     }
     if let Some(mask) = &node.mask_properties {
-        effects.insert(mask.effect.id, mask.effect.clone());
+        effects.insert(
+            Arc::as_ptr(&mask.effect.lifecycle.identity) as usize,
+            mask.effect.clone(),
+        );
     }
     for scrollbar in [
         &node.horizontal_scrollbar_properties,
         &node.vertical_scrollbar_properties,
     ] {
         if let Some(scrollbar) = scrollbar {
-            effects.insert(scrollbar.effect.id, scrollbar.effect.clone());
+            effects.insert(
+                Arc::as_ptr(&scrollbar.effect.lifecycle.identity) as usize,
+                scrollbar.effect.clone(),
+            );
         }
     }
     for child in &node.children {
@@ -3442,6 +3451,27 @@ fn RestoreBuilderStates(node: &mut PaintTreeNode<'_>, current_pass: u64) -> usiz
         restored += RestoreBuilderStates(child, current_pass);
     }
     restored
+}
+
+fn GatherRetainedRawPropertyIds(node: &PaintTreeNode<'_>, ids: &mut BTreeSet<u64>) {
+    let cache = node
+        .cache
+        .as_ref()
+        .expect("resident node has builder state");
+    let mut states: Vec<&paint_model::paint_property_tree::PropertyTreeState> =
+        vec![&cache.raw_properties.nodes, &cache.raw_contents.nodes];
+    states.extend(cache.raw_fixed_background.iter());
+    states.extend(cache.raw_horizontal_scrollbar.iter());
+    states.extend(cache.raw_vertical_scrollbar.iter());
+    states.extend(cache.raw_mask.iter());
+    let trees = paint_model::paint_property_tree::PaintPropertyTrees::from_states(states);
+    ids.extend(trees.transforms.keys().copied().filter(|id| *id != 0));
+    ids.extend(trees.clips.keys().copied().filter(|id| *id != 0));
+    ids.extend(trees.effects.keys().copied().filter(|id| *id != 0));
+    ids.extend(trees.scrolls.keys().copied().filter(|id| *id != 0));
+    for child in &node.children {
+        GatherRetainedRawPropertyIds(child, ids);
+    }
 }
 
 fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
@@ -4137,7 +4167,19 @@ impl PrePaintTreeWalk {
                     self.SameRetainedContextStructure(&cache.inherited, &inherited)
                 })
             });
-        let subtree_clean = (same_context || retained_context)
+        // A retained structural match does not prove that the old derived
+        // geometry is current. Descend when CullRectUpdater exposes new area
+        // or a mutable ScrollTranslation changes: Paint's root-space culling
+        // consumes the flat transform vectors stored on each descendant.
+        let retained_geometry_covered = retained_context
+            && previous.as_ref().is_some_and(|node| {
+                node.cache.as_ref().is_some_and(|cache| {
+                    Self::CullContextCovers(&cache.inherited.cull, &inherited.cull)
+                        && cache.inherited.transforms == inherited.transforms
+                        && cache.inherited.scroll == inherited.scroll
+                })
+            });
+        let subtree_clean = (same_context || retained_geometry_covered)
             && fragment.pre_paint_subtree_revision != 0
             && previous.as_ref().is_some_and(|node| {
                 node.cache.as_ref().unwrap().subtree_revision == fragment.pre_paint_subtree_revision
@@ -4158,7 +4200,7 @@ impl PrePaintTreeWalk {
             self.stats.skipped_subtrees += 1;
             return node;
         }
-        let self_clean = (same_context || retained_context)
+        let self_clean = (same_context || retained_geometry_covered)
             && fragment.pre_paint_revision != 0
             && previous.as_ref().is_some_and(|node| {
                 node.cache.as_ref().unwrap().revision == fragment.pre_paint_revision
@@ -4246,7 +4288,13 @@ impl PrePaintTreeWalk {
                     new_cache.raw_horizontal_scrollbar = old_cache.raw_horizontal_scrollbar.clone();
                     new_cache.raw_vertical_scrollbar = old_cache.raw_vertical_scrollbar.clone();
                     new_cache.raw_mask = old_cache.raw_mask.clone();
-                    new_cache.children = old_cache.children.clone();
+                    // Keep the child context computed from this lifecycle
+                    // pass. Stable property slots make old/new builder states
+                    // equivalent even when a mutable ScrollTranslation value
+                    // changed, but the flat transform and cull vectors used by
+                    // Paint's MapRectToRoot must carry that new value. Reuse
+                    // only the finalized property snapshot inside the context.
+                    new_cache.children.properties = old_cache.children.properties.clone();
                     new_cache.own_keys = old_cache.own_keys.clone();
                     // The completed node snapshots were retained above. If a
                     // sibling forces the post pass, restore this node from its
@@ -4479,7 +4527,12 @@ impl PrePaintTreeWalk {
             .checked_add(1)
             .expect("PrePaint pass exhausted");
         self.reset_owners.clear();
-        self.prior_property_keys = std::mem::take(&mut self.property_keys);
+        // Retained raw builder states can survive more than one incremental
+        // pass. Keep every temporary label still reachable from those states;
+        // the completed stable slot directory alone cannot identify a raw
+        // ancestor restored from an older pass.
+        self.prior_property_keys
+            .extend(std::mem::take(&mut self.property_keys));
         let viewport = ArtifactViewport(&root);
         let environment_changed = viewport != self.viewport;
         if environment_changed || (viewport.is_some() && self.viewport_properties.clip_id == 0) {
@@ -4517,9 +4570,16 @@ impl PrePaintTreeWalk {
                 );
             }
         }
-        let desired_root_cull = viewport.map(|rect| Expand(rect, ScrollCullExpansion(&root, true)));
+        // PaintTreeNode cull rectangles are in root (viewport) space, matching
+        // IsVisible's MapRectToRoot result. The root ScrollTranslation is
+        // already present in every scrolling descendant's transform chain;
+        // adding the scroll offset here would compare viewport-space visual
+        // rects with a document-space cull window.
+        let visible_root_cull = viewport;
+        let desired_root_cull =
+            visible_root_cull.map(|rect| Expand(rect, ScrollCullExpansion(&root, true)));
         if viewport.is_none()
-            || !matches!((self.retained_root_cull, viewport), (Some(cull), Some(visible)) if cull.contains(visible))
+            || !matches!((self.retained_root_cull, visible_root_cull), (Some(cull), Some(visible)) if cull.contains(visible))
         {
             self.retained_root_cull = desired_root_cull;
         }
@@ -4638,9 +4698,11 @@ impl PrePaintTreeWalk {
             }
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.PersistPropertyStates");
-                let mut updater = self
-                    .property_node_store
-                    .updater(&self.property_keys, &effects);
+                let mut updater = self.property_node_store.updater(
+                    &self.property_keys,
+                    &self.prior_property_keys,
+                    &effects,
+                );
                 PersistPropertyStates(&mut tree, &mut updater);
                 updater.finish();
             }
@@ -4657,6 +4719,11 @@ impl PrePaintTreeWalk {
                 MarkOverlapCompositingLayers(&mut tree);
             }
         }
+        let mut retained_raw_ids = BTreeSet::new();
+        GatherRetainedRawPropertyIds(&tree, &mut retained_raw_ids);
+        retained_raw_ids.extend(self.property_keys.keys().copied());
+        self.prior_property_keys
+            .retain(|id, _| retained_raw_ids.contains(id));
         tree
     }
 

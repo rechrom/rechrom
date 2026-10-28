@@ -341,12 +341,23 @@ impl Node {
     }
 
     pub(crate) fn UpdateInputScrollOffset(&mut self, offset: super::layout_input::Offset) {
+        let changed = self
+            .input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.scroll_offset != offset);
         self.ReflectInputScrollOffset(offset);
         let area = super::layout_scrollable_area::PaintLayerScrollableArea::FromNode(self);
         if !area.is_null() {
             // The resident area, not SavedLayerScrollOffset, owns live offsets.
             unsafe { &mut *area }
                 .UpdateScrollOffset(ScrollOffset::new(offset.x as f32, offset.y as f32));
+        }
+        if changed {
+            let object = self.GetLayoutObject();
+            if !object.is_null() {
+                unsafe { &mut *object }.SetNeedsPaintPropertyUpdate();
+            }
         }
     }
 

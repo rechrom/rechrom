@@ -3575,10 +3575,9 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     ) {
         debug_assert!(context.services.IsImplThread(self.task_runner_provider_));
         assert!(context.services.SettingsFeatures().TreesInViz());
-        assert!(
-            self.settings_
-                .TreesInVizInClientProcess(context.services.SettingsFeatures())
-        );
+        assert!(self
+            .settings_
+            .TreesInVizInClientProcess(context.services.SettingsFeatures()));
         self.unbounded_frame_sink_id_ = *frame_sink_id;
         self.unbounded_local_surface_id_ = local_id.clone();
         if let Some(layer_context) = self.layer_context_.as_mut() {
@@ -5511,6 +5510,11 @@ mod source_chunk_b {
             self.host.requires_high_res_to_draw_
         }
 
+        fn prevent_visible_scroll_checkerboarding(&mut self) -> bool {
+            self.host.GetActivelyScrollingType(self.context)
+                != crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone
+        }
+
         fn report_expected_missing_high_resolution_content(&mut self) {
             debug_assert!(
                 false,
@@ -5936,7 +5940,7 @@ mod source_chunk_c {
     // Existing canonical definitions excluded: cc:1809-1863,1865-1877.
     use crate::adapter::{
         geometry::RectF,
-        image_animation::{WhichTree, kDefaultFrameIndex},
+        image_animation::{kDefaultFrameIndex, WhichTree},
         layer_tree_impl::{LayerTreeLayer, LayerTreeLayerList},
         property_types::ViewTransitionElementResourceId,
     };
@@ -6759,7 +6763,7 @@ mod source_chunk_g {
     // Existing canonical owner definitions excluded:4832-4834,4836-4842,4988-4994.
     use crate::adapter::{
         geometry::PointF,
-        image_animation::{PaintImageId, kDefaultFrameIndex},
+        image_animation::{kDefaultFrameIndex, PaintImageId},
         input_handler::InputScrollNodeId,
         time::TimeTicks,
     };
@@ -11364,7 +11368,7 @@ impl<B: HostImplTypes> crate::adapter::layer_tree_impl::LayerTreeHost<B>
             &mut client,
         );
     } // Source: cc/trees/layer_tree_impl.cc:1621-1626. The target's actual source
-    // callback body is shared with all narrower scroll/page-scale hosts.
+      // callback body is shared with all narrower scroll/page-scale hosts.
     fn PendingTreeDidUpdatePageScale(&mut self) {
         crate::adapter::layer_tree_impl::mutation::LayerTreeScaleHost::PendingTreeDidUpdatePageScale(&mut self.MutationHost());
     }
@@ -11738,8 +11742,8 @@ fn OnPageScaleUpdatedForHost(
 mod source_input_forwarding {
     // Source-aligned live mutation capabilities; selected receiver is borrowed out.
     use super::*;
-    use crate::adapter::layer_tree_impl::LayerTreeId;
     use crate::adapter::layer_tree_impl::mutation::{LayerTreeScaleHost, LayerTreeScrollHost};
+    use crate::adapter::layer_tree_impl::LayerTreeId;
     pub(crate) struct HostImplMutationFacade<'a, 'c, B: HostImplTypes> {
         pub(crate) core: HostImplRuntimeCore<'a, B>,
         pub(crate) active_tree_: HostImplTreeSlot<'a, B>,
@@ -15089,14 +15093,13 @@ mod source_chunk_d {
                     .unwrap()
                     .InnerViewportScrollNode()
                 {
-                    debug_assert!(
-                        self.host
-                            .active_tree_
-                            .as_deref()
-                            .unwrap()
-                            .OuterViewportScrollNode()
-                            .is_some()
-                    );
+                    debug_assert!(self
+                        .host
+                        .active_tree_
+                        .as_deref()
+                        .unwrap()
+                        .OuterViewportScrollNode()
+                        .is_some());
                     metadata.root_overflow_y_hidden = !self
                         .host
                         .active_tree_
@@ -15577,12 +15580,10 @@ mod source_chunk_d {
         }
 
         fn submit_unbounded_frame(&mut self) {
-            assert!(
-                !self
-                    .host
-                    .settings_
-                    .TreesInVizInClientProcess(self.context.services.SettingsFeatures())
-            );
+            assert!(!self
+                .host
+                .settings_
+                .TreesInVizInClientProcess(self.context.services.SettingsFeatures()));
             assert!(self.host.settings_.enable_unbounded_element);
             let mut unbounded = B::Frame::default();
             let mut unbounded_metadata = self
@@ -16320,10 +16321,9 @@ mod source_chunk_d {
             is_flush: bool,
             context: &mut HostImplContext<'_, B>,
         ) -> TimeTicks {
-            debug_assert!(
-                self.settings_
-                    .TreesInVizInClientProcess(context.services.SettingsFeatures())
-            );
+            debug_assert!(self
+                .settings_
+                .TreesInVizInClientProcess(context.services.SettingsFeatures()));
             debug_assert!(self.layer_context_.is_some());
             let interface = context
                 .services
@@ -16342,10 +16342,9 @@ mod source_chunk_d {
         }
         // Source: cc/trees/layer_tree_host_impl.cc:3452-3491.
         pub fn FlushDisplayTree(&mut self, context: &mut HostImplContext<'_, B>) {
-            assert!(
-                self.settings_
-                    .TreesInVizInClientProcess(context.services.SettingsFeatures())
-            );
+            assert!(self
+                .settings_
+                .TreesInVizInClientProcess(context.services.SettingsFeatures()));
             assert!(self.layer_context_.is_some());
             let mut frame = FrameData::<B>::default();
             frame.origin_begin_main_frame_args =
@@ -17153,10 +17152,10 @@ struct HostPictureTileRelease<
         Option<&'a mut dyn crate::adapter::picture_layer_impl::PictureReleasedTileClient<B>>,
 }
 impl<
-    B: HostImplTypes
-        + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-        + crate::adapter::tile_manager::TileManagerTypes,
-> crate::adapter::tile::TileTraceContext for HostPictureTileRelease<'_, '_, B>
+        B: HostImplTypes
+            + crate::adapter::picture_layer_impl::PictureLayerImplTypes
+            + crate::adapter::tile_manager::TileManagerTypes,
+    > crate::adapter::tile::TileTraceContext for HostPictureTileRelease<'_, '_, B>
 {
     fn MakeDictIntoImplicitSnapshotWithCategory<V: PropertyTrace>(
         &self,
@@ -17178,10 +17177,10 @@ impl<
     }
 }
 impl<
-    B: HostImplTypes
-        + crate::adapter::picture_layer_impl::PictureLayerImplTypes
-        + crate::adapter::tile_manager::TileManagerTypes,
-> crate::adapter::tile_manager::TileReleaseRuntime<B> for HostPictureTileRelease<'_, '_, B>
+        B: HostImplTypes
+            + crate::adapter::picture_layer_impl::PictureLayerImplTypes
+            + crate::adapter::tile_manager::TileManagerTypes,
+    > crate::adapter::tile_manager::TileReleaseRuntime<B> for HostPictureTileRelease<'_, '_, B>
 {
     fn ResourcePoolMutable(
         &mut self,
@@ -20075,11 +20074,9 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             return;
         }
         assert_eq!(owner.owner, self.owner_id_);
-        assert!(
-            owner
-                .alive
-                .ptr_eq(&std::sync::Arc::downgrade(&self.weak_factory_))
-        );
+        assert!(owner
+            .alive
+            .ptr_eq(&std::sync::Arc::downgrade(&self.weak_factory_)));
         self.WithInputHandler(context, |input, host| {
             if let Some(input) = input {
                 input.RunAutoscrollTask(task, host);

@@ -234,6 +234,14 @@ pub(super) fn ExportProperties(
         return output;
     };
     let source = unsafe { &*source_entry.node };
+    if source.IsElementNode() {
+        let element = unsafe {
+            &*(source as *const Node as *const crate::internal::layout_node_metadata::Element)
+        };
+        if let Some(data) = element.InputElementData() {
+            output.scroll_offset = data.scroll_offset;
+        }
+    }
     let mut paint_style = source.InputStyle();
     if !effective_style.is_null() {
         if let Some(&effective_source) = style_sources.get(&effective_style) {

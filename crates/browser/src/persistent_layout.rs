@@ -205,7 +205,6 @@ pub(crate) fn LayoutPersistentScrollDocument(
         changes,
         fragments,
         scroll_only,
-        false,
     )
     .is_some()
 }
@@ -217,7 +216,6 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     changes: &[(u64, layoutng_assembly::internal::layout_input::Offset)],
     fragments: &mut LayoutResultHandle,
     scroll_only: bool,
-    defer_cull_rect_refresh: bool,
 ) -> Option<ScrollLayoutUpdate> {
     // Source: platform/graphics/paint/cull_rect.cc. Chromium keeps the old
     // expanded cull rect until the scroll delta reaches 512 CSS pixels, then
@@ -250,11 +248,10 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     let cull_rect_changed_enough = changes
         .iter()
         .any(|&(id, offset)| changed_enough(native_root, id, offset));
-    // Page defers main-thread cull-data refresh while a phased gesture is active.
-    // Retained Paint covers that interval; the boundary update runs once when
-    // the gesture ends, matching Chromium's separation between compositor
-    // scrolling and main-thread paint-property work.
-    let refresh_cull_rect = cull_rect_changed_enough && !(scroll_only && defer_cull_rect_refresh);
+    // CullRectUpdater runs during each PrePaint lifecycle. Its hysteresis
+    // decides whether the changed offset requires a fresh projection; a wheel
+    // phase does not defer that decision until the gesture ends.
+    let refresh_cull_rect = cull_rect_changed_enough;
     fn contains(node: NativePaintFragmentCursor<'_>, id: u64) -> bool {
         node.node_id == id || node.Children().into_iter().any(|child| contains(child, id))
     }
@@ -344,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn phased_scroll_defers_cull_projection_until_gesture_boundary() {
+    fn phased_scroll_refreshes_cull_projection_at_hysteresis_boundary() {
         crate::native_test_thread::run(|| {
             use layoutng_assembly::internal::layout_input::Offset;
 
@@ -375,34 +372,16 @@ mod tests {
                     &[(id, offset)],
                     &mut fragments,
                     true,
-                    true,
                 ),
-                Some(ScrollLayoutUpdate::RetainedGeometry)
+                Some(ScrollLayoutUpdate::RefreshedLayout)
             ));
             assert_eq!(fragment(&fragments, id).paint.scroll_offset, offset);
             assert_eq!(
                 fragment(&fragments, id).paint_cull_scroll_offset,
-                origin,
-                "active scrolling retains the previously painted interest rect"
-            );
-
-            assert!(matches!(
-                LayoutPersistentScrollDocumentWithMode(
-                    &mut engine,
-                    &mut owner,
-                    &cs,
-                    &[(id, offset)],
-                    &mut fragments,
-                    true,
-                    false,
-                ),
-                Some(ScrollLayoutUpdate::RefreshedLayout)
-            ));
-            assert_eq!(
-                fragment(&fragments, id).paint_cull_scroll_offset,
                 Some(offset),
-                "gesture completion runs one main-thread cull-data refresh"
+                "active PrePaint refreshes cull data once hysteresis is crossed"
             );
+            assert_ne!(origin, Some(offset));
         });
     }
 

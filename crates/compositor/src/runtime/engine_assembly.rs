@@ -118,6 +118,20 @@ impl NativeEngineAssembly {
         artifact: Arc<PaintArtifact>,
         viewport: CompositorViewportState,
     ) -> Result<CompositorOutput, CompositorError> {
+        if !self.core.awaiting_main {
+            // The embedding can finish Page's artifact before Scheduler has
+            // dispatched the BeginMainFrame which will own it.  Synchronize
+            // impl-side deltas before snapshotting the main tree in that
+            // case.  Otherwise PrepareCommit captures the pre-scroll base;
+            // the later BMF reflects the already-applied delta into a second
+            // slot and a following commit can restore that stale base.
+            //
+            // This preserves Chromium's ordering even though this resident
+            // single-sequence embedding receives the produced artifact at
+            // the Commit boundary: ApplyCompositorDeltas precedes the main
+            // tree commit it belongs to.
+            self.core.ApplyCompositorDeltas();
+        }
         {
             let _query = self
                 .core
@@ -722,8 +736,10 @@ impl NativeEngineAssembly {
             };
             let precise = host.BaseMutable().GetActivelyScrollingType(&mut context)
                 == ActivelyScrollingType::kPrecise;
-            let avoid = (context.services.NewContentForCheckerboardedScrollsEnabled()
-                && host.Base().PrioritizeNewContentDueToCheckerboarding())
+            let checkerboarded_scroll =
+                context.services.NewContentForCheckerboardedScrollsEnabled()
+                    && host.Base().PrioritizeNewContentDueToCheckerboarding();
+            let avoid = checkerboarded_scroll
                 || (precise
                     && host
                         .BaseMutable()

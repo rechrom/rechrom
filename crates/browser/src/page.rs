@@ -1296,12 +1296,6 @@ struct PageState {
     dirty: Cell<bool>,
     // Only offsets have changed since the last completed presentation.
     scroll_only: Cell<bool>,
-    // Chromium lets cc keep moving the active scroll tree while Blink's
-    // CullRectUpdater catches up on the main thread.  Preserve that ordering
-    // for a phased wheel gesture and remember the final offsets which still
-    // need a main-thread cull-data refresh after the gesture ends.
-    defer_scroll_cull_refresh: Cell<bool>,
-    deferred_scroll_cull_updates: RefCell<Vec<(u64, Offset)>>,
     styles_resolved: Cell<bool>,
     resource_references_dirty: Cell<ResourceReferenceDirty>,
     // A stable image resource id published a new immutable content snapshot.
@@ -1375,8 +1369,6 @@ impl PageState {
             client: client.clone(),
             dirty: Cell::new(true),
             scroll_only: Cell::new(false),
-            defer_scroll_cull_refresh: Cell::new(false),
-            deferred_scroll_cull_updates: RefCell::new(Vec::new()),
             styles_resolved: Cell::new(false),
             resource_references_dirty: Cell::new(ResourceReferenceDirty::ALL),
             paint_resources_dirty: Cell::new(false),
@@ -1909,23 +1901,6 @@ impl PageState {
                 .layout_engine
                 .borrow_mut()
                 .TakePublishedPaintOutput(std::mem::take(&mut frame.fragments));
-            let defer_cull_refresh = offset_only && self.defer_scroll_cull_refresh.get();
-            trace.set("defer_cull_refresh", defer_cull_refresh as u8 as f64);
-            if defer_cull_refresh {
-                let mut deferred = self.deferred_scroll_cull_updates.borrow_mut();
-                for &(id, offset) in updates.iter() {
-                    let changed_enough = layout_output.PaintCullRectHasScrolledEnough(id, offset);
-                    if let Some(index) = deferred.iter().position(|(pending, _)| *pending == id) {
-                        if changed_enough {
-                            deferred[index].1 = offset;
-                        } else {
-                            deferred.swap_remove(index);
-                        }
-                    } else if changed_enough {
-                        deferred.push((id, offset));
-                    }
-                }
-            }
             let scroll_layout = {
                 let mut engine = self.layout_engine.borrow_mut();
                 crate::persistent_layout::LayoutPersistentScrollDocumentWithMode(
@@ -1935,15 +1910,13 @@ impl PageState {
                     &updates,
                     layout_output.ResultHandleMut(),
                     offset_only,
-                    defer_cull_refresh,
                 )
             };
-            let Some(mut scroll_layout) = scroll_layout else {
+            let Some(scroll_layout) = scroll_layout else {
                 frame.fragments = self
                     .layout_engine
                     .borrow_mut()
                     .CommitRetainedPaint(layout_output);
-                self.deferred_scroll_cull_updates.borrow_mut().clear();
                 return false;
             };
             trace.set(
@@ -1985,27 +1958,6 @@ impl PageState {
             let property_update = (scroll_layout
                 == crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry)
                 .then(|| paint.TryUpdateScrollProperties(&layout_output));
-            if defer_cull_refresh
-                && matches!(
-                    property_update,
-                    Some(Err(
-                        paint::scroll_paint_update::ScrollPaintInvalidation::CoverageExceeded
-                    ))
-                )
-            {
-                // The compositor may outrun the old painted interest rect.
-                // Chromium then requires a main-thread CullRectUpdater/Paint
-                // before exposing uncovered pixels. Refresh immediately in
-                // that uncommon frame instead of publishing missing content.
-                let refreshed = self
-                    .layout_engine
-                    .borrow_mut()
-                    .RefreshScrollCullData(layout_output.ResultHandleMut());
-                assert!(refreshed, "retained scroll lost its native layout tree");
-                scroll_layout = crate::persistent_layout::ScrollLayoutUpdate::RefreshedLayout;
-                self.deferred_scroll_cull_updates.borrow_mut().clear();
-                trace.set("coverage_forced_cull_refresh", 1.0);
-            }
             reused_recordings = matches!(&property_update, Some(Ok(_)));
             let paint_output = if !reused_recordings {
                 trace.set("full_paint", 1.0);
@@ -2046,16 +1998,10 @@ impl PageState {
             // measurement first, so callers retaining an older frame are the
             // only reason a later update performs copy-on-write.
             self.MarkLayoutCurrent();
-            if !defer_cull_refresh
-                || scroll_layout == crate::persistent_layout::ScrollLayoutUpdate::RefreshedLayout
-            {
-                self.deferred_scroll_cull_updates.borrow_mut().clear();
-            }
             true
         });
         if !reused {
             self.document.borrow_mut().InvalidateLayout();
-            self.deferred_scroll_cull_updates.borrow_mut().clear();
         }
         updates.clear();
         trace.set("records_reused", reused_recordings as u8 as f64);
