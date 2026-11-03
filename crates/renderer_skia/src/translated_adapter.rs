@@ -4,7 +4,7 @@
 //! converts those borrowed values into the concrete translated primitives
 //! used for one synchronous draw or publication call.
 
-use crate::native::{PixelFormat, RenderTarget};
+use crate::render_target::{PixelFormat, PixelStorage, RenderTarget};
 use compositor_core::{
     adapter::{
         geometry::{RRectF, Rect, RectF},
@@ -36,13 +36,13 @@ use skia::{
     },
 };
 use std::{collections::BTreeMap, io, sync::Arc};
-use viz::native::VizOutput;
+use viz::adapter::VizOutput;
 
 pub(crate) type PassId = RenderPassId;
 
 pub(crate) struct PassBacking {
     pub(crate) rect: Rect,
-    pub(crate) pixels: Vec<u32>,
+    pub(crate) pixels: PixelStorage,
     pub(crate) drawn_rect: Rect,
 }
 
@@ -54,7 +54,7 @@ impl PassBacking {
             .ok_or_else(|| io::Error::other("translated render-pass allocation overflow"))?;
         Ok(Self {
             rect,
-            pixels: vec![0; length],
+            pixels: PixelStorage::owned(vec![0; length]),
             drawn_rect: Rect::default(),
         })
     }

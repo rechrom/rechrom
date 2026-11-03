@@ -14,7 +14,7 @@ use style::{
     },
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let document = owner.GetDocument();
     let index = (0..document.NodeCount())
         .find(|&i| {
@@ -24,7 +24,13 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*document.ResolvedStyleFor(index).unwrap().native_style.Get() }
+    unsafe {
+        &*document
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn update(owner: &mut dom::DOM) {
     let mut engine = StyleEngine::new(owner);
@@ -37,17 +43,68 @@ fn update(owner: &mut dom::DOM) {
         engine.Diagnostics()
     );
 }
+
 #[test]
-fn font_variants_and_adjustment_reach_native_description_and_inherit() {
+fn font_metric_completion_invalidates_only_metric_dependent_styles() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<html><body><div id=ordinary>ordinary</div><div id=metric>metric</div><div id=pseudo></div><div id=retained>retained</div></body></html>",
+    );
+    owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(
+        "#ordinary{width:20px}#metric{width:16ch}#pseudo::before{content:'x';height:2ex}#retained{height:10px}",
+    ));
+    update(&mut owner);
+
+    let index = |id: &str| {
+        let document = owner.GetDocument();
+        (0..document.NodeCount())
+            .find(|&node| {
+                document
+                    .Node(node)
+                    .FindAttribute("id")
+                    .is_some_and(|attribute| attribute.value == id)
+            })
+            .unwrap()
+    };
+    let metric = index("metric");
+    let pseudo = index("pseudo");
+    let retained = index("retained");
+    let retained_style = owner.GetDocument().ResolvedStyleHandle(retained).unwrap();
+
+    assert_eq!(owner.GetDocumentMut().InvalidateStylesForFontMetrics(), 2);
+    let state = owner.GetDocument().StyleState();
+    assert_eq!(
+        state.changes,
+        std::collections::HashSet::from([
+            dom::style_state::StyleChange::Node(metric),
+            dom::style_state::StyleChange::Node(pseudo),
+        ])
+    );
+    assert!(state.sibling_sensitive_nodes.is_empty());
+    assert!(state.descendant_sensitive_nodes.is_empty());
+
+    update(&mut owner);
+    assert!(
+        owner.GetDocument().StyleState().stats.resolved_nodes <= 2,
+        "font metrics must not trigger a document-wide recalc"
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &retained_style,
+        &owner.GetDocument().ResolvedStyleHandle(retained).unwrap()
+    ));
+}
+
+#[test]
+fn font_variants_and_adjustment_reach_computed_style_description_and_inherit() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         r#"<div id=p style="font-variant:small-caps no-common-ligatures discretionary-ligatures historical-ligatures no-contextual oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero ruby proportional-width jis04 stylistic(fancy) styleset(one,two) historical-forms swash(flow) super emoji;font-language-override:'TRK ';font-size-adjust:cap-height calc(0.3 + 0.2)"><div id=c style="font-variant:inherit;font-language-override:inherit;font-size-adjust:inherit"></div><div id=i style="font-variant:initial;font-language-override:initial;font-size-adjust:initial"></div></div>"#,
     );
     update(&mut owner);
     let (p, c, i) = (
-        native(&owner, "p").GetFontDescription(),
-        native(&owner, "c").GetFontDescription(),
-        native(&owner, "i").GetFontDescription(),
+        computed_style(&owner, "p").GetFontDescription(),
+        computed_style(&owner, "c").GetFontDescription(),
+        computed_style(&owner, "i").GetFontDescription(),
     );
     assert_eq!(p.VariantCaps(), FontVariantCaps::kSmallCaps);
     assert_eq!(
@@ -108,7 +165,7 @@ fn font_shorthand_resets_every_stable_font_longhand() {
         r#"<div id=a style="font-variant:all-small-caps no-common-ligatures tabular-nums jis78 historical-forms sub emoji;font-size-adjust:from-font;font-language-override:'ENG';font-feature-settings:'liga' 0;font-variation-settings:'wght' 620;font-kerning:none;font-optical-sizing:none;font:italic small-caps bold condensed 20px/1.5 'Example',serif"></div><div id=p style="font:16px monospace"><div id=c style="font:inherit"></div><div id=i style="font:initial"></div></div>"#,
     );
     update(&mut owner);
-    let a = native(&owner, "a").GetFontDescription();
+    let a = computed_style(&owner, "a").GetFontDescription();
     assert_eq!(a.ComputedSize(), 20.0);
     assert_eq!(a.Weight().ToFloat(), 700.0);
     assert_eq!(a.Stretch().ToFloat(), 75.0);
@@ -117,7 +174,10 @@ fn font_shorthand_resets_every_stable_font_longhand() {
         a.GetStyleSyntax(),
         font_engine::fonts::font_description::StyleSyntax::kItalicKeyword
     );
-    assert_eq!(native(&owner, "a").LineHeight().PercentValue(), 150.0);
+    assert_eq!(
+        computed_style(&owner, "a").LineHeight().PercentValue(),
+        150.0
+    );
     assert_eq!(a.Family().FamilyName().Utf8(), "Example");
     assert_eq!(a.VariantCaps(), FontVariantCaps::kSmallCaps);
     assert_eq!(a.GetVariantLigatures(), VariantLigatures::default());
@@ -143,9 +203,14 @@ fn font_shorthand_resets_every_stable_font_longhand() {
         a.FontOpticalSizing(),
         font_engine::fonts::font_optical_sizing::OpticalSizing::kAutoOpticalSizing
     );
-    assert!(native(&owner, "p").GetFontDescription() == native(&owner, "c").GetFontDescription());
+    assert!(
+        computed_style(&owner, "p").GetFontDescription()
+            == computed_style(&owner, "c").GetFontDescription()
+    );
     assert_eq!(
-        native(&owner, "i").GetFontDescription().VariantCaps(),
+        computed_style(&owner, "i")
+            .GetFontDescription()
+            .VariantCaps(),
         FontVariantCaps::kCapsNormal
     );
 }
@@ -224,7 +289,7 @@ fn invalid_font_grammar_is_rejected_atomically_and_canonicalized() {
 }
 
 #[test]
-fn core_font_and_text_longhands_reach_native_and_inherit() {
+fn core_font_and_text_longhands_reach_computed_style_and_inherit() {
     use font_engine::fonts::{
         font_description::{GenericFamilyType, StyleSyntax},
         font_smoothing_mode::FontSmoothingMode,
@@ -237,9 +302,9 @@ fn core_font_and_text_longhands_reach_native_and_inherit() {
     );
     update(&mut owner);
     let (p, c, i) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
     );
     let (pd, cd, id) = (
         p.GetFontDescription(),
@@ -292,25 +357,41 @@ fn font_size_keywords_use_chromium_table_and_preserve_absolute_metadata() {
     );
     update(&mut owner);
     for (name, size, keyword) in [("xs", 10.0, 2), ("xxl", 32.0, 7), ("xxxl", 48.0, 8)] {
-        let d = native(&owner, name).GetFontDescription();
+        let d = computed_style(&owner, name).GetFontDescription();
         assert_eq!(d.SpecifiedSize(), size);
         assert_eq!(d.KeywordSize(), keyword);
         assert!(!d.IsAbsoluteSize());
     }
     for name in ["p", "c", "r"] {
-        assert!(native(&owner, name).GetFontDescription().IsAbsoluteSize());
+        assert!(computed_style(&owner, name)
+            .GetFontDescription()
+            .IsAbsoluteSize());
     }
-    assert!((native(&owner, "c").GetFontDescription().SpecifiedSize() - 20.0 / 1.2).abs() < 0.001);
+    assert!(
+        (computed_style(&owner, "c")
+            .GetFontDescription()
+            .SpecifiedSize()
+            - 20.0 / 1.2)
+            .abs()
+            < 0.001
+    );
     assert_eq!(
-        native(&owner, "r").GetFontDescription().SpecifiedSize(),
+        computed_style(&owner, "r")
+            .GetFontDescription()
+            .SpecifiedSize(),
         40.0
     );
     assert_eq!(
-        native(&owner, "c").GetFontDescription().GetStyleSyntax(),
+        computed_style(&owner, "c")
+            .GetFontDescription()
+            .GetStyleSyntax(),
         font_engine::fonts::font_description::StyleSyntax::kItalicKeyword
     );
     assert_eq!(
-        native(&owner, "c").GetFontDescription().Weight().ToFloat(),
+        computed_style(&owner, "c")
+            .GetFontDescription()
+            .Weight()
+            .ToFloat(),
         100.0
     );
 }
@@ -341,19 +422,29 @@ fn oblique_angles_are_typed_and_invalid_ranges_are_rejected() {
     );
     update(&mut owner);
     assert_eq!(
-        native(&owner, "a").GetFontDescription().Style().ToFloat(),
+        computed_style(&owner, "a")
+            .GetFontDescription()
+            .Style()
+            .ToFloat(),
         30.0
     );
     assert_eq!(
-        native(&owner, "a").GetFontDescription().GetStyleSyntax(),
+        computed_style(&owner, "a")
+            .GetFontDescription()
+            .GetStyleSyntax(),
         font_engine::fonts::font_description::StyleSyntax::kExplicitAngle
     );
     assert_eq!(
-        native(&owner, "b").GetFontDescription().Style().ToFloat(),
+        computed_style(&owner, "b")
+            .GetFontDescription()
+            .Style()
+            .ToFloat(),
         14.0
     );
     assert_eq!(
-        native(&owner, "b").GetFontDescription().GetStyleSyntax(),
+        computed_style(&owner, "b")
+            .GetFontDescription()
+            .GetStyleSyntax(),
         font_engine::fonts::font_description::StyleSyntax::kImplicitAngle
     );
 }

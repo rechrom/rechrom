@@ -141,7 +141,7 @@ unsafe fn JS_RunGCInternal(rt: *mut JSRuntime, remove_weak_objects: i32) {
             phase.set("closure_slots", counts.closure_slots as f64);
             phase.set("array_slots", counts.array_slots as f64);
             phase.set("constant_slots", counts.constant_slots as f64);
-            phase.set("native_function_slots", counts.native_function_slots as f64);
+            phase.set("function_slots", counts.function_slots as f64);
             // Each trace event has eight field slots. Keep the type breakdown
             // separate from parent totals and phase work counters.
             browser_tracing::instant("gc", "QuickJSTopology", &[

@@ -14,8 +14,8 @@ compile_error!("Alias requires actual selected C++ symbol/ABI binding; no metada
 // Source: base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/debug/alias.h:87-89
 // Explicit original C++ call-site line retains the actual unique nonce; Rust's
 // source line is not substituted. Declarations remain in the caller scope.
-macro_rules! PA_NO_CODE_FOLDING{(@source $native_line:expr)=>{
- let line_number:core::ffi::c_int=$native_line;
+macro_rules! PA_NO_CODE_FOLDING{(@source $line:expr)=>{
+ let line_number:core::ffi::c_int=$line;
  unsafe{$crate::base::allocator::partition_allocator::src::partition_alloc::partition_alloc_base::debug::alias::Alias(core::ptr::addr_of!(line_number).cast());}
 };}
 pub(crate) use PA_NO_CODE_FOLDING;

@@ -96,5 +96,4 @@ pub mod text_fit_utils;
 #[cfg(feature = "translation_in_progress")]
 pub mod text_overflow_layout_service;
 pub mod transformed_string;
-#[cfg(feature = "translation_in_progress")]
 pub mod used_font;

@@ -7,9 +7,9 @@ use super::shape_result::ShapeResult;
 use super::shape_result_view::{Segment, ShapeResultView};
 use super::text_spacing_trim::{ShouldTrimEnd, ShouldTrimStartOfWrappedLine, TextSpacingTrim};
 use crate::fonts::font::Font;
-use crate::text::native::character::Character;
-use crate::text::native::hyphenation::Hyphenation;
-use crate::text::native::text_break_iterator::{BreakSpaceType, LazyLineBreakIterator};
+use crate::text::implementation::character::Character;
+use crate::text::implementation::hyphenation::Hyphenation;
+use crate::text::implementation::text_break_iterator::{BreakSpaceType, LazyLineBreakIterator};
 
 // C++'s pure virtual Shape has no body in this package. A backend supplied by
 // the derived owner preserves virtual dispatch without inventing shaping.

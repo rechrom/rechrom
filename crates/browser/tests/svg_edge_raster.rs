@@ -1,6 +1,6 @@
 //! Production SVG inline and document-image clip/raster equivalence.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::internal::layout_input::FontFace;
@@ -155,9 +155,61 @@ fn dump_artifact(a: &std::sync::Arc<PaintArtifact>, path: &std::path::Path) {
     }
     std::fs::write(path, dump).unwrap();
 }
+
+#[test]
+fn gradient_dither_phase_is_invariant_through_picture_layer_raster() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let page = page_fixture(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="320" height="210"
+                       viewBox="0 0 32 21" preserveAspectRatio="none">
+                 <defs>
+                   <pattern id="p" width="1" height="1" patternUnits="userSpaceOnUse">
+                     <path d="M 1 0 H 0 V 1" fill="none" stroke="#e4ebe6"
+                           stroke-width=".094"/>
+                   </pattern>
+                   <linearGradient id="g" x1="0" x2="0" y1="0" y2="1">
+                     <stop offset="0" stop-color="#f2f5f3"/>
+                     <stop offset=".5" stop-color="#f2f5f3" stop-opacity="0"/>
+                     <stop offset="1" stop-color="#f2f5f3" stop-opacity="0"/>
+                   </linearGradient>
+                 </defs>
+                 <rect fill="#f2f5f3" width="32" height="21"/>
+                 <rect fill="url(#p)" width="32" height="21"/>
+                 <path d="M 32 0 V 21 H 0" fill="none" stroke="#e4ebe6"
+                       stroke-width=".094"/>
+                 <rect fill="url(#g)" width="32" height="21"/>
+               </svg>"##,
+            None,
+        );
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let direct = raster::RasterizePaintArtifactTransparent(artifact, 320, 200);
+        let mut composited = vec![0_u32; 320 * 200];
+        page.PaintArtifactInto(
+            artifact,
+            320,
+            200,
+            1.0,
+            &mut composited,
+            renderer_skia::PixelFormat::Rgba8888,
+            320,
+        )
+        .unwrap();
+        let composited = composited
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .collect::<Vec<_>>();
+        let changed = direct
+            .chunks_exact(4)
+            .zip(composited.chunks_exact(4))
+            .filter(|(direct, composited)| direct != composited)
+            .count();
+        assert_eq!(changed, 0);
+    });
+}
 #[test]
 fn inline_and_fetched_asset_edges_share_record_raster_semantics() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut mismatches = Vec::new();
         for (name, asset, clip) in [("foundation", FOUNDATION, "ga"), ("commons", COMMONS, "aa")] {
@@ -202,8 +254,35 @@ fn describe(i: &paint::paint_engine::DisplayItem) -> String {
 }
 
 #[test]
+fn inline_svg_path_reaches_the_paint_record_and_raster() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let page = page_fixture(
+            r##"<svg width="64" height="64" viewBox="0 0 64 64">
+                <path d="M5 5H55V55H5Z" fill="#d02020"/>
+            </svg>"##,
+            None,
+        );
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        assert!(
+            artifact.items.iter().any(|item| {
+                item.r#type == paint::paint_engine::DisplayItemType::kDrawPath
+                    && !item.path.is_empty()
+            }),
+            "inline SVG path never reached SVGShapePainter"
+        );
+        let pixels = render(&page, "inline-path-pixel");
+        let center = pixels[20 * 320 + 20].to_ne_bytes();
+        assert!(
+            center[0] > 160 && center[1] < 80 && center[2] < 80 && center[3] > 240,
+            "SVG path center pixel was not red: {center:?}"
+        );
+    });
+}
+
+#[test]
 fn clipped_asset_edges_match_at_device_scales_fractional_placement_and_backgrounds() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut failures = Vec::new();
         for (name, asset) in [("foundation", FOUNDATION), ("commons", COMMONS)] {

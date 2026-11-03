@@ -7,24 +7,33 @@
 //! paths, filters, and low-level paint value types. It does not walk layout,
 //! decide reuse, record display items, group chunks, or publish artifacts.
 
-pub mod border_shape_utils;
 pub mod boundary;
+pub mod contoured_border_geometry;
 pub mod cull;
+pub mod cull_rect;
 pub mod display_item_id;
 pub mod geometry;
 pub mod geometry_mapper;
 pub mod opaque_paint_cache_slot;
 pub mod paint_clip_path;
+pub mod paint_flags;
 pub mod paint_order;
 pub mod paint_phase;
 pub mod paint_property_tree;
+pub mod paint_result;
 pub mod property_filter_operations;
 pub mod property_node_geometry;
+pub mod stroke_data;
+pub mod styled_stroke_data;
+pub mod svg_filter_geometry;
 pub mod viewport;
 
 pub use boundary::{DisplayMaskLayer, ResolveDocumentImageContainerKey};
+pub use cull_rect::CullRect;
 pub use geometry::PaintRect;
+pub use paint_flags::PaintFlags;
 pub use paint_phase::PaintPhase;
+pub use paint_result::{kMaxPaintResult, PaintResult};
 pub use viewport::{PaintCompositorViewport, PaintCompositorViewportMode};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

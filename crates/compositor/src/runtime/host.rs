@@ -46,9 +46,9 @@ impl HostColorSpace for RasterColorSpace {
 
 /// The actual external trace allocation supplies its own implicit-snapshot JSON
 /// metadata operation. It cannot query or retain any compositor owner.
-pub trait NativeTraceValue: HostTraceValue + LayerImplTraceValue {}
-impl<T: HostTraceValue + LayerImplTraceValue> NativeTraceValue for T {}
-pub struct TraceValue(pub Box<dyn NativeTraceValue>);
+pub trait TraceValueBackend: HostTraceValue + LayerImplTraceValue {}
+impl<T: HostTraceValue + LayerImplTraceValue> TraceValueBackend for T {}
+pub struct TraceValue(pub Box<dyn TraceValueBackend>);
 impl TracedValue for TraceValue {
     fn BeginDictionary(&mut self, name: &str) {
         self.0.BeginDictionary(name)

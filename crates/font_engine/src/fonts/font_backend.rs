@@ -44,6 +44,21 @@ pub trait FontBackend {
         synthetic_bold: bool,
         synthetic_italic: bool,
     ) -> FontBackendGlyphMetrics;
+    /// Source: skia/skia_text_metrics.cc SkFontGetGlyphWidthForHarfBuzz.
+    ///
+    /// Shaping asks the selected platform strike for advances before GPOS is
+    /// applied. Backends that can query width without computing ink bounds
+    /// should override this hot path.
+    fn GlyphAdvanceForShaping(
+        &self,
+        glyph: u16,
+        size: f32,
+        synthetic_bold: bool,
+        synthetic_italic: bool,
+    ) -> f32 {
+        self.GlyphMetrics(glyph, size, synthetic_bold, synthetic_italic)
+            .advance
+    }
     fn WithVariations(&self, variations: &[FontVariation]) -> Arc<dyn FontBackend>;
 }
 
@@ -54,7 +69,7 @@ pub trait FontBackendFactory {
         bytes: &[u8],
         face_index: u32,
         variations: &[FontVariation],
-        native_family: &str,
+        resolved_family: &str,
         metrics_family: &str,
         weight: f64,
         italic: bool,

@@ -1,9 +1,17 @@
-// Translation status: complete
 // Copyright 2015 The Chromium Authors. BSD-style license in LICENSE.
 // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.h:1-74;
 // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:1-24.
-use crate::adapter::{geometry::{Rect,RectF,Size,Vector2dF,ToEnclosingRect},paint_geometry::PaintChunkView,raster_invalidator::*,region_backend::{SkRegionBackend,SkRegionOp,SkIRect},content_layer_client_impl::RasterInvalidationCallback};
-use super::{float_clip_rect::FloatClipRect,display_item_raster_invalidator::DisplayItemRasterInvalidator};
+use super::{
+    display_item_raster_invalidator::DisplayItemRasterInvalidator,
+    float_clip_rect::FloatClipRect,
+};
+use crate::adapter::{
+    content_layer_client_impl::RasterInvalidationCallback,
+    geometry::{Rect, RectF, Size, ToEnclosingRect, Vector2dF},
+    paint_geometry::PaintChunkView,
+    raster_invalidator::*,
+    region_backend::{SkIRect, SkRegionBackend, SkRegionOp},
+};
 use crate::third_party::blink::renderer::platform::graphics::compositing::chunk_to_layer_mapper::ChunkToLayerMapper;
 use foundation::{PaintInvalidationReason as Reason,IsFullPaintInvalidationReason};
 use std::sync::Arc;
@@ -111,6 +119,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         self.tracking_.as_mut()
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:39-62.
+    #[inline(always)]
     fn GetOldChunk(&self, index: usize) -> &M::Chunk {
         let info = &self.old_paint_chunks_info_[index];
         let chunk = self
@@ -122,6 +131,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         debug_assert!(chunk.id() == info.id);
         chunk
     }
+    #[inline(always)]
     fn MatchNewChunkToOldChunk(&self, new: &M::Chunk, index: usize) -> Option<usize> {
         if !new.CanMatchOldChunk() {
             return None;
@@ -135,6 +145,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:64-143;
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.h:154-163.
+    #[inline(always)]
     fn ChunkPropertiesChanged(
         &self,
         new: &M::Chunk,
@@ -294,9 +305,11 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             } else {
                 Reason::kNone
             };
+            let resource_changed = chunks.artifact().ChunkHasResourceChange(index);
             if !offset_changed
                 && reason == Reason::kNone
                 && new.is_moved_from_cached_subsequence()
+                && !resource_changed
                 && !m.ChunkPropertiesChangedOnlyComposited(new, &self.layer_state_)
             {
                 new_infos.push(PaintChunkInfo::FromOld(
@@ -366,7 +379,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                         .expect("source old artifact")
                         .clone();
                     if !Arc::ptr_eq(chunks.artifact(), &old_artifact)
-                        && !new.is_moved_from_cached_subsequence()
+                        && (!new.is_moved_from_cached_subsequence() || resource_changed)
                     {
                         let old_chunk_index =
                             self.old_paint_chunks_info_[matched_index].index_in_paint_artifact;
@@ -379,6 +392,12 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                             old_artifact.DisplayItemsInChunk(old_chunk_index),
                             chunks.artifact().DisplayItemsInChunk(index),
                             &mapper,
+                        )
+                        .WithImageContentRevisions(
+                            old_artifact.ImageContentRevisionsInChunk(old_chunk_index),
+                            chunks
+                                .artifact()
+                                .ImageContentRevisionsInChunk(index),
                         )
                         .Generate();
                     }
@@ -408,6 +427,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:322-333;
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.h:135-139.
+    #[inline(always)]
     fn IncrementallyInvalidateChunk(
         &mut self,
         old: Rect,
@@ -601,26 +621,269 @@ impl<M: RasterInvalidationTypes> RasterInvalidationSink for RasterInvalidatorSin
             .AddRasterInvalidation(rect, id, reason, old, self.callback)
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        paint::{
+            CpuGeometryMapper, CpuPaintRecord, CpuRasterTrackingServices, CpuTrackingBitmap,
+            PaintArtifact, PaintChunk, PaintChunkSubset, PropertyTreeState,
+        },
+        skia::SkRegion,
+    };
+    use paint::{
+        display_item_id::{DisplayItemId, DisplayItemIdType},
+        paint_engine::PaintRect,
+    };
 
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.h:140.
-// ClientIsOldOrNew retains the two source variants in the shared typed boundary.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.h:153-173.
-// ClipByLayerBounds has integer and float specializations; PopulatePaintChunksInfo
-// is shared by Generate and the resident metadata refresh entry above.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.h:174-187.
-// Source fields are owned in this resident invalidator; GC tracing is represented
-// by the artifact leases. Namespace/include-guard closures map to module scope.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:173.
-// Closes the source ShouldSkipForRasterInvalidation function above.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:25.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:38.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:63.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:144.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:185.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:321.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:334.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:348.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:355.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:395.
-// Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:419.
-// Definition separators have no runtime instructions.
+    #[derive(Default)]
+    struct TrackingRuntime;
+
+    impl CpuRasterTrackingServices<SkRegion> for TrackingRuntime {
+        fn PaintUnderInvalidationCheckingEnabled(&self) -> bool {
+            false
+        }
+
+        fn IsTracingRasterInvalidations(&self) -> bool {
+            false
+        }
+
+        fn Rasterize(
+            &self,
+            _: &CpuPaintRecord<SkRegion>,
+            _: Rect,
+        ) -> Option<CpuTrackingBitmap> {
+            unreachable!("under-invalidation checking is disabled")
+        }
+
+        fn BuildUnderInvalidationRecord(
+            &self,
+            _: CpuPaintRecord<SkRegion>,
+            _: CpuTrackingBitmap,
+            _: Rect,
+        ) -> CpuPaintRecord<SkRegion> {
+            unreachable!("under-invalidation checking is disabled")
+        }
+
+        fn LogUnderInvalidation(&self, _: &str, _: i32, _: i32, _: u32, _: u32) {}
+
+        fn LogMoreUnderInvalidations(&self) {}
+    }
+
+    #[derive(Default)]
+    struct Callback(Vec<Rect>);
+
+    impl RasterInvalidationCallback for Callback {
+        fn InvalidateRect(&mut self, rect: Rect) {
+            self.0.push(rect);
+        }
+    }
+
+    fn mapper() -> CpuGeometryMapper<SkRegion> {
+        CpuGeometryMapper::new(false, Arc::new(TrackingRuntime))
+    }
+
+    fn chunk(client_id: u64, bounds: PaintRect) -> PaintChunk {
+        PaintChunk {
+            id: DisplayItemId {
+                client_id,
+                r#type: DisplayItemIdType::kLayerChunk,
+                fragment: 0,
+            },
+            is_cacheable: true,
+            bounds,
+            drawable_bounds: bounds,
+            ..PaintChunk::default()
+        }
+    }
+
+    fn artifact(chunks: Vec<PaintChunk>) -> Arc<PaintArtifact> {
+        let mut artifact = PaintArtifact::default();
+        for chunk in &chunks {
+            artifact.RecordDebugInfo(
+                chunk.id.client_id as usize,
+                Arc::<str>::from(format!("client-{}", chunk.id.client_id)),
+                0,
+            );
+        }
+        artifact.chunks = chunks.into();
+        Arc::new(artifact)
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> PaintRect {
+        PaintRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn run(
+        invalidator: &mut RasterInvalidator<CpuGeometryMapper<SkRegion>>,
+        artifact: Arc<PaintArtifact>,
+        mapper: &CpuGeometryMapper<SkRegion>,
+        callback: &mut Callback,
+    ) {
+        invalidator.Generate(
+            &PaintChunkSubset::from_artifact(artifact),
+            Vector2dF::default(),
+            Size::new(100, 100),
+            &PropertyTreeState::default(),
+            mapper,
+            callback,
+        );
+    }
+
+    #[test]
+    fn first_nonempty_layer_invalidates_the_full_layer() {
+        let mapper = mapper();
+        let mut invalidator = RasterInvalidator::new(&mapper);
+        invalidator.SetTracksRasterInvalidations(true, &mapper);
+        let mut callback = Callback::default();
+
+        run(
+            &mut invalidator,
+            artifact(vec![chunk(1, rect(10., 20., 30., 40.))]),
+            &mapper,
+            &mut callback,
+        );
+
+        assert_eq!(callback.0, [Rect::new(0, 0, 100, 100)]);
+        let tracked = invalidator.GetTracking().unwrap().Invalidations();
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].reason, Reason::kFullLayer);
+        assert_eq!(tracked[0].client_debug_name, "client-1");
+    }
+
+    #[test]
+    fn reordered_chunks_follow_source_appeared_then_disappeared_order() {
+        let mapper = mapper();
+        let mut invalidator = RasterInvalidator::new(&mapper);
+        let mut callback = Callback::default();
+        run(
+            &mut invalidator,
+            artifact(vec![
+                chunk(1, rect(0., 0., 10., 10.)),
+                chunk(2, rect(10., 0., 10., 10.)),
+                chunk(3, rect(20., 0., 10., 10.)),
+            ]),
+            &mapper,
+            &mut callback,
+        );
+
+        invalidator.SetTracksRasterInvalidations(true, &mapper);
+        callback.0.clear();
+        run(
+            &mut invalidator,
+            artifact(vec![
+                chunk(1, rect(0., 0., 10., 10.)),
+                chunk(3, rect(20., 0., 10., 10.)),
+                chunk(2, rect(10., 0., 10., 10.)),
+            ]),
+            &mapper,
+            &mut callback,
+        );
+
+        let tracked = invalidator.GetTracking().unwrap().Invalidations();
+        assert_eq!(tracked.len(), 2);
+        assert_eq!(tracked[0].client_id, 2);
+        assert_eq!(tracked[0].reason, Reason::kChunkAppeared);
+        assert_eq!(tracked[1].client_id, 2);
+        assert_eq!(tracked[1].reason, Reason::kChunkDisappeared);
+    }
+
+    #[test]
+    fn effectively_invisible_chunk_is_reported_as_disappeared() {
+        let mapper = mapper();
+        let mut invalidator = RasterInvalidator::new(&mapper);
+        let mut callback = Callback::default();
+        run(
+            &mut invalidator,
+            artifact(vec![chunk(1, rect(10., 20., 30., 40.))]),
+            &mapper,
+            &mut callback,
+        );
+
+        invalidator.SetTracksRasterInvalidations(true, &mapper);
+        callback.0.clear();
+        let mut changed = chunk(1, rect(20., 30., 30., 40.));
+        changed.effectively_invisible = true;
+        run(
+            &mut invalidator,
+            artifact(vec![changed]),
+            &mapper,
+            &mut callback,
+        );
+
+        assert_eq!(callback.0, [Rect::new(10, 20, 30, 40)]);
+        let tracked = invalidator.GetTracking().unwrap().Invalidations();
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].reason, Reason::kChunkDisappeared);
+    }
+
+    #[test]
+    fn foreign_layer_chunks_own_their_raster_invalidation() {
+        let mapper = mapper();
+        let mut invalidator = RasterInvalidator::new(&mapper);
+        let mut callback = Callback::default();
+        let mut foreign = chunk(1, rect(10., 20., 30., 40.));
+        foreign.id.r#type = DisplayItemIdType::kForeignLayerVideo;
+
+        run(
+            &mut invalidator,
+            artifact(vec![foreign.clone()]),
+            &mapper,
+            &mut callback,
+        );
+
+        invalidator.SetTracksRasterInvalidations(true, &mapper);
+        callback.0.clear();
+        foreign.drawable_bounds = rect(20., 30., 40., 50.);
+        foreign.bounds = foreign.drawable_bounds;
+        run(
+            &mut invalidator,
+            artifact(vec![foreign]),
+            &mapper,
+            &mut callback,
+        );
+
+        assert!(callback.0.is_empty());
+        assert!(invalidator
+            .GetTracking()
+            .unwrap()
+            .Invalidations()
+            .is_empty());
+    }
+
+    #[test]
+    fn moved_cached_subsequence_reuses_old_chunk_info() {
+        let mapper = mapper();
+        let mut invalidator = RasterInvalidator::new(&mapper);
+        let mut callback = Callback::default();
+        run(
+            &mut invalidator,
+            artifact(vec![chunk(1, rect(10., 20., 30., 40.))]),
+            &mapper,
+            &mut callback,
+        );
+
+        invalidator.SetTracksRasterInvalidations(true, &mapper);
+        callback.0.clear();
+        let mut moved = chunk(1, rect(10., 20., 30., 40.));
+        moved.is_moved_from_cached_subsequence = true;
+        run(
+            &mut invalidator,
+            artifact(vec![moved]),
+            &mapper,
+            &mut callback,
+        );
+
+        assert!(callback.0.is_empty());
+        assert!(invalidator
+            .GetTracking()
+            .unwrap()
+            .Invalidations()
+            .is_empty());
+    }
+}

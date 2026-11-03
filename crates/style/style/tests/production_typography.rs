@@ -15,12 +15,12 @@ use style::{
     },
     production_css_value as values, StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -45,14 +45,14 @@ fn emphasis_custom_keyword_position_inheritance_and_shorthand_reset() {
     );
     update(&mut owner);
     let (p, c, i, u, s, a, n, q) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "u"),
-        native(&owner, "s"),
-        native(&owner, "a"),
-        native(&owner, "n"),
-        native(&owner, "q"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "s"),
+        computed_style(&owner, "a"),
+        computed_style(&owner, "n"),
+        computed_style(&owner, "q"),
     );
     for v in [p, c, u] {
         assert_eq!(v.GetTextEmphasisFill(), F::kFilled);
@@ -89,20 +89,20 @@ fn emphasis_custom_keyword_position_inheritance_and_shorthand_reset() {
     );
 }
 #[test]
-fn hyphenation_ruby_and_text_size_adjust_native_fields_css_wide() {
+fn hyphenation_ruby_and_text_size_adjust_computed_style_fields_css_wide() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='hyphenate-character:&quot;\\2010 &quot;;hyphenate-limit-chars:999 auto 3;ruby-position:under;ruby-overhang:none;text-size-adjust:125%'><div id=c style='hyphenate-character:inherit;hyphenate-limit-chars:inherit;ruby-position:inherit;ruby-overhang:inherit;text-size-adjust:inherit'></div><div id=u style='hyphenate-character:unset;hyphenate-limit-chars:unset;ruby-position:unset;ruby-overhang:unset;text-size-adjust:unset'></div><div id=i style='hyphenate-character:initial;hyphenate-limit-chars:initial;ruby-position:initial;ruby-overhang:initial;text-size-adjust:initial'></div><div id=a style='hyphenate-character:auto;hyphenate-limit-chars:auto;text-size-adjust:auto'></div><div id=e style='hyphenate-character:&quot;&quot;;hyphenate-limit-chars:7;text-size-adjust:none'></div><div id=t style='hyphenate-limit-chars:calc(2.5) 4;text-size-adjust:calc(50% + 25%)'></div></div>",
     );
     update(&mut owner);
     let (p, c, u, i, a, e, t) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "u"),
-        native(&owner, "i"),
-        native(&owner, "a"),
-        native(&owner, "e"),
-        native(&owner, "t"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "a"),
+        computed_style(&owner, "e"),
+        computed_style(&owner, "t"),
     );
     for v in [p, c, u] {
         assert_eq!(v.HyphenationString().Utf8(), "‐");

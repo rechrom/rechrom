@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
 use crate::fonts::shaping::harfbuzz_face::HarfBuzzFace;
-use crate::text::native::harfbuzz as hb;
+use crate::text::implementation::harfbuzz as hb;
 
 // Values index the OpenType MATH constants subtable.
 // cpp: font_engine/fonts/opentype/open_type_math_support.h:25-84

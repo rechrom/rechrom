@@ -7,7 +7,7 @@ use std::collections::HashSet;
 pub mod trace;
 pub use trace::{span as trace_span, TracePhase};
 
-/// Layout updates retain native fragments for borrowed queries. Paint also
+/// Layout updates retain source fragments for borrowed queries. Paint also
 /// materializes the current paint boundary output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutUpdateKind {
@@ -16,18 +16,36 @@ pub enum LayoutUpdateKind {
 }
 
 /// Opaque client set produced by Paint after its artifact is complete.
-/// Layout consumes it to advance native DisplayItemClient state.
+/// Layout consumes it to advance source DisplayItemClient state.
 pub struct PaintClientCommit {
     used_clients: HashSet<u64>,
+    pending_delayed_paint_invalidations: HashSet<u64>,
 }
 
 impl PaintClientCommit {
     pub fn FromClientSet(used_clients: HashSet<u64>) -> Self {
-        Self { used_clients }
+        Self {
+            used_clients,
+            pending_delayed_paint_invalidations: HashSet::new(),
+        }
+    }
+
+    pub fn FromClientSetAndDelayedInvalidations(
+        used_clients: HashSet<u64>,
+        pending_delayed_paint_invalidations: HashSet<u64>,
+    ) -> Self {
+        Self {
+            used_clients,
+            pending_delayed_paint_invalidations,
+        }
     }
 
     pub fn UsedClients(&self) -> &HashSet<u64> {
         &self.used_clients
+    }
+
+    pub fn PendingDelayedPaintInvalidations(&self) -> &HashSet<u64> {
+        &self.pending_delayed_paint_invalidations
     }
 }
 
@@ -40,13 +58,13 @@ pub trait PaintCommitOutput {
 }
 
 /// Adapter implemented by the resident layout owner. `layout_commit` owns the
-/// order while the adapter retains access to native clients and output types.
+/// order while the adapter retains access to source clients and output types.
 pub trait PaintCommitBackend {
     type Layout;
     type Published;
 
     fn ValidateAuxiliaryClients(&mut self, commit: &PaintClientCommit);
-    fn CommitNativeClients(&mut self, commit: &PaintClientCommit, layout: &mut Self::Layout);
+    fn CommitClients(&mut self, commit: &PaintClientCommit, layout: &mut Self::Layout);
     fn CommitPrePaintInputs(&mut self, commit: &PaintClientCommit);
     fn PublishLayout(&mut self, layout: Self::Layout) -> Self::Published;
 }
@@ -65,8 +83,8 @@ pub fn CommitPaintResult<B: PaintCommitBackend, P: PaintCommitOutput>(
         backend.ValidateAuxiliaryClients(&commit);
     }
     {
-        let _phase = trace_span(TracePhase::CommitNativeClients);
-        backend.CommitNativeClients(&commit, &mut layout);
+        let _phase = trace_span(TracePhase::CommitClients);
+        backend.CommitClients(&commit, &mut layout);
     }
     {
         let _phase = trace_span(TracePhase::CommitPrePaintInputs);
@@ -79,7 +97,7 @@ pub fn CommitPaintResult<B: PaintCommitBackend, P: PaintCommitOutput>(
     (published, artifact)
 }
 
-/// Native adapters supply ownership-specific operations while this package
+/// Chromium adapters supply ownership-specific operations while this package
 /// owns the observable publication order. This keeps LayoutObject and fragment
 /// implementation types out of the commit boundary.
 pub trait LayoutPublicationBackend {
@@ -94,7 +112,7 @@ pub trait LayoutPublicationBackend {
 }
 
 /// Environment token for one layout publication. Creating the token before
-/// layout lets native preparation reuse its resources; consuming it through
+/// layout lets source preparation reuse its resources; consuming it through
 /// `Publish` or `Commit` makes the publication order explicit and shared by
 /// the ordinary layout path and retained-result snapshots.
 #[must_use = "a layout commit transaction must publish or commit its environment"]
@@ -115,7 +133,7 @@ impl<E> LayoutCommitTransaction<E> {
         &self.environment
     }
 
-    /// Publish a fragment snapshot, run any native finalization that must
+    /// Publish a fragment snapshot, run any source finalization that must
     /// observe it, and only then commit the environment.
     #[inline(never)]
     pub fn Publish<C, O>(
@@ -245,10 +263,10 @@ mod tests {
             self.steps.push("auxiliary");
         }
 
-        fn CommitNativeClients(&mut self, commit: &PaintClientCommit, layout: &mut u32) {
+        fn CommitClients(&mut self, commit: &PaintClientCommit, layout: &mut u32) {
             assert!(commit.UsedClients().contains(&17));
             *layout += 1;
-            self.steps.push("native");
+            self.steps.push("source");
         }
 
         fn CommitPrePaintInputs(&mut self, commit: &PaintClientCommit) {
@@ -275,7 +293,20 @@ mod tests {
         assert_eq!((published, artifact), (42, 9));
         assert_eq!(
             backend.steps,
-            ["auxiliary", "native", "prepaint", "publish"]
+            ["auxiliary", "source", "prepaint", "publish"]
+        );
+    }
+
+    #[test]
+    fn paint_client_commit_keeps_delayed_invalidations_separate_from_used_clients() {
+        let commit = PaintClientCommit::FromClientSetAndDelayedInvalidations(
+            HashSet::from([17]),
+            HashSet::from([29]),
+        );
+        assert_eq!(commit.UsedClients(), &HashSet::from([17]));
+        assert_eq!(
+            commit.PendingDelayedPaintInvalidations(),
+            &HashSet::from([29])
         );
     }
 }

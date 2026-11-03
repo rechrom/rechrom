@@ -4,7 +4,7 @@ use crate::internal::layout_algorithm_set::LayoutAlgorithmSet;
 use crate::internal::layout_object_factory_set::LayoutObjectFactorySet;
 use crate::layout_boundary_support::LayoutBoundarySupport;
 
-struct NativeLayoutPublication<'a> {
+struct LayoutPublication<'a> {
     boundary: LayoutBoundarySupport,
     root: &'a mut crate::internal::layout_object::LayoutObject,
     result: &'a layout_fragment::layout_result::LayoutResult,
@@ -12,7 +12,7 @@ struct NativeLayoutPublication<'a> {
     cache: &'a mut crate::layout_boundary_support::LayoutBoundaryCache,
 }
 
-impl layout_commit::LayoutPublicationBackend for NativeLayoutPublication<'_> {
+impl layout_commit::LayoutPublicationBackend for LayoutPublication<'_> {
     type Environment = Box<dyn crate::layout_boundary_support::LayoutBoundaryEnvironment>;
     type Output = layout_fragment::fragment_tree::LayoutResultHandle;
 
@@ -95,7 +95,7 @@ impl LayoutAssembly {
         );
         crate::internal::boundary::layout_boundary::RefreshScrollPaintProperties(
             root,
-            crate::layout_engine::NativePaintFragmentCursor::FromHandle(fragments),
+            crate::layout_engine::PaintFragmentCursor::FromHandle(fragments),
             reuse_sticky_constraints,
         );
         // cppgc schedules collection from allocation pressure instead of
@@ -121,9 +121,9 @@ impl LayoutAssembly {
         let result = unsafe { &*root_box }.GetLayoutResult(0);
         assert!(
             !result.is_null(),
-            "layout must finish before publishing its native result"
+            "layout must finish before publishing its source result"
         );
-        layout_commit::PublishLayoutResult(&mut NativeLayoutPublication {
+        layout_commit::PublishLayoutResult(&mut LayoutPublication {
             boundary: self.boundary,
             root,
             result: unsafe { &*result },

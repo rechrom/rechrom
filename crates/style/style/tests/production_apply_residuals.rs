@@ -34,12 +34,12 @@ fn apply(b: &mut ComputedStyleBuilder, parent: Option<&ComputedStyle>, css: &str
         .unwrap_or_else(|e| panic!("{css}: {e:?}"));
     }
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let node = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(node).unwrap().computed_style_owner.Get() }
 }
 
 #[test]
@@ -55,10 +55,22 @@ fn text_align_match_parent_uses_parent_direction_and_root_computes_start() {
         "{:?}",
         engine.Diagnostics()
     );
-    assert_eq!(native(&owner, "root").GetTextAlign(), ETextAlign::kStart);
-    assert_eq!(native(&owner, "c").GetTextAlign(), ETextAlign::kRight);
-    assert_eq!(native(&owner, "inherit").GetTextAlign(), ETextAlign::kStart);
-    assert_eq!(native(&owner, "end").GetTextAlign(), ETextAlign::kLeft);
+    assert_eq!(
+        computed_style(&owner, "root").GetTextAlign(),
+        ETextAlign::kStart
+    );
+    assert_eq!(
+        computed_style(&owner, "c").GetTextAlign(),
+        ETextAlign::kRight
+    );
+    assert_eq!(
+        computed_style(&owner, "inherit").GetTextAlign(),
+        ETextAlign::kStart
+    );
+    assert_eq!(
+        computed_style(&owner, "end").GetTextAlign(),
+        ETextAlign::kLeft
+    );
 }
 
 #[test]

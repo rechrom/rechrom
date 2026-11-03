@@ -3790,18 +3790,18 @@ impl UniformSpan {
 struct DumpNameKey<'a>(&'a [u8]);
 #[derive(Default)]
 struct DumpNameHash;
-impl crate::src::core::SkTHash::NativeHash<DumpNameKey<'_>> for DumpNameHash {
+impl crate::src::core::SkTHash::HashPolicy<DumpNameKey<'_>> for DumpNameHash {
     fn hash(&self, k: &DumpNameKey<'_>) -> u32 {
         crate::src::core::SkChecksum::SkGoodHash::default().hash_string_view(k.0)
     }
 }
 struct DumpNameBytes(Vec<u8>);
-impl crate::src::core::SkTHash::NativeDefault for DumpNameBytes {
+impl crate::src::core::SkTHash::CxxDefault for DumpNameBytes {
     fn default_construct() -> Self {
         Self(Vec::new())
     }
 }
-impl crate::src::core::SkTHash::NativeMove for DumpNameBytes {
+impl crate::src::core::SkTHash::CxxMove for DumpNameBytes {
     fn move_construct(v: &mut Self) -> Self {
         Self(core::mem::take(&mut v.0))
     }
@@ -3810,12 +3810,12 @@ impl crate::src::core::SkTHash::NativeMove for DumpNameBytes {
     }
 }
 struct DumpPositionNames(crate::src::core::SkTHash::THashMap<i32, DumpNameBytes>);
-impl crate::src::core::SkTHash::NativeDefault for DumpPositionNames {
+impl crate::src::core::SkTHash::CxxDefault for DumpPositionNames {
     fn default_construct() -> Self {
         Self(Default::default())
     }
 }
-impl crate::src::core::SkTHash::NativeMove for DumpPositionNames {
+impl crate::src::core::SkTHash::CxxMove for DumpPositionNames {
     fn move_construct(v: &mut Self) -> Self {
         Self(crate::src::core::SkTHash::THashMap::move_from(&mut v.0))
     }

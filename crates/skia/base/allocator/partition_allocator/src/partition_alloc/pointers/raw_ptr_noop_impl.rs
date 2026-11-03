@@ -7,7 +7,7 @@ unsafe impl RawPtrBackend for RawPtrNoOpImpl{
  unsafe fn wrap<T>(p:*mut T)->*mut T{p}
  unsafe fn release<T>(p:*mut T){
   // Actual native PA_MSAN_CHECK_MEM_IS_INITIALIZED, not an empty sanitizer stub.
-  unsafe{super::raw_ptr::native_input::msan_check_initialized(core::ptr::from_ref(&p).cast(),core::mem::size_of_val(&p));}
+  unsafe{super::raw_ptr::input::msan_check_initialized(core::ptr::from_ref(&p).cast(),core::mem::size_of_val(&p));}
  }
  unsafe fn dereference<T>(p:*mut T)->*mut T{p}unsafe fn extract<T>(p:*mut T)->*mut T{p}
  unsafe fn compare<T>(p:*mut T)->*mut T{p}unsafe fn duplicate<T>(p:*mut T)->*mut T{p}

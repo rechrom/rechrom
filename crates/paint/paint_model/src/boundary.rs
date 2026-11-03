@@ -7,16 +7,17 @@ use layoutng_assembly::internal::paint_input::{
 
 use crate::PaintRect;
 
-// cpp: paint/paint_engine.h:82-100
 #[derive(Clone, PartialEq)]
 pub struct DisplayMaskLayer {
     pub source_error: Option<String>,
     pub resource_id: u64,
     pub image_interpolation_quality: InterpolationQuality,
+    pub image_orientation: image_resource::ImageOrientation,
     pub document_image_container_key: Option<image_resource::ContainerKey>,
     pub paint_shader: Option<PaintShader>,
     pub clip_rect: PaintRect,
     pub clip_radii: PaintCornerRadii,
+    pub has_clip: bool,
     pub source_rect: PaintRect,
     pub tile_rect: PaintRect,
     pub repeat_x: bool,
@@ -35,10 +36,12 @@ impl Default for DisplayMaskLayer {
             source_error: None,
             resource_id: 0,
             image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            image_orientation: image_resource::ImageOrientation::kDefault,
             document_image_container_key: None,
             paint_shader: None,
             clip_rect: PaintRect::default(),
             clip_radii: PaintCornerRadii::default(),
+            has_clip: true,
             source_rect: PaintRect::default(),
             tile_rect: PaintRect::default(),
             repeat_x: false,

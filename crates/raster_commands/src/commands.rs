@@ -173,11 +173,16 @@ pub enum PaintFilterType {
     kContrast,
     kGrayscale,
     kHueRotate,
+    kLuminanceToAlpha,
+    kColorMatrix,
     kInvert,
     kOpacity,
     kSaturate,
     kSepia,
     kDropShadow,
+    kConvolveMatrix,
+    kComponentTransfer,
+    kTurbulence,
     kBoxReflect,
 }
 
@@ -195,6 +200,8 @@ pub enum PaintReflectionDirection {
 pub struct PaintFilterOperation {
     pub r#type: PaintFilterType,
     pub amount: f64,
+    pub color_matrix: Vec<f64>,
+    pub canvas_filter: Option<crate::filter_graph::RenderSvgFilterKind>,
     pub offset: Offset,
     pub blur_radius: f64,
     pub color: Color,
@@ -208,6 +215,8 @@ impl Default for PaintFilterOperation {
         Self {
             r#type: PaintFilterType::kBlur,
             amount: 0.0,
+            color_matrix: Vec::new(),
+            canvas_filter: None,
             offset: Offset::default(),
             blur_radius: 0.0,
             color: Color::default(),
@@ -584,9 +593,11 @@ impl ImageOrientation {
 pub struct MaskLayer {
     pub resource_id: u64,
     pub image_interpolation_quality: ImageInterpolationQuality,
+    pub image_orientation: ImageOrientation,
     pub paint_shader: Option<PaintShader>,
     pub clip_rect: PaintRect,
     pub clip_radii: PaintCornerRadii,
+    pub has_clip: bool,
     pub source_rect: PaintRect,
     pub tile_rect: PaintRect,
     pub repeat_x: bool,
@@ -603,9 +614,11 @@ impl Default for MaskLayer {
         Self {
             resource_id: 0,
             image_interpolation_quality: ImageInterpolationQuality::kMedium,
+            image_orientation: ImageOrientation::kDefault,
             paint_shader: None,
             clip_rect: PaintRect::default(),
             clip_radii: PaintCornerRadii::default(),
+            has_clip: true,
             source_rect: PaintRect::default(),
             tile_rect: PaintRect::default(),
             repeat_x: false,
@@ -633,6 +646,9 @@ pub struct DrawCommand {
     pub line_style: BorderLineStyle,
     pub decoration_style: TextDecorationStyle,
     pub stroke_width: f64,
+    /// Generic stroked-path corner effect radius. Rounded rectangles retain
+    /// their independent per-corner geometry below.
+    pub corner_radius: f64,
     pub corner_radii: PaintCornerRadii,
     pub inner_corner_radii: PaintCornerRadii,
     pub dash_intervals: Vec<f64>,
@@ -692,6 +708,7 @@ impl Default for DrawCommand {
             line_style: BorderLineStyle::kNone,
             decoration_style: TextDecorationStyle::kSolid,
             stroke_width: 0.0,
+            corner_radius: 0.0,
             corner_radii: PaintCornerRadii::default(),
             inner_corner_radii: PaintCornerRadii::default(),
             dash_intervals: Vec::new(),
@@ -747,7 +764,7 @@ impl Default for DrawCommand {
 /// Typeface metadata borrows strings/font bytes from the caller.
 pub struct FontFace<'a> {
     pub family: &'a str,
-    pub native_family: &'a str,
+    pub resolved_family: &'a str,
     pub weight: f64,
     pub italic: bool,
     pub bytes: &'a [u8],
@@ -840,10 +857,18 @@ pub fn canonical_font_variations(
     )
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageAlphaType {
+    #[default]
+    Unpremultiplied,
+    Premultiplied,
+}
+
 pub struct Image<'a> {
     pub id: u64,
     pub width: u32,
     pub height: u32,
+    pub alpha_type: ImageAlphaType,
     pub rgba8: &'a [u8],
     rgba8_owner: Option<&'a std::sync::Arc<Vec<u8>>>,
 }
@@ -853,6 +878,7 @@ impl<'a> Image<'a> {
             id,
             width,
             height,
+            alpha_type: ImageAlphaType::Unpremultiplied,
             rgba8,
             rgba8_owner: None,
         }
@@ -862,6 +888,23 @@ impl<'a> Image<'a> {
             id,
             width,
             height,
+            alpha_type: ImageAlphaType::Unpremultiplied,
+            rgba8,
+            rgba8_owner: Some(rgba8),
+        }
+    }
+    pub fn shared_with_alpha_type(
+        id: u64,
+        width: u32,
+        height: u32,
+        alpha_type: ImageAlphaType,
+        rgba8: &'a std::sync::Arc<Vec<u8>>,
+    ) -> Self {
+        Self {
+            id,
+            width,
+            height,
+            alpha_type,
             rgba8,
             rgba8_owner: Some(rgba8),
         }
@@ -892,7 +935,7 @@ mod font_identity_tests {
     fn face(bytes: &[u8]) -> FontFace<'_> {
         FontFace {
             family: "alias",
-            native_family: "Arial",
+            resolved_family: "Arial",
             weight: 400.0,
             italic: false,
             bytes,
@@ -910,7 +953,7 @@ mod font_identity_tests {
         let copy = bytes.clone();
         let mut alias = face(&copy);
         alias.family = "different alias";
-        alias.native_family = "a missing platform family";
+        alias.resolved_family = "a missing platform family";
         alias.weight = 700.0;
         alias.italic = true;
         assert!(identity.matches(&alias));

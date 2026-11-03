@@ -21952,7 +21952,7 @@ macro_rules! BASE_NUMERIC_ENUM_INPUT {
 // IntegralConstantLike's constexpr equality/conversion proof is not replaced by
 // a permissive Rust blanket implementation; concrete native adapters remain a
 // language-level dependency until those exact const constraints are available.
-#[cfg(not(base_numeric_native_inputs_configured))]
+#[cfg(not(base_numeric_inputs_configured))]
 compile_error!("actual native numerics compiler/macro inputs must be supplied");
 // Source: safe_conversions_impl.h:360-381. No 128-bit or two-bit specialization.
 pub struct IntegerSelector<const BITS: u32, const SIGNED: bool>;

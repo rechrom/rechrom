@@ -17,10 +17,10 @@ use std::{
 
 use font_engine::{FontDescription, FontSelectionValue, FontVariantEmoji, LayoutLocale};
 use foundation::{
-    AtomicString, CSSBitset as NativeCSSBitset, CSSPropertyID, CSSValueID,
-    DisplayAdjustmentContext, EDisplay, EForcedColorAdjust, EInlineBlockBaselineEdge, EInsideLink,
-    EInteractivity, EOrder, EOverflow, EPosition, EUserModify, Length, Member, Persistent,
-    PhysicalOffset, TextDirection, Vector,
+    AtomicString, CSSBitset as StyleCSSBitset, CSSPropertyID, CSSValueID, DisplayAdjustmentContext,
+    EDisplay, EForcedColorAdjust, EInlineBlockBaselineEdge, EInsideLink, EInteractivity, EOrder,
+    EOverflow, EPosition, EUserModify, Length, Member, Persistent, PhysicalOffset, TextDirection,
+    Vector,
 };
 use layoutng_style::{
     css::style_color::StyleColor,
@@ -33,7 +33,7 @@ use layoutng_style::{
         computed_style_initial_values::ComputedStyleInitialValues,
         display_adjustment::AdjustComputedDisplayForLayout,
         gap_data_list::GapDataList,
-        style_base_data::StyleBaseData as NativeStyleBaseData,
+        style_base_data::StyleBaseData as ComputedStyleBaseData,
     },
 };
 
@@ -314,7 +314,7 @@ fn ApplyProductionThemeAppearance(
 
 /// Typed document/platform boundary consumed by Chromium's forced-colors
 /// adjustment. Platform packages can retain their actual provider privately
-/// and expose only the resolved native color for one system keyword.
+/// and expose only the resolved computed style color for one system keyword.
 pub(crate) trait ProductionSystemColorResolver {
     fn ResolveSystemColor(
         &self,
@@ -993,7 +993,7 @@ impl ProductionMatchedPropertiesCache {
 struct ProductionBaseStyleCascade {
     result: Rc<RefCell<MatchResult>>,
     state: Option<std::ptr::NonNull<ProductionResolverState>>,
-    important_set: Option<Rc<NativeCSSBitset>>,
+    important_set: Option<Rc<StyleCSSBitset>>,
     animations: Option<ProductionActiveInterpolationsMap>,
     transitions: Option<ProductionActiveInterpolationsMap>,
     inline_style_lost: bool,
@@ -1201,12 +1201,17 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     pub root_style: Option<Persistent<ComputedStyle>>,
     pub root_font_size: f32,
     pub color_scheme_settings: ColorSchemeSettings,
-    /// Borrowed native system-color owner used only while resolving this
+    /// Borrowed computed style system-color owner used only while resolving this
     /// style. `None` selects Chromium's canonical LayoutTheme failure.
     pub system_colors: ProductionSystemColorContext<'a>,
     /// Document::TextLinkColors custom text color. StyleResolver publishes
     /// the body's resolved current color here; UA quirks colors consume it.
     pub text_link_text_color: Option<foundation::Color>,
+    /// HTMLBodyElement writes these legacy attributes into the document's
+    /// TextLinkColors owner. The UA link keywords read the same live values.
+    pub link_color: Option<foundation::Color>,
+    pub visited_link_color: Option<foundation::Color>,
+    pub active_link_color: Option<foundation::Color>,
     pub is_document_element: bool,
     pub is_ensuring_style: bool,
     pub incremental_style: Option<ProductionIncrementalStyle<'a>>,
@@ -1267,6 +1272,9 @@ impl ProductionBaseStyleCollaborators<'_> {
             color_scheme_settings: ColorSchemeSettings::default(),
             system_colors: ProductionSystemColorContext::default(),
             text_link_text_color: None,
+            link_color: None,
+            visited_link_color: None,
+            active_link_color: None,
             is_document_element: false,
             is_ensuring_style: false,
             incremental_style: None,
@@ -1364,7 +1372,7 @@ struct ProductionRuleMatchingHost<'d> {
     // ComputedStyleBuilder stores StyleBaseData as a raw Oilpan Member. Keep
     // the production GC root alive until StateTakeStyle transfers that Member
     // into the final rooted ComputedStyle.
-    base_data_roots: RefCell<Vec<Persistent<NativeStyleBaseData>>>,
+    base_data_roots: RefCell<Vec<Persistent<ComputedStyleBaseData>>>,
 }
 
 impl<'d> ProductionRuleMatchingHost<'d> {
@@ -1485,6 +1493,520 @@ impl<'d> ProductionRuleMatchingHost<'d> {
         let mut properties = properties.borrow_mut();
         for parsed_property in parsed {
             properties.SetLonghandProperty(parsed_property);
+        }
+    }
+
+    /// HTMLElement::AddHTMLLengthToStyle.
+    ///
+    /// HTML dimension attributes use pixels for unitless values and retain
+    /// percentages. Relative `*` dimensions and CSS units are not accepted by
+    /// the HTML parser. Keep that conversion at presentation-hint collection
+    /// so the ordinary typed property parser and cascade remain authoritative.
+    fn AddHTMLLengthPresentationAttribute(
+        &self,
+        properties: &Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>,
+        property: CSSPropertyID,
+        value: &str,
+        allow_percentage: bool,
+        allow_zero: bool,
+    ) {
+        let value = value.trim_matches(|character: char| character.is_ascii_whitespace());
+        let (number, css_value) = if let Some(number) = value.strip_suffix('%') {
+            if !allow_percentage {
+                return;
+            }
+            let Ok(number) = number.trim().parse::<f64>() else {
+                return;
+            };
+            (number, format!("{number}%"))
+        } else {
+            let Ok(number) = value.parse::<f64>() else {
+                return;
+            };
+            (number, format!("{number}px"))
+        };
+        if !number.is_finite() || number < 0.0 || (!allow_zero && number == 0.0) {
+            return;
+        }
+        self.AddPresentationAttributeProperty(properties, property, &css_value);
+    }
+
+    fn HTMLPresentationAttributeApplies(element_name: &str, attribute_name: &str) -> bool {
+        if matches!(
+            attribute_name,
+            "align" | "contenteditable" | "hidden" | "lang" | "dir" | "draggable"
+        ) {
+            return true;
+        }
+        match element_name {
+            "br" => attribute_name == "clear",
+            "body" => matches!(
+                attribute_name,
+                "background"
+                    | "marginwidth"
+                    | "leftmargin"
+                    | "marginheight"
+                    | "topmargin"
+                    | "bgcolor"
+                    | "text"
+            ),
+            "table" => matches!(
+                attribute_name,
+                "width"
+                    | "height"
+                    | "bgcolor"
+                    | "background"
+                    | "valign"
+                    | "align"
+                    | "cellspacing"
+                    | "border"
+                    | "bordercolor"
+                    | "frame"
+                    | "rules"
+            ),
+            "thead" | "tbody" | "tfoot" | "tr" => matches!(
+                attribute_name,
+                "bgcolor" | "background" | "valign" | "align" | "height"
+            ),
+            "td" | "th" => matches!(
+                attribute_name,
+                "bgcolor" | "background" | "valign" | "align" | "height" | "width" | "nowrap"
+            ),
+            "font" => matches!(attribute_name, "size" | "color" | "face"),
+            "img" => matches!(
+                attribute_name,
+                "width" | "height" | "border" | "vspace" | "hspace" | "align" | "valign"
+            ),
+            "iframe" => matches!(attribute_name, "width" | "height" | "align" | "frameborder"),
+            _ => false,
+        }
+    }
+
+    fn CollectHTMLPresentationAttribute(
+        &self,
+        element_name: &str,
+        attribute_name: &str,
+        value: &str,
+        properties: &Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>,
+    ) {
+        let length = |this: &Self, property, percentages, zero| {
+            this.AddHTMLLengthPresentationAttribute(properties, property, value, percentages, zero)
+        };
+        // cpp: core/html/html_br_element.cc:34-50. `all` is the legacy
+        // synonym for CSS `both`; every other non-empty token is parsed by the
+        // ordinary clear property parser at the presentation-hint origin.
+        if element_name == "br" && attribute_name == "clear" && !value.is_empty() {
+            self.AddPresentationAttributeProperty(
+                properties,
+                CSSPropertyID::kClear,
+                if value.eq_ignore_ascii_case("all") {
+                    "both"
+                } else {
+                    value
+                },
+            );
+            return;
+        }
+        if element_name == "body" {
+            match attribute_name {
+                "marginwidth" | "leftmargin" => {
+                    length(self, CSSPropertyID::kMarginRight, true, true);
+                    length(self, CSSPropertyID::kMarginLeft, true, true);
+                    return;
+                }
+                "marginheight" | "topmargin" => {
+                    length(self, CSSPropertyID::kMarginBottom, true, true);
+                    length(self, CSSPropertyID::kMarginTop, true, true);
+                    return;
+                }
+                "bgcolor" => {
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kBackgroundColor,
+                        value,
+                    );
+                    return;
+                }
+                "text" => {
+                    self.AddPresentationAttributeProperty(properties, CSSPropertyID::kColor, value);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if element_name == "table" {
+            match attribute_name {
+                "width" => {
+                    length(self, CSSPropertyID::kWidth, true, false);
+                    return;
+                }
+                "height" => {
+                    length(self, CSSPropertyID::kHeight, true, true);
+                    return;
+                }
+                "border" => {
+                    let width = value.trim().parse::<u32>().unwrap_or(1);
+                    for property in [
+                        CSSPropertyID::kBorderTopWidth,
+                        CSSPropertyID::kBorderRightWidth,
+                        CSSPropertyID::kBorderBottomWidth,
+                        CSSPropertyID::kBorderLeftWidth,
+                    ] {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            property,
+                            &format!("{width}px"),
+                        );
+                    }
+                    return;
+                }
+                "bordercolor" => {
+                    if !value.is_empty() {
+                        for property in [
+                            CSSPropertyID::kBorderTopColor,
+                            CSSPropertyID::kBorderRightColor,
+                            CSSPropertyID::kBorderBottomColor,
+                            CSSPropertyID::kBorderLeftColor,
+                        ] {
+                            self.AddPresentationAttributeProperty(properties, property, value);
+                        }
+                    }
+                    return;
+                }
+                "bgcolor" => {
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kBackgroundColor,
+                        value,
+                    );
+                    return;
+                }
+                "valign" => {
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kVerticalAlign,
+                        value,
+                    );
+                    return;
+                }
+                "cellspacing" => {
+                    length(
+                        self,
+                        CSSPropertyID::kWebkitBorderHorizontalSpacing,
+                        false,
+                        true,
+                    );
+                    length(
+                        self,
+                        CSSPropertyID::kWebkitBorderVerticalSpacing,
+                        false,
+                        true,
+                    );
+                    return;
+                }
+                "align" => {
+                    if value.eq_ignore_ascii_case("center") {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kMarginInlineStart,
+                            "auto",
+                        );
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kMarginInlineEnd,
+                            "auto",
+                        );
+                    } else {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kFloat,
+                            value,
+                        );
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if matches!(
+            element_name,
+            "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+        ) {
+            match attribute_name {
+                "bgcolor" => {
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kBackgroundColor,
+                        value,
+                    );
+                    return;
+                }
+                "valign" => {
+                    let value = if value.eq_ignore_ascii_case("middle") {
+                        "middle"
+                    } else {
+                        value
+                    };
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kVerticalAlign,
+                        value,
+                    );
+                    return;
+                }
+                "align" => {
+                    let value = if value.eq_ignore_ascii_case("middle")
+                        || value.eq_ignore_ascii_case("center")
+                    {
+                        "-webkit-center"
+                    } else if value.eq_ignore_ascii_case("left") {
+                        "-webkit-left"
+                    } else if value.eq_ignore_ascii_case("right") {
+                        "-webkit-right"
+                    } else {
+                        value
+                    };
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kTextAlign,
+                        value,
+                    );
+                    return;
+                }
+                "height" => {
+                    length(
+                        self,
+                        CSSPropertyID::kHeight,
+                        true,
+                        element_name != "td" && element_name != "th",
+                    );
+                    return;
+                }
+                "width" if matches!(element_name, "td" | "th") => {
+                    length(self, CSSPropertyID::kWidth, true, false);
+                    return;
+                }
+                "nowrap" if matches!(element_name, "td" | "th") => {
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kWhiteSpaceCollapse,
+                        "collapse",
+                    );
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kTextWrapMode,
+                        "nowrap",
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if element_name == "font" {
+            match attribute_name {
+                "color" => {
+                    self.AddPresentationAttributeProperty(properties, CSSPropertyID::kColor, value);
+                    return;
+                }
+                "face" if !value.is_empty() => {
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kFontFamily,
+                        value,
+                    );
+                    return;
+                }
+                "size" => {
+                    let size = value
+                        .trim()
+                        .parse::<i32>()
+                        .ok()
+                        .map(|value| value.clamp(1, 7));
+                    let keyword = match size {
+                        Some(1) => Some("x-small"),
+                        Some(2) => Some("small"),
+                        Some(3) => Some("medium"),
+                        Some(4) => Some("large"),
+                        Some(5) => Some("x-large"),
+                        Some(6) => Some("xx-large"),
+                        Some(7) => Some("xxx-large"),
+                        _ => None,
+                    };
+                    if let Some(keyword) = keyword {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kFontSize,
+                            keyword,
+                        );
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // cpp: core/html/html_iframe_element.cc:172-208.
+        // Iframe dimensions are ordinary author-origin presentation hints.
+        // Keeping them in the retained presentation declaration set lets
+        // author CSS override the attributes and gives LayoutNG the canonical
+        // ComputedStyle height instead of falling back to the 300x150 replaced
+        // element default.
+        if element_name == "iframe" {
+            match attribute_name {
+                "width" => {
+                    length(self, CSSPropertyID::kWidth, true, true);
+                    return;
+                }
+                "height" => {
+                    length(self, CSSPropertyID::kHeight, true, true);
+                    return;
+                }
+                "align" => {
+                    let lower = value.to_ascii_lowercase();
+                    if matches!(lower.as_str(), "left" | "right") {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kFloat,
+                            &lower,
+                        );
+                    }
+                    let vertical = match lower.as_str() {
+                        "absmiddle" | "abscenter" => Some("middle"),
+                        "absbottom" => Some("bottom"),
+                        "left" | "right" | "top" => Some("top"),
+                        "middle" | "center" => Some("-webkit-baseline-middle"),
+                        "bottom" => Some("baseline"),
+                        "texttop" => Some("text-top"),
+                        _ => None,
+                    };
+                    if let Some(vertical) = vertical {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kVerticalAlign,
+                            vertical,
+                        );
+                    }
+                    return;
+                }
+                "frameborder" => {
+                    if value.trim().parse::<i32>().unwrap_or(0) == 0 {
+                        for property in [
+                            CSSPropertyID::kBorderTopWidth,
+                            CSSPropertyID::kBorderRightWidth,
+                            CSSPropertyID::kBorderBottomWidth,
+                            CSSPropertyID::kBorderLeftWidth,
+                        ] {
+                            self.AddPresentationAttributeProperty(properties, property, "0px");
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if element_name == "img" {
+            match attribute_name {
+                "width" => {
+                    length(self, CSSPropertyID::kWidth, true, true);
+                    return;
+                }
+                "height" => {
+                    length(self, CSSPropertyID::kHeight, true, true);
+                    return;
+                }
+                "vspace" => {
+                    length(self, CSSPropertyID::kMarginTop, true, true);
+                    length(self, CSSPropertyID::kMarginBottom, true, true);
+                    return;
+                }
+                "hspace" => {
+                    length(self, CSSPropertyID::kMarginLeft, true, true);
+                    length(self, CSSPropertyID::kMarginRight, true, true);
+                    return;
+                }
+                "border" => {
+                    let width = value.trim().parse::<u32>().unwrap_or(0);
+                    for side in ["top", "right", "bottom", "left"] {
+                        let (width_property, style_property) = match side {
+                            "top" => (
+                                CSSPropertyID::kBorderTopWidth,
+                                CSSPropertyID::kBorderTopStyle,
+                            ),
+                            "right" => (
+                                CSSPropertyID::kBorderRightWidth,
+                                CSSPropertyID::kBorderRightStyle,
+                            ),
+                            "bottom" => (
+                                CSSPropertyID::kBorderBottomWidth,
+                                CSSPropertyID::kBorderBottomStyle,
+                            ),
+                            _ => (
+                                CSSPropertyID::kBorderLeftWidth,
+                                CSSPropertyID::kBorderLeftStyle,
+                            ),
+                        };
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            width_property,
+                            &format!("{width}px"),
+                        );
+                        self.AddPresentationAttributeProperty(properties, style_property, "solid");
+                    }
+                    return;
+                }
+                "align" => {
+                    let lower = value.to_ascii_lowercase();
+                    if matches!(lower.as_str(), "left" | "right") {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kFloat,
+                            &lower,
+                        );
+                    }
+                    let vertical = match lower.as_str() {
+                        "absmiddle" | "abscenter" => Some("middle"),
+                        "absbottom" => Some("bottom"),
+                        "left" | "right" | "top" => Some("top"),
+                        "middle" | "center" => Some("-webkit-baseline-middle"),
+                        "bottom" => Some("baseline"),
+                        "texttop" => Some("text-top"),
+                        _ => None,
+                    };
+                    if let Some(vertical) = vertical {
+                        self.AddPresentationAttributeProperty(
+                            properties,
+                            CSSPropertyID::kVerticalAlign,
+                            vertical,
+                        );
+                    }
+                    return;
+                }
+                "valign" => {
+                    self.AddPresentationAttributeProperty(
+                        properties,
+                        CSSPropertyID::kVerticalAlign,
+                        value,
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if attribute_name == "align" {
+            self.AddPresentationAttributeProperty(
+                properties,
+                CSSPropertyID::kTextAlign,
+                if value.eq_ignore_ascii_case("middle") {
+                    "center"
+                } else {
+                    value
+                },
+            );
         }
     }
 
@@ -2072,10 +2594,13 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         element: &Self::Element,
     ) -> Option<Rc<Self::CSSPropertyValueSet>> {
         let node = self.document.Node(element.index);
+        let has_html_presentation_attribute = node.Namespace() == DOMNamespace::kHTML
+            && node.Attributes().iter().any(|attribute| {
+                attribute.namespace_uri.is_empty()
+                    && Self::HTMLPresentationAttributeApplies(node.Name(), &attribute.local_name)
+            });
         if node.Namespace() == DOMNamespace::kHTML
-            && !node.Attributes().iter().any(|attribute| {
-                attribute.namespace_uri.is_empty() && attribute.local_name == "hidden"
-            })
+            && !has_html_presentation_attribute
             && self
                 .document
                 .DirectionalityPresentationalHint(element.index)
@@ -2092,15 +2617,26 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         // or an attachment override. MatchPresentationalHints supplies its
         // cascade origin; canonical ComputedStyle owns the resulting display.
         if node.Namespace() == DOMNamespace::kHTML {
-            if let Some(hidden) = node.Attributes().iter().find(|attribute| {
-                attribute.namespace_uri.is_empty() && attribute.local_name == "hidden"
-            }) {
-                let (property, value) = if hidden.value.eq_ignore_ascii_case("until-found") {
-                    (CSSPropertyID::kContentVisibility, CSSValueID::kHidden)
-                } else {
-                    (CSSPropertyID::kDisplay, CSSValueID::kNone)
-                };
-                self.SetLonghandProperty(properties.as_ref(), property, value);
+            for attribute in node
+                .Attributes()
+                .iter()
+                .filter(|attribute| attribute.namespace_uri.is_empty())
+            {
+                if attribute.local_name == "hidden" {
+                    let (property, value) = if attribute.value.eq_ignore_ascii_case("until-found") {
+                        (CSSPropertyID::kContentVisibility, CSSValueID::kHidden)
+                    } else {
+                        (CSSPropertyID::kDisplay, CSSValueID::kNone)
+                    };
+                    self.SetLonghandProperty(properties.as_ref(), property, value);
+                    continue;
+                }
+                self.CollectHTMLPresentationAttribute(
+                    node.Name(),
+                    &attribute.local_name,
+                    &attribute.value,
+                    &properties,
+                );
             }
         }
         if node.Namespace() == DOMNamespace::kSVG {
@@ -2288,9 +2824,44 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     }
     fn AdditionalPresentationAttributeStyle(
         &self,
-        _: &Self::Element,
+        element: &Self::Element,
     ) -> Option<Rc<Self::CSSPropertyValueSet>> {
-        None
+        let node = self.document.Node(element.index);
+        if node.Namespace() != DOMNamespace::kHTML || !matches!(node.Name(), "td" | "th") {
+            return None;
+        }
+        // HTMLTableCellElement::AdditionalPresentationAttributeStyle reads
+        // the nearest table's shared cell style. Build the same author-hint
+        // declaration owner for this resolution; no layout or flattened style
+        // representation crosses the package boundary.
+        let mut ancestor = self.document.FlatTreeParentElement(element.index);
+        let table = loop {
+            let index = ancestor?;
+            let candidate = self.document.Node(index);
+            if candidate.IsHTMLElement("table") {
+                break candidate;
+            }
+            ancestor = self.document.FlatTreeParentElement(index);
+        };
+        let padding = table
+            .FindAttribute("cellpadding")
+            .and_then(|attribute| attribute.value.trim().parse::<u32>().ok())
+            .unwrap_or(1);
+        if padding == 0 {
+            return None;
+        }
+        let properties = self.NewMutableCSSPropertyValueSet(
+            crate::parser::css_parser_mode::CSSParserMode::kHTMLQuirksMode,
+        );
+        for property in [
+            CSSPropertyID::kPaddingTop,
+            CSSPropertyID::kPaddingRight,
+            CSSPropertyID::kPaddingBottom,
+            CSSPropertyID::kPaddingLeft,
+        ] {
+            self.AddPresentationAttributeProperty(&properties, property, &format!("{padding}px"));
+        }
+        (!self.PropertyValueSetIsEmpty(&properties)).then_some(properties)
     }
     fn HasDirectionAuto(&self, e: &Self::Element) -> bool {
         self.document.HasDirectionAuto(e.index)
@@ -2800,8 +3371,8 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     type CSSPropertyValue = crate::css_property_value::CSSPropertyValue<ProductionCSSValueDispatch>;
     type CSSValue = Rc<production_css_value::Value>;
     type LengthConversionFlags = u32;
-    type StyleBaseData = Persistent<NativeStyleBaseData>;
-    type CSSBitset = NativeCSSBitset;
+    type StyleBaseData = Persistent<ComputedStyleBaseData>;
+    type CSSBitset = StyleCSSBitset;
     type ElementAnimations = ProductionElementAnimations;
     type AnimationData = ();
     type ActiveInterpolationsMap =
@@ -2817,7 +3388,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn ElementComputedStyle(&self, element: &Self::Element) -> Option<Rc<Self::ComputedStyle>> {
         self.document
             .ResolvedStyleFor(element.index)
-            .map(|resolved| Rc::new(resolved.native_style.clone()))
+            .map(|resolved| Rc::new(resolved.computed_style_owner.clone()))
     }
     fn ParentElement(&self, element: &Self::Element) -> Option<Rc<Self::Element>> {
         self.document.Node(element.index).Parent().map(|index| {
@@ -3263,6 +3834,9 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                     color_scheme_settings: self.cascade.color_scheme_settings,
                     system_colors: self.cascade.system_colors,
                     text_link_text_color: self.cascade.text_link_text_color,
+                    link_color: self.cascade.link_color,
+                    visited_link_color: self.cascade.visited_link_color,
+                    active_link_color: self.cascade.active_link_color,
                     is_document_element: false,
                     pseudo_id: self.cascade.pseudo_id,
                     originating_style: self.cascade.originating_style.clone(),
@@ -3653,7 +4227,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         style: Rc<Self::ComputedStyle>,
         important: Option<Rc<Self::CSSBitset>>,
     ) -> Rc<Self::StyleBaseData> {
-        Rc::new(Persistent::from_ptr(NativeStyleBaseData::Create(
+        Rc::new(Persistent::from_ptr(ComputedStyleBaseData::Create(
             style.Get(),
             important.map(|set| Box::new(set.as_ref().clone())),
         )))
@@ -3715,7 +4289,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         Self::style(style).EffectiveZoom()
     }
     fn StyleInheritedVariablesHash(&self, style: &Self::ComputedStyle) -> u32 {
-        // The native style retains other inherited fields. Variables belong
+        // The computed style style retains other inherited fields. Variables belong
         // to the typed style-side owner and join the same source MPC key.
         self.cascade
             .parent_custom_properties
@@ -4051,6 +4625,9 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 color_scheme_settings: self.cascade.color_scheme_settings,
                 system_colors: self.cascade.system_colors,
                 text_link_text_color: self.cascade.text_link_text_color,
+                link_color: self.cascade.link_color,
+                visited_link_color: self.cascade.visited_link_color,
+                active_link_color: self.cascade.active_link_color,
                 is_document_element: self.cascade.is_document_element,
                 pseudo_id: self.cascade.pseudo_id,
                 originating_style: self.cascade.originating_style.clone(),
@@ -4690,7 +5267,7 @@ pub(crate) struct ProductionResolveBaseStyleInputs<'a> {
 
 /// Result of one translated MatchAllRules -> StyleCascade ->
 /// ApplyBaseStyleNoCache operation. Custom properties are returned beside the
-/// native style because the public DocumentStyleEngine owns their inheritance
+/// computed style style because the public DocumentStyleEngine owns their inheritance
 /// side table.
 pub(crate) struct ProductionBaseStyleOutput {
     pub style: Rc<Persistent<ComputedStyle>>,
@@ -5076,7 +5653,7 @@ pub(crate) fn ResolveBaseStyleForElement(
 }
 
 /// Runs the source-aligned `StyleResolver::InitialStyleForElement` path for
-/// the standalone document host and returns the canonical native style root.
+/// the standalone document host and returns the canonical computed style style root.
 pub(crate) fn InitialStyleForDocument(
     media: &MediaValuesCachedData,
     color_scheme: ColorSchemeSettings,
@@ -5608,7 +6185,7 @@ mod tests {
         assert!(unsafe {
             (&*actual
                 .GetContentData()
-                .expect("content:none must retain native NoneContentData"))
+                .expect("content:none must retain computed_style NoneContentData"))
                 .IsNone()
         });
     }
@@ -5711,7 +6288,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_svg_presentation_attributes_reach_native_style() {
+    fn translated_svg_presentation_attributes_reach_computed_style_style() {
         let _heap = foundation::LayoutHeapScope::new();
         let media = MediaValuesCachedData::default();
         let owner = html::html_parser::ParseHTML(
@@ -5962,9 +6539,9 @@ mod tests {
             ProductionRuleMatchingHost::style(first_output.as_ref()).Width()
         );
 
-        // The same native parent can carry a different typed variable owner.
+        // The same computed style parent can carry a different typed variable owner.
         // Cache hits must restore computed output, and a variable mutation
-        // must miss without relying on native pointer identity or hash alone.
+        // must miss without relying on computed style pointer identity or hash alone.
         let variable_author = rule_set(
             ".hit { width:var(--width); --derived:var(--width) }",
             &media,
@@ -6075,7 +6652,7 @@ mod tests {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         let expected_values = (
@@ -6109,6 +6686,9 @@ mod tests {
             color_scheme_settings: ColorSchemeSettings::default(),
             system_colors: ProductionSystemColorContext::default(),
             text_link_text_color: None,
+            link_color: None,
+            visited_link_color: None,
+            active_link_color: None,
             is_document_element: false,
             pseudo_id: layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdNone,
             originating_style: None,
@@ -6318,7 +6898,7 @@ mod tests {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         let expected_values = (
@@ -6335,7 +6915,7 @@ mod tests {
                 owner
                     .GetDocument()
                     .ResolvedStyleFor(parent)
-                    .map(|resolved| resolved.native_style.clone())
+                    .map(|resolved| resolved.computed_style_owner.clone())
             });
         let actual = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {

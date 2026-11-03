@@ -65,6 +65,15 @@ pub struct MediaValuesCachedData {
     pub style_root_line_height: Option<f32>,
     pub style_font_metrics: Option<FontRelativeLengthMetrics>,
     pub style_root_font_metrics: Option<FontRelativeLengthMetrics>,
+    /// Style property conversion's nearest eligible query-container size.
+    /// These are physical CSS-pixel axes, matching
+    /// CSSToLengthConversionData::ContainerSizes. A missing axis falls back
+    /// to the small viewport when a cq* unit is evaluated.
+    pub style_container_width: Option<f64>,
+    pub style_container_height: Option<f64>,
+    /// Writing mode of the element whose property is being converted. This is
+    /// only consulted by the logical cqi/cqb units.
+    pub style_writing_mode: Option<WritingMode>,
     pub three_d_enabled: bool,
     pub strict_mode: bool,
     pub media_type: String,
@@ -79,6 +88,14 @@ pub struct MediaValuesCachedData {
     pub prefers_reduced_transparency: bool,
     pub forced_colors: ForcedColors,
     pub navigation_controls: NavigationControls,
+    /// Page scrollbar facts needed while root style is resolved before the
+    /// retained LayoutView can be borrowed. These are the explicit package
+    /// boundary for PaintLayerScrollableArea::ComputeScrollbarWidthsForViewportUnits.
+    pub scrollbar_theme_auto_thickness: i32,
+    pub scrollbar_theme_thin_thickness: i32,
+    pub scrollbar_theme_uses_overlay_scrollbars: bool,
+    pub visual_viewport_supplies_scrollbars: bool,
+    pub hide_scrollbars: bool,
     pub horizontal_viewport_segments: i32,
     pub vertical_viewport_segments: i32,
     pub device_posture: DevicePostureType,
@@ -119,6 +136,9 @@ impl Default for MediaValuesCachedData {
             style_root_line_height: None,
             style_font_metrics: None,
             style_root_font_metrics: None,
+            style_container_width: None,
+            style_container_height: None,
+            style_writing_mode: None,
             three_d_enabled: false,
             strict_mode: true,
             media_type: String::default(),
@@ -133,6 +153,11 @@ impl Default for MediaValuesCachedData {
             prefers_reduced_transparency: false,
             forced_colors: ForcedColors::kNone,
             navigation_controls: NavigationControls::kNone,
+            scrollbar_theme_auto_thickness: 0,
+            scrollbar_theme_thin_thickness: 0,
+            scrollbar_theme_uses_overlay_scrollbars: false,
+            visual_viewport_supplies_scrollbars: false,
+            hide_scrollbars: false,
             horizontal_viewport_segments: 0,
             vertical_viewport_segments: 0,
             device_posture: DevicePostureType::kContinuous,

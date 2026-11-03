@@ -8,14 +8,14 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug)]
-pub struct NativeBeginFrame {
+pub struct BeginFrame {
     pub args: BeginFrameArgs,
     /// CoreVideo's estimated target display time, not a scanout confirmation.
-    /// Timer fallback and synthetic callers have no native display target.
+    /// Timer fallback and synthetic callers have no source display target.
     pub display_time: Option<Instant>,
 }
 
-impl From<BeginFrameArgs> for NativeBeginFrame {
+impl From<BeginFrameArgs> for BeginFrame {
     fn from(args: BeginFrameArgs) -> Self {
         Self {
             args,
@@ -24,7 +24,7 @@ impl From<BeginFrameArgs> for NativeBeginFrame {
     }
 }
 
-impl std::ops::Deref for NativeBeginFrame {
+impl std::ops::Deref for BeginFrame {
     type Target = BeginFrameArgs;
     fn deref(&self) -> &Self::Target {
         &self.args
@@ -63,7 +63,7 @@ pub(crate) fn sample_host_clock() -> (Instant, f64) {
 /// An infallible enqueue-only callback into the owner's command queue. It must
 /// not execute Page, invoke client code, or block waiting for the owner thread.
 /// This is CVDisplayLinkMac's PostTask-to-register-thread boundary.
-type QueuedFrameNotify = Arc<dyn Fn(NativeBeginFrame) + Send + Sync>;
+type QueuedFrameNotify = Arc<dyn Fn(BeginFrame) + Send + Sync>;
 static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
 const LOGICAL_FRAME_SOURCE_COUNT: usize = 3;
@@ -74,12 +74,12 @@ struct OrderedFrameDispatch {
 }
 
 impl OrderedFrameDispatch {
-    fn issue(&self, frame: NativeBeginFrame) {
+    fn issue(&self, frame: BeginFrame) {
         // These logical clients are ordered phases of one browser frame, not
-        // independent BeginFrameObservers. NativeFrameDemand already gates the
+        // independent BeginFrameObservers. FrameDemand already gates the
         // physical source. Once it emits a pulse, input, compositor and display
         // must all observe that same identity in order. Gating the phases again
-        // can consume Page demand in one phase while another keeps the native
+        // can consume Page demand in one phase while another keeps the source
         // source active, leaving BeginMainFrame permanently outstanding.
         for index in 0..LOGICAL_FRAME_SOURCE_COUNT {
             let callback = self.clients.lock().unwrap()[index].clone();
@@ -112,7 +112,7 @@ impl OrderedFrameDispatch {
 /// Logical sources share frame identity and demand; their index controls only
 /// delivery order: input (0), compositor (1), display scheduler (2).
 pub struct OrderedBeginFrameSource {
-    native: Arc<dyn BeginFrameSource>,
+    source: Arc<dyn BeginFrameSource>,
     dispatch: Arc<OrderedFrameDispatch>,
 }
 
@@ -126,7 +126,7 @@ impl OrderedBeginFrameSource {
         }
         Ok(Arc::new(LogicalBeginFrameSource {
             index,
-            native: self.native.clone(),
+            source: self.source.clone(),
             dispatch: self.dispatch.clone(),
         }))
     }
@@ -134,17 +134,17 @@ impl OrderedBeginFrameSource {
 
 impl BeginFrameSource for OrderedBeginFrameSource {
     fn request_begin_frame(&self) {
-        self.native.request_begin_frame();
+        self.source.request_begin_frame();
     }
 
     fn set_display(&self, display_id: u32) {
-        self.native.set_display(display_id);
+        self.source.set_display(display_id);
     }
 }
 
 pub struct LogicalBeginFrameSource {
     index: usize,
-    native: Arc<dyn BeginFrameSource>,
+    source: Arc<dyn BeginFrameSource>,
     dispatch: Arc<OrderedFrameDispatch>,
 }
 
@@ -156,11 +156,11 @@ impl LogicalBeginFrameSource {
 
 impl BeginFrameSource for LogicalBeginFrameSource {
     fn request_begin_frame(&self) {
-        self.native.request_begin_frame();
+        self.source.request_begin_frame();
     }
 
     fn set_display(&self, display_id: u32) {
-        self.native.set_display(display_id);
+        self.source.set_display(display_id);
     }
 }
 
@@ -208,16 +208,16 @@ impl BeginFrameArgsGenerator {
 
 #[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
-struct NativeFrameDemand {
+struct FrameDemand {
     generator: BeginFrameArgsGenerator,
-    latest: Option<NativeBeginFrame>,
+    latest: Option<BeginFrame>,
     last_delivered: Option<u64>,
     requested: bool,
 }
 
 #[cfg(any(target_os = "macos", test))]
-impl NativeFrameDemand {
-    fn request(&mut self, now: Instant) -> Option<NativeBeginFrame> {
+impl FrameDemand {
+    fn request(&mut self, now: Instant) -> Option<BeginFrame> {
         self.requested = true;
         // ExternalBeginFrameSourceMac::GetMissedBeginFrameArgs offers the
         // current cycle on renewed demand instead of always waiting for vsync.
@@ -235,13 +235,13 @@ impl NativeFrameDemand {
         deadline: Instant,
         interval: Duration,
         display_time: Option<Instant>,
-    ) -> Option<NativeBeginFrame> {
+    ) -> Option<BeginFrame> {
         let args = self
             .generator
             .generate(source_id, frame_time, deadline, interval);
-        let frame = NativeBeginFrame { args, display_time };
+        let frame = BeginFrame { args, display_time };
         trace_vsync(frame, false, self.requested);
-        // Keep actual native phase even while idle; never synthesize a new tick.
+        // Keep actual source phase even while idle; never synthesize a new tick.
         self.latest = Some(frame);
         if self.requested {
             self.deliver(frame)
@@ -250,7 +250,7 @@ impl NativeFrameDemand {
         }
     }
 
-    fn deliver(&mut self, frame: NativeBeginFrame) -> Option<NativeBeginFrame> {
+    fn deliver(&mut self, frame: BeginFrame) -> Option<BeginFrame> {
         self.requested = false;
         self.last_delivered = Some(frame.sequence_number);
         Some(frame)
@@ -258,7 +258,7 @@ impl NativeFrameDemand {
 }
 
 // Record source pulses independently of Page demand and owner-thread delays.
-fn trace_vsync(frame: NativeBeginFrame, timer_fallback: bool, requested: bool) {
+fn trace_vsync(frame: BeginFrame, timer_fallback: bool, requested: bool) {
     if !browser_tracing::enabled() {
         return;
     }
@@ -287,7 +287,7 @@ fn trace_vsync(frame: NativeBeginFrame, timer_fallback: bool, requested: bool) {
     );
 }
 
-fn create_native(
+fn create_display_source(
     notify: QueuedFrameNotify,
     fallback_interval: Duration,
     display_id: Option<u32>,
@@ -318,7 +318,7 @@ pub fn create(
 }
 
 /// Offscreen embedding uses the same ordered BeginFrame scheduling without
-/// querying a native monitor or creating a display-link connection.
+/// querying a source monitor or creating a display-link connection.
 pub fn create_offscreen(interval: Duration) -> io::Result<Arc<OrderedBeginFrameSource>> {
     create_for_host(interval, None, true)
 }
@@ -337,12 +337,12 @@ fn create_for_host(
     let dispatch = Arc::new(OrderedFrameDispatch::default());
     let output = dispatch.clone();
     let notify: QueuedFrameNotify = Arc::new(move |frame| output.issue(frame));
-    let native = if offscreen {
+    let source = if offscreen {
         TimerSource::create(notify, fallback_interval)?
     } else {
-        create_native(notify, fallback_interval, display_id)?
+        create_display_source(notify, fallback_interval, display_id)?
     };
-    Ok(Arc::new(OrderedBeginFrameSource { native, dispatch }))
+    Ok(Arc::new(OrderedBeginFrameSource { source, dispatch }))
 }
 
 fn finish_worker(worker: &mut Option<JoinHandle<()>>) {
@@ -517,7 +517,7 @@ mod mac {
     struct CallbackState {
         switching_display: AtomicBool,
         active_link: AtomicUsize,
-        frames: Mutex<NativeFrameDemand>,
+        frames: Mutex<FrameDemand>,
         source_id: u64,
         enqueue: QueuedFrameNotify,
         timebase: MachTimebase,
@@ -592,7 +592,7 @@ mod mac {
         let now = unsafe { now.as_ref() };
         let output = unsafe { output.as_ref() };
         // Use one clock mapping for both callback and output timestamps so
-        // their difference retains the native target-display phase.
+        // their difference retains the source target-display phase.
         let (host_now, instant) = state.host_clock_sample();
         let frame_time = now
             .and_then(|stamp| state.frame_time(stamp, host_now, instant))
@@ -616,7 +616,7 @@ mod mac {
                 interval,
                 display_time,
             ) {
-                // Both producers enqueue under this lock, preserving native
+                // Both producers enqueue under this lock, preserving source
                 // sequence order. enqueue only sends the owner's command.
                 (state.enqueue)(frame);
             }
@@ -624,7 +624,7 @@ mod mac {
         0
     }
 
-    struct NativeLink {
+    struct DisplayLinkState {
         link: usize,
         display_id: u32,
     }
@@ -632,7 +632,7 @@ mod mac {
     struct DisplaySource {
         // Opaque CoreVideo handle: used only through the thread-safe display-link
         // API and released after stopping. No unsafe Send/Sync implementations.
-        native: Mutex<NativeLink>,
+        source: Mutex<DisplayLinkState>,
         context: usize,
         state: Arc<CallbackState>,
     }
@@ -654,8 +654,8 @@ mod mac {
 
     impl DisplaySource {
         fn bind_display(&self, display_id: u32) -> io::Result<()> {
-            let mut native = self.native.lock().unwrap();
-            if native.display_id == display_id {
+            let mut source = self.source.lock().unwrap();
+            if source.display_id == display_id {
                 return Ok(());
             }
             let link = open_link(display_id)?;
@@ -678,7 +678,7 @@ mod mac {
                     discard_link(link, &self.state);
                     return Err(error);
                 }
-                let previous = native.link as Link;
+                let previous = source.link as Link;
                 let stopped = unsafe { CVDisplayLinkStop(previous) };
                 if unsafe { CVDisplayLinkIsRunning(previous) } != 0 {
                     discard_link(link, &self.state);
@@ -688,8 +688,8 @@ mod mac {
                 }
                 let fallback = *self.state.nominal_interval.lock().unwrap();
                 *self.state.nominal_interval.lock().unwrap() = nominal_interval(link, fallback);
-                native.link = link as usize;
-                native.display_id = display_id;
+                source.link = link as usize;
+                source.display_id = display_id;
                 // The previous monitor's unconsumed target is not a tick of
                 // the new monitor. Pending demand waits for its first callback.
                 self.state.frames.lock().unwrap().latest = None;
@@ -715,14 +715,14 @@ mod mac {
             self.state.switching_display.store(true, Ordering::Release);
             self.state.frames.lock().unwrap().requested = false;
             unsafe {
-                let link = self.native.get_mut().unwrap().link as Link;
+                let link = self.source.get_mut().unwrap().link as Link;
                 CVDisplayLinkStop(link);
                 if CVDisplayLinkIsRunning(link) == 0 {
                     CVDisplayLinkRelease(link);
                     drop(Arc::from_raw(self.context as *const CallbackState));
                 } else {
                     // An unexpected OS stop failure must not free callback memory.
-                    // Keep the native handle/context alive rather than permit UAF.
+                    // Keep the source handle/context alive rather than permit UAF.
                     eprintln!(
                         "begin_frame_source: CVDisplayLinkStop failed; retaining callback context"
                     );
@@ -809,7 +809,7 @@ mod mac {
         let state = Arc::new(CallbackState {
             switching_display: AtomicBool::new(false),
             active_link: AtomicUsize::new(link as usize),
-            frames: Mutex::new(NativeFrameDemand::default()),
+            frames: Mutex::new(FrameDemand::default()),
             source_id: NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
             enqueue,
             timebase,
@@ -817,7 +817,7 @@ mod mac {
         });
         let context = Arc::into_raw(state.clone()) as usize;
         let source = DisplaySource {
-            native: Mutex::new(NativeLink {
+            source: Mutex::new(DisplayLinkState {
                 link: link as usize,
                 display_id,
             }),
@@ -864,7 +864,7 @@ mod tests {
                 .unwrap();
         }
         let now = Instant::now();
-        dispatch.issue(NativeBeginFrame {
+        dispatch.issue(BeginFrame {
             args: BeginFrameArgs {
                 source_id: 11,
                 sequence_number: 29,
@@ -896,16 +896,16 @@ mod tests {
         assert_eq!(fifth.sequence_number, 5);
         assert_eq!(fifth.frame_time, jittered);
         assert_eq!(fifth.deadline, jittered + interval);
-        let native: NativeBeginFrame = fifth.into();
-        assert_eq!(native.sequence_number, 5);
-        assert_eq!(native.display_time, None);
+        let source: BeginFrame = fifth.into();
+        assert_eq!(source.sequence_number, 5);
+        assert_eq!(source.display_time, None);
     }
 
     #[test]
-    fn current_native_cycle_is_delivered_once_or_waits_for_next_tick() {
+    fn current_display_cycle_is_delivered_once_or_waits_for_next_tick() {
         let base = Instant::now();
         let interval = Duration::from_millis(10);
-        let mut frames = NativeFrameDemand::default();
+        let mut frames = FrameDemand::default();
         // No snapshot: demand must wait for the first actual callback.
         assert!(frames.request(base).is_none());
         let first = frames
@@ -925,7 +925,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(second.sequence_number, 2);
-        // Idle tick: renewed demand receives that unconsumed native cycle.
+        // Idle tick: renewed demand receives that unconsumed source cycle.
         assert!(frames
             .on_tick(
                 7,

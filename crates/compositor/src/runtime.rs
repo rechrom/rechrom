@@ -54,25 +54,25 @@ pub mod layer_context;
 
 pub mod host_types;
 
-pub mod native_services;
+pub mod services;
 
-pub(crate) mod native_animation;
-pub(crate) mod native_core_services;
-pub(crate) mod native_frame_sink;
-pub(crate) mod native_host_action;
-pub(crate) mod native_host_core;
-pub(crate) mod native_host_frame_sink;
-pub(crate) mod native_host_lifecycle;
-pub(crate) mod native_host_metadata;
-pub(crate) mod native_host_picture;
-pub(crate) mod native_images;
-pub(crate) mod native_input_client;
-pub(crate) mod native_latency;
-pub mod native_metrics;
-pub(crate) mod native_pac_scroll;
-pub(crate) mod native_scheduler;
+pub(crate) mod animation_host;
+pub(crate) mod core_services;
+pub(crate) mod host_action;
+pub(crate) mod host_core;
+pub(crate) mod host_frame_sink;
+pub(crate) mod host_lifecycle;
+pub(crate) mod host_metadata;
+pub(crate) mod host_picture_services;
+pub(crate) mod images;
+pub(crate) mod input_client;
+pub(crate) mod latency_info_swap_promise_monitor;
+pub(crate) mod layer_tree_frame_sink_endpoint;
+pub mod metrics;
 pub mod owner_types;
+pub(crate) mod pac_scroll;
 pub mod picture_types;
+pub(crate) mod scheduler_services;
 
 pub mod host_picture;
 
@@ -90,7 +90,7 @@ pub(crate) mod main_endpoint;
 
 pub(crate) mod engine_core;
 
-pub(crate) mod native_render;
+pub(crate) mod render;
 
 pub(crate) mod engine_factory;
 
@@ -98,24 +98,24 @@ pub(crate) mod engine_queries;
 
 pub(crate) mod engine_assembly;
 
-pub(crate) mod native_begin_frame;
+pub(crate) mod begin_frame;
 
-pub(crate) mod native_resource_events;
-pub(crate) mod native_resources;
+pub(crate) mod resource_events;
+pub(crate) mod resource_services;
 
-pub(crate) mod native_animation_services;
+pub(crate) mod animation_services;
 
-pub(crate) mod native_client;
+pub(crate) mod client;
 
-pub(crate) mod native_worklet;
+pub(crate) mod worklet;
 
-pub(crate) mod native_frame_build;
-pub mod native_ui;
+pub(crate) mod frame_build;
+pub mod ui;
 
-pub(crate) mod native_tree_environment;
+pub(crate) mod tree_environment;
 
-pub(crate) mod native_activation;
+pub(crate) mod activation;
 
-pub(crate) mod native_scrollbar;
+pub(crate) mod scrollbar;
 
-pub(crate) mod native_software_images;
+pub(crate) mod software_image_decode_cache;

@@ -61,7 +61,7 @@ fn viewport_media_non_inherited_change_skips_unchanged_descendants() {
         .unwrap();
     let viewport_styles = (0..owner.GetDocument().NodeCount())
         .filter_map(|index| owner.GetDocument().ResolvedStyleFor(index))
-        .filter(|style| unsafe { &*style.native_style.Get() }.HasViewportUnits())
+        .filter(|style| unsafe { &*style.computed_style_owner.Get() }.HasViewportUnits())
         .count();
     assert_eq!(viewport_styles, 1);
     engine
@@ -91,7 +91,7 @@ fn font_size(owner: &dom::DOM, index: usize) -> f32 {
             .GetDocument()
             .ResolvedStyleFor(index)
             .expect("element must have resolved style")
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .GetFontDescription()
@@ -124,7 +124,7 @@ fn document_transition_samples_reach_translated_cascade_with_transition_priority
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(transitioned.Width().Pixels(), 59.0);
@@ -144,7 +144,7 @@ fn document_transition_samples_reach_translated_cascade_with_transition_priority
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(animated.Width().Pixels(), 37.0);
@@ -175,7 +175,7 @@ fn html_quirks_ua_owner_is_selected_only_in_quirks_mode() {
             .GetDocument()
             .ResolvedStyleFor(quirks_target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(quirks_style.BoxSizing(), foundation::EBoxSizing::kBorderBox);
@@ -197,7 +197,7 @@ fn html_quirks_ua_owner_is_selected_only_in_quirks_mode() {
             .GetDocument()
             .ResolvedStyleFor(standards_target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(
@@ -227,7 +227,7 @@ fn forced_colors_ua_owner_uses_dedicated_medium_and_active_environment() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_ne!(ordinary.Display(), EDisplay::kNone);
@@ -240,7 +240,7 @@ fn forced_colors_ua_owner_uses_dedicated_medium_and_active_environment() {
     engine
         .EnsureComputedStyle(&mut owner, &forced_media, &sheets, target)
         .unwrap();
-    let forced = unsafe { &*native_pointer(&owner, target) };
+    let forced = unsafe { &*pointer(&owner, target) };
     assert_eq!(forced.Display(), EDisplay::kNone);
     assert_eq!(
         engine
@@ -269,7 +269,7 @@ fn unvisited_link_keeps_visited_color_in_its_private_slot() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(
@@ -307,7 +307,7 @@ fn named_custom_highlight_metadata_survives_translated_update() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     let names = style.CustomHighlightNames();
@@ -330,7 +330,7 @@ fn named_custom_highlight_metadata_survives_translated_update() {
             .GetDocument()
             .ResolvedStyleFor(leaf)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(
@@ -338,7 +338,7 @@ fn named_custom_highlight_metadata_survives_translated_update() {
         highlight as *const _
     );
 
-    // Highlight matches live in native metadata rather than ordinary match
+    // Highlight matches live in computed style metadata rather than ordinary match
     // signatures. Removing the rule and its ancestor condition together must
     // clear the old highlight even though the current selector no longer matches.
     let mut owner = html::html_parser::ParseHTML(
@@ -349,14 +349,14 @@ fn named_custom_highlight_metadata_survives_translated_update() {
     let sheet = node(&owner, "sheet");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(!unsafe { &*native_pointer(&owner, target) }
+    assert!(!unsafe { &*pointer(&owner, target) }
         .HighlightData()
         .CustomHighlight(&mark)
         .is_null());
     owner.GetDocumentMut().Remove(sheet);
     set_attribute(&mut owner, parent, "class", "off");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let final_style = unsafe { &*native_pointer(&owner, target) };
+    let final_style = unsafe { &*pointer(&owner, target) };
     assert!(final_style.HighlightData().CustomHighlight(&mark).is_null());
     assert!(!final_style.HasPseudoElementStyle(
         layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
@@ -382,7 +382,7 @@ fn highlight_cache_survives_supported_defined_selector_resolution() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     let mark = foundation::AtomicString::from_str("mark");
@@ -419,7 +419,7 @@ fn webkit_any_selector_stays_on_the_authoritative_translated_path() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.Width().Pixels(), 41.0);
@@ -428,7 +428,7 @@ fn webkit_any_selector_stays_on_the_authoritative_translated_path() {
             .GetDocument()
             .ResolvedStyleFor(link)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(link_style.Height().Pixels(), 43.0);
@@ -452,7 +452,7 @@ fn internal_text_field_uses_typed_input_type_and_invalidates_on_type_change() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.Opacity(), 0.4);
@@ -466,7 +466,7 @@ fn internal_text_field_uses_typed_input_type_and_invalidates_on_type_change() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.Opacity(), 1.0);
@@ -496,7 +496,7 @@ fn form_state_pseudos_consume_typed_capabilities_and_live_value_state() {
             .GetDocument()
             .ResolvedStyleFor(element)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get())
             .Opacity()
     };
@@ -565,7 +565,7 @@ fn disabled_form_owner_propagates_through_fieldset_legend_and_select_groups() {
             .GetDocument()
             .ResolvedStyleFor(element)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get())
             .Opacity()
     };
@@ -623,7 +623,7 @@ fn ua_list_box_and_datalist_pseudos_use_dom_owned_state_and_invalidation() {
             .GetDocument()
             .ResolvedStyleFor(element)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get())
             .Opacity()
     };
@@ -663,9 +663,9 @@ fn autofill_pseudos_use_live_form_control_state_and_suggested_value_producer() {
          #field:-internal-autofill-selected { width:31px }",
     );
     let field = node(&owner, "field");
-    let opacity = |owner: &dom::DOM| unsafe { &*native_pointer(owner, field) }.Opacity();
-    let width = |owner: &dom::DOM| unsafe { &*native_pointer(owner, field) }.Width();
-    let height = |owner: &dom::DOM| unsafe { &*native_pointer(owner, field) }.Height();
+    let opacity = |owner: &dom::DOM| unsafe { &*pointer(owner, field) }.Opacity();
+    let width = |owner: &dom::DOM| unsafe { &*pointer(owner, field) }.Width();
+    let height = |owner: &dom::DOM| unsafe { &*pointer(owner, field) }.Height();
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     assert_eq!(opacity(&owner), 1.0);
@@ -723,7 +723,7 @@ fn select_suggested_option_retains_identity_and_clears_on_option_lifecycle() {
     let field = node(&owner, "field");
     let one = node(&owner, "one");
     let two = node(&owner, "two");
-    let opacity = |owner: &dom::DOM| unsafe { &*native_pointer(owner, field) }.Opacity();
+    let opacity = |owner: &dom::DOM| unsafe { &*pointer(owner, field) }.Opacity();
     let mut engine = StyleEngine::new(&owner);
 
     owner
@@ -804,30 +804,17 @@ fn default_pseudo_uses_content_defaults_and_tree_order_default_button_owner() {
         first_update.translated_style_resolver_failures, 0,
         "{first_update:?}"
     );
-    assert_eq!(unsafe { &*native_pointer(&owner, check) }.Opacity(), 0.17);
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, option) }.Width().Pixels(),
-        13.0
-    );
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, first) }.Height().Pixels(),
-        19.0
-    );
-    assert!(unsafe { &*native_pointer(&owner, second) }
-        .Height()
-        .IsAuto());
+    assert_eq!(unsafe { &*pointer(&owner, check) }.Opacity(), 0.17);
+    assert_eq!(unsafe { &*pointer(&owner, option) }.Width().Pixels(), 13.0);
+    assert_eq!(unsafe { &*pointer(&owner, first) }.Height().Pixels(), 19.0);
+    assert!(unsafe { &*pointer(&owner, second) }.Height().IsAuto());
 
     // Changing the first submit control's type moves :default to the next
     // successful submit button without mutating that button itself.
     set_attribute(&mut owner, first, "type", "button");
     engine.Update(&mut owner, &media(), &[ua]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, first) }.Height().IsAuto());
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, second) }
-            .Height()
-            .Pixels(),
-        23.0
-    );
+    assert!(unsafe { &*pointer(&owner, first) }.Height().IsAuto());
+    assert_eq!(unsafe { &*pointer(&owner, second) }.Height().Pixels(), 23.0);
 }
 
 #[test]
@@ -847,7 +834,7 @@ fn checked_option_uses_live_selectedness_dirty_state_and_select_lifecycle() {
     let one = node(&owner, "one");
     let two = node(&owner, "two");
     let three = node(&owner, "three");
-    let opacity = |owner: &dom::DOM, option| unsafe { (&*native_pointer(owner, option)).Opacity() };
+    let opacity = |owner: &dom::DOM, option| unsafe { (&*pointer(owner, option)).Opacity() };
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     let initial = engine.TranslatedRuleShadowStats();
@@ -914,8 +901,7 @@ fn internal_multi_select_focus_uses_non_contiguous_interaction_owner() {
     let list_id = owner.GetDocument().Node(list).Id();
     let first_id = owner.GetDocument().Node(first).Id();
     let second_id = owner.GetDocument().Node(second).Id();
-    let opacity =
-        |owner: &dom::DOM, element| unsafe { (&*native_pointer(owner, element)).Opacity() };
+    let opacity = |owner: &dom::DOM, element| unsafe { (&*pointer(owner, element)).Opacity() };
     let mut engine = StyleEngine::new(&owner);
     let second_active = dom::UserInteractionState {
         focused_node_id: Some(list_id),
@@ -984,7 +970,7 @@ fn internal_spatial_navigation_focus_is_disabled_for_ordinary_selects() {
         engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
         for id in ["menu-option", "list-option", "multiple-option", "unowned"] {
             assert_eq!(
-                unsafe { (&*native_pointer(&owner, node(&owner, id))).Opacity() },
+                unsafe { (&*pointer(&owner, node(&owner, id))).Opacity() },
                 1.0,
                 "{id}, focus={focus:?}"
             );
@@ -1031,8 +1017,7 @@ fn hover_and_active_follow_flat_tree_chain_label_and_top_layer_boundary() {
     owner.GetDocumentMut().ShowModalDialog(dialog);
     let hit_id = owner.GetDocument().Node(hit).Id();
     let modal_hit_id = owner.GetDocument().Node(modal_hit).Id();
-    let opacity =
-        |owner: &dom::DOM, element| unsafe { (&*native_pointer(owner, element)).Opacity() };
+    let opacity = |owner: &dom::DOM, element| unsafe { (&*pointer(owner, element)).Opacity() };
     let mut engine = StyleEngine::new(&owner);
 
     engine
@@ -1108,7 +1093,7 @@ fn indeterminate_uses_live_checkbox_radio_group_and_progress_dom_state() {
             .GetDocument()
             .ResolvedStyleFor(element)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get())
             .Opacity()
     };
@@ -1158,7 +1143,7 @@ fn top_layer_selectors_use_dialog_and_popover_lifecycle_state() {
             .GetDocument()
             .ResolvedStyleFor(element)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get())
             .Opacity()
     };
@@ -1168,7 +1153,7 @@ fn top_layer_selectors_use_dialog_and_popover_lifecycle_state() {
     // The content attribute opens a non-modal dialog; it does not put it in
     // the top layer and must not approximate either selector state.
     assert_eq!(opacity(&owner, dialog), 1.0);
-    assert!(unsafe { &*native_pointer(&owner, dialog) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, dialog) }.Width().IsAuto());
     owner
         .GetDocumentMut()
         .RemoveAttributeDefault(dialog, "open");
@@ -1180,18 +1165,16 @@ fn top_layer_selectors_use_dialog_and_popover_lifecycle_state() {
     assert_eq!(active.translated_style_resolver_failures, 0, "{active:?}");
     assert_eq!(opacity(&owner, dialog), 0.11);
     assert_eq!(opacity(&owner, popover), 0.21);
-    assert_eq!(native_width(&owner, dialog), 11.0);
-    assert_eq!(native_width(&owner, popover), 21.0);
+    assert_eq!(width(&owner, dialog), 11.0);
+    assert_eq!(width(&owner, popover), 21.0);
 
     owner.GetDocumentMut().CloseDialog(dialog);
     owner.GetDocumentMut().HidePopover(popover);
     engine.Update(&mut owner, &media(), &[ua]).unwrap();
     assert_eq!(opacity(&owner, dialog), 1.0);
     assert_eq!(opacity(&owner, popover), 1.0);
-    assert!(unsafe { &*native_pointer(&owner, dialog) }.Width().IsAuto());
-    assert!(unsafe { &*native_pointer(&owner, popover) }
-        .Width()
-        .IsAuto());
+    assert!(unsafe { &*pointer(&owner, dialog) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, popover) }.Width().IsAuto());
 }
 
 #[test]
@@ -1220,7 +1203,7 @@ fn internal_is_html_uses_document_type_not_element_namespace() {
         .EnsureComputedStyle(&mut owner, &media(), &[ua.clone()], form)
         .unwrap();
     assert_eq!(
-        unsafe { &*native_pointer(&owner, form) }.Display(),
+        unsafe { &*pointer(&owner, form) }.Display(),
         EDisplay::kNone
     );
 
@@ -1232,7 +1215,7 @@ fn internal_is_html_uses_document_type_not_element_namespace() {
         .SetDocumentType(root, dom::persistent_document::DOMDocumentType::kXML);
     engine.Update(&mut owner, &media(), &[ua]).unwrap();
     assert_ne!(
-        unsafe { &*native_pointer(&owner, form) }.Display(),
+        unsafe { &*pointer(&owner, form) }.Display(),
         EDisplay::kNone
     );
 }
@@ -1259,7 +1242,7 @@ fn internal_select_contains_input_tracks_associated_dom_descendants() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
     assert_ne!(
-        unsafe { &*native_pointer(&owner, select) }.Display(),
+        unsafe { &*pointer(&owner, select) }.Display(),
         EDisplay::kInlineFlex
     );
 
@@ -1271,14 +1254,14 @@ fn internal_select_contains_input_tracks_associated_dom_descendants() {
         "{inserted:?}"
     );
     assert_eq!(
-        unsafe { &*native_pointer(&owner, select) }.Display(),
+        unsafe { &*pointer(&owner, select) }.Display(),
         EDisplay::kInlineFlex
     );
 
     owner.GetDocumentMut().Remove(input);
     engine.Update(&mut owner, &media(), &[ua]).unwrap();
     assert_ne!(
-        unsafe { &*native_pointer(&owner, select) }.Display(),
+        unsafe { &*pointer(&owner, select) }.Display(),
         EDisplay::kInlineFlex
     );
 }
@@ -1297,7 +1280,7 @@ fn internal_select_has_slotted_button_tracks_first_element_child() {
         .CreateElementDefault(dom::persistent_document::DOMNamespace::kHTML, "span".into());
     owner.GetDocumentMut().AppendChild(select, button);
     let ua = crate::ParseUserAgentCSS("select:-internal-select-has-slotted-button { opacity:.41 }");
-    let opacity = |owner: &dom::DOM| unsafe { (&*native_pointer(owner, select)).Opacity() };
+    let opacity = |owner: &dom::DOM| unsafe { (&*pointer(owner, select)).Opacity() };
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
 
@@ -1395,7 +1378,7 @@ fn style_engine_retains_each_typed_stylesheet_revision_without_reparsing() {
         "div{width:11px}",
     ))];
     engine.Update(&mut owner, &media(), &shared).unwrap();
-    assert_eq!(native_width(&owner, target), 11.0);
+    assert_eq!(width(&owner, target), 11.0);
     assert!(
         std::rc::Rc::strong_count(&shared[0]) > 1,
         "retain the supplied sheet owner"
@@ -1418,7 +1401,7 @@ fn style_engine_retains_each_typed_stylesheet_revision_without_reparsing() {
         std::rc::Rc::strong_count(&shared[0]) > 1,
         "author changes retain the UA owner too"
     );
-    assert_eq!(native_width(&owner, target), 11.0);
+    assert_eq!(width(&owner, target), 11.0);
 
     // Copy-on-write can change attachment metadata without changing the
     // parsed contents identity/revision. The retained owner must be replaced.
@@ -1431,7 +1414,7 @@ fn style_engine_retains_each_typed_stylesheet_revision_without_reparsing() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -1440,17 +1423,17 @@ fn style_engine_retains_each_typed_stylesheet_revision_without_reparsing() {
         .owner_media_conditions
         .clear();
     engine.Update(&mut owner, &media(), &shared).unwrap();
-    assert_eq!(native_width(&owner, target), 11.0);
+    assert_eq!(width(&owner, target), 11.0);
 
     shared[0] = std::rc::Rc::new(crate::ParseUserAgentCSS("div{width:22px}"));
     engine.Update(&mut owner, &media(), &shared).unwrap();
-    assert_eq!(native_width(&owner, target), 22.0);
+    assert_eq!(width(&owner, target), 22.0);
     let mut borrowed = vec![crate::ParseUserAgentCSS("div{width:33px}")];
     engine.Update(&mut owner, &media(), &borrowed).unwrap();
-    assert_eq!(native_width(&owner, target), 33.0);
+    assert_eq!(width(&owner, target), 33.0);
     borrowed[0] = crate::ParseUserAgentCSS("div{width:44px}");
     engine.Update(&mut owner, &media(), &borrowed).unwrap();
-    assert_eq!(native_width(&owner, target), 44.0);
+    assert_eq!(width(&owner, target), 44.0);
     borrowed[0]
         .owner_media_conditions
         .push("(min-width:9999px)".into());
@@ -1460,7 +1443,7 @@ fn style_engine_retains_each_typed_stylesheet_revision_without_reparsing() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -1504,16 +1487,16 @@ fn update_reaches_retained_translated_rule_set_and_selector_checker() {
         first.translated_style_cascade_applied + first.translated_style_cascade_failures,
         "every production translated-cascade trial must publish or wholly fall back: {first:?}"
     );
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Display(), EDisplay::kBlock);
-    assert_eq!(native.GetPosition(), EPosition::kAbsolute);
+    assert_eq!(computed_style.Display(), EDisplay::kBlock);
+    assert_eq!(computed_style.GetPosition(), EPosition::kAbsolute);
 
     // The typed sheet and its translated RuleSet survive a stable update.
     engine.Update(&mut owner, &media(), &[]).unwrap();
@@ -1565,7 +1548,7 @@ fn update_reaches_retained_translated_rule_set_and_selector_checker() {
             parsed_engine
                 .Update(&mut parsed_owner, &media(), &[])
                 .unwrap();
-            assert_eq!(native_width(&parsed_owner, target), 17.0);
+            assert_eq!(width(&parsed_owner, target), 17.0);
             assert_eq!(
                 parsed_engine.TranslatedRuleShadowStats().rule_sets_built,
                 if different_context {
@@ -1601,7 +1584,7 @@ fn update_publishes_translated_style_resolver_result_with_inline_owner() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.Display(), EDisplay::kBlock);
@@ -1630,7 +1613,7 @@ fn update_publishes_translated_cascade_for_typed_numeric_math() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.Width().Pixels(), 120.0);
@@ -1657,7 +1640,7 @@ fn update_resolves_pending_shorthand_from_typed_variable_data() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.BorderTopWidth(), 3);
@@ -1698,7 +1681,7 @@ fn document_element_uses_translated_cascade_with_initial_parent_and_root_units()
             .GetDocument()
             .ResolvedStyleFor(root)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     let child_style = unsafe {
@@ -1706,7 +1689,7 @@ fn document_element_uses_translated_cascade_with_initial_parent_and_root_units()
             .GetDocument()
             .ResolvedStyleFor(child)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     // On the root, rem resolves against the initial font size. Descendants use
@@ -1723,8 +1706,8 @@ fn light_dark_color_uses_each_elements_computed_color_scheme() {
     let mut owner =
         html::html_parser::ParseHTML("<!doctype html><div id=light></div><div id=dark></div>");
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
-        "#light { color-scheme: light; color: light-dark(rgb(17, 34, 51), rgb(221, 238, 255)) } \
-         #dark { color-scheme: dark; color: light-dark(rgb(17, 34, 51), rgb(221, 238, 255)) }",
+        "#light { color-scheme: light; color: light-dark(rgb(17, 34, 51), rgb(221, 238, 255)); background:light-dark(#eee,#222) } \
+         #dark { color-scheme: dark; color: light-dark(rgb(17, 34, 51), rgb(221, 238, 255)); background:light-dark(#eee,#222) }",
     ));
     let light = node(&owner, "light");
     let dark = node(&owner, "dark");
@@ -1739,7 +1722,7 @@ fn light_dark_color_uses_each_elements_computed_color_scheme() {
             .GetDocument()
             .ResolvedStyleFor(index)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(
@@ -1749,6 +1732,22 @@ fn light_dark_color_uses_each_elements_computed_color_scheme() {
     assert_eq!(
         style(dark).GetCurrentColor(None),
         Color::FromRGB(221, 238, 255)
+    );
+    assert_eq!(
+        style(light).BackgroundColor().Resolve(
+            style(light).GetCurrentColor(None),
+            style(light).UsedColorScheme(),
+            None,
+        ),
+        Color::FromRGB(238, 238, 238)
+    );
+    assert_eq!(
+        style(dark).BackgroundColor().Resolve(
+            style(dark).GetCurrentColor(None),
+            style(dark).UsedColorScheme(),
+            None,
+        ),
+        Color::FromRGB(34, 34, 34)
     );
 }
 
@@ -1774,6 +1773,8 @@ fn light_dark_url_images_use_computed_scheme_and_document_resource_owner() {
                 natural_height: 16.0,
                 resolution_scale: 1.0,
                 orientation: Default::default(),
+                known_to_be_opaque: false,
+                is_cors_same_origin: false,
             },
         );
     }
@@ -1791,7 +1792,7 @@ fn light_dark_url_images_use_computed_scheme_and_document_resource_owner() {
                 .GetDocument()
                 .ResolvedStyleFor(index)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         FetchedImage(unsafe { &*style.BackgroundLayers().GetImage() }).unwrap()
@@ -1803,7 +1804,7 @@ fn light_dark_url_images_use_computed_scheme_and_document_resource_owner() {
 }
 
 #[test]
-fn color_mix_retains_current_color_and_normalized_alpha_through_native_style() {
+fn color_mix_retains_current_color_and_normalized_alpha_through_computed_style_style() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<!doctype html><main style='color:rgb(40, 80, 120)'>\
@@ -1826,7 +1827,7 @@ fn color_mix_retains_current_color_and_normalized_alpha_through_native_style() {
             .GetDocument()
             .ResolvedStyleFor(index)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     let surface = style(surface);
@@ -1872,7 +1873,7 @@ fn document_element_typed_inline_style_commits_in_the_same_resolver_cascade() {
             .GetDocument()
             .ResolvedStyleFor(root)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.Width().Pixels(), 19.0);
@@ -1903,16 +1904,16 @@ fn mixed_sheet_keeps_ordinary_collector_output_as_final_cascade_input() {
     assert_eq!(stats.translated_style_cascade_attempts, 2, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 2, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Display(), EDisplay::kBlock);
-    assert_eq!(native.GetPosition(), EPosition::kAbsolute);
+    assert_eq!(computed_style.Display(), EDisplay::kBlock);
+    assert_eq!(computed_style.GetPosition(), EPosition::kAbsolute);
 }
 
 #[test]
@@ -1933,19 +1934,19 @@ fn mixed_typed_and_inline_declarations_share_one_translated_cascade() {
     assert_eq!(stats.translated_style_cascade_attempts, 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_applied, 1, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_failures, 0, "{stats:?}");
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Display(), EDisplay::kBlock);
-    assert_eq!(native.GetPosition(), EPosition::kAbsolute);
-    assert_eq!(native.Width().Pixels(), 19.0);
-    assert_eq!(native.Height().Pixels(), 23.0);
-    assert_eq!(native.Opacity(), 0.5);
+    assert_eq!(computed_style.Display(), EDisplay::kBlock);
+    assert_eq!(computed_style.GetPosition(), EPosition::kAbsolute);
+    assert_eq!(computed_style.Width().Pixels(), 19.0);
+    assert_eq!(computed_style.Height().Pixels(), 23.0);
+    assert_eq!(computed_style.Opacity(), 0.5);
 }
 
 #[test]
@@ -1967,7 +1968,7 @@ fn translated_rule_path_evaluates_owner_media_outside_typed_rule_set() {
 }
 
 #[test]
-fn resolved_background_gradient_is_retained_by_native_computed_style() {
+fn resolved_background_gradient_is_retained_by_computed_style_computed_style() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=target style='background:linear-gradient(to right,red,blue) left top/16px 16px no-repeat,linear-gradient(to bottom,red,blue) right bottom/20px 20px no-repeat'></div>",
@@ -1976,8 +1977,8 @@ fn resolved_background_gradient_is_retained_by_native_computed_style() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*resolved.native_style.Get() };
-    let first = native.BackgroundLayers();
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let first = computed_style.BackgroundLayers();
     let image = unsafe { first.GetImage().as_ref() }.expect("computed background image");
     assert!(image.IsGeneratedImage());
     assert!(
@@ -1990,7 +1991,7 @@ fn resolved_background_gradient_is_retained_by_native_computed_style() {
 }
 
 #[test]
-fn url_images_cross_native_style_resource_and_paint_boundaries() {
+fn url_images_cross_computed_style_style_resource_and_paint_boundaries() {
     use layoutng_style::style::style_fetched_image::FetchedImage;
 
     let _heap = foundation::LayoutHeapScope::new();
@@ -2004,11 +2005,11 @@ fn url_images_cross_native_style_resource_and_paint_boundaries() {
 
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     assert_eq!(resolved.ReferencedStyleImageSources(), [source]);
-    let native = unsafe { &*resolved.native_style.Get() };
-    let fetched = FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() }).unwrap();
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!(fetched.SourceURL(), source);
     assert_eq!(fetched.ResourceId(), 0);
-    let paint = layoutng::internal::boundary::native_paint_style::Export(native, None);
+    let paint = layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images.len(), 1);
     assert_eq!(paint.background_images[0].source_url, source);
     assert_eq!(paint.background_images[0].resource_id, 0);
@@ -2021,14 +2022,16 @@ fn url_images_cross_native_style_resource_and_paint_boundaries() {
             natural_height: 40.0,
             resolution_scale: 2.0,
             orientation: Default::default(),
+            known_to_be_opaque: false,
+            is_cors_same_origin: false,
         },
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*resolved.native_style.Get() };
-    let fetched = FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() }).unwrap();
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!(fetched.ResourceId(), 41);
-    let paint = layoutng::internal::boundary::native_paint_style::Export(native, None);
+    let paint = layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images[0].resource_id, 41);
     assert_eq!(paint.background_images[0].source_url, source);
 }
@@ -2053,6 +2056,8 @@ fn image_set_reselects_for_device_scale_and_exports_per_use_resolution() {
                 natural_height: height,
                 resolution_scale: 1.0,
                 orientation: Default::default(),
+                known_to_be_opaque: false,
+                is_cors_same_origin: false,
             },
         );
     }
@@ -2063,10 +2068,10 @@ fn image_set_reselects_for_device_scale_and_exports_per_use_resolution() {
     engine.Update(&mut owner, &high_density, &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     assert_eq!(resolved.ReferencedStyleImageSources(), [two]);
-    let native = unsafe { &*resolved.native_style.Get() };
-    let fetched = FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() }).unwrap();
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!((fetched.ResourceId(), fetched.ResolutionScale()), (52, 2.0));
-    let paint = layoutng::internal::boundary::native_paint_style::Export(native, None);
+    let paint = layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images[0].image_resolution_scale, 2.0);
 
     let mut low_density = media();
@@ -2074,8 +2079,8 @@ fn image_set_reselects_for_device_scale_and_exports_per_use_resolution() {
     engine.Update(&mut owner, &low_density, &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     assert_eq!(resolved.ReferencedStyleImageSources(), [one]);
-    let native = unsafe { &*resolved.native_style.Get() };
-    let fetched = FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() }).unwrap();
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!((fetched.ResourceId(), fetched.ResolutionScale()), (51, 1.0));
 
     // Page publishes LocalFrame's effective DPR (host DSF × layout zoom).
@@ -2083,8 +2088,8 @@ fn image_set_reselects_for_device_scale_and_exports_per_use_resolution() {
     low_density.device_pixel_ratio = 2.0;
     engine.Update(&mut owner, &low_density, &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*resolved.native_style.Get() };
-    let fetched = FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() }).unwrap();
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!((fetched.ResourceId(), fetched.ResolutionScale()), (52, 2.0));
 }
 
@@ -2102,13 +2107,8 @@ fn list_marker_image_projects_selected_intrinsic_size_and_rebuilds_after_load() 
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &high_density, &[]).unwrap();
     let pending = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    assert!(pending
-        .style
-        .extended
-        .as_ref()
-        .unwrap()
-        .list_style_image
-        .is_none());
+    let pending = unsafe { &*pending.computed_style_owner.Get() };
+    assert!(layoutng::style_projection::ProjectListMarkerImage(pending).is_none());
 
     for (source, id, width, height) in [(one, 61, 80.0, 40.0), (two, 62, 160.0, 80.0)] {
         owner.GetDocumentMut().SetImageResource(
@@ -2119,19 +2119,16 @@ fn list_marker_image_projects_selected_intrinsic_size_and_rebuilds_after_load() 
                 natural_height: height,
                 resolution_scale: 1.0,
                 orientation: image_resource::ImageOrientation::kRotate90,
+                known_to_be_opaque: false,
+                is_cors_same_origin: false,
             },
         );
     }
     engine.Update(&mut owner, &high_density, &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let image = resolved
-        .style
-        .extended
-        .as_ref()
-        .unwrap()
-        .list_style_image
-        .as_ref()
-        .expect("loaded list-style-image projection");
+    let resolved = unsafe { &*resolved.computed_style_owner.Get() };
+    let image = layoutng::style_projection::ProjectListMarkerImage(resolved)
+        .expect("loaded list-style-image boundary data");
     assert_eq!((image.resource_id, image.resolution_scale), (62, 2.0));
     assert_eq!((image.natural_width, image.natural_height), (40.0, 80.0));
     assert!(image.shader.is_none());
@@ -2156,9 +2153,9 @@ fn completed_url_image_rejects_cached_pending_style_snapshot() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
     for &card in &cards {
         let style = owner.GetDocument().ResolvedStyleFor(card).unwrap();
-        let native = unsafe { &*style.native_style.Get() };
+        let computed_style = unsafe { &*style.computed_style_owner.Get() };
         assert_eq!(
-            FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() })
+            FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() })
                 .unwrap()
                 .ResourceId(),
             0
@@ -2173,14 +2170,16 @@ fn completed_url_image_rejects_cached_pending_style_snapshot() {
             natural_height: 40.0,
             resolution_scale: 1.0,
             orientation: Default::default(),
+            known_to_be_opaque: false,
+            is_cors_same_origin: false,
         },
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
     for card in cards {
         let style = owner.GetDocument().ResolvedStyleFor(card).unwrap();
-        let native = unsafe { &*style.native_style.Get() };
+        let computed_style = unsafe { &*style.computed_style_owner.Get() };
         assert_eq!(
-            FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() })
+            FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() })
                 .unwrap()
                 .ResourceId(),
             91
@@ -2222,6 +2221,8 @@ fn translated_style_cascade_uses_document_substitution_and_image_owners() {
             natural_height: 30.0,
             resolution_scale: 1.0,
             orientation: Default::default(),
+            known_to_be_opaque: false,
+            is_cors_same_origin: false,
         },
     );
     let target = node(&owner, "target");
@@ -2237,7 +2238,7 @@ fn translated_style_cascade_uses_document_substitution_and_image_owners() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(style.Width().Pixels(), 37.0);
@@ -2284,9 +2285,9 @@ fn pseudo_background_and_content_urls_retain_resource_dependencies() {
         .after
         .as_ref()
         .unwrap();
-    let native = unsafe { &*after.native_style.Get() };
+    let computed_style = unsafe { &*after.computed_style_owner.Get() };
     assert_eq!(
-        FetchedImage(unsafe { &*native.BackgroundLayers().GetImage() })
+        FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() })
             .unwrap()
             .SourceURL(),
         background
@@ -2302,8 +2303,8 @@ fn pseudo_background_and_content_urls_retain_resource_dependencies() {
         before.content.as_slice(),
         [PseudoContent::Image { resource_id: 0, .. }, PseudoContent::Text(text)] if text == "\n"
     ));
-    let native = unsafe { &*before.native_style.Get() };
-    let content_data = native.GetContentData().unwrap();
+    let computed_style = unsafe { &*before.computed_style_owner.Get() };
+    let content_data = computed_style.GetContentData().unwrap();
     assert!(unsafe { &*content_data }.IsImage());
     let image = unsafe { &*(content_data as *const ImageContentData) }.GetImage();
     assert_eq!(
@@ -2335,6 +2336,8 @@ fn pseudo_background_and_content_urls_retain_resource_dependencies() {
             natural_height: 30.0,
             resolution_scale: 2.0,
             orientation: image_resource::ImageOrientation::kRotate90,
+            known_to_be_opaque: false,
+            is_cors_same_origin: false,
         },
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
@@ -2397,7 +2400,7 @@ fn generated_gradient_content_reaches_the_replaced_image_shader_boundary() {
 }
 
 #[test]
-fn html_type_selectors_from_ua_styles_reach_native_computed_style() {
+fn html_type_selectors_from_ua_styles_reach_computed_style_computed_style() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<html><head><style id=sheet>body{color:red}</style><title id=title>x</title></head><body id=body>ok</body></html>",
@@ -2422,7 +2425,7 @@ fn html_type_selectors_from_ua_styles_reach_native_computed_style() {
             .GetDocument()
             .ResolvedStyleFor(index)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get())
             .Display()
     };
@@ -2461,7 +2464,7 @@ fn non_inherited_flex_direction_does_not_cross_element_boundary() {
             .GetDocument()
             .ResolvedStyleFor(outer)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     let inner = unsafe {
@@ -2469,7 +2472,7 @@ fn non_inherited_flex_direction_does_not_cross_element_boundary() {
             .GetDocument()
             .ResolvedStyleFor(inner)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(outer.FlexDirection(), foundation::EFlexDirection::kColumn);
@@ -2478,7 +2481,7 @@ fn non_inherited_flex_direction_does_not_cross_element_boundary() {
 }
 
 #[test]
-fn typed_length_division_in_zoom_reaches_native_computed_style() {
+fn typed_length_division_in_zoom_reaches_computed_style_computed_style() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=target style='zoom:min(calc(100vw / 1536px),calc(1080px / 1536px))'>x</div>",
@@ -2486,22 +2489,22 @@ fn typed_length_division_in_zoom_reaches_native_computed_style() {
     let target = node(&owner, "target");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert!(
-        (native.Zoom() - 800.0 / 1536.0).abs() < 0.000_01,
+        (computed_style.Zoom() - 800.0 / 1536.0).abs() < 0.000_01,
         "{}",
-        native.Zoom()
+        computed_style.Zoom()
     );
 }
 #[test]
-fn document_native_style_ua_author_inline_inheritance_and_media() {
+fn document_computed_style_style_ua_author_inline_inheritance_and_media() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<html><body id=parent style='font-size:20px;color:red;white-space:pre'><span id=child style='width:30px;position:absolute;font-family:serif, sans-serif'></span><div id=hidden><b id=inside></b></div></body></html>",
@@ -2518,26 +2521,35 @@ fn document_native_style_ua_author_inline_inheritance_and_media() {
         engine.Diagnostics()
     );
     let s = owner.GetDocument().ResolvedStyleFor(child).unwrap();
-    let native = unsafe { &*s.native_style.Get() };
-    assert_eq!(s.style.native_style, s.native_style.Get());
-    assert_eq!(native.Display(), EDisplay::kBlock);
-    assert_eq!(native.GetPosition(), EPosition::kAbsolute);
-    assert_eq!(native.Width().Pixels(), 50.0);
-    assert_eq!(native.PaddingLeft().Pixels(), 3.0);
-    assert_eq!(native.Opacity(), 0.4);
-    assert_eq!(native.BorderTopWidth(), 2);
-    assert_eq!(s.style.paint.background_color.blue, 1.0);
-    assert_eq!(s.style.paint.color.red, 1.0);
-    assert_eq!(s.style.paint.opacity, 0.4);
-    assert_eq!(native.GetFontDescription().ComputedSize(), 20.0);
-    assert_eq!(native.GetFontDescription().Weight().ToFloat(), 700.0);
-    let ext = s.style.extended.as_ref().unwrap();
-    assert_eq!(ext.font_size, 20.0);
+    let computed_style = unsafe { &*s.computed_style_owner.Get() };
+    assert_eq!(computed_style.Display(), EDisplay::kBlock);
+    assert_eq!(computed_style.GetPosition(), EPosition::kAbsolute);
+    assert_eq!(computed_style.Width().Pixels(), 50.0);
+    assert_eq!(computed_style.PaddingLeft().Pixels(), 3.0);
+    assert_eq!(computed_style.Opacity(), 0.4);
+    assert_eq!(computed_style.BorderTopWidth(), 2);
     assert_eq!(
-        ext.white_space,
-        layoutng::internal::layout_input::WhiteSpace::kPre
+        computed_style.BackgroundColor().GetColor(),
+        Color::FromRGB(0, 0, 255)
     );
-    assert_eq!(ext.font_families, vec!["serif", "sans-serif"]);
+    assert_eq!(computed_style.Color().GetColor(), Color::FromRGB(255, 0, 0));
+    assert_eq!(computed_style.GetFontDescription().ComputedSize(), 20.0);
+    assert_eq!(
+        computed_style.GetFontDescription().Weight().ToFloat(),
+        700.0
+    );
+    assert_eq!(
+        computed_style.GetWhiteSpaceCollapse(),
+        layoutng_style::css::white_space::WhiteSpaceCollapse::kPreserve
+    );
+    assert_eq!(
+        computed_style
+            .GetFontDescription()
+            .Family()
+            .FamilyName()
+            .Utf8(),
+        "serif"
+    );
     assert!(owner.GetDocument().ResolvedStyleFor(inside).is_none());
 }
 
@@ -2622,26 +2634,17 @@ fn css_module_visually_hidden_rule_retains_all_supported_declarations() {
         engine.Diagnostics()
     );
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*resolved.native_style.Get() };
-    assert_eq!(native.GetPosition(), EPosition::kAbsolute);
-    assert_eq!(native.Width().Pixels(), 1.0);
-    assert_eq!(native.Height().Pixels(), 1.0);
-    assert_eq!(native.OverflowX(), EOverflow::kHidden);
-    assert_eq!(native.OverflowY(), EOverflow::kHidden);
-    assert!(native.HasClipPath());
-    let projected = resolved.style.extended.as_ref().unwrap();
-    assert_eq!(
-        projected.overflow_x,
-        layoutng::internal::layout_input::Overflow::kHidden
-    );
-    assert_eq!(
-        projected.overflow_y,
-        layoutng::internal::layout_input::Overflow::kHidden
-    );
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    assert_eq!(computed_style.GetPosition(), EPosition::kAbsolute);
+    assert_eq!(computed_style.Width().Pixels(), 1.0);
+    assert_eq!(computed_style.Height().Pixels(), 1.0);
+    assert_eq!(computed_style.OverflowX(), EOverflow::kHidden);
+    assert_eq!(computed_style.OverflowY(), EOverflow::kHidden);
+    assert!(computed_style.HasClipPath());
 }
 
 #[test]
-fn native_list_style_none_and_position_cross_the_layout_boundary() {
+fn list_style_none_and_position_cross_the_layout_boundary() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<ul id=none style='list-style:none'><li>x</li></ul><ol id=inside style='list-style:decimal inside'><li>y</li></ol>",
@@ -2651,21 +2654,32 @@ fn native_list_style_none_and_position_cross_the_layout_boundary() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
 
-    let none = owner.GetDocument().ResolvedStyleFor(none).unwrap();
-    let none = none.style.extended.as_ref().unwrap();
+    let none = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(none)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
+    assert!(none.ListStyleType().Get().is_null());
+    let inside = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(inside)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
     assert_eq!(
-        none.list_style_type,
-        layoutng::internal::layout_input::ListStyleType::kNone
+        unsafe { &*inside.ListStyleType().Get() }
+            .GetCounterStyleName()
+            .Utf8(),
+        "decimal"
     );
-    let inside = owner.GetDocument().ResolvedStyleFor(inside).unwrap();
-    let inside = inside.style.extended.as_ref().unwrap();
     assert_eq!(
-        inside.list_style_type,
-        layoutng::internal::layout_input::ListStyleType::kDecimal
-    );
-    assert_eq!(
-        inside.list_style_position,
-        layoutng::internal::layout_input::ListStylePosition::kInside
+        inside.ListStylePosition(),
+        foundation::EListStylePosition::kInside
     );
 }
 #[test]
@@ -2682,16 +2696,16 @@ fn supported_auto_repeat_does_not_drop_sibling_inline_declarations() {
         "{:?}",
         engine.Diagnostics()
     );
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Width().Pixels(), 7.0);
-    assert_eq!(native.PaddingLeft().Pixels(), 9.0);
+    assert_eq!(computed_style.Width().Pixels(), 7.0);
+    assert_eq!(computed_style.PaddingLeft().Pixels(), 9.0);
     assert!(!owner.GetDocument().StyleState().all_dirty);
     let mut other = html::html_parser::ParseHTML("<div></div>");
     assert!(matches!(
@@ -2717,30 +2731,21 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
     );
 
     let group_resolved = owner.GetDocument().ResolvedStyleFor(group).unwrap();
-    let group = unsafe { &*group_resolved.native_style.Get() };
+    let group = unsafe { &*group_resolved.computed_style_owner.Get() };
     assert_eq!(group.Transform().size(), 1);
+    let projected_group = layoutng::style_projection::ProjectComputedStyle(group).unwrap();
     assert_eq!(
-        group_resolved
-            .style
-            .paint
-            .transform
-            .as_ref()
-            .unwrap()
-            .operations[0]
+        projected_group.paint.transform.as_ref().unwrap().operations[0]
             .matrix
             .values[12],
         -111.5
     );
 
     let shape_resolved = owner.GetDocument().ResolvedStyleFor(shape).unwrap();
-    let shape = unsafe { &*shape_resolved.native_style.Get() };
+    let shape = unsafe { &*shape_resolved.computed_style_owner.Get() };
     assert_eq!(
         shape.FillPaint().GetColor().GetColor().Param0(),
         0x15 as f32
-    );
-    assert_eq!(
-        shape_resolved.style.paint.svg_fill.unwrap().red,
-        0x15 as f32 / 255.0
     );
     // SVGElement::HasSVGParent uses the flat tree. A <use> instance root is
     // parented by its shadow host, and display:none g keeps resource objects.
@@ -2765,7 +2770,7 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
     assert_eq!(groups.len(), 1);
     let group = instances.GetDocument().ResolvedStyleFor(groups[0]).unwrap();
     assert_eq!(
-        unsafe { &*group.native_style.Get() }.Display(),
+        unsafe { &*group.computed_style_owner.Get() }.Display(),
         EDisplay::kNone
     );
     assert!(
@@ -2788,10 +2793,7 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
         .unwrap();
     assert!(resources
         .GetDocument()
-        .ResolvedStyleFor(client)
-        .unwrap()
-        .style
-        .paint
+        .ResolvedStyleResourcesFor(client)
         .svg_fill_server
         .is_none());
     resource_engine
@@ -2806,10 +2808,7 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
         .unwrap();
     assert!(resources
         .GetDocument()
-        .ResolvedStyleFor(client)
-        .unwrap()
-        .style
-        .paint
+        .ResolvedStyleResourcesFor(client)
         .svg_fill_server
         .is_none());
     set_attribute(&mut resources, hidden, "style", "display:block");
@@ -2818,12 +2817,52 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
         .unwrap();
     assert!(resources
         .GetDocument()
-        .ResolvedStyleFor(client)
-        .unwrap()
-        .style
-        .paint
+        .ResolvedStyleResourcesFor(client)
         .svg_fill_server
         .is_some());
+}
+
+#[test]
+fn local_svg_paint_servers_resolve_attached_resource_nodes() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r##"<svg width="128" height="80"><defs><pattern id="pattern" width="1" height="1" patternUnits="userSpaceOnUse"><path d="M1 0H0V1" stroke="#ddd" stroke-width="0.094"/></pattern><linearGradient id="gradient"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><rect id="pattern-client" width="128" height="80" fill="url(#pattern) cyan"/><rect id="gradient-client" width="128" height="80" fill="url(#gradient) lime"/></svg>"##,
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let document = owner.GetDocument();
+    for resource in [node(&owner, "pattern"), node(&owner, "gradient")] {
+        let style = document.ResolvedStyleFor(resource).unwrap();
+        assert!(
+            style.own_generates_box,
+            "an attached SVG paint resource retains its resource container"
+        );
+    }
+    for client in [
+        node(&owner, "pattern-client"),
+        node(&owner, "gradient-client"),
+    ] {
+        let resources = document.ResolvedStyleResourcesFor(client);
+        assert!(
+            resources.svg_fill_server.is_some(),
+            "local SVG fill paint server did not bind for {}",
+            document.Node(client).FindAttribute("id").unwrap().value
+        );
+    }
+    let server = owner
+        .GetDocument()
+        .ResolvedStyleResourcesFor(node(&owner, "pattern-client"))
+        .svg_fill_server
+        .as_ref()
+        .unwrap();
+    let pattern = server.pattern.as_ref().unwrap();
+    let stroke_width = pattern.commands.iter().find_map(|command| match command {
+        layoutng::internal::paint_input::SvgPatternCommand::DrawShape(shape) => {
+            Some(shape.stroke_width)
+        }
+        _ => None,
+    });
+    assert_eq!(stroke_width, Some(0.094));
 }
 
 #[test]
@@ -2837,15 +2876,14 @@ fn unnamed_white_space_combination_crosses_the_layout_boundary() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
     assert_eq!(
-        native.GetWhiteSpaceCollapse(),
+        computed_style.GetWhiteSpaceCollapse(),
         layoutng_style::css::white_space::WhiteSpaceCollapse::kPreserveBreaks
     );
-    assert_eq!(native.GetTextWrapMode(), foundation::TextWrapMode::kNowrap);
     assert_eq!(
-        style.style.extended.as_ref().unwrap().white_space,
-        layoutng::internal::layout_input::WhiteSpace::kPreserveBreaksNowrap
+        computed_style.GetTextWrapMode(),
+        foundation::TextWrapMode::kNowrap
     );
 }
 
@@ -2896,11 +2934,11 @@ fn document_cascade_resolves_environment_values_and_records_style_state() {
         .UpdateWithEnvironment(&mut owner, &media(), &[], Some(&environment))
         .unwrap();
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
-    assert_eq!(native.PaddingTop().Pixels(), 23.0);
-    assert_eq!(native.PaddingBottom().Pixels(), 9.0);
-    assert!(native.HasEnv());
-    assert!(native.HasEnvSafeAreaInsetBottom());
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
+    assert_eq!(computed_style.PaddingTop().Pixels(), 23.0);
+    assert_eq!(computed_style.PaddingBottom().Pixels(), 9.0);
+    assert!(computed_style.HasEnv());
+    assert!(computed_style.HasEnvSafeAreaInsetBottom());
 }
 
 #[test]
@@ -2914,10 +2952,10 @@ fn production_declarations_preserve_comment_token_boundaries() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
-    assert!(!native.Width().IsFixed());
-    assert_eq!(native.Height().Pixels(), 12.0);
-    assert!(native.GetCurrentColor(None) == Color::kBlack);
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
+    assert!(!computed_style.Width().IsFixed());
+    assert_eq!(computed_style.Height().Pixels(), 12.0);
+    assert!(computed_style.GetCurrentColor(None) == Color::kBlack);
 }
 
 #[test]
@@ -2935,8 +2973,18 @@ fn connected_style_element_text_is_collected_by_the_document_engine() {
         engine.Diagnostics()
     );
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    assert_eq!(unsafe { &*style.native_style.Get() }.Width().Pixels(), 23.0);
-    assert_eq!(style.style.paint.background_color.red, 1.0);
+    assert_eq!(
+        unsafe { &*style.computed_style_owner.Get() }
+            .Width()
+            .Pixels(),
+        23.0
+    );
+    assert_eq!(
+        unsafe { &*style.computed_style_owner.Get() }
+            .BackgroundColor()
+            .GetColor(),
+        Color::FromRGB(255, 0, 0)
+    );
     assert_eq!(owner.GetDocument().ActiveStyleSheets().count(), 1);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(owner.GetDocument().ActiveStyleSheets().count(), 1);
@@ -2946,9 +2994,9 @@ fn connected_style_element_text_is_collected_by_the_document_engine() {
     narrow.large_viewport_width = 640.0;
     engine.Update(&mut owner, &narrow, &[]).unwrap();
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
-    assert!(!native.Width().IsFixed());
-    assert_eq!(style.style.paint.background_color.alpha, 0.0);
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
+    assert!(!computed_style.Width().IsFixed());
+    assert_eq!(computed_style.BackgroundColor().GetColor().Alpha(), 0.0);
     assert!(
         engine.TranslatedRuleShadowStats().skipped_owner_media >= 1,
         "{:?}",
@@ -2973,24 +3021,25 @@ fn compound_class_background_and_zoom_cross_the_layout_boundary_once() {
         engine.Diagnostics()
     );
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
-    assert_eq!(native.Width().Pixels(), 100.0);
-    assert_eq!(native.GetFontDescription().ComputedSize(), 20.0);
-    assert!((native.RowGap().as_ref().unwrap().Pixels() - 20.736).abs() < 0.001);
-    assert!((native.ColumnGap().as_ref().unwrap().Pixels() - 20.736).abs() < 0.001);
-    assert!(native.BackgroundColor().GetColor().Param2() > 0.1);
-    assert!(native.HasAuthorBackground());
-    assert_eq!(style.style.width, Some(200.0));
-    assert_eq!(style.style.extended.as_ref().unwrap().font_size, 40.0);
-    assert!(style.style.extended.as_ref().unwrap().has_author_background);
-    let neutral_radii = style.style.paint.border_radii.unwrap();
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
+    assert_eq!(computed_style.Width().Pixels(), 100.0);
+    assert_eq!(computed_style.GetFontDescription().ComputedSize(), 20.0);
+    assert!((computed_style.RowGap().as_ref().unwrap().Pixels() - 20.736).abs() < 0.001);
+    assert!((computed_style.ColumnGap().as_ref().unwrap().Pixels() - 20.736).abs() < 0.001);
+    assert!(computed_style.BackgroundColor().GetColor().Param2() > 0.1);
+    assert!(computed_style.HasAuthorBackground());
+    let neutral = layoutng::style_projection::ProjectComputedStyle(computed_style).unwrap();
+    assert_eq!(neutral.width, Some(200.0));
+    assert_eq!(neutral.extended.as_ref().unwrap().font_size, 40.0);
+    assert!(neutral.extended.as_ref().unwrap().has_author_background);
+    let neutral_radii = neutral.paint.border_radii.unwrap();
     assert_eq!(neutral_radii.top_left.x, 20.0);
-    assert_eq!(style.style.paint.border_radii_percentages.top_right.x, 50.0);
-    assert_eq!(style.style.paint.box_shadows[0].offset.x, 2.0);
-    assert_eq!(style.style.paint.box_shadows[0].blur_radius, 6.0);
-    assert_eq!(style.style.paint.box_shadows[0].spread, 8.0);
-    assert!((style.style.extended.as_ref().unwrap().column_gap.unwrap() - 41.472).abs() < 0.001);
-    let used = layoutng::internal::css_zoom::ZoomedStyle(&style.style);
+    assert_eq!(neutral.paint.border_radii_percentages.top_right.x, 50.0);
+    assert_eq!(neutral.paint.box_shadows[0].offset.x, 2.0);
+    assert_eq!(neutral.paint.box_shadows[0].blur_radius, 6.0);
+    assert_eq!(neutral.paint.box_shadows[0].spread, 8.0);
+    assert!((neutral.extended.as_ref().unwrap().column_gap.unwrap() - 41.472).abs() < 0.001);
+    let used = layoutng::internal::css_zoom::ZoomedStyle(&neutral);
     assert_eq!(used.width, Some(100.0));
     assert_eq!(used.extended.as_ref().unwrap().font_size, 20.0);
     assert_eq!(used.paint.border_radii.unwrap().top_left.x, 10.0);
@@ -3016,7 +3065,7 @@ fn source_layer_priorities_revert_layer_and_live_dom_mutations() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(s.Width().Pixels(), 11.0);
@@ -3036,7 +3085,7 @@ fn source_layer_priorities_revert_layer_and_live_dom_mutations() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(s.Width().Pixels(), 44.0);
@@ -3058,7 +3107,7 @@ fn source_layer_priorities_revert_layer_and_live_dom_mutations() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(s.Width().Pixels(), 22.0);
@@ -3083,7 +3132,7 @@ fn dynamic_style_element_replaces_owner_sheet_and_recalculates_connected_nodes()
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(s.Width().Pixels(), 19.0);
@@ -3107,16 +3156,16 @@ fn dynamic_style_element_replaces_owner_sheet_and_recalculates_connected_nodes()
     owner.GetDocumentMut().AppendChild(wrapper, inserted);
     owner.GetDocumentMut().AppendChild(parent, wrapper);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 23.0);
+    assert_eq!(width(&owner, target), 23.0);
     owner.GetDocumentMut().Remove(inserted);
     owner
         .GetDocumentMut()
         .SetTextContent(inserted, "#target{width:29px}".into());
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 19.0);
+    assert_eq!(width(&owner, target), 19.0);
     owner.GetDocumentMut().AppendChild(wrapper, inserted);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 29.0);
+    assert_eq!(width(&owner, target), 29.0);
     let removed = owner.GetDocumentMut().CreateElement(
         dom::persistent_document::DOMNamespace::kHTML,
         "style".into(),
@@ -3128,7 +3177,7 @@ fn dynamic_style_element_replaces_owner_sheet_and_recalculates_connected_nodes()
     owner.GetDocumentMut().AppendChild(parent, removed);
     owner.GetDocumentMut().Remove(removed);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 29.0);
+    assert_eq!(width(&owner, target), 29.0);
 }
 
 fn set_attribute(owner: &mut dom::DOM, index: usize, name: &str, value: &str) {
@@ -3141,19 +3190,19 @@ fn set_attribute(owner: &mut dom::DOM, index: usize, name: &str, value: &str) {
         },
     );
 }
-fn native_width(owner: &dom::DOM, index: usize) -> f32 {
+fn width(owner: &dom::DOM, index: usize) -> f32 {
     unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(index)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
     .Pixels()
 }
-fn native_pointer(
+fn pointer(
     owner: &dom::DOM,
     index: usize,
 ) -> *mut layoutng_style::style::computed_style::ComputedStyle {
@@ -3161,11 +3210,11 @@ fn native_pointer(
         .GetDocument()
         .ResolvedStyleFor(index)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .Get()
 }
 #[test]
-fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
+fn incremental_inline_and_class_changes_retain_unrelated_computed_style_styles() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<html><body><div id=target class=small><b id=descendant></b></div><section id=unrelated><b></b><b></b><b></b></section><svg><defs><rect id=source width=10 height=10 /></defs><use href=\"#source\" /></svg></body></html>",
@@ -3183,17 +3232,17 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let full = owner.GetDocument().StyleState().stats.resolved_nodes;
     let unrelated_style = owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap();
-    let child_pointer = native_pointer(&owner, descendant);
+    let child_pointer = pointer(&owner, descendant);
     assert!(engine.Update(&mut owner, &media(), &[]).unwrap().IsEmpty());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 0);
     assert_eq!(owner.GetDocument().StyleState().stats.rule_sets_built, 0);
     set_attribute(&mut owner, target, "class", "large");
     let impact = engine.Update(&mut owner, &media(), &[]).unwrap();
     assert!(impact.layout && !impact.reattach);
-    assert_eq!(native_width(&owner, target), 20.0);
+    assert_eq!(width(&owner, target), 20.0);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
     assert!(owner.GetDocument().StyleState().stats.resolved_nodes < full);
-    assert_eq!(native_pointer(&owner, descendant), child_pointer);
+    assert_eq!(pointer(&owner, descendant), child_pointer);
     assert!(std::sync::Arc::ptr_eq(
         &unrelated_style,
         &owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap()
@@ -3203,14 +3252,14 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     assert!(impact.paint && !impact.layout && !impact.reattach);
     assert_eq!(owner.GetDocument().StyleState().stats.changed_nodes, 1);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
-    // A different selector state with an equal cascade preserves native identity.
-    let pointer = native_pointer(&owner, target);
+    // A different selector state with an equal cascade preserves computed style identity.
+    let target_style = pointer(&owner, target);
     set_attribute(&mut owner, target, "class", "large extra");
     assert!(engine.Update(&mut owner, &media(), &[]).unwrap().IsEmpty());
     assert_eq!(owner.GetDocument().StyleState().stats.changed_nodes, 0);
-    assert_eq!(native_pointer(&owner, target), pointer);
+    assert_eq!(pointer(&owner, target), target_style);
 
-    // CSSOM's native SetResult, not a text diff, grants MISU eligibility.
+    // CSSOM's computed style SetResult, not a text diff, grants MISU eligibility.
     let mut owner = html::html_parser::ParseHTML("<!doctype html><style>#target{height:5px;--w:41px}#target::before{content:'';width:inherit}.blocked{width:60px!important}</style><div id=target style='width:10px'></div>");
     let target = node(&owner, "target");
     let mut engine = StyleEngine::new(&owner);
@@ -3240,7 +3289,7 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     };
     write(&mut owner, "width", "20px");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 20.0);
+    assert_eq!(width(&owner, target), 20.0);
     assert_eq!(
         engine.TranslatedRuleShadowStats().incremental_style_updates,
         1
@@ -3253,14 +3302,14 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     );
     write(&mut owner, "width", "var(--w)"); // substitution: ordinary cascade
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 41.0);
+    assert_eq!(width(&owner, target), 41.0);
     assert_eq!(
         engine.TranslatedRuleShadowStats().incremental_style_updates,
         0
     );
     write(&mut owner, "width", "42px");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 42.0);
+    assert_eq!(width(&owner, target), 42.0);
     assert_eq!(
         engine.TranslatedRuleShadowStats().incremental_style_updates,
         1
@@ -3269,7 +3318,7 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
     write(&mut owner, "width", "44px"); // old inline lost to !important
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 60.0);
+    assert_eq!(width(&owner, target), 60.0);
     assert_eq!(
         engine.TranslatedRuleShadowStats().incremental_style_updates,
         0
@@ -3278,7 +3327,7 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     set_attribute(&mut owner, target, "style", "width:50px");
     write(&mut owner, "width", "51px"); // cannot downgrade pending cssText/class recalc
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 51.0);
+    assert_eq!(width(&owner, target), 51.0);
     assert_eq!(
         engine.TranslatedRuleShadowStats().incremental_style_updates,
         0
@@ -3300,32 +3349,34 @@ fn incremental_inheritance_and_combinator_invalidation_resolve_only_changed_targ
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let full = owner.GetDocument().StyleState().stats.resolved_nodes;
-    let plain_pointer = native_pointer(&owner, plain);
-    let unrelated_pointer = native_pointer(&owner, unrelated);
+    let plain_pointer = pointer(&owner, plain);
+    let unrelated_pointer = pointer(&owner, unrelated);
     set_attribute(&mut owner, host, "class", "active");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 31.0);
+    assert_eq!(width(&owner, target), 31.0);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 2);
-    assert_eq!(native_pointer(&owner, plain), plain_pointer);
+    assert_eq!(pointer(&owner, plain), plain_pointer);
     set_attribute(&mut owner, host, "style", "color:red");
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
     assert!(owner.GetDocument().StyleState().stats.resolved_nodes < full);
     assert_eq!(
-        owner
-            .GetDocument()
-            .ResolvedStyleFor(plain)
-            .unwrap()
-            .style
-            .paint
-            .color
-            .red,
-        1.0
+        unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(plain)
+                .unwrap()
+                .computed_style_owner
+                .Get()
+        }
+        .Color()
+        .GetColor(),
+        Color::FromRGB(255, 0, 0)
     );
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
     owner.GetDocumentMut().RemoveAttributeDefault(host, "class");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, target) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, target) }.Width().IsAuto());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 2);
 }
 #[test]
@@ -3345,7 +3396,7 @@ fn attribute_invalidation_uses_compiled_keys_and_link_pseudo_dependencies() {
     let unrelated = node(&owner, "unrelated");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let unrelated_pointer = native_pointer(&owner, unrelated);
+    let unrelated_pointer = pointer(&owner, unrelated);
     // Unrelated sibling/positional selectors must not widen attribute changes
     // to every element under the parent, even with incomplete match signatures.
     for (index, name, value) in [
@@ -3369,22 +3420,12 @@ fn attribute_invalidation_uses_compiled_keys_and_link_pseudo_dependencies() {
     set_attribute(&mut owner, script, "nonce", "accepted");
     set_attribute(&mut owner, anchor, "href", "/destination");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 31.0);
+    assert_eq!(width(&owner, target), 31.0);
+    assert_eq!(unsafe { &*pointer(&owner, target) }.Height().Pixels(), 32.0);
+    assert_eq!(width(&owner, child), 41.0);
+    assert_eq!(unsafe { &*pointer(&owner, child) }.Height().Pixels(), 51.0);
     assert_eq!(
-        unsafe { &*native_pointer(&owner, target) }
-            .Height()
-            .Pixels(),
-        32.0
-    );
-    assert_eq!(native_width(&owner, child), 41.0);
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, child) }.Height().Pixels(),
-        51.0
-    );
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, target) }
-            .MinWidth()
-            .Pixels(),
+        unsafe { &*pointer(&owner, target) }.MinWidth().Pixels(),
         42.0
     );
     owner
@@ -3395,10 +3436,10 @@ fn attribute_invalidation_uses_compiled_keys_and_link_pseudo_dependencies() {
         .GetDocumentMut()
         .RemoveAttributeDefault(script, "nonce");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, target) }.Width().IsAuto());
-    assert!(unsafe { &*native_pointer(&owner, child) }.Width().IsAuto());
-    assert!(unsafe { &*native_pointer(&owner, child) }.Height().IsAuto());
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert!(unsafe { &*pointer(&owner, target) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, child) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, child) }.Height().IsAuto());
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
 }
 
 #[test]
@@ -3414,21 +3455,21 @@ fn incremental_sheet_replacement_and_removal_invalidate_old_and_new_targets() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let full = owner.GetDocument().StyleState().stats.resolved_nodes;
-    let unrelated_pointer = native_pointer(&owner, unrelated);
+    let unrelated_pointer = pointer(&owner, unrelated);
     owner
         .GetDocumentMut()
         .SetTextContent(sheet, "#second{width:22px}".into());
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, first) }.Width().IsAuto());
-    assert_eq!(native_width(&owner, second), 22.0);
+    assert!(unsafe { &*pointer(&owner, first) }.Width().IsAuto());
+    assert_eq!(width(&owner, second), 22.0);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 2);
     assert_eq!(owner.GetDocument().StyleState().stats.rule_sets_built, 1);
     assert!(owner.GetDocument().StyleState().stats.resolved_nodes < full);
     owner.GetDocumentMut().Remove(sheet);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, second) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, second) }.Width().IsAuto());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
 
     // Appending a sheet must preserve old matches in an unchanged sheet.
     // A later batch can remove it and change its ancestor selector together.
@@ -3441,13 +3482,13 @@ fn incremental_sheet_replacement_and_removal_invalidate_old_and_new_targets() {
     let other = node(&owner, "other");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 31.0);
-    let target_pointer = native_pointer(&owner, target);
+    assert_eq!(width(&owner, target), 31.0);
+    let target_pointer = pointer(&owner, target);
     owner
         .GetDocumentMut()
         .AppendStyleSheet(crate::ParseCSS("section{height:7px}b+b{opacity:.9}"));
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_pointer(&owner, target), target_pointer);
+    assert_eq!(pointer(&owner, target), target_pointer);
     // DOM and stylesheet revisions are one batch. Attribute invalidation
     // must keep the old feature owner even after its map key is pruned; an
     // unrelated sibling rule must not widen the mutation to the whole body.
@@ -3456,12 +3497,9 @@ fn incremental_sheet_replacement_and_removal_invalidate_old_and_new_targets() {
         .SetTextContent(sheet, ".new #target{width:42px}".into());
     set_attribute(&mut owner, parent, "class", "new");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 42.0);
+    assert_eq!(width(&owner, target), 42.0);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 2);
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, other) }.Height().Pixels(),
-        7.0
-    );
+    assert_eq!(unsafe { &*pointer(&owner, other) }.Height().Pixels(), 7.0);
     owner.GetDocumentMut().Remove(sheet);
     owner.GetDocumentMut().SetAttribute(
         parent,
@@ -3472,7 +3510,7 @@ fn incremental_sheet_replacement_and_removal_invalidate_old_and_new_targets() {
         },
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, target) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, target) }.Width().IsAuto());
 }
 #[test]
 fn incremental_append_and_reverse_position_invalidation_preserve_other_branches() {
@@ -3490,22 +3528,19 @@ fn incremental_append_and_reverse_position_invalidation_preserve_other_branches(
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let full = owner.GetDocument().StyleState().stats.resolved_nodes;
-    let unrelated_pointer = native_pointer(&owner, unrelated);
+    let unrelated_pointer = pointer(&owner, unrelated);
     let inserted = owner
         .GetDocumentMut()
         .CreateElementDefault(dom::persistent_document::DOMNamespace::kHTML, "li".into());
     owner.GetDocumentMut().AppendChild(list, inserted);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, inserted), 12.0);
-    assert!(unsafe { &*native_pointer(&owner, last) }.Width().IsAuto());
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, last) }.Height().Pixels(),
-        15.0
-    );
-    assert!(unsafe { &*native_pointer(&owner, first) }.Height().IsAuto());
+    assert_eq!(width(&owner, inserted), 12.0);
+    assert!(unsafe { &*pointer(&owner, last) }.Width().IsAuto());
+    assert_eq!(unsafe { &*pointer(&owner, last) }.Height().Pixels(), 15.0);
+    assert!(unsafe { &*pointer(&owner, first) }.Height().IsAuto());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
     assert!(owner.GetDocument().StyleState().stats.resolved_nodes < full);
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
 }
 
 #[test]
@@ -3520,7 +3555,7 @@ fn incremental_explicit_inheritance_and_display_suppression_follow_parent_change
     let unrelated = node(&owner, "unrelated");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let unrelated_pointer = native_pointer(&owner, unrelated);
+    let unrelated_pointer = pointer(&owner, unrelated);
     assert!(owner.GetDocument().ResolvedStyleFor(parent).is_none());
     assert!(owner.GetDocument().ResolvedStyleFor(child).is_none());
     assert!(owner.GetDocument().ResolvedStyleFor(grandchild).is_none());
@@ -3532,15 +3567,18 @@ fn incremental_explicit_inheritance_and_display_suppression_follow_parent_change
     for target in [parent, child, grandchild] {
         let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
         assert!(!resolved.generates_box);
-        assert!(unsafe { &*resolved.native_style.Get() }.IsEnsuredInDisplayNone());
-        assert_eq!(unsafe { &*resolved.native_style.Get() }.Opacity(), 0.1);
+        assert!(unsafe { &*resolved.computed_style_owner.Get() }.IsEnsuredInDisplayNone());
+        assert_eq!(
+            unsafe { &*resolved.computed_style_owner.Get() }.Opacity(),
+            0.1
+        );
     }
     assert_eq!(owner.GetMeasurementGeometryRevision(), geometry_revision);
-    let cached = native_pointer(&owner, grandchild);
+    let cached = pointer(&owner, grandchild);
     engine
         .EnsureComputedStyle(&mut owner, &media(), &[], grandchild)
         .unwrap();
-    assert_eq!(native_pointer(&owner, grandchild), cached);
+    assert_eq!(pointer(&owner, grandchild), cached);
     set_attribute(&mut owner, parent, "style", "opacity:.15;display:none");
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
@@ -3548,10 +3586,7 @@ fn incremental_explicit_inheritance_and_display_suppression_follow_parent_change
     engine
         .EnsureComputedStyle(&mut owner, &media(), &[], grandchild)
         .unwrap();
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, grandchild) }.Opacity(),
-        0.15
-    );
+    assert_eq!(unsafe { &*pointer(&owner, grandchild) }.Opacity(), 0.15);
     set_attribute(&mut owner, parent, "style", "opacity:.2;display:contents");
     let impact = engine.Update(&mut owner, &media(), &[]).unwrap();
     assert!(impact.reattach);
@@ -3569,29 +3604,23 @@ fn incremental_explicit_inheritance_and_display_suppression_follow_parent_change
             .unwrap()
             .generates_box
     );
-    assert_eq!(unsafe { &*native_pointer(&owner, child) }.Opacity(), 0.2);
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, grandchild) }.Opacity(),
-        0.2
-    );
+    assert_eq!(unsafe { &*pointer(&owner, child) }.Opacity(), 0.2);
+    assert_eq!(unsafe { &*pointer(&owner, grandchild) }.Opacity(), 0.2);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
     set_attribute(&mut owner, parent, "style", "opacity:.3;display:contents");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, grandchild) }.Opacity(),
-        0.3
-    );
+    assert_eq!(unsafe { &*pointer(&owner, grandchild) }.Opacity(), 0.3);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
 
     // Switching the parent to flex forces descendant recalc for blockification.
     // The grandchild still has the same computed values and explicit opacity;
     // traversal must not manufacture a changed style or replace its owner.
-    let grandchild_style = native_pointer(&owner, grandchild);
+    let grandchild_style = pointer(&owner, grandchild);
     set_attribute(&mut owner, parent, "style", "opacity:.3;display:flex");
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
-    assert_eq!(native_pointer(&owner, grandchild), grandchild_style);
+    assert_eq!(pointer(&owner, grandchild), grandchild_style);
     assert_eq!(unsafe { &*grandchild_style }.Opacity(), 0.3);
 }
 
@@ -3657,20 +3686,20 @@ fn incremental_child_state_and_sibling_selectors_invalidate_beyond_the_container
     let unrelated = node(&owner, "unrelated");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 14.0);
-    let unrelated_pointer = native_pointer(&owner, unrelated);
+    assert_eq!(width(&owner, target), 14.0);
+    let unrelated_pointer = pointer(&owner, unrelated);
     let inserted = owner
         .GetDocumentMut()
         .CreateElementDefault(dom::persistent_document::DOMNamespace::kHTML, "b".into());
     owner.GetDocumentMut().AppendChild(container, inserted);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, target) }.Width().IsAuto());
+    assert!(unsafe { &*pointer(&owner, target) }.Width().IsAuto());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 2);
     owner.GetDocumentMut().Remove(inserted);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, target), 14.0);
+    assert_eq!(width(&owner, target), 14.0);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
 }
 #[test]
 fn incremental_has_and_filtered_nth_selectors_track_mutated_selector_dependencies() {
@@ -3687,22 +3716,15 @@ fn incremental_has_and_filtered_nth_selectors_track_mutated_selector_dependencie
     let unrelated = node(&owner, "unrelated");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, second) }
-            .Height()
-            .Pixels(),
-        17.0
-    );
-    let unrelated_pointer = native_pointer(&owner, unrelated);
+    assert_eq!(unsafe { &*pointer(&owner, second) }.Height().Pixels(), 17.0);
+    let unrelated_pointer = pointer(&owner, unrelated);
     set_attribute(&mut owner, first, "class", "active");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, host), 25.0);
-    assert_eq!(unsafe { &*native_pointer(&owner, second) }.Opacity(), 0.41);
-    assert!(unsafe { &*native_pointer(&owner, second) }
-        .Height()
-        .IsAuto());
+    assert_eq!(width(&owner, host), 25.0);
+    assert_eq!(unsafe { &*pointer(&owner, second) }.Opacity(), 0.41);
+    assert!(unsafe { &*pointer(&owner, second) }.Height().IsAuto());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
     // A temporary measurement node elsewhere must not promote the unrelated
     // branch through this non-subject :has descendant invalidation.
     let body = owner.GetDocument().Node(host).Parent().unwrap();
@@ -3712,13 +3734,13 @@ fn incremental_has_and_filtered_nth_selectors_track_mutated_selector_dependencie
     );
     owner.GetDocumentMut().AppendChild(body, probe);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
-    assert_eq!(unsafe { &*native_pointer(&owner, second) }.Opacity(), 0.41);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(unsafe { &*pointer(&owner, second) }.Opacity(), 0.41);
     owner.GetDocumentMut().Remove(probe);
     set_attribute(&mut owner, first, "class", "selected");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(unsafe { &*native_pointer(&owner, second) }.Opacity(), 1.0);
-    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(unsafe { &*pointer(&owner, second) }.Opacity(), 1.0);
+    assert_eq!(pointer(&owner, unrelated), unrelated_pointer);
 }
 #[test]
 fn incremental_appended_sheet_resolves_its_targets_without_revisiting_older_rules() {
@@ -3733,23 +3755,23 @@ fn incremental_appended_sheet_resolves_its_targets_without_revisiting_older_rule
     let second = node(&owner, "second");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let first_pointer = native_pointer(&owner, first);
+    let first_pointer = pointer(&owner, first);
     owner
         .GetDocumentMut()
         .AppendStyleSheet(crate::ParseCSS("#second{width:20px}"));
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, second), 20.0);
-    assert_eq!(native_pointer(&owner, first), first_pointer);
+    assert_eq!(width(&owner, second), 20.0);
+    assert_eq!(pointer(&owner, first), first_pointer);
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
     assert_eq!(owner.GetDocument().StyleState().stats.rule_sets_built, 1);
     // Subsequent selector invalidation compares signatures for the new order.
     set_attribute(&mut owner, first, "class", "unrelated");
     assert!(engine.Update(&mut owner, &media(), &[]).unwrap().IsEmpty());
-    assert_eq!(native_pointer(&owner, first), first_pointer);
+    assert_eq!(pointer(&owner, first), first_pointer);
 }
 
 #[test]
-fn production_pseudo_styles_have_independent_cascade_and_native_content() {
+fn production_pseudo_styles_have_independent_cascade_and_computed_style_content() {
     use layoutng_style::style::{
         computed_style_constants::PseudoId, content_data::TextContentData,
     };
@@ -3783,20 +3805,19 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
     // belongs to the originating element and does not enter the pseudo cascade.
     let before = style.before.as_ref().unwrap();
     assert_eq!(before.text, "wrong");
-    assert_eq!(before.style.paint.color.blue, 1.0);
-    assert_eq!(style.style.paint.color.red, 1.0);
-    let native = unsafe { &*before.native_style.Get() };
-    let origin = unsafe { &*style.native_style.Get() };
+    let computed_style = unsafe { &*before.computed_style_owner.Get() };
+    let origin = unsafe { &*style.computed_style_owner.Get() };
+    assert_eq!(computed_style.Color().GetColor(), Color::FromRGB(0, 0, 255));
+    assert_eq!(origin.Color().GetColor(), Color::FromRGB(255, 0, 0));
     assert!(origin.HasPseudoElementStyle(PseudoId::kPseudoIdBefore));
     assert!(origin.CanGeneratePseudoElement(PseudoId::kPseudoIdBefore));
     assert_eq!(
         origin.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore),
-        before.native_style.Get()
+        before.computed_style_owner.Get()
     );
-    assert_eq!(native.StyleType(), PseudoId::kPseudoIdBefore);
-    assert_eq!(native.GetFontDescription().ComputedSize(), 20.0);
-    assert_eq!(before.style.native_style, before.native_style.Get());
-    let data = native.GetContentData().unwrap();
+    assert_eq!(computed_style.StyleType(), PseudoId::kPseudoIdBefore);
+    assert_eq!(computed_style.GetFontDescription().ComputedSize(), 20.0);
+    let data = computed_style.GetContentData().unwrap();
     assert!(unsafe { (&*data).IsText() });
     assert_eq!(
         unsafe { (&*(data as *const TextContentData)).GetText().Utf8() },
@@ -3806,9 +3827,16 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
     assert_eq!(after.text, "");
     assert!(after.display_contents);
     assert_eq!(
-        unsafe { &*style.first_letter.as_ref().unwrap().native_style.Get() }
-            .GetFontDescription()
-            .ComputedSize(),
+        unsafe {
+            &*style
+                .first_letter
+                .as_ref()
+                .unwrap()
+                .computed_style_owner
+                .Get()
+        }
+        .GetFontDescription()
+        .ComputedSize(),
         40.0
     );
     let placeholder = owner
@@ -3819,10 +3847,15 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
         .as_ref()
         .unwrap();
     assert_eq!(
-        unsafe { &*placeholder.native_style.Get() }.StyleType(),
+        unsafe { &*placeholder.computed_style_owner.Get() }.StyleType(),
         PseudoId::kPseudoIdPlaceholder
     );
-    assert_eq!(placeholder.style.paint.color.blue, 1.0);
+    assert_eq!(
+        unsafe { &*placeholder.computed_style_owner.Get() }
+            .Color()
+            .GetColor(),
+        Color::FromRGB(0, 0, 255)
+    );
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(
         stats.translated_style_cascade_pseudo_failures, 0,
@@ -3847,18 +3880,20 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
     owner.GetDocumentMut().AppendChild(parent, sheet);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(
-        owner
-            .GetDocument()
-            .ResolvedStyleFor(control)
-            .unwrap()
-            .placeholder
-            .as_ref()
-            .unwrap()
-            .style
-            .paint
-            .color
-            .red,
-        1.0
+        unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(control)
+                .unwrap()
+                .placeholder
+                .as_ref()
+                .unwrap()
+                .computed_style_owner
+                .Get()
+        }
+        .Color()
+        .GetColor(),
+        Color::FromRGB(255, 0, 0)
     );
     let resolved = owner.GetDocument().StyleState().stats.resolved_nodes;
     assert!(resolved < 24, "resolved={resolved}");
@@ -3867,46 +3902,39 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
         "input::-webkit-input-placeholder{color:green !important}".into(),
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(
-        owner
-            .GetDocument()
-            .ResolvedStyleFor(control)
-            .unwrap()
-            .placeholder
-            .as_ref()
-            .unwrap()
-            .style
-            .paint
-            .color
-            .green
-            > 0.4,
-        "{:?}",
-        owner
-            .GetDocument()
-            .ResolvedStyleFor(control)
-            .unwrap()
-            .placeholder
-            .as_ref()
-            .unwrap()
-            .style
-            .paint
-            .color
+    assert_eq!(
+        unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(control)
+                .unwrap()
+                .placeholder
+                .as_ref()
+                .unwrap()
+                .computed_style_owner
+                .Get()
+        }
+        .Color()
+        .GetColor(),
+        Color::FromRGB(0, 128, 0)
     );
     owner.GetDocumentMut().Remove(sheet);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(
-        owner
-            .GetDocument()
-            .ResolvedStyleFor(control)
-            .unwrap()
-            .placeholder
-            .as_ref()
-            .unwrap()
-            .style
-            .paint
-            .color
-            .blue,
-        1.0
+        unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(control)
+                .unwrap()
+                .placeholder
+                .as_ref()
+                .unwrap()
+                .computed_style_owner
+                .Get()
+        }
+        .Color()
+        .GetColor(),
+        Color::FromRGB(0, 0, 255)
     );
 }
 
@@ -3930,20 +3958,23 @@ fn production_marker_pseudo_owns_cascade_cache_and_content() {
 
     let resolved = owner.GetDocument().ResolvedStyleFor(item).unwrap();
     let marker = resolved.marker.as_ref().expect("list item owns ::marker");
-    let native = unsafe { &*marker.native_style.Get() };
-    let originating = unsafe { &*resolved.native_style.Get() };
+    let computed_style = unsafe { &*marker.computed_style_owner.Get() };
+    let originating = unsafe { &*resolved.computed_style_owner.Get() };
     assert_eq!(marker.text, "owned");
-    assert_eq!(native.StyleType(), PseudoId::kPseudoIdMarker);
-    assert_eq!(native.GetFontDescription().ComputedSize(), 24.0);
-    assert_eq!(native.Display(), EDisplay::kInlineBlock);
-    assert_eq!(native.WhiteSpace(), EWhiteSpace::kPre);
-    assert_eq!(native.GetTextAlign(), foundation::ETextAlign::kStart);
+    assert_eq!(computed_style.StyleType(), PseudoId::kPseudoIdMarker);
+    assert_eq!(computed_style.GetFontDescription().ComputedSize(), 24.0);
+    assert_eq!(computed_style.Display(), EDisplay::kInlineBlock);
+    assert_eq!(computed_style.WhiteSpace(), EWhiteSpace::kPre);
+    assert_eq!(
+        computed_style.GetTextAlign(),
+        foundation::ETextAlign::kStart
+    );
     // width is not valid on ::marker and must be filtered by RuleData's
     // ValidPropertyFilter rather than leaking through the document adapter.
-    assert!(native.Width().IsAuto());
+    assert!(computed_style.Width().IsAuto());
     assert_eq!(
         originating.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdMarker),
-        marker.native_style.Get()
+        marker.computed_style_owner.Get()
     );
     assert!(originating.HasPseudoElementStyle(PseudoId::kPseudoIdMarker));
     assert!(owner
@@ -3954,8 +3985,9 @@ fn production_marker_pseudo_owns_cascade_cache_and_content() {
         .is_none());
     // The UA defaults belong to a marker request, not to the ordinary div.
     // A phantom marker bit with no cached style makes equal styles differ.
-    assert!(!unsafe { &*native_pointer(&owner, ordinary) }
-        .HasPseudoElementStyle(PseudoId::kPseudoIdMarker));
+    assert!(
+        !unsafe { &*pointer(&owner, ordinary) }.HasPseudoElementStyle(PseudoId::kPseudoIdMarker)
+    );
 }
 
 #[test]
@@ -3988,16 +4020,19 @@ fn nested_generated_marker_owns_originating_pseudo_cascade_and_invalidation() {
     );
     let before = resolved.before.as_ref().expect("generated ::before");
     let marker = before.marker.as_deref().expect("::before owns ::marker");
-    let before_native = unsafe { &*before.native_style.Get() };
-    let marker_native = unsafe { &*marker.native_style.Get() };
+    let before_computed_style = unsafe { &*before.computed_style_owner.Get() };
+    let marker_computed_style = unsafe { &*marker.computed_style_owner.Get() };
     assert_eq!(marker.text, "before-marker");
-    assert_eq!(marker_native.StyleType(), PseudoId::kPseudoIdMarker);
-    assert_eq!(marker_native.GetFontDescription().ComputedSize(), 23.0);
-    assert!(marker_native.Width().IsAuto());
-    assert!(before_native.HasPseudoElementStyle(PseudoId::kPseudoIdMarker));
+    assert_eq!(marker_computed_style.StyleType(), PseudoId::kPseudoIdMarker);
     assert_eq!(
-        before_native.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdMarker),
-        marker.native_style.Get()
+        marker_computed_style.GetFontDescription().ComputedSize(),
+        23.0
+    );
+    assert!(marker_computed_style.Width().IsAuto());
+    assert!(before_computed_style.HasPseudoElementStyle(PseudoId::kPseudoIdMarker));
+    assert_eq!(
+        before_computed_style.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdMarker),
+        marker.computed_style_owner.Get()
     );
     assert_eq!(
         resolved
@@ -4007,7 +4042,7 @@ fn nested_generated_marker_owns_originating_pseudo_cascade_and_invalidation() {
             .map(|marker| marker.text.as_str()),
         Some("after-marker")
     );
-    let old_marker = marker.native_style.Get();
+    let old_marker = marker.computed_style_owner.Get();
 
     set_attribute(&mut owner, item, "class", "swap");
     engine.Update(&mut owner, &media(), &[marker_ua]).unwrap();
@@ -4022,11 +4057,11 @@ fn nested_generated_marker_owns_originating_pseudo_cascade_and_invalidation() {
         .as_deref()
         .unwrap();
     assert_eq!(marker.text, "updated-marker");
-    assert_ne!(marker.native_style.Get(), old_marker);
+    assert_ne!(marker.computed_style_owner.Get(), old_marker);
 }
 
 #[test]
-fn translated_style_cascade_publishes_pseudo_native_style_with_exact_stats() {
+fn translated_style_cascade_publishes_pseudo_computed_style_style_with_exact_stats() {
     use layoutng_style::style::{
         computed_style_constants::PseudoId, content_data::TextContentData,
     };
@@ -4063,12 +4098,14 @@ fn translated_style_cascade_publishes_pseudo_native_style_with_exact_stats() {
 
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     let pseudo = resolved.before.as_ref().expect("generated ::before");
-    let native = unsafe { &*pseudo.native_style.Get() };
-    assert_eq!(native.StyleType(), PseudoId::kPseudoIdBefore);
-    assert_eq!(native.Display(), foundation::EDisplay::kBlock);
-    assert_eq!(native.GetFontDescription().ComputedSize(), 19.0);
-    assert_eq!(pseudo.style.paint.color.blue, 1.0);
-    let content = native.GetContentData().expect("native pseudo content");
+    let computed_style = unsafe { &*pseudo.computed_style_owner.Get() };
+    assert_eq!(computed_style.StyleType(), PseudoId::kPseudoIdBefore);
+    assert_eq!(computed_style.Display(), foundation::EDisplay::kBlock);
+    assert_eq!(computed_style.GetFontDescription().ComputedSize(), 19.0);
+    assert_eq!(computed_style.Color().GetColor(), Color::FromRGB(0, 0, 255));
+    let content = computed_style
+        .GetContentData()
+        .expect("computed_style pseudo content");
     assert!(unsafe { (&*content).IsText() });
     assert_eq!(
         unsafe { (&*(content as *const TextContentData)).GetText().Utf8() },
@@ -4120,7 +4157,7 @@ fn registered_property_owner_is_dependency_scoped_and_reports_exact_apply() {
             .GetDocument()
             .ResolvedStyleFor(plain)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(plain_style.Display(), foundation::EDisplay::kBlock);
@@ -4129,7 +4166,7 @@ fn registered_property_owner_is_dependency_scoped_and_reports_exact_apply() {
             .GetDocument()
             .ResolvedStyleFor(dependent)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(dependent_style.Display(), foundation::EDisplay::kBlock);
@@ -4139,7 +4176,7 @@ fn registered_property_owner_is_dependency_scoped_and_reports_exact_apply() {
             .GetDocument()
             .ResolvedStyleFor(own)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(own_style.Display(), foundation::EDisplay::kBlock);
@@ -4149,7 +4186,7 @@ fn registered_property_owner_is_dependency_scoped_and_reports_exact_apply() {
             .GetDocument()
             .ResolvedStyleFor(invalid)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(invalid_style.Display(), foundation::EDisplay::kBlock);
@@ -4171,7 +4208,7 @@ fn production_pseudo_cache_retains_suppressed_attr_content_and_invalidates_it() 
     let old = owner.GetDocument().ResolvedStyleHandle(target).unwrap();
     assert!(old.before.is_none());
     assert!(old.after.is_none());
-    let origin = unsafe { &*old.native_style.Get() };
+    let origin = unsafe { &*old.computed_style_owner.Get() };
     assert!(origin.HasPseudoElementStyle(PseudoId::kPseudoIdBefore));
     assert!(origin.HasPseudoElementStyle(PseudoId::kPseudoIdAfter));
     let cached = origin.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore);
@@ -4186,7 +4223,7 @@ fn production_pseudo_cache_retains_suppressed_attr_content_and_invalidates_it() 
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let current = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     assert!(current.before.is_none());
-    let changed = unsafe { &*current.native_style.Get() }
+    let changed = unsafe { &*current.computed_style_owner.Get() }
         .GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore);
     assert_ne!(changed, cached);
     let content = unsafe { &*changed }.GetContentData().unwrap();
@@ -4201,14 +4238,14 @@ fn production_pseudo_cache_retains_suppressed_attr_content_and_invalidates_it() 
     let current = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     assert_eq!(current.before.as_ref().unwrap().text, "two");
     assert_eq!(
-        unsafe { &*current.native_style.Get() }
+        unsafe { &*current.computed_style_owner.Get() }
             .GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore),
-        current.before.as_ref().unwrap().native_style.Get()
+        current.before.as_ref().unwrap().computed_style_owner.Get()
     );
     set_attribute(&mut owner, target, "class", "removed");
     assert!(engine.Update(&mut owner, &media(), &[]).unwrap().reattach);
     let current = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let origin = unsafe { &*current.native_style.Get() };
+    let origin = unsafe { &*current.computed_style_owner.Get() };
     assert!(!origin.HasAnyPseudoElementStyles());
     assert!(origin
         .GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore)
@@ -4229,19 +4266,19 @@ fn production_pseudo_generation_respects_contents_and_suppressed_ancestors() {
     let contents = owner.GetDocument().ResolvedStyleFor(contents).unwrap();
     assert!(contents.before.is_some());
     assert!(contents.first_letter.is_none());
-    assert!(unsafe { &*contents.native_style.Get() }
+    assert!(unsafe { &*contents.computed_style_owner.Get() }
         .HasPseudoElementStyle(PseudoId::kPseudoIdFirstLetter));
-    assert!(!unsafe { &*contents.native_style.Get() }
+    assert!(!unsafe { &*contents.computed_style_owner.Get() }
         .CanGeneratePseudoElement(PseudoId::kPseudoIdFirstLetter));
     assert!(owner.GetDocument().ResolvedStyleFor(suppressed).is_none());
     engine
         .EnsureComputedStyle(&mut owner, &media(), &[], suppressed)
         .unwrap();
     let suppressed = owner.GetDocument().ResolvedStyleFor(suppressed).unwrap();
-    assert!(unsafe { &*suppressed.native_style.Get() }.IsEnsuredInDisplayNone());
+    assert!(unsafe { &*suppressed.computed_style_owner.Get() }.IsEnsuredInDisplayNone());
     assert!(suppressed.before.is_none());
     assert!(suppressed.first_letter.is_none());
-    assert!(unsafe { &*suppressed.native_style.Get() }
+    assert!(unsafe { &*suppressed.computed_style_owner.Get() }
         .GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore)
         .is_null());
 }
@@ -4309,7 +4346,7 @@ fn production_pseudo_local_invalidation_and_unchanged_frame_reuse() {
         .before
         .as_ref()
         .unwrap()
-        .native_style
+        .computed_style_owner
         .Get();
     set_attribute(&mut owner, target, "class", "host extra");
     assert!(engine.Update(&mut owner, &media(), &[]).unwrap().IsEmpty());
@@ -4321,7 +4358,7 @@ fn production_pseudo_local_invalidation_and_unchanged_frame_reuse() {
             .before
             .as_ref()
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get(),
         before
     );
@@ -4351,10 +4388,10 @@ fn production_custom_properties_feed_cascade_and_invalidate_inheriting_children(
         engine.Diagnostics()
     );
     let resolved = owner.GetDocument().ResolvedStyleFor(child).unwrap();
-    let style = unsafe { &*resolved.native_style.Get() };
+    let style = unsafe { &*resolved.computed_style_owner.Get() };
     assert_eq!(style.Width().Pixels(), 31.0);
     assert_eq!(style.Height().Pixels(), 9.0);
-    assert_eq!(resolved.style.paint.color.blue, 1.0);
+    assert_eq!(style.Color().GetColor(), Color::FromRGB(0, 0, 255));
 
     set_attribute(&mut owner, parent, "style", "--size:47px;--tone:red");
     engine.Update(&mut owner, &media(), &[]).unwrap();
@@ -4364,9 +4401,9 @@ fn production_custom_properties_feed_cascade_and_invalidate_inheriting_children(
         engine.Diagnostics()
     );
     let resolved = owner.GetDocument().ResolvedStyleFor(child).unwrap();
-    let style = unsafe { &*resolved.native_style.Get() };
+    let style = unsafe { &*resolved.computed_style_owner.Get() };
     assert_eq!(style.Width().Pixels(), 47.0);
-    assert_eq!(resolved.style.paint.color.red, 1.0);
+    assert_eq!(style.Color().GetColor(), Color::FromRGB(255, 0, 0));
 }
 
 #[test]
@@ -4388,12 +4425,12 @@ fn inherited_custom_property_change_skips_proven_passive_intermediaries() {
     let mut engine = StyleEngine::new(&owner);
 
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 31.0);
+    assert_eq!(width(&owner, consumer), 31.0);
     let passive_style = owner.GetDocument().ResolvedStyleHandle(passive).unwrap();
 
     set_attribute(&mut owner, parent, "style", "--size:47px");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert_eq!(width(&owner, consumer), 47.0);
     assert!(std::sync::Arc::ptr_eq(
         &passive_style,
         &owner.GetDocument().ResolvedStyleHandle(passive).unwrap()
@@ -4425,12 +4462,12 @@ fn inherited_custom_property_change_skips_unrelated_variable_consumers() {
     let mut engine = StyleEngine::new(&owner);
 
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 31.0);
+    assert_eq!(width(&owner, consumer), 31.0);
     let unrelated_style = owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap();
 
     set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert_eq!(width(&owner, consumer), 47.0);
     assert!(std::sync::Arc::ptr_eq(
         &unrelated_style,
         &owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap()
@@ -4438,7 +4475,7 @@ fn inherited_custom_property_change_skips_unrelated_variable_consumers() {
     let stats = &owner.GetDocument().StyleState().stats;
     assert!(
         stats.resolved_nodes <= 2,
-        "unrelated var() consumers must retain their native style: {stats:?}"
+        "unrelated var() consumers must retain their computed_style style: {stats:?}"
     );
 }
 
@@ -4464,12 +4501,12 @@ fn inherited_custom_property_change_skips_unrelated_pseudo_variable_consumers() 
     let mut engine = StyleEngine::new(&owner);
 
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 31.0);
+    assert_eq!(width(&owner, consumer), 31.0);
     let unrelated_style = owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap();
 
     set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert_eq!(width(&owner, consumer), 47.0);
     assert!(std::sync::Arc::ptr_eq(
         &unrelated_style,
         &owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap()
@@ -4477,7 +4514,7 @@ fn inherited_custom_property_change_skips_unrelated_pseudo_variable_consumers() 
     let stats = &owner.GetDocument().StyleState().stats;
     assert!(
         stats.resolved_nodes <= 2,
-        "unrelated pseudo var() consumers must retain their native style: {stats:?}"
+        "unrelated pseudo var() consumers must retain their computed_style style: {stats:?}"
     );
 }
 
@@ -4500,11 +4537,11 @@ fn inherited_custom_property_change_skips_proven_suppressed_elements() {
 
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert!(owner.GetDocument().ResolvedStyleFor(suppressed).is_none());
-    assert_eq!(native_width(&owner, consumer), 31.0);
+    assert_eq!(width(&owner, consumer), 31.0);
 
     set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert_eq!(width(&owner, consumer), 47.0);
     assert!(owner.GetDocument().ResolvedStyleFor(suppressed).is_none());
     let stats = &owner.GetDocument().StyleState().stats;
     assert!(
@@ -4549,7 +4586,7 @@ fn shadow_sheet_change_preserves_unrelated_document_dependency_proofs() {
 
     set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert_eq!(width(&owner, consumer), 47.0);
     assert!(std::sync::Arc::ptr_eq(
         &unrelated_style,
         &owner.GetDocument().ResolvedStyleHandle(unrelated).unwrap()
@@ -4602,12 +4639,12 @@ fn incremental_inline_update_preserves_custom_property_dependency_proof() {
         engine.TranslatedRuleShadowStats().incremental_style_updates,
         1
     );
-    assert_eq!(native_width(&owner, target), 20.0);
+    assert_eq!(width(&owner, target), 20.0);
     let target_style = owner.GetDocument().ResolvedStyleHandle(target).unwrap();
 
     set_attribute(&mut owner, parent, "style", "--size:47px;--tone:blue");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 47.0);
+    assert_eq!(width(&owner, consumer), 47.0);
     assert!(std::sync::Arc::ptr_eq(
         &target_style,
         &owner.GetDocument().ResolvedStyleHandle(target).unwrap()
@@ -4637,7 +4674,7 @@ fn suppressed_element_recalculates_when_its_display_variable_changes() {
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     assert!(resolved.generates_box);
     assert_eq!(
-        unsafe { &*resolved.native_style.Get() }.Display(),
+        unsafe { &*resolved.computed_style_owner.Get() }.Display(),
         EDisplay::kBlock
     );
 }
@@ -4654,14 +4691,14 @@ fn local_custom_property_declaration_stops_parent_change() {
     let mut engine = StyleEngine::new(&owner);
 
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 9.0);
+    assert_eq!(width(&owner, consumer), 9.0);
     let local_style = owner.GetDocument().ResolvedStyleHandle(local).unwrap();
-    assert!(unsafe { &*local_style.native_style.Get() }.HasVariableDeclaration());
+    assert!(unsafe { &*local_style.computed_style_owner.Get() }.HasVariableDeclaration());
     let consumer_style = owner.GetDocument().ResolvedStyleHandle(consumer).unwrap();
 
     set_attribute(&mut owner, parent, "style", "--size:47px");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(native_width(&owner, consumer), 9.0);
+    assert_eq!(width(&owner, consumer), 9.0);
     assert!(std::sync::Arc::ptr_eq(
         &local_style,
         &owner.GetDocument().ResolvedStyleHandle(local).unwrap()
@@ -4686,17 +4723,18 @@ fn production_inherited_nested_custom_property_resolves_border_color() {
         "{:?}",
         engine.Diagnostics()
     );
-    let color = owner
-        .GetDocument()
-        .ResolvedStyleFor(target)
-        .unwrap()
-        .style
-        .paint
-        .border_colors[0];
-    assert!((color.red - 209.0 / 255.0).abs() < 0.001, "{color:?}");
-    assert!((color.green - 217.0 / 255.0).abs() < 0.001, "{color:?}");
-    assert!((color.blue - 224.0 / 255.0).abs() < 0.001, "{color:?}");
-    assert!((color.alpha - 1.0).abs() < 0.001, "{color:?}");
+    let style = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
+    assert_eq!(
+        style.BorderTopColor().GetColor(),
+        Color::FromRGB(209, 217, 224)
+    );
 }
 
 #[test]
@@ -4750,7 +4788,7 @@ fn production_pseudo_sheet_removal_and_unsupported_requests_do_not_fake_content(
 }
 
 #[test]
-fn production_animation_transition_cascade_writes_native_timing_lists() {
+fn production_animation_transition_cascade_writes_computed_style_timing_lists() {
     use layoutng_style::style::css_timing_data::{
         PlaybackDirection, TimingFunction, TransitionBehavior, TransitionProperty,
     };
@@ -4773,10 +4811,10 @@ fn production_animation_transition_cascade_writes_native_timing_lists() {
         .GetDocument()
         .ResolvedStyleFor(target)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
-    let native = unsafe { &*initial.Get() };
-    let animation = unsafe { &*native.Animations().Get() };
+    let computed_style = unsafe { &*initial.Get() };
+    let animation = unsafe { &*computed_style.Animations().Get() };
     assert_eq!(animation.DurationList(), &[Some(0.15)]);
     assert_eq!(animation.DelayStartList()[0].time_delay, 0.25);
     assert_eq!(
@@ -4790,7 +4828,7 @@ fn production_animation_transition_cascade_writes_native_timing_lists() {
             ..
         }
     ));
-    let transition = unsafe { &*native.Transitions().Get() };
+    let transition = unsafe { &*computed_style.Transitions().Get() };
     assert_eq!(transition.DurationList(), &[Some(1.0), Some(0.2)]);
     assert_eq!(transition.DelayStartList()[0].time_delay, -0.3);
     assert_eq!(
@@ -4818,9 +4856,15 @@ fn production_animation_transition_cascade_writes_native_timing_lists() {
         engine.Diagnostics()
     );
     let updated = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let updated = unsafe { &*updated.native_style.Get() };
-    assert_ne!(updated.Animations().Get(), native.Animations().Get());
-    assert_ne!(updated.Transitions().Get(), native.Transitions().Get());
+    let updated = unsafe { &*updated.computed_style_owner.Get() };
+    assert_ne!(
+        updated.Animations().Get(),
+        computed_style.Animations().Get()
+    );
+    assert_ne!(
+        updated.Transitions().Get(),
+        computed_style.Transitions().Get()
+    );
     assert_eq!(
         unsafe { &*updated.Animations().Get() }.DelayStartList()[0].time_delay,
         0.5
@@ -4838,7 +4882,7 @@ fn production_animation_transition_cascade_writes_native_timing_lists() {
 }
 
 #[test]
-fn production_position_and_repeat_values_reach_native_style() {
+fn production_position_and_repeat_values_reach_computed_style_style() {
     use layoutng_style::style::computed_style_constants::{BackgroundEdgeOrigin, EFillRepeat};
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=target></div>");
@@ -4854,15 +4898,15 @@ fn production_position_and_repeat_values_reach_native_style() {
         engine.Diagnostics()
     );
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
-    assert_eq!(native.ObjectPosition().X().Pixels(), 10.0);
-    assert_eq!(native.ObjectPosition().Y().Pixels(), 20.0);
-    assert_eq!(native.PerspectiveOrigin().X().PercentValue(), 25.0);
-    assert_eq!(native.PerspectiveOrigin().Y().PercentValue(), 75.0);
-    assert_eq!(native.GetTransformOrigin().X().PercentValue(), 10.0);
-    assert_eq!(native.GetTransformOrigin().Y().PercentValue(), 20.0);
-    assert_eq!(native.GetTransformOrigin().Z(), -3.0);
-    let background = native.BackgroundLayers();
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
+    assert_eq!(computed_style.ObjectPosition().X().Pixels(), 10.0);
+    assert_eq!(computed_style.ObjectPosition().Y().Pixels(), 20.0);
+    assert_eq!(computed_style.PerspectiveOrigin().X().PercentValue(), 25.0);
+    assert_eq!(computed_style.PerspectiveOrigin().Y().PercentValue(), 75.0);
+    assert_eq!(computed_style.GetTransformOrigin().X().PercentValue(), 10.0);
+    assert_eq!(computed_style.GetTransformOrigin().Y().PercentValue(), 20.0);
+    assert_eq!(computed_style.GetTransformOrigin().Z(), -3.0);
+    let background = computed_style.BackgroundLayers();
     assert_eq!(background.PositionX().Pixels(), 7.0);
     assert_eq!(background.PositionY().Pixels(), 9.0);
     assert_eq!(background.BackgroundXOrigin(), BackgroundEdgeOrigin::kRight);
@@ -4872,7 +4916,7 @@ fn production_position_and_repeat_values_reach_native_style() {
     );
     assert_eq!(background.Repeat().x, EFillRepeat::kRoundFill);
     assert_eq!(background.Repeat().y, EFillRepeat::kSpaceFill);
-    let mask = native.MaskLayers();
+    let mask = computed_style.MaskLayers();
     assert_eq!(mask.PositionX().Pixels(), 3.0);
     assert_eq!(mask.PositionY().Pixels(), 4.0);
     assert_eq!(mask.Repeat().x, EFillRepeat::kNoRepeatFill);
@@ -4899,9 +4943,12 @@ fn production_scope_root_limit_nested_and_self_limit() {
             .GetDocument()
             .ResolvedStyleFor(node(&owner, id))
             .unwrap();
-        let native = unsafe { &*style.native_style.Get() };
+        let computed_style = unsafe { &*style.computed_style_owner.Get() };
         assert_eq!(
-            (native.Width().Pixels(), native.Height().Pixels()),
+            (
+                computed_style.Width().Pixels(),
+                computed_style.Height().Pixels()
+            ),
             (width, height),
             "{id}: {:?}",
             engine.Diagnostics()
@@ -4912,7 +4959,9 @@ fn production_scope_root_limit_nested_and_self_limit() {
         .ResolvedStyleFor(node(&owner, "root"))
         .unwrap();
     assert_eq!(
-        unsafe { &*root.native_style.Get() }.PaddingLeft().Pixels(),
+        unsafe { &*root.computed_style_owner.Get() }
+            .PaddingLeft()
+            .Pixels(),
         3.0
     );
     assert!(
@@ -4931,17 +4980,17 @@ fn production_scope_proximity_precedes_order_after_specificity_and_layer() {
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS("@layer first,second; @scope (.near){.item{width:11px;height:12px}} @scope (.far){.item{width:21px} #target{height:22px}} .item{width:31px} @layer first{@scope (.near){.item{padding-left:13px}}} @layer second{@scope (.far){.item{padding-left:23px}}}"));
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(node(&owner, "target"))
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Width().Pixels(), 11.0);
-    assert_eq!(native.Height().Pixels(), 22.0);
-    assert_eq!(native.PaddingLeft().Pixels(), 23.0);
+    assert_eq!(computed_style.Width().Pixels(), 11.0);
+    assert_eq!(computed_style.Height().Pixels(), 22.0);
+    assert_eq!(computed_style.PaddingLeft().Pixels(), 23.0);
     assert!(
         engine.Diagnostics().is_empty(),
         "{:?}",
@@ -4973,7 +5022,7 @@ fn production_scope_implicit_owner_and_root_limit_mutation_invalidation() {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         (
@@ -4987,7 +5036,7 @@ fn production_scope_implicit_owner_and_root_limit_mutation_invalidation() {
             .GetDocument()
             .ResolvedStyleFor(node(&owner, "outside"))
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert!(!outside.Width().IsFixed());
@@ -5056,7 +5105,7 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
         .GetDocument()
         .ResolvedStyleFor(target)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
     assert!(
         unsafe { &*initial.Get() }.DependsOnSizeContainerQueries(),
@@ -5079,21 +5128,14 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
     let root = node(&owner, "root");
     set_attribute(&mut owner, root, "class", "enabled");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert_eq!(
-        unsafe { &*native_pointer(&owner, target) }
-            .Height()
-            .Pixels(),
-        23.0
-    );
+    assert_eq!(unsafe { &*pointer(&owner, target) }.Height().Pixels(), 23.0);
     assert!(
         owner.GetDocument().StyleState().stats.resolved_nodes <= 2,
         "compiled class invalidation must reach only its subject even beside conditional rules"
     );
     owner.GetDocumentMut().RemoveAttributeDefault(root, "class");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    assert!(unsafe { &*native_pointer(&owner, target) }
-        .Height()
-        .IsAuto());
+    assert!(unsafe { &*pointer(&owner, target) }.Height().IsAuto());
     assert!(
         owner.GetDocument().StyleState().stats.resolved_nodes <= 2,
         "removed class keys must remain available to invalidation"
@@ -5108,7 +5150,7 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(wide.Width().Pixels(), 41.0);
@@ -5129,7 +5171,7 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(narrow.Width().Pixels(), 7.0);
@@ -5178,11 +5220,11 @@ fn production_slotted_shadow_container_query_uses_flat_tree_ancestry_in_update()
         let mut builder =
             layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
         builder.SetContainerType(1);
-        let native = foundation::Persistent::from_ptr(
+        let computed_style = foundation::Persistent::from_ptr(
             builder.TakeStyle() as *mut layoutng_style::style::computed_style::ComputedStyle
         );
         let mut resolved = dom::persistent_document::ResolvedNodeStyle::default();
-        resolved.SetNativeStyle(native);
+        resolved.SetComputedStyleOwner(computed_style);
         document.SetResolvedStyle(container, resolved);
         container
     };
@@ -5201,7 +5243,7 @@ fn production_slotted_shadow_container_query_uses_flat_tree_ancestry_in_update()
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(wide.Width().Pixels(), 41.0);
@@ -5218,7 +5260,7 @@ fn production_slotted_shadow_container_query_uses_flat_tree_ancestry_in_update()
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(narrow.Width().Pixels(), 7.0);
@@ -5380,7 +5422,7 @@ fn update_consumes_ordered_manual_slot_owners_and_fallback_activation() {
 }
 
 #[test]
-fn production_animation_shorthand_names_composition_and_inheritance_reach_native_data() {
+fn production_animation_shorthand_names_composition_and_inheritance_reach_computed_style_data() {
     use layoutng_style::style::css_timing_data::{
         CompositeOperation, PlaybackDirection, StyleTimeline, TimingFunction,
     };
@@ -5403,10 +5445,10 @@ fn production_animation_shorthand_names_composition_and_inheritance_reach_native
         .GetDocument()
         .ResolvedStyleFor(target)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
-    let native = unsafe { &*style.Get() };
-    let animation = unsafe { &*native.Animations().Get() };
+    let computed_style = unsafe { &*style.Get() };
+    let animation = unsafe { &*computed_style.Animations().Get() };
     assert_eq!(
         unsafe { &*animation.NameList()[0].Get() }.GetName().Utf8(),
         "fade"
@@ -5449,7 +5491,7 @@ fn production_animation_shorthand_names_composition_and_inheritance_reach_native
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     let updated = unsafe { &*updated.Animations().Get() };
@@ -5463,7 +5505,7 @@ fn production_animation_shorthand_names_composition_and_inheritance_reach_native
 }
 
 #[test]
-fn production_grid_template_areas_shorthand_and_inheritance_reach_native_grid_data() {
+fn production_grid_template_areas_shorthand_and_inheritance_reach_computed_style_grid_data() {
     use foundation::String;
     use layoutng_style::style::computed_style_constants::GridAutoFlow;
     let _heap = foundation::LayoutHeapScope::new();
@@ -5485,25 +5527,28 @@ fn production_grid_template_areas_shorthand_and_inheritance_reach_native_grid_da
         .GetDocument()
         .ResolvedStyleFor(target)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
-    let native = unsafe { &*style.Get() };
-    let areas = unsafe { &*native.GridTemplateAreas().Get() };
+    let computed_style = unsafe { &*style.Get() };
+    let areas = unsafe { &*computed_style.GridTemplateAreas().Get() };
     assert_eq!((areas.row_count, areas.column_count), (2, 2));
     assert_eq!(
         areas.implicit_named_grid_row_lines[&String::from("head-end")],
         vec![1]
     );
-    assert_eq!(native.GetGridAutoFlow(), GridAutoFlow::kAutoFlowRowDense);
     assert_eq!(
-        native
+        computed_style.GetGridAutoFlow(),
+        GridAutoFlow::kAutoFlowRowDense
+    );
+    assert_eq!(
+        computed_style
             .GridAutoRows()
             .RepeatTrackSize(0, 0)
             .MinTrackBreadth()
             .Pixels(),
         12.0
     );
-    let columns = unsafe { &*native.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
+    let columns = unsafe { &*computed_style.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
     assert_eq!(
         columns.RepeatTrackSize(0, 0).MaxTrackBreadth().FlexValue(),
         2.0
@@ -5520,7 +5565,7 @@ fn production_grid_template_areas_shorthand_and_inheritance_reach_native_grid_da
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert!(
@@ -5538,7 +5583,7 @@ fn production_grid_template_areas_shorthand_and_inheritance_reach_native_grid_da
 }
 
 #[test]
-fn named_grid_lines_reach_native_track_list_and_grid_positions() {
+fn named_grid_lines_reach_computed_style_track_list_and_grid_positions() {
     use foundation::String;
 
     let _heap = foundation::LayoutHeapScope::new();
@@ -5553,22 +5598,25 @@ fn named_grid_lines_reach_native_track_list_and_grid_positions() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    let rows = unsafe { &*native.SpecifiedGridTemplateRows().Get() };
+    let rows = unsafe { &*computed_style.SpecifiedGridTemplateRows().Get() };
     assert_eq!(rows.GetTrackList().TrackCountWithoutAutoRepeat(), 3);
     assert_eq!(rows.GetNamedGridLines()[&String::from("line1")], [1]);
     assert_eq!(rows.GetNamedGridLines()[&String::from("line2")], [2]);
-    assert!(native.GridRowStart().IsNamedGridArea());
-    assert_eq!(native.GridRowStart().NamedGridLine().Utf8(), "line1");
-    assert!(native.GridRowEnd().IsNamedGridArea());
-    assert_eq!(native.GridRowEnd().NamedGridLine().Utf8(), "line2");
+    assert!(computed_style.GridRowStart().IsNamedGridArea());
+    assert_eq!(
+        computed_style.GridRowStart().NamedGridLine().Utf8(),
+        "line1"
+    );
+    assert!(computed_style.GridRowEnd().IsNamedGridArea());
+    assert_eq!(computed_style.GridRowEnd().NamedGridLine().Utf8(), "line2");
 }
 
 #[test]
@@ -5588,8 +5636,8 @@ fn translated_element_resolution_retains_dynamic_pseudo_markers() {
     assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
     assert!(stats.translated_style_resolver_applied > 0, "{stats:?}");
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
-    assert!(native.HasPseudoElementStyle(PseudoId::kPseudoIdBefore));
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
+    assert!(computed_style.HasPseudoElementStyle(PseudoId::kPseudoIdBefore));
     assert_eq!(
         style.before.as_ref().map(|pseudo| pseudo.text.as_str()),
         Some("marker")
@@ -5597,7 +5645,7 @@ fn translated_element_resolution_retains_dynamic_pseudo_markers() {
 }
 
 #[test]
-fn fetched_background_css_values_reach_native_fill_layer_cache() {
+fn fetched_background_css_values_reach_computed_style_fill_layer_cache() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<!doctype html><div id=pending></div><div id=loaded></div><div id=local></div><div id=data></div><div id=gradient></div><div id=relative></div>",
@@ -5621,6 +5669,8 @@ fn fetched_background_css_values_reach_native_fill_layer_cache() {
             natural_height: 100.0,
             resolution_scale: 1.0,
             orientation: Default::default(),
+            known_to_be_opaque: false,
+            is_cors_same_origin: false,
         },
     );
     let mut engine = StyleEngine::new(&owner);
@@ -5644,15 +5694,15 @@ fn fetched_background_css_values_reach_native_fill_layer_cache() {
         ("gradient", None),
         ("relative", Some("https://example.test/image.svg")),
     ] {
-        let native = unsafe {
+        let computed_style = unsafe {
             &*owner
                 .GetDocument()
                 .ResolvedStyleFor(node(&owner, id))
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
-        let layers = native.BackgroundLayers();
+        let layers = computed_style.BackgroundLayers();
         let image = layers.GetImage();
         assert!(!image.is_null(), "{id}");
         let value = unsafe { &*image }.CssValue();
@@ -5670,7 +5720,7 @@ fn fetched_background_css_values_reach_native_fill_layer_cache() {
 }
 
 #[test]
-fn html_hidden_presentation_hint_uses_native_display_and_author_hint_origin() {
+fn html_hidden_presentation_hint_uses_computed_style_display_and_author_hint_origin() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<!doctype html><style>#override { display:block } #contents {display:contents}</style>\
@@ -5696,7 +5746,7 @@ fn html_hidden_presentation_hint_uses_native_display_and_author_hint_origin() {
             .unwrap();
         let resolved = owner.GetDocument().ResolvedStyleFor(index).unwrap();
         assert_eq!(
-            unsafe { &*resolved.native_style.Get() }.Display(),
+            unsafe { &*resolved.computed_style_owner.Get() }.Display(),
             expected,
             "{name}"
         );
@@ -5718,7 +5768,7 @@ fn html_hidden_presentation_hint_uses_native_display_and_author_hint_origin() {
                 .GetDocument()
                 .ResolvedStyleFor(rtl)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Direction(),
@@ -5749,10 +5799,10 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
             .GetDocument()
             .ResolvedStyleFor(node(&owner, name))
             .unwrap();
-        let native = unsafe { &*resolved.native_style.Get() };
-        assert_ne!(native.Display(), EDisplay::kNone, "{name}");
+        let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+        assert_ne!(computed_style.Display(), EDisplay::kNone, "{name}");
         assert_eq!(
-            native.ContentVisibility(),
+            computed_style.ContentVisibility(),
             EContentVisibility::kHidden,
             "{name}"
         );
@@ -5767,7 +5817,7 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
         .ResolvedStyleFor(node(&owner, "space"))
         .unwrap();
     assert_eq!(
-        unsafe { &*spaced.native_style.Get() }.Display(),
+        unsafe { &*spaced.computed_style_owner.Get() }.Display(),
         EDisplay::kNone
     );
     let over = owner
@@ -5775,7 +5825,7 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
         .ResolvedStyleFor(node(&owner, "override"))
         .unwrap();
     assert_eq!(
-        unsafe { &*over.native_style.Get() }.ContentVisibility(),
+        unsafe { &*over.computed_style_owner.Get() }.ContentVisibility(),
         EContentVisibility::kVisible
     );
     for value in ["", "until-found", "false", "UNTIL-FOUND"] {
@@ -5784,18 +5834,22 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
         engine
             .EnsureComputedStyle(&mut owner, &media(), &[], target)
             .unwrap();
-        let native = unsafe {
+        let computed_style = unsafe {
             &*owner
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         let until_found = value.eq_ignore_ascii_case("until-found");
-        assert_eq!(native.Display() == EDisplay::kNone, !until_found, "{value}");
         assert_eq!(
-            native.ContentVisibility(),
+            computed_style.Display() == EDisplay::kNone,
+            !until_found,
+            "{value}"
+        );
+        assert_eq!(
+            computed_style.ContentVisibility(),
             if until_found {
                 EContentVisibility::kHidden
             } else {
@@ -5806,16 +5860,19 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
     }
     owner.GetDocumentMut().RemoveAttribute(target, "hidden", "");
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_ne!(native.Display(), EDisplay::kNone);
-    assert_eq!(native.ContentVisibility(), EContentVisibility::kVisible);
+    assert_ne!(computed_style.Display(), EDisplay::kNone);
+    assert_eq!(
+        computed_style.ContentVisibility(),
+        EContentVisibility::kVisible
+    );
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
@@ -5869,22 +5926,22 @@ fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes(
     ];
     engine.Update(&mut owner, &media(), &sheets).unwrap();
     for index in &cases {
-        let native = unsafe {
+        let computed_style = unsafe {
             &*owner
                 .GetDocument()
                 .ResolvedStyleFor(*index)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         assert_ne!(
-            native.Display(),
+            computed_style.Display(),
             EDisplay::kNone,
             "namespace {:?}",
             owner.GetDocument().Node(*index).Namespace()
         );
         assert_eq!(
-            native.ContentVisibility(),
+            computed_style.ContentVisibility(),
             foundation::EContentVisibility::kVisible
         );
     }
@@ -5898,17 +5955,17 @@ fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes(
     let html = *cases.last().unwrap();
     set_attribute(&mut owner, html, "hidden", "until-found");
     engine.Update(&mut owner, &media(), &sheets).unwrap();
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(html)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_ne!(native.Display(), EDisplay::kNone);
+    assert_ne!(computed_style.Display(), EDisplay::kNone);
     assert_eq!(
-        native.ContentVisibility(),
+        computed_style.ContentVisibility(),
         foundation::EContentVisibility::kHidden
     );
     set_attribute(&mut owner, html, "hidden", "");
@@ -5917,15 +5974,15 @@ fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes(
     engine
         .EnsureComputedStyle(&mut owner, &media(), &sheets, html)
         .unwrap();
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(html)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Display(), EDisplay::kNone);
+    assert_eq!(computed_style.Display(), EDisplay::kNone);
     assert_eq!(
         engine
             .TranslatedRuleShadowStats()
@@ -5950,7 +6007,7 @@ fn production_fit_content_tracks_preserve_typed_limits_and_inheritance() {
         .GetDocument()
         .ResolvedStyleFor(target)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
     let style = unsafe { &*style.Get() };
     let columns = unsafe { &*style.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
@@ -6016,7 +6073,7 @@ fn production_fit_content_rejects_invalid_arguments_without_losing_prior_declara
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .clone();
         let style = unsafe { &*style.Get() };
         assert!(

@@ -11,15 +11,15 @@ use super::layout_object::StyleChangeContext;
 use super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::shapes::shape_outside_info::ShapeOutsideInfo;
 
-#[path = "../../../layout_invalidation/src/native_layout_box_style_change.rs"]
-mod layout_invalidation_native_layout_box_style_change;
-use layout_invalidation_native_layout_box_style_change::{
+#[path = "../../../layout_invalidation/src/layout_box_style_change.rs"]
+mod layout_invalidation_layout_box_style_change;
+use layout_invalidation_layout_box_style_change::{
     LayoutBoxStyleDidChange, LayoutBoxStyleWillChange,
 };
 
-#[path = "../../../layout_invalidation/src/native_layout_box_tree_lifecycle.rs"]
-mod layout_invalidation_native_layout_box_tree_lifecycle;
-use layout_invalidation_native_layout_box_tree_lifecycle::{
+#[path = "../../../layout_invalidation/src/layout_box_tree_lifecycle.rs"]
+mod layout_invalidation_layout_box_tree_lifecycle;
+use layout_invalidation_layout_box_tree_lifecycle::{
     LayoutBoxInsertedIntoTree, LayoutBoxWillBeDestroyed, LayoutBoxWillBeRemovedFromTree,
 };
 

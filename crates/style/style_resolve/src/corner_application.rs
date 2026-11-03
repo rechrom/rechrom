@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native corner Superellipse and StyleBorderShape owners.
+//! Canonical corner Superellipse and StyleBorderShape owners.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{MakeGarbageCollected, Member};

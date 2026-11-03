@@ -14,12 +14,12 @@ use style::{
     },
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -37,17 +37,17 @@ fn parse(id: P, text: &str) -> Vec<style::production_css_value::PropertyValue> {
     .unwrap()
 }
 #[test]
-fn anchor_names_scope_and_position_anchor_preserve_document_root_native_identity() {
+fn anchor_names_scope_and_position_anchor_preserve_document_root_computed_style_identity() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=p style='anchor-name:--Foo,--foo;anchor-scope:--Foo,--other;position-anchor:--Foo'><div id=c style='anchor-name:inherit;anchor-scope:inherit;position-anchor:inherit'></div><div id=i style='anchor-name:initial;anchor-scope:initial;position-anchor:initial'></div><div id=u style='anchor-name:unset;anchor-scope:unset;position-anchor:unset'></div><div id=a style='anchor-name:none;anchor-scope:all;position-anchor:auto'></div><div id=n style='anchor-scope:none;position-anchor:none'></div></div>");
     update(&mut owner);
     let (p, c, i, u, a, n) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "u"),
-        native(&owner, "a"),
-        native(&owner, "n"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "a"),
+        computed_style(&owner, "n"),
     );
     let names = unsafe { &*p.AnchorName().Get() }.GetNames();
     assert_eq!(names.len(), 2);
@@ -102,7 +102,7 @@ fn anchor_names_scope_and_position_anchor_preserve_document_root_native_identity
     assert!(b.AnchorScope().IsAll());
 }
 #[test]
-fn position_area_visibility_and_try_options_reach_native_fields_and_reset() {
+fn position_area_visibility_and_try_options_reach_computed_style_fields_and_reset() {
     let _heap = foundation::LayoutHeapScope::new();
     assert_eq!(
         parse(P::kPositionArea, "top left")[0]
@@ -141,13 +141,13 @@ fn position_area_visibility_and_try_options_reach_native_fields_and_reset() {
     let mut owner=html::html_parser::ParseHTML("<div id=p style='position-area:top left;position-visibility:no-overflow anchors-visible;position-try:most-width flip-y flip-x --preferred,top span-right,--other'><div id=c style='position-area:inherit;position-visibility:inherit;position-try:inherit'></div><div id=i style='position-area:initial;position-visibility:initial;position-try:initial'></div><div id=u style='position-area:unset;position-visibility:unset;position-try:unset'></div><div id=r style='position-try-order:most-height;position-try-fallbacks:--old;position-try:none;position-area:none;position-visibility:always'></div><div id=l style='position-area:self-inline-end self-block-start;position-try-fallbacks:flip-block flip-inline flip-start'></div><div id=s style='position-area:span-start;position-try:bottom'></div></div>");
     update(&mut owner);
     let (p, c, i, u, r, l, s) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "u"),
-        native(&owner, "r"),
-        native(&owner, "l"),
-        native(&owner, "s"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "r"),
+        computed_style(&owner, "l"),
+        computed_style(&owner, "s"),
     );
     assert_eq!(p.GetPositionArea().FirstStart(), R::kLeft);
     assert_eq!(p.GetPositionArea().FirstEnd(), R::kLeft);
@@ -190,14 +190,17 @@ fn position_area_visibility_and_try_options_reach_native_fields_and_reset() {
     let mut names = foundation::HashSet::new();
     names.insert(foundation::AtomicString::from_str("--other"));
     assert!(fs.HasPositionTryName(&names));
-    for native in [i, u] {
-        assert!(native.GetPositionArea().IsNone());
+    for computed_style in [i, u] {
+        assert!(computed_style.GetPositionArea().IsNone());
         assert_eq!(
-            native.GetPositionVisibility(),
+            computed_style.GetPositionVisibility(),
             PositionVisibility::kAnchorsVisible
         );
-        assert_eq!(native.PositionTryOrder(), EPositionTryOrder::kNormal);
-        assert!(native.GetPositionTryFallbacks().Get().is_null());
+        assert_eq!(
+            computed_style.PositionTryOrder(),
+            EPositionTryOrder::kNormal
+        );
+        assert!(computed_style.GetPositionTryFallbacks().Get().is_null());
     }
     assert!(r.GetPositionArea().IsNone());
     assert_eq!(r.GetPositionVisibility(), PositionVisibility::kAlways);
@@ -219,7 +222,7 @@ fn position_area_visibility_and_try_options_reach_native_fields_and_reset() {
     assert_eq!(s.PositionTryOrder(), EPositionTryOrder::kNormal);
 }
 #[test]
-fn anchor_invalid_grammars_and_native_capacity_remain_explicit() {
+fn anchor_invalid_grammars_and_computed_style_capacity_remain_explicit() {
     let _heap = foundation::LayoutHeapScope::new();
     for (id, text) in [
         (P::kAnchorName, "foo"),

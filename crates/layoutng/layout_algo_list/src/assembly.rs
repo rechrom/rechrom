@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{AtomicString, EListStylePosition, LayoutUnit, MakeGarbageCollected, To};
-use layoutng_assembly::internal::layout_input::{ExtendedStyle, ListStyleType, NodeKind};
+use layoutng_assembly::internal::layout_input::NodeKind;
 use layoutng_assembly::internal::layout_node_metadata::{Element, Node};
 use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_assembly::LayoutAssembly;
@@ -72,13 +72,14 @@ fn CreateListObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObjec
             MakeGarbageCollected(LayoutOutsideListMarker::new(element)) as *mut LayoutObject
         };
         if node.InputIsStyleGenerated() {
-            let defaults = ExtendedStyle::default();
-            let parent_style = unsafe { &*parent }.InputStyle();
-            let extra = parent_style.extended.as_deref().unwrap_or(&defaults);
-            let symbol = matches!(
-                extra.list_style_type,
-                ListStyleType::kDisc | ListStyleType::kCircle | ListStyleType::kSquare
-            );
+            let list_style_type = unsafe { &*parent }.ComputedStyleRef().ListStyleType().Get();
+            let symbol = unsafe { list_style_type.as_ref() }.is_some_and(|style| {
+                style.IsCounterStyle()
+                    && matches!(
+                        style.GetCounterStyleName().Utf8().as_str(),
+                        "disc" | "circle" | "square"
+                    )
+            });
             let marker_data = ListMarker::GetMut(marker);
             unsafe { &mut *marker_data }.SetStandaloneSymbolMarker(symbol);
         }

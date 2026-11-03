@@ -133,7 +133,7 @@ impl FontEngineHandle {
         Rc::ptr_eq(&self.engine, &other.engine)
     }
 
-    /// Layout's native resolver returns references retained by FontEngine, so
+    /// Layout.s font resolver returns references retained by FontEngine, so
     /// its existing TLS scope cannot use a short `RefMut`. The caller must own
     /// the exclusive Style/Layout lifecycle scope for the returned reference.
     pub unsafe fn get_mut_for_exclusive_scope(&self) -> &mut FontEngine {
@@ -260,6 +260,9 @@ impl FontEngine {
                 {
                     return Err(FontError::InvalidResponse);
                 }
+                let fallback_ranks_only =
+                    matches!(&response.request.query, SystemFontQuery::Fallback { .. });
+                let catalog_changed = matches!(&response.answer, SystemFontAnswer::Face(_));
                 if let (
                     Some(collector),
                     SystemFontQuery::OpenFace { id },
@@ -284,8 +287,17 @@ impl FontEngine {
                 }
                 self.pending.remove(index);
                 self.answers.push(response);
-                self.resolver = None;
-                self.resolved_faces = None;
+                // ResolvedFontSource reads contextual fallback ranks from the
+                // shared collector at shaping time. Reusing a face that is
+                // already open therefore invalidates text shaping, but does
+                // not rebuild every element's primary Font binding. Family
+                // matches and newly opened faces still rebuild that binding.
+                if !fallback_ranks_only || catalog_changed {
+                    self.resolver = None;
+                }
+                if catalog_changed {
+                    self.resolved_faces = None;
+                }
             }
         }
         self.metrics_cache.clear();
@@ -735,10 +747,10 @@ mod tests {
     fn unicode_family_matching_is_shared_by_loading_and_discovery() {
         let version = FontContextVersion(0);
         let mut engine = FontEngine::new(version, None);
-        let mut native = face();
-        native.family = "Straße Σ".into();
+        let mut platform_face = face();
+        platform_face.family = "Straße Σ".into();
         engine
-            .ApplyMutation(FontMutation::SetFaces(vec![native]))
+            .ApplyMutation(FontMutation::SetFaces(vec![platform_face]))
             .unwrap();
         let mut description = description();
         description.SetFamily(&crate::FontFamily::new(
@@ -1199,7 +1211,7 @@ mod tests {
             italic: false,
             locale: "ja".into(),
         };
-        let id = SystemFontFaceId("japanese-native-face".into());
+        let id = SystemFontFaceId("japanese-system-face".into());
         let request = engine
             .PrepareSystemQuery(query.clone())
             .system_queries

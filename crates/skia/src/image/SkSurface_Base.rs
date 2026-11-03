@@ -584,11 +584,7 @@ impl<'device> SkSurface_Base<'device> {
         }
         true
     }
-    unsafe fn validate_canvas_identity_raw(
-        base: NonNull<Self>,
-        native_file: *const u8,
-        native_line: u32,
-    ) {
+    unsafe fn validate_canvas_identity_raw(base: NonNull<Self>, file: *const u8, line: u32) {
         #[cfg(sk_debug)]
         {
             let canvas = {
@@ -598,7 +594,7 @@ impl<'device> SkSurface_Base<'device> {
                     .map(|canvas| NonNull::from(canvas.as_ref().get_ref().canvas_ref()))
             };
             if let Some(canvas) = canvas {
-                crate::SkASSERT!(@source native_file,native_line; @condition b"!fOwnedBaseCanvas || fOwnedBaseCanvas->getSurface() == this\0".as_ptr(); unsafe{SkCanvas::get_surface_base_raw(canvas)}==Some(base));
+                crate::SkASSERT!(@source file,line; @condition b"!fOwnedBaseCanvas || fOwnedBaseCanvas->getSurface() == this\0".as_ptr(); unsafe{SkCanvas::get_surface_base_raw(canvas)}==Some(base));
             }
         }
     }

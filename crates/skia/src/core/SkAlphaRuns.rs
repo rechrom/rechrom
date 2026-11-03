@@ -38,7 +38,7 @@ impl<'a> SkAlphaRuns<'a> {
         }
     }
     #[cfg(sk_debug)]
-    fn native_width(&self) -> i32 {
+    fn width(&self) -> i32 {
         // Rust safety precondition, not a native release field/default value.
         assert!(
             self.width_initialized,
@@ -66,7 +66,7 @@ impl<'a> SkAlphaRuns<'a> {
         offset_x: usize,
     ) -> usize {
         crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 61; @condition b"x >= 0 && x + (startAlpha != 0) + middleCount + (stopAlpha != 0) <= fWidth\0".as_ptr(); x + usize::from(start_alpha != 0) + middle_count + usize::from(stop_alpha != 0)
-                <= self.native_width() as usize);
+                <= self.width() as usize);
         crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 63; @condition b"fRuns[offsetX] >= 0\0".as_ptr(); self.fRuns[offset_x] >= 0);
         let mut base = offset_x;
         let mut last_alpha = base;
@@ -220,14 +220,14 @@ impl<'a> SkAlphaRuns<'a> {
     pub fn validate(&self) {
         #[cfg(sk_debug)]
         {
-            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 58; @condition b"fWidth > 0\0".as_ptr(); self.native_width() > 0);
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 58; @condition b"fWidth > 0\0".as_ptr(); self.width() > 0);
             let mut count = 0;
             while self.fRuns[count] != 0 {
                 crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 64; @condition b"*runs > 0\0".as_ptr(); self.fRuns[count] > 0);
                 count += self.fRuns[count] as usize;
-                crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 66; @condition b"count <= fWidth\0".as_ptr(); count <= self.native_width() as usize);
+                crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 66; @condition b"count <= fWidth\0".as_ptr(); count <= self.width() as usize);
             }
-            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 69; @condition b"count == fWidth\0".as_ptr(); (count) == (self.native_width() as usize));
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 69; @condition b"count == fWidth\0".as_ptr(); (count) == (self.width() as usize));
         }
     }
 }

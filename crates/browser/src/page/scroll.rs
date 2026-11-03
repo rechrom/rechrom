@@ -71,6 +71,7 @@ impl Page {
             }
         }
         drop(pending);
+        self.state.compositor_scroll_updates.set(true);
         self.state.InvalidateLayoutOutput();
         if !self.state.dirty.get() {
             self.state.scroll_only.set(true);
@@ -154,7 +155,8 @@ impl Page {
         let mut requested_main_frame = false;
         for effect in effects {
             match effect {
-                CompositorMainThreadEffect::RequestMainFrame => requested_main_frame = true,
+                CompositorMainThreadEffect::BeginMainFrame
+                | CompositorMainThreadEffect::RequestMainFrame => requested_main_frame = true,
                 CompositorMainThreadEffect::ScrollOffsetChanged {
                     sequence,
                     element,
@@ -173,6 +175,25 @@ impl Page {
                             y: f64::from(offset.y()),
                         },
                     )?;
+                }
+                // Source: core/page/scrolling/scrolling_coordinator.cc:88-100.
+                // Element-id lookup is shared with compositor scroll offsets;
+                // the native PaintLayerScrollableArea retains the visibility.
+                CompositorMainThreadEffect::ScrollbarsHiddenChanged { element, hidden } => {
+                    let Some((_, target)) = self.CompositorScrollOwner(element) else {
+                        continue;
+                    };
+                    if self
+                        .state
+                        .layout_engine
+                        .borrow_mut()
+                        .UpdateScrollbarsHiddenIfOverlay(target, hidden)
+                    {
+                        self.state.InvalidateLayoutOutput();
+                        self.state.scroll_only.set(true);
+                        self.state.dirty.set(true);
+                        requested_main_frame = true;
+                    }
                 }
                 _ => {}
             }
@@ -311,7 +332,7 @@ impl Page {
             let mut targeted_wheel = wheel.clone();
             targeted_wheel.target_node_id = target_node_id;
             interaction::ComputeMainThreadScrollUpdates(
-                NativePaintFragmentCursor::FromHandle(&frame.fragments),
+                PaintFragmentCursor::FromHandle(&frame.fragments),
                 &targeted_wheel,
                 viewport_height,
                 &current_offset,

@@ -335,7 +335,7 @@ pub fn stoi(s: &[u8], value: &mut SKSL_INT) -> bool {
 // Real compiler-created va_list: no tuple pack, synthetic stack slots, cursor
 // layout assumptions, or Apple-only argument transport. The Vec is the existing
 // language mapping of std::string, not an exported C++ std::string ABI promise.
-mod native_format {
+mod string_format {
     use core::{
         ffi::{c_char, c_int, VaList},
         mem::MaybeUninit,
@@ -398,4 +398,4 @@ mod native_format {
         drop(args);
     }
 }
-pub use native_format::{appendf, printf, vappendf};
+pub use string_format::{appendf, printf, vappendf};

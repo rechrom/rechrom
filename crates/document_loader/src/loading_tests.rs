@@ -267,10 +267,14 @@ impl image_decoder::image_decoder::ImageDecoder for Images {
     ) -> io::Result<image_decoder::image_decoder::DecodedImage> {
         assert_eq!(input.bytes, [1, 2, 3, 255]);
         Ok(image_decoder::image_decoder::DecodedImage {
-            animation: Default::default(),
+            alpha_type: Default::default(),
+            animation: image_resource::PaintImageAnimationMetadata::Known(
+                image_resource::PaintImageAnimationInfo::confirmed_static(),
+            ),
             width: 1,
             height: 1,
             orientation: Default::default(),
+            animation_frames: Vec::new(),
             rgba8: input.bytes.into(),
         })
     }
@@ -293,6 +297,8 @@ impl image_resource::DocumentImageDecoder for DocumentImages {
 #[derive(Default)]
 struct Client {
     mutations: Vec<page_mutation::ResourceMutation>,
+    style_sheet_events: Vec<(u64, String, bool)>,
+    javascript: bool,
 }
 impl ResourceFetcherClient for Client {
     fn ApplyResourceMutation(&mut self, mutation: page_mutation::ResourceMutation) {
@@ -301,8 +307,11 @@ impl ResourceFetcherClient for Client {
     fn DispatchImageEvent(&mut self, _: u64, _: bool) {
         panic!("no JavaScript event dispatch")
     }
+    fn DispatchStyleSheetEvent(&mut self, id: u64, signature: String, loaded: bool) {
+        self.style_sheet_events.push((id, signature, loaded));
+    }
     fn HasJavaScript(&self) -> bool {
-        false
+        self.javascript
     }
 }
 fn fetcher(backend: Rc<RefCell<dyn URLLoader>>) -> ResourceFetcher {
@@ -387,7 +396,10 @@ fn dynamic_link_stylesheet_uses_stylesheet_resource_and_enters_document_cssom() 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url, "https://page.test/root/theme.css");
     assert_eq!(requests[0].destination, RequestDestination::kStyleSheet);
-    let mut client = Client::default();
+    let mut client = Client {
+        javascript: true,
+        ..Default::default()
+    };
     assert_eq!(fetcher.PollPendingStyleSheetsWithBudget(&mut client, 1), 0);
     assert!(fetcher.HasPendingStyleSheets());
     assert_eq!(fetcher.PollPendingStyleSheetsWithBudget(&mut client, 1), 1);
@@ -401,6 +413,14 @@ fn dynamic_link_stylesheet_uses_stylesheet_resource_and_enters_document_cssom() 
         .expect("dynamic link sheet must be attached to its DOM owner");
     assert_eq!(sheet.rules.len(), 2);
     assert!(client.mutations.is_empty());
+    assert_eq!(
+        client.style_sheet_events,
+        vec![(
+            owner_node_id,
+            "theme.css\0stylesheet\0\0false\0\0".into(),
+            true
+        )]
+    );
     assert_eq!(drops.get(), 1);
 }
 
@@ -408,6 +428,7 @@ fn dynamic_link_stylesheet_uses_stylesheet_resource_and_enters_document_cssom() 
 fn fetcher_deduplicates_image_requests_and_delivers_only_completed_mutations() {
     let (backend, drops) = backend(
         Ok(URLResponse {
+            final_url: "https://page.test/root/image.png".into(),
             body: vec![1, 2, 3, 255],
             mime_type: "image/png".into(),
             ..Default::default()
@@ -441,15 +462,45 @@ fn fetcher_deduplicates_image_requests_and_delivers_only_completed_mutations() {
         page_mutation::ResourceMutation::ImageResourceReady(image) => {
             assert_eq!(image.source, "image.png");
             assert_eq!(image.image.width, 1);
+            assert!(image.image.is_cors_same_origin);
             assert_eq!(
                 image.image.BitmapPixels().unwrap().as_slice(),
                 [1, 2, 3, 255]
             );
         }
+        page_mutation::ResourceMutation::ResourceLoadFailed(failure) => {
+            panic!("unexpected image failure: {}", failure.error)
+        }
         _ => panic!("unexpected resource mutation"),
     }
     assert_eq!(fetcher.PollPendingImages(&mut client), 0);
     assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn redirected_cross_origin_image_retains_tainted_origin_provenance() {
+    let (backend, _) = backend(
+        Ok(URLResponse {
+            final_url: "https://cdn.test/image.png".into(),
+            body: vec![1, 2, 3, 255],
+            mime_type: "image/png".into(),
+            ..Default::default()
+        }),
+        0,
+    );
+    let fetcher = fetcher(backend);
+    let mut client = Client::default();
+    fetcher.QueueImage("image.png", None).unwrap();
+    assert_eq!(fetcher.PollPendingImages(&mut client), 1);
+
+    let image = match &client.mutations[0] {
+        page_mutation::ResourceMutation::ImageResourceReady(image) => image,
+        page_mutation::ResourceMutation::ResourceLoadFailed(failure) => {
+            panic!("unexpected image failure: {}", failure.error)
+        }
+        _ => panic!("unexpected resource mutation"),
+    };
+    assert!(!image.image.is_cors_same_origin);
 }
 
 #[test]

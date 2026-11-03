@@ -284,7 +284,7 @@ trait TilingIteratorType {
     fn cursor_x(&self) -> i32;
     fn cursor_y(&self) -> i32;
 }
-macro_rules! native_iterator {
+macro_rules! iterator {
     ($t:ty) => {
         impl TilingIteratorType for $t {
             fn Advance(&mut self) {
@@ -302,9 +302,9 @@ macro_rules! native_iterator {
         }
     };
 }
-native_iterator!(Iterator);
-native_iterator!(DifferenceIterator);
-native_iterator!(SpiralDifferenceIterator);
+iterator!(Iterator);
+iterator!(DifferenceIterator);
+iterator!(SpiralDifferenceIterator);
 
 // Source: cc/tiles/tiling_set_raster_queue_all.h:64-68.
 #[derive(Clone, Copy, PartialEq, Eq)]

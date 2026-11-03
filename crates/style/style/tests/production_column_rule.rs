@@ -15,12 +15,12 @@ use style::{
     },
     production_css_value as values, StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -38,21 +38,21 @@ fn parse(id: P, text: &str) -> Vec<values::PropertyValue> {
     .unwrap()
 }
 #[test]
-fn column_rule_shorthand_lists_defaults_and_css_wide_use_native_gap_data() {
+fn column_rule_shorthand_lists_defaults_and_css_wide_use_computed_style_gap_data() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='column-rule:red solid 0.5px,thin dashed rgb(0,0,255)'><div id=c style='column-rule:inherit'></div><div id=i style='column-rule:initial'></div><div id=u style='column-rule:unset'></div><div id=r style='column-rule:9px double red;column-rule:dotted'></div><div id=n style='column-rule:none'></div><div id=h style='column-rule:999999999px hidden currentcolor'></div><div id=l style='column-rule-color:red,blue;column-rule-style:solid,double;column-rule-width:2px,4px'></div></div>",
     );
     update(&mut owner);
     let (p, c, i, u, r, n, h, l) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "u"),
-        native(&owner, "r"),
-        native(&owner, "n"),
-        native(&owner, "h"),
-        native(&owner, "l"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "r"),
+        computed_style(&owner, "n"),
+        computed_style(&owner, "h"),
+        computed_style(&owner, "l"),
     );
     for v in [p, c] {
         assert_eq!(v.ColumnRuleStyle().GetGapDataList().size(), 2);
@@ -110,18 +110,18 @@ fn column_rule_shorthand_lists_defaults_and_css_wide_use_native_gap_data() {
     assert_eq!(parse(P::kColumnRule, "solid,").len(), 3);
 }
 #[test]
-fn webkit_column_break_aliases_expand_to_modern_native_break_fields() {
+fn webkit_column_break_aliases_expand_to_modern_computed_style_break_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='-webkit-column-break-before:always;-webkit-column-break-after:avoid;-webkit-column-break-inside:avoid'><div id=c style='-webkit-column-break-before:inherit;-webkit-column-break-after:inherit;-webkit-column-break-inside:inherit'></div><div id=i style='-webkit-column-break-before:initial;-webkit-column-break-after:initial;-webkit-column-break-inside:initial'></div><div id=u style='-webkit-column-break-before:unset;-webkit-column-break-after:unset;-webkit-column-break-inside:unset'></div></div>",
     );
     update(&mut owner);
-    for v in [native(&owner, "p"), native(&owner, "c")] {
+    for v in [computed_style(&owner, "p"), computed_style(&owner, "c")] {
         assert_eq!(v.BreakBefore(), B::kColumn);
         assert_eq!(v.BreakAfter(), B::kAvoid);
         assert_eq!(v.BreakInside(), I::kAvoid);
     }
-    for v in [native(&owner, "i"), native(&owner, "u")] {
+    for v in [computed_style(&owner, "i"), computed_style(&owner, "u")] {
         assert_eq!(v.BreakBefore(), B::kAuto);
         assert_eq!(v.BreakAfter(), B::kAuto);
         assert_eq!(v.BreakInside(), I::kAuto);
@@ -137,7 +137,7 @@ fn webkit_column_break_aliases_expand_to_modern_native_break_fields() {
     }
 }
 #[test]
-fn column_rule_invalid_partial_and_native_zoom_color_boundaries() {
+fn column_rule_invalid_partial_and_computed_style_zoom_color_boundaries() {
     let _heap = foundation::LayoutHeapScope::new();
     for (id, text) in [
         (P::kColumnRuleWidth, "-1px"),

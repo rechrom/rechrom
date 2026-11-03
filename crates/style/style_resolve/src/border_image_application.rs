@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Chromium native NinePieceImage Apply* branches with real image bindings.
+//! Chromium computed style NinePieceImage Apply* branches with real image bindings.
 #![allow(non_snake_case)]
 use super::*;
 use crate::{
@@ -88,7 +88,7 @@ fn QuadValue(
         Err(LonghandApplicationError::InvalidValue(id))
     }
 }
-// css_to_style_map.cc:617-651. Native resolved-side conversion is shared with
+// css_to_style_map.cc:617-651. Canonical resolved-side conversion is shared with
 // the generic map, including the source round() on number slices.
 fn MapSlice(
     id: CSSPropertyID,
@@ -115,8 +115,8 @@ fn MapSlice(
     image.SetFill(slice.fill);
     Ok(())
 }
-// css_to_style_map.cc:654-681. Number retains the native multiplier tag;
-// lengths and percentages retain their native Length rather than CSS strings.
+// css_to_style_map.cc:654-681. Number retains the computed style multiplier tag;
+// lengths and percentages retain their computed style Length rather than CSS strings.
 fn MapQuad(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -160,7 +160,7 @@ fn MapRepeat(id: CSSPropertyID, v: &Value, image: &mut NinePieceImage) -> Result
     Ok(())
 }
 // css_to_style_map.cc:537-615. The nested slash list is the actual legacy
-// value structure; source native-width side effects are committed last.
+// value structure; source computed style-width side effects are committed last.
 pub(super) fn MapNinePieceImage(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -469,7 +469,7 @@ mod tests {
         assert!(b.BorderImage().BorderSlices().Top().Number().is_finite());
     }
     #[test]
-    fn production_border_image_width_outset_repeat_native_tags_and_preservation() {
+    fn production_border_image_width_outset_repeat_computed_style_tags_and_preservation() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(&mut b,None,"border-image-slice:15 fill;border-image-width:2 3px 25% auto;border-image-outset:1 4px;border-image-repeat:round space");

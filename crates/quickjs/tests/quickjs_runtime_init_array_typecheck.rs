@@ -452,7 +452,7 @@ _ => std::process::abort(),
         classes[JS_CLASS_C_FUNCTION as usize].call = Some(callable);
         (*ctx).rt = rt;
         (*ctx).class_proto = prototypes.as_mut_ptr();
-        (*ctx).native_error_proto.fill(JS_NULL);
+        (*ctx).error_proto.fill(JS_NULL);
         init_list_head(&mut (*ctx).loaded_modules);
         let arr = JS_NewObjectProtoClass(ctx, JS_NULL, JS_CLASS_ARRAY);
         assert_eq!(JS_IsException(arr), 0);

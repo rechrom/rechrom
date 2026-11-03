@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native computed animation/transition timing lists. Timeline-dependent timing
+//! Chromium computed animation/transition timing lists. Timeline-dependent timing
 //! and effect execution remain outside this style-storage slice.
 #![allow(non_snake_case, non_camel_case_types)]
 use super::computed_style_constants::{EAnimPlayState, TimelineAxis, TimelineScroller};
@@ -76,7 +76,7 @@ pub enum CompositeOperation {
 }
 
 // cpp: core/style/style_timeline.h:21-106. Preserve the source variant and
-// parameter types, including values set by other native style owners.
+// parameter types, including values set by other source style owners.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StyleTimeline {
     Keyword(CSSValueID),
@@ -152,7 +152,7 @@ impl PartialEq for TimelineOffsetOrAuto {
     }
 }
 
-// cpp: core/animation/timing.h:177-187. Seconds are the existing native
+// cpp: core/animation/timing.h:177-187. Seconds are the existing source
 // style-storage representation of AnimationTimeDelta, including auto duration.
 #[derive(Clone)]
 pub struct Timing {
@@ -270,7 +270,7 @@ impl PartialEq for CSSTimingData {
 }
 
 // cpp: core/animation/css/css_animation_data.h; .cc:32-59,78-88.
-// Trigger attachments remain outside this native storage slice; timeline trigger
+// Trigger attachments remain outside this source storage slice; timeline trigger
 // declaration lists are real CSSAnimationData fields.
 #[derive(Clone)]
 pub struct CSSAnimationData {

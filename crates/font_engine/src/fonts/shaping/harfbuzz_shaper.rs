@@ -26,11 +26,13 @@ use crate::fonts::glyph::Glyph;
 use crate::fonts::orientation_iterator_types::RenderOrientation;
 use crate::fonts::script_run_iterator::ScriptShortName;
 use crate::fonts::simple_font_data::SimpleFontData;
-use crate::text::native::character::Character;
-use crate::text::native::character_break_iterator::CharacterBreakIterator;
-use crate::text::native::layout_locale::LayoutLocale;
-use crate::text::native::rustybuzz_shaper::{
-    shape_utf16_with_specified_size, shape_utf16_with_specified_size_and_features, Utf16Run,
+use crate::text::implementation::character::Character;
+use crate::text::implementation::character_break_iterator::CharacterBreakIterator;
+use crate::text::implementation::harfbuzz as hb;
+use crate::text::implementation::layout_locale::LayoutLocale;
+use crate::text::implementation::rustybuzz_shaper::{
+    shape_utf16_with_specified_size, shape_utf16_with_specified_size_and_features, Utf16Glyph,
+    Utf16Run,
 };
 use crate::text_shaper::TextDirection as ShapingDirection;
 
@@ -39,6 +41,112 @@ const HB_DIRECTION_TTB: i32 = 6;
 const USCRIPT_HAN: i32 = 17;
 const USCRIPT_SIMPLIFIED_HAN: i32 = 73;
 const USCRIPT_TRADITIONAL_HAN: i32 = 74;
+
+/// Source: harfbuzz_shaper.cc ShapeRange / HarfBuzzFace::GetScaledFont.
+///
+/// Chromium shapes the final UTF-16 range with HarfBuzz itself.  Keep the
+/// pure-Rust shaper for isolated parity tests and the not-yet-connected
+/// variation-selector callback path, but use the source engine for ordinary
+/// browser text: variable-font interpolation can differ by fractional 16.16
+/// advances before LayoutUnit rounding.
+fn ShapeUtf16WithHarfBuzz(
+    data: &SimpleFontData,
+    units: &[u16],
+    start: u32,
+    end: u32,
+    direction: ShapingDirection,
+    language: Option<&str>,
+    script: Option<&str>,
+    features: &[FontFeatureRange],
+) -> Utf16Run {
+    assert!(start <= end && end as usize <= units.len());
+    assert!(units.len() <= i32::MAX as usize);
+    let buffer = unsafe { hb::hb_buffer_create() };
+    assert!(!buffer.is_null(), "HarfBuzz buffer allocation failed");
+    struct Buffer(*mut hb::HbBuffer);
+    impl Drop for Buffer {
+        fn drop(&mut self) {
+            unsafe { hb::hb_buffer_destroy(self.0) }
+        }
+    }
+    let buffer = Buffer(buffer);
+    let direction = direction as i32 + hb::DIRECTION_LTR;
+    unsafe {
+        hb::hb_buffer_set_direction(buffer.0, direction);
+        // HB_BUFFER_CLUSTER_LEVEL_MONOTONE_CHARACTERS, matching Chromium.
+        hb::hb_buffer_set_cluster_level(buffer.0, 1);
+        if let Some(language) = language.filter(|value| !value.is_empty()) {
+            assert!(language.len() <= i32::MAX as usize);
+            hb::hb_buffer_set_language(
+                buffer.0,
+                hb::hb_language_from_string(language.as_ptr().cast(), language.len() as i32),
+            );
+        }
+        if let Some(script) = script.filter(|value| !value.is_empty()) {
+            assert!(script.len() <= i32::MAX as usize);
+            hb::hb_buffer_set_script(
+                buffer.0,
+                hb::hb_script_from_string(script.as_ptr().cast(), script.len() as i32),
+            );
+        }
+        hb::hb_buffer_add_utf16(
+            buffer.0,
+            units.as_ptr(),
+            units.len() as i32,
+            start,
+            (end - start) as i32,
+        );
+        hb::hb_buffer_guess_segment_properties(buffer.0);
+    }
+    let face = data.PlatformData().GetHarfBuzzFace();
+    assert!(!face.is_null(), "HarfBuzz face allocation failed");
+    let font = unsafe { &*face }.GetScaledFont();
+    let shaped = unsafe {
+        hb::hb_buffer_allocation_successful(buffer.0) != 0
+            && hb::hb_shape_full(
+                font,
+                buffer.0,
+                if features.is_empty() {
+                    std::ptr::null()
+                } else {
+                    FontFeatureRange::ToHarfBuzzData(features.as_ptr()).cast()
+                },
+                features.len() as u32,
+                std::ptr::null(),
+            ) != 0
+    };
+    assert!(shaped, "HarfBuzz shaping failed");
+    let mut count = 0;
+    let infos = unsafe { hb::hb_buffer_get_glyph_infos(buffer.0, &mut count) };
+    let positions = unsafe { hb::hb_buffer_get_glyph_positions(buffer.0, std::ptr::null_mut()) };
+    if count == 0 {
+        return Utf16Run {
+            glyphs: Vec::new(),
+            direction: unsafe { hb::hb_buffer_get_direction(buffer.0) as u32 },
+            script: unsafe { hb::hb_buffer_get_script(buffer.0) },
+        };
+    }
+    assert!(!infos.is_null() && !positions.is_null());
+    let infos = unsafe { std::slice::from_raw_parts(infos, count as usize) };
+    let positions = unsafe { std::slice::from_raw_parts(positions, count as usize) };
+    Utf16Run {
+        glyphs: infos
+            .iter()
+            .zip(positions)
+            .map(|(info, position)| Utf16Glyph {
+                id: info.codepoint,
+                cluster: info.cluster,
+                unsafe_to_break: info.mask & 1 != 0,
+                x_advance: position.x_advance,
+                y_advance: position.y_advance,
+                x_offset: position.x_offset,
+                y_offset: position.y_offset,
+            })
+            .collect(),
+        direction: unsafe { hb::hb_buffer_get_direction(buffer.0) as u32 },
+        script: unsafe { hb::hb_buffer_get_script(buffer.0) },
+    }
+}
 
 // cpp: font_engine/fonts/shaping/harfbuzz_shaper.cc:185-201
 fn ApplyFontVariantEmojiOnFallbackPriority(
@@ -436,28 +544,50 @@ impl HarfBuzzShaper {
                 }
             }
         }
-        let mut result = shape_utf16_with_specified_size_and_features(
-            font.SourceBytes(),
-            font.FaceIndex(),
-            font.Size(),
-            font.SpecifiedSize(),
-            &font.Variations(),
-            if transformed { &shaping_units } else { units },
-            if transformed {
-                boundaries[range_start as usize]
-            } else {
-                range_start
-            },
-            if transformed {
-                boundaries[range_end as usize]
-            } else {
-                range_end
-            },
-            ShapingDirectionFromHarfBuzz(hb_direction),
-            Some(language),
-            script,
-            &features,
-        );
+        let shaping_text = if transformed { &shaping_units } else { units };
+        let shaping_start = if transformed {
+            boundaries[range_start as usize]
+        } else {
+            range_start
+        };
+        let shaping_end = if transformed {
+            boundaries[range_end as usize]
+        } else {
+            range_end
+        };
+        // Chromium's HarfBuzzFace installs a variation-selector cmap callback.
+        // Keep the translated callback behavior until that font-func hook is
+        // connected to the C font; ordinary ranges use HarfBuzz directly.
+        let has_variation_selector = shaping_text[shaping_start as usize..shaping_end as usize]
+            .iter()
+            .any(|unit| matches!(*unit, 0x180b..=0x180d | 0xfe00..=0xfe0f | 0xdb40));
+        let mut result = if has_variation_selector {
+            shape_utf16_with_specified_size_and_features(
+                font.SourceBytes(),
+                font.FaceIndex(),
+                font.Size(),
+                font.SpecifiedSize(),
+                &font.Variations(),
+                shaping_text,
+                shaping_start,
+                shaping_end,
+                ShapingDirectionFromHarfBuzz(hb_direction),
+                Some(language),
+                script,
+                &features,
+            )
+        } else {
+            ShapeUtf16WithHarfBuzz(
+                data,
+                shaping_text,
+                shaping_start,
+                shaping_end,
+                ShapingDirectionFromHarfBuzz(hb_direction),
+                Some(language),
+                script,
+                &features,
+            )
+        };
         if transformed {
             for glyph in &mut result.glyphs {
                 glyph.cluster = source_indices[glyph.cluster as usize];
@@ -529,20 +659,11 @@ impl HarfBuzzShaper {
             assert!(character_index <= HarfBuzzRunGlyphData::kMaxCharacterIndex);
             let unsafe_to_break = glyph.unsafe_to_break;
             let vertical = (hb_direction & !1) == 6;
-            let mut shaped_advance = if vertical {
+            let shaped_advance = if vertical {
                 -glyph.y_advance as f32
             } else {
                 glyph.x_advance as f32
             } / 65536.0;
-            if !vertical
-                && !data
-                    .PlatformData()
-                    .RawFont()
-                    .UsesOpenTypeHorizontalAdvances()
-            {
-                shaped_advance += data.WidthForGlyph(glyph.id as Glyph)
-                    - data.PlatformData().RawFont().HorizontalAdvance(glyph.id) as f32;
-            }
             let advance = TextRunLayoutUnit::FromFloatRound(shaped_advance);
             run_ref.glyph_data_[i as u32] = HarfBuzzRunGlyphData::new(
                 glyph.id,
@@ -934,12 +1055,66 @@ impl HarfBuzzShaper {
 mod tests {
     use super::*;
     use crate::fonts::font::FontFallbackSource;
+    use crate::fonts::font_backend::{
+        FontBackend, FontBackendGlyphMetrics, FontBackendMetrics, FontVariation,
+    };
     use crate::fonts::font_fallback_iterator::tests::face;
     use crate::fonts::font_fallback_metadata::{FontFallbackMetadata, FontFallbackRole};
-    use crate::text::native::rustybuzz_shaper::Utf16Glyph;
+    use crate::fonts::font_platform_data::FontPlatformData;
+    use crate::fonts::text_rendering_mode::TextRenderingMode;
+    use crate::minimal_font::Build;
+    use crate::text::implementation::opentype_font::OpenTypeFont;
+    use crate::text::implementation::rustybuzz_shaper::Utf16Glyph;
     use foundation::LayoutHeapScope;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::Arc;
+
+    const PLATFORM_SHAPING_ADVANCE: f32 = 7.12345;
+
+    struct FixedAdvanceBackend;
+
+    impl FontBackend for FixedAdvanceBackend {
+        fn Metrics(
+            &self,
+            size: f32,
+            _synthetic_bold: bool,
+            _synthetic_italic: bool,
+        ) -> FontBackendMetrics {
+            FontBackendMetrics {
+                ascent: size * 0.8,
+                descent: size * 0.2,
+                ..Default::default()
+            }
+        }
+
+        fn GlyphMetrics(
+            &self,
+            _glyph: u16,
+            _size: f32,
+            _synthetic_bold: bool,
+            _synthetic_italic: bool,
+        ) -> FontBackendGlyphMetrics {
+            FontBackendGlyphMetrics {
+                advance: 3.25,
+                ..Default::default()
+            }
+        }
+
+        fn GlyphAdvanceForShaping(
+            &self,
+            _glyph: u16,
+            _size: f32,
+            _synthetic_bold: bool,
+            _synthetic_italic: bool,
+        ) -> f32 {
+            PLATFORM_SHAPING_ADVANCE
+        }
+
+        fn WithVariations(&self, _variations: &[FontVariation]) -> Arc<dyn FontBackend> {
+            Arc::new(Self)
+        }
+    }
 
     fn glyph(id: u32, cluster: u32) -> Utf16Glyph {
         Utf16Glyph {
@@ -956,6 +1131,40 @@ mod tests {
     fn shape(font: &Font, text: &str, direction: TextDirection) -> *mut ShapeResult {
         let units: Vec<_> = text.encode_utf16().collect();
         HarfBuzzShaper::new(String::from_utf16(&units)).Shape(font, direction)
+    }
+
+    #[test]
+    fn backend_advance_callback_shapes_with_platform_strike() {
+        let _heap = LayoutHeapScope::new();
+        let bytes = Build(false, 0, 'A' as u32, false, false);
+        let platform = MakeGarbageCollected(FontPlatformData::new(
+            Arc::new(OpenTypeFont::new(&bytes, 0, 16.0, &[])),
+            Some(Arc::new(FixedAdvanceBackend)),
+            16.0,
+            false,
+            false,
+            TextRenderingMode::kAutoTextRendering,
+            vec![],
+            FontOrientation::kHorizontal,
+            vec![],
+        ));
+        let data = unsafe { &*SimpleFontData::Create(platform) };
+        let text = String::from("AA");
+        let units = [u16::from(b'A'), u16::from(b'A')];
+        let run = HarfBuzzShaper::new(text).ShapeBuffer(
+            data,
+            &units,
+            HB_DIRECTION_LTR,
+            0,
+            units.len() as u32,
+            "en",
+            None,
+            &[],
+            VariationSelectorMode::Normal,
+        );
+        assert_eq!(run.glyphs.len(), 2);
+        let expected = (PLATFORM_SHAPING_ADVANCE * 65536.0) as i32;
+        assert!(run.glyphs.iter().all(|glyph| glyph.x_advance == expected));
     }
 
     #[test]
@@ -1003,7 +1212,7 @@ mod tests {
     fn installed_color_emoji_keeps_family_zwj_as_one_ligature() {
         use crate::fonts::font_platform_data::FontPlatformData;
         use crate::fonts::text_rendering_mode::TextRenderingMode;
-        use crate::text::native::opentype_font::OpenTypeFont;
+        use crate::text::implementation::opentype_font::OpenTypeFont;
         use std::sync::Arc;
         let _heap = LayoutHeapScope::new();
         let bytes = std::fs::read(
@@ -1163,7 +1372,7 @@ mod tests {
         use crate::fonts::font_platform_data::FontPlatformData;
         use crate::fonts::text_rendering_mode::TextRenderingMode;
         use crate::minimal_font::{Build, Put16, Put32};
-        use crate::text::native::opentype_font::OpenTypeFont;
+        use crate::text::implementation::opentype_font::OpenTypeFont;
         use std::sync::Arc;
         let mut bytes = Build(false, 0, 0x41, false, false);
         let parsed = ttf_parser::Face::parse(&bytes, 0).unwrap();

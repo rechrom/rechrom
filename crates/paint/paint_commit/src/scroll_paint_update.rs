@@ -77,7 +77,7 @@ struct MaskOutput {
 pub struct RetainedScrollPaintState {
     fragments: Vec<FragmentCoverage>,
     // Recorded identity, never traversal order or a borrowed fragment address.
-    // Logical out-of-flow reparenting can differ from native fragment order.
+    // Logical out-of-flow reparenting can differ from source fragment order.
     fragment_indices: HashMap<(u64, u64, u64, u32), usize>,
     // Physical preorder ranges let a certified unchanged subtree satisfy the
     // retained identity proof without walking every descendant. Paint's
@@ -435,6 +435,7 @@ impl RetainedScrollPaintState {
         }
         for node in nodes {
             let f = node.fragment.as_deref()?;
+            let (revision, subtree_revision) = node.RecordedRevisions()?;
             // Pixel-moving effects are retained property-tree effects. Their
             // unsupported coverage mapping is isolated below to that state;
             // it must not disable retained scrolling for unrelated layers.
@@ -459,7 +460,7 @@ impl RetainedScrollPaintState {
             if fragment_indices.insert(identity, fragments.len()).is_some() {
                 return None;
             }
-            let paintable = f.paint.has_source && f.paint.style.visible && !f.paint.hidden;
+            let paintable = f.paint.HasSource() && f.paint.style.visible() && !f.paint.hidden;
             let was_recorded = recorded_clients.contains(&(
                 f.paint.display_item_client_id,
                 f.paint.display_item_fragment,
@@ -541,8 +542,8 @@ impl RetainedScrollPaintState {
                         contents_properties: node.contents_properties.clone(),
                         transforms: node.transforms.clone(),
                     }),
-                revision: f.pre_paint_revision,
-                subtree_revision: f.pre_paint_subtree_revision,
+                revision,
+                subtree_revision,
             });
         }
         let mut physical_ranges = HashMap::with_capacity(fragments.len());
@@ -689,12 +690,24 @@ fn collect_current_fragments<'a>(
         nodes[index] = Some(f);
     }
     *collected += 1;
-    if !self_clean && f.paint.display_item_client_id != 0 {
-        let owner = PaintPropertyOwner::NativeFragment {
+    if f.paint.display_item_client_id != 0 {
+        let owner = PaintPropertyOwner::Fragment {
             client: f.paint.display_item_client_id,
             fragment: f.paint.display_item_fragment,
         };
-        if let Some(constraint) = f.paint.sticky_constraint {
+        // ScrollTranslation and StickyTranslation are property values. Layout
+        // can refresh them while retaining the fragment's geometry revision,
+        // so read owners that already have one of those property slots even
+        // when the fragment itself is otherwise clean.
+        // Retained geometry cannot add or remove an ObjectPaintProperties
+        // slot. Refresh only the existing StickyTranslation owner; an
+        // unrelated fragment revision must not turn an ordinary node into a
+        // synthetic sticky-property candidate.
+        let tracks_sticky = sticky.contains_key(&owner);
+        if tracks_sticky {
+            let Some(constraint) = f.paint.sticky_constraint else {
+                return false;
+            };
             let current = (f.paint.sticky_offset, constraint);
             if dirty_sticky
                 .insert(owner, current)
@@ -704,13 +717,23 @@ fn collect_current_fragments<'a>(
             }
             sticky.insert(owner, current);
         }
-        if dirty_offsets
-            .insert(owner, f.paint.scroll_offset)
-            .is_some_and(|old| old != f.paint.scroll_offset)
-        {
-            return false;
+        // As above, bind the live Layout value to the existing
+        // ScrollTranslation slot. Property topology changes use normal
+        // PrePaint/Paint instead of manufacturing a retained owner here.
+        if offsets.contains_key(&owner) {
+            let scroll_position = f
+                .paint
+                .scroll_container
+                .as_ref()
+                .map_or(f.paint.scroll_offset, |scroll| scroll.scroll_position);
+            if dirty_offsets
+                .insert(owner, scroll_position)
+                .is_some_and(|old| old != scroll_position)
+            {
+                return false;
+            }
+            offsets.insert(owner, scroll_position);
         }
-        offsets.insert(owner, f.paint.scroll_offset);
     }
     // LayoutSVGHiddenContainer remains in Layout snapshots for resource users,
     // but PrePaint creates no ordinary owners beneath that boundary. Traverse
@@ -740,13 +763,11 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
     let Some(fragment) = node.fragment.as_deref() else {
         return false;
     };
-    if !fragment.paint.has_source || fragment.paint.background_transfers_to_view {
+    if !fragment.paint.HasSource() || fragment.paint.background_transfers_to_view {
         return false;
     }
-    fragment
-        .paint
-        .style
-        .background_images
+    let background_images = fragment.paint.style.background_images();
+    background_images
         .iter()
         .any(|layer| match layer.attachment {
             BackgroundAttachment::kScroll => false,
@@ -756,7 +777,7 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
                     fragment.paint.can_composite_background_attachment_fixed
                         && !node.fixed_background_acts_as_scroll
                         && fragment.paint.background_paint_location.PaintsBorderBox()
-                        && fragment.paint.style.background_images.len() == 1
+                        && background_images.len() == 1
                         && (layer.shader.is_some() || layer.resource_id != 0);
                 !node.fixed_background_acts_as_scroll && !independently_recorded
             }
@@ -779,7 +800,7 @@ fn refreshed(
         || trees.clip_for(&state.clip).is_none()
         || trees.effect_for(&state.effect).is_none()
     {
-        // Fresh property nodes without native-owner slots still belong to the
+        // Fresh property nodes without source-owner slots still belong to the
         // retained graph. Rebind their actual ancestors through the updated
         // scroll snapshots; do not mistake an incomplete directory for loss.
         let mut referenced = state.clone();
@@ -820,7 +841,7 @@ fn state_cache_key(state: &PropertyTreeState) -> (usize, usize, usize) {
     )
 }
 
-/// Retained records require the native unchanged-layout proof and prove
+/// Retained records require the source unchanged-layout proof and prove
 /// current coverage and real property/scrollbar semantics before publication.
 /// Rejection leaves the artifact untouched and requests ordinary paint.
 pub fn TryUpdateScrollPropertiesWithPrePaint(
@@ -845,14 +866,11 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         }
     }
     let retained = retained_scroll_state.as_ref().ok_or(MissingCoverage)?;
-    if artifact.recorded_properties.len() != artifact.chunks.len() {
-        return Err(MissingCoverage);
-    }
     if let Some((index, chunk)) = artifact
         .chunks
         .iter()
         .enumerate()
-        .find(|(_, chunk)| !chunk.can_match_old_chunk())
+        .find(|(_, chunk)| !chunk.CanMatchOldChunk())
     {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!("scroll-paint-reject stage=chunk-cache index={} id={:?} cacheable={} just_created={}",
@@ -860,7 +878,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         }
         return Err(PropertyChanged);
     }
-    // This path is admitted only by Page's retained native-layout proof. No
+    // This path is admitted only by Page's retained source-layout proof. No
     // property builder or temporary PaintTreeNode is needed for clean content.
     // Verify current geometry independently and carry Layout's resolved sticky
     // values into its existing property slot before validating recorded coverage.
@@ -915,7 +933,15 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
             .get(owner)
             .is_some_and(|recorded| recorded != current)
     });
-    if scroll_changed && retained.has_scroll_dependent_background {
+    // A scroll transaction cannot publish the old property tree as a
+    // successful retained update.  This also catches a stale/missing source
+    // owner directory: Chromium falls back to the ordinary PrePaint/Paint
+    // walk when it cannot bind the changed ScrollableArea to its paint
+    // property node.
+    if !scroll_changed {
+        return Err(PropertyChanged);
+    }
+    if retained.has_scroll_dependent_background {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!("scroll-paint-reject stage=scroll-dependent-background");
         }
@@ -1080,7 +1106,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     // Scrollbar thumb geometry is real scroll-dependent recorded content.
     // Re-record only overflow controls, retaining every other drawing record.
     // Translate the tiny new records back into their original flat coordinate
-    // basis so old wrapper ops and recorded_properties remain authoritative.
+    // basis so old wrapper ops remain authoritative.
     // Only overflow-control IDs can be produced here. Build their directory
     // lazily, without allocating entries for the page's ordinary records.
     let mut old_record_indices: Option<BTreeMap<(u64, u32, u8), usize>> = None;
@@ -1101,7 +1127,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         node.paint_snap_offset = geometry.paint_snap_offset;
         node.properties = geometry.properties.clone();
         node.contents_properties = geometry.contents_properties.clone();
-        node.SetFragment(f);
+        node.SetOwnedFragmentForTesting(f);
         let mut controls = PaintRecording::default();
         let context = RefCell::new(paint_context::PaintContext::WithCaret(&mut controls, None));
         scrollable_area_painter::ScrollableAreaPainter::new(&node, &context).PaintOverflowControls(
@@ -1209,6 +1235,18 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         viewport.viewport_clip = updated_store
             .viewport_clip()
             .expect("source retained viewport clip")
+            .clone();
+        viewport.overscroll_elasticity_transform = updated_store
+            .overscroll_elasticity_transform()
+            .expect("source retained overscroll elasticity transform")
+            .clone();
+        viewport.page_scale = updated_store
+            .page_scale()
+            .expect("source retained page scale")
+            .clone();
+        viewport.visual_scroll_translation = updated_store
+            .visual_viewport_scroll_translation()
+            .expect("source retained visual viewport scroll")
             .clone();
         if let Some(old) = &viewport.layout_scroll_translation {
             viewport.layout_scroll_translation = Some(

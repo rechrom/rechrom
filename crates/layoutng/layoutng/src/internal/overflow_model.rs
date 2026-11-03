@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_fragment/src/native_overflow_model.rs"]
-mod layout_fragment_native_overflow_model;
+#[path = "../../../layout_fragment/src/overflow_model.rs"]
+mod layout_fragment_overflow_model;
 
-pub use layout_fragment_native_overflow_model::*;
+pub use layout_fragment_overflow_model::*;

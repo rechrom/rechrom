@@ -233,7 +233,7 @@ pub trait ConversionInvalidationTracking<B: PaintChunksTypes> {
 pub trait PaintChunksServices<B: PaintChunksTypes>: ContentLayerClientServices<B> {
     /// Retains the artifact's native record range with the independent value
     /// analysis capability owned by the services. No item/owner backpointer.
-    fn NativePaintRecord(
+    fn PaintRecord(
         &self,
         artifact: &Arc<B::PaintArtifact>,
         item: &B::DisplayItem,

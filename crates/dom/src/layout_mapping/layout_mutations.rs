@@ -10,7 +10,7 @@ use layoutng_assembly::{
 };
 use std::rc::Rc;
 
-// DOM owns style/input state. Native tree ownership and application of these
+// DOM owns style/input state. Chromium tree ownership and application of these
 // synchronous mutation events belong to the Page's LayoutEngine.
 impl DOM {
     /// Finish the document-owned SVG resource lifecycle after computed style
@@ -78,23 +78,31 @@ impl DOM {
         // turn every unrelated style input into a subtree transaction.
         let can_apply_local = !state.layout_inputs_require_tree;
         let reattach_nodes = state.layout_reattach_nodes.clone();
-        let mut nodes = state
-            .layout_style_nodes
-            .union(&state.geometry_input_nodes)
-            .copied()
-            .collect::<Vec<_>>();
-        // Style application is parent-first, as in RecalcOwnStyle followed by
-        // child traversal. Font/fragmentation preparation reads that parent.
-        let document = self.GetDocument();
-        nodes.sort_by_cached_key(|&id| {
-            let mut depth = 0;
-            let mut node = document.FindNodeById(id);
-            while let Some(index) = node {
-                depth += 1;
-                node = document.FlatTreeParentElement(index);
+        // Style publishes this work in its parent-first recalc order. Preserve
+        // that source order instead of recovering it from the DOM afterward.
+        let mut nodes = state.layout_style_nodes.iter().copied().collect::<Vec<_>>();
+        let mut needs_parent_sort = false;
+        for &id in &state.geometry_input_nodes {
+            if !state.layout_style_nodes.contains(&id) {
+                nodes.push(id);
+                needs_parent_sort = true;
             }
-            (depth, id)
-        });
+        }
+        trace.set("requires_parent_sort", needs_parent_sort as u8 as f64);
+        let document = self.GetDocument();
+        if needs_parent_sort {
+            // Geometry-only updates can enter outside Style traversal. Mixed
+            // work retains the conservative parent-first fallback.
+            nodes.sort_by_cached_key(|&id| {
+                let mut depth = 0;
+                let mut node = document.FindNodeById(id);
+                while let Some(index) = node {
+                    depth += 1;
+                    node = document.FlatTreeParentElement(index);
+                }
+                (depth, id)
+            });
+        }
         let mut locally_applied = Vec::new();
         let mut local_attempts = 0;
         if can_apply_local {
@@ -107,10 +115,12 @@ impl DOM {
                     LayoutMutation::PaintInput {
                         node_id,
                         style,
+                        resources,
                         element,
                     } => receive(LayoutMutation::NodeInput {
                         node_id,
                         style,
+                        resources,
                         element,
                     }),
                     _ => unreachable!("EmitPaintInputs emits typed node inputs"),
@@ -157,7 +167,7 @@ impl DOM {
 
     /// Emit the resolved style for one element whose animation sample contains
     /// only non-geometric paint properties. LayoutEngine still validates the
-    /// resident native object before accepting the targeted update.
+    /// resident source object before accepting the targeted update.
     pub fn EmitPaintStyle(
         &self,
         node_id: u64,
@@ -173,16 +183,33 @@ impl DOM {
         let Some(resolved) = document.ResolvedStyleFor(index) else {
             return false;
         };
-        let native_style = resolved.native_style.Get();
-        let Some(native_style) = (unsafe { native_style.as_ref() }) else {
+        let style = resolved.computed_style_owner.Get();
+        let Some(style) = (unsafe { style.as_ref() }) else {
             return false;
         };
+        let clip_resources = super::layout_object_tree_builder::svg_clip_resource_binding(
+            style,
+            resources,
+            document.SVGResourceScope(index),
+        );
+        let resolved_resources = document.ResolvedStyleResourcesFor(index);
+        let svg_filter_graphs = document.SVGFilterGraphs().unwrap();
+        let replaced_image_shader = None;
+        let style_resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+            svg_filter_graphs,
+            &clip_resources,
+            &resolved_resources.svg_mask_resource,
+            &resolved_resources.svg_fill_server,
+            &resolved_resources.svg_stroke_server,
+            &resolved_resources.svg_markers,
+            &replaced_image_shader,
+        );
         receive(LayoutMutation::PaintStyle {
             node_id,
-            style: native_style,
-            projected: &resolved.style.paint,
+            style,
+            resources: &style_resources,
             clip_resource_version: if super::layout_object_tree_builder::needs_svg_clip_resources(
-                &resolved.style,
+                style,
             ) {
                 resources.version
             } else {
@@ -192,7 +219,7 @@ impl DOM {
         true
     }
 
-    /// Deliver ordinary paint-only style and native theme state to resident
+    /// Deliver ordinary paint-only style and source theme state to resident
     /// objects. Text uses its resolved flat-tree parent's style, exactly as
     /// AppendChildren does during attachment. Generated/flattened sources keep
     /// the ordinary export path until their separate source can be retained.
@@ -221,21 +248,38 @@ impl DOM {
         {
             return false;
         }
-        let mut style = resolved.style.clone();
-        super::layout_object_tree_builder::resolve_svg_clip_path(
-            &mut style,
+        let style = resolved.computed_style_owner.Get();
+        let Some(style) = (unsafe { style.as_ref() }) else {
+            return false;
+        };
+        let clip_resources = super::layout_object_tree_builder::svg_clip_resource_binding(
+            style,
             resources,
             document.SVGResourceScope(index),
+        );
+        let resolved_resources = document.ResolvedStyleResourcesFor(index);
+        let svg_filter_graphs = document.SVGFilterGraphs().unwrap();
+        let replaced_image_shader = None;
+        let style_resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+            svg_filter_graphs,
+            &clip_resources,
+            &resolved_resources.svg_mask_resource,
+            &resolved_resources.svg_fill_server,
+            &resolved_resources.svg_stroke_server,
+            &resolved_resources.svg_markers,
+            &replaced_image_shader,
         );
         let element = super::persistent_tree_builder::ElementMetadata(
             document,
             index,
             interaction,
-            style.paint.respect_image_orientation,
+            style.ImageOrientation()
+                == foundation::RespectImageOrientationEnum::kRespectImageOrientation,
         );
         if !receive(LayoutMutation::PaintInput {
             node_id,
-            style: &style,
+            style,
+            resources: &style_resources,
             element: Some(element),
         }) {
             return false;
@@ -246,7 +290,8 @@ impl DOM {
                 && !node.Data().is_empty()
                 && !receive(LayoutMutation::PaintInput {
                     node_id: node.Id(),
-                    style: &resolved.style,
+                    style,
+                    resources: &style_resources,
                     element: None,
                 })
             {
@@ -257,7 +302,7 @@ impl DOM {
     }
 
     /// Return whether a live DOM node was found and a scroll mutation emitted.
-    /// A receiver can separately inspect its native engine's application result.
+    /// A receiver can separately inspect its source engine's application result.
     pub fn EmitScrollOffset(
         &mut self,
         node_id: u64,

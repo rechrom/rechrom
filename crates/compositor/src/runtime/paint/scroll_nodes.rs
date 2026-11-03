@@ -11,10 +11,26 @@ use crate::{
     cc::input::{
         main_thread_scrolling_reason::{MainThreadRepaintReason, MainThreadRepaintReasons},
         overscroll_behavior::{OverscrollBehavior, Type},
-        scroll_snap_data::SnapContainerData,
+        scroll_snap_data::{ScrollSnapType, SnapAxis, SnapContainerData, SnapStrictness},
     },
     runtime::types::CpuSkiaBackend,
 };
+fn scroll_snap_type(value: paint::paint_property_tree::PaintScrollSnapType) -> ScrollSnapType {
+    use paint::paint_property_tree::{PaintScrollSnapAxis as Axis, PaintScrollSnapStrictness as S};
+    let axis = match value.axis {
+        Axis::Both => SnapAxis::kBoth,
+        Axis::X => SnapAxis::kX,
+        Axis::Y => SnapAxis::kY,
+        Axis::Block => SnapAxis::kBlock,
+        Axis::Inline => SnapAxis::kInline,
+        Axis::Pair => SnapAxis::kPair,
+    };
+    let strictness = match value.strictness {
+        S::Proximity => SnapStrictness::kProximity,
+        S::Mandatory => SnapStrictness::kMandatory,
+    };
+    ScrollSnapType::new(false, axis, strictness)
+}
 fn rect(p: paint::paint_engine::PaintRect) -> Rect {
     crate::adapter::geometry::ToEnclosingRect(RectF::new(
         p.x as f32,
@@ -40,14 +56,10 @@ impl<R: CpuSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
             .map(|p| Self::from_arc(p.clone()))
     }
     fn ContainerRect(&self) -> Rect {
-        rect(self.node().container_rect)
+        rect(self.node().ContainerRect())
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        let id = self
-            .node()
-            .compositor
-            .compositor_element_id
-            .GetInternalValue();
+        let id = self.node().GetCompositorElementId().GetInternalValue();
         if id == 0 {
             ElementId::default()
         } else {
@@ -55,47 +67,51 @@ impl<R: CpuSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
         }
     }
     fn ScrollingContentsCullRect(&self) -> Rect {
-        rect(self.node().compositor.scrolling_contents_cull_rect)
+        rect(self.node().ScrollingContentsCullRect())
     }
     fn ContentsRect(&self) -> Rect {
-        rect(self.node().contents_rect)
+        rect(self.node().ContentsRect())
     }
     fn UserScrollableHorizontal(&self) -> bool {
-        self.node().user_scrollable_horizontal
+        self.node().UserScrollableHorizontal()
     }
     fn UserScrollableVertical(&self) -> bool {
-        self.node().user_scrollable_vertical
+        self.node().UserScrollableVertical()
     }
     fn PreventViewportScrollingFromInner(&self) -> bool {
-        self.node().compositor.prevent_viewport_scrolling_from_inner
+        self.node().PreventViewportScrollingFromInner()
     }
     fn MaxScrollOffsetAffectedByPageScale(&self) -> bool {
-        self.node()
-            .compositor
-            .max_scroll_offset_affected_by_page_scale
+        self.node().MaxScrollOffsetAffectedByPageScale()
     }
     fn OverscrollBehavior(&self) -> OverscrollBehavior {
         let convert = |v| match v {
-            paint::paint_property_tree::NativeOverscrollBehavior::kNone => Type::kNone,
-            paint::paint_property_tree::NativeOverscrollBehavior::kAuto => Type::kAuto,
-            paint::paint_property_tree::NativeOverscrollBehavior::kContain => Type::kContain,
-            paint::paint_property_tree::NativeOverscrollBehavior::kChain => Type::kChain,
+            paint::paint_property_tree::LayoutOverscrollBehavior::kNone => Type::kNone,
+            paint::paint_property_tree::LayoutOverscrollBehavior::kAuto => Type::kAuto,
+            paint::paint_property_tree::LayoutOverscrollBehavior::kContain => Type::kContain,
+            paint::paint_property_tree::LayoutOverscrollBehavior::kChain => Type::kChain,
         };
-        let b = self.node().compositor.overscroll_behavior;
+        let b = self.node().OverscrollBehavior();
         OverscrollBehavior::FromAxes(convert(b[0]), convert(b[1]))
     }
     fn GetSnapContainerData(&self) -> Option<SnapContainerData> {
         assert!(
-            self.node().parent.is_none() || self.node().compositor.snap_container_data_absent,
+            self.node().parent.is_none()
+                || self.node().compositor.snap_container_data_absent
+                || self.node().compositor.snap_container_data.is_some(),
             "PaintInput rejects a non-root scroll node without native snap metadata"
         );
-        None
+        self.node()
+            .compositor
+            .snap_container_data
+            .map(scroll_snap_type)
+            .map(SnapContainerData::FromType)
     }
     fn PreventScrollAxisLocking(&self) -> bool {
-        self.node().compositor.prevent_scroll_axis_locking
+        self.node().PreventScrollAxisLocking()
     }
     fn GetMainThreadRepaintReasons(&self) -> MainThreadRepaintReasons {
-        let bits = self.node().compositor.main_thread_repaint_reasons;
+        let bits = self.node().GetMainThreadRepaintReasons();
         let mut result = MainThreadRepaintReasons::new();
         for (i, r) in [
             MainThreadRepaintReason::kHasBackgroundAttachmentFixedObjects,
@@ -113,7 +129,25 @@ impl<R: CpuSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
         result
     }
     fn CompositedScrollingNotPreferred(&self) -> bool {
-        self.node().compositor.composited_scrolling_preference
-            == native::PaintCompositedScrollingPreference::NotPreferred
+        self.node().GetCompositedScrollingPreference()
+            == paint_property_tree::PaintCompositedScrollingPreference::NotPreferred
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn computed_scroll_snap_type_reaches_cc_container_data() {
+        let data = paint::paint_property_tree::PaintScrollSnapType {
+            axis: paint::paint_property_tree::PaintScrollSnapAxis::X,
+            strictness: paint::paint_property_tree::PaintScrollSnapStrictness::Mandatory,
+        };
+        let container = SnapContainerData::FromType(scroll_snap_type(data));
+        assert_eq!(
+            container.scroll_snap_type(),
+            ScrollSnapType::new(false, SnapAxis::kX, SnapStrictness::kMandatory)
+        );
     }
 }

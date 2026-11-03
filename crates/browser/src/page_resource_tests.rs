@@ -131,11 +131,14 @@ impl ResourceFetcherClient for Client {
     fn DispatchImageEvent(&mut self, _: u64, _: bool) {
         panic!("source no-script fixture emits no image events");
     }
+    fn DispatchStyleSheetEvent(&mut self, _: u64, _: String, _: bool) {
+        panic!("source no-script fixture emits no stylesheet events");
+    }
 }
 
 #[test]
 fn parser_resource_fetcher_and_frame_match_unchanged_cpp_browser() {
-    crate::native_test_thread::run(body);
+    crate::test_thread::run(body);
 }
 fn body() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

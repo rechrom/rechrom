@@ -75,7 +75,7 @@ impl RevisionUpdateTrace {
     }
 }
 
-/// Start the package-owned interval for a complete native revision pass.
+/// Start the package-owned interval for a complete source revision pass.
 /// Keeping the trace name here makes the standalone package, not its temporary
 /// assembly adapter, authoritative for performance attribution.
 #[doc(hidden)]
@@ -88,7 +88,7 @@ pub fn update_span() -> RevisionUpdateTrace {
 }
 
 /// Allocate one process-wide fragment revision. This is public only for the
-/// native tracker adapter composed by `layoutng_assembly`.
+/// source tracker adapter composed by `layoutng_assembly`.
 #[doc(hidden)]
 #[inline(never)]
 pub fn next_revision() -> u64 {
@@ -100,7 +100,7 @@ pub fn next_revision() -> u64 {
 }
 
 /// Minimal field access needed by fragment-local scroll invalidation.
-/// Concrete native fragment data remains private to the assembly adapter.
+/// Concrete source fragment data remains private to the assembly adapter.
 pub trait FragmentRevisionNode {
     fn pre_paint_revision(&self) -> u64;
     fn set_pre_paint_revision(&mut self, revision: u64);
@@ -108,7 +108,7 @@ pub trait FragmentRevisionNode {
     fn set_pre_paint_subtree_revision(&mut self, revision: u64);
 }
 
-/// Version an in-place native scroll/sticky/control change on an already
+/// Version an in-place source scroll/sticky/control change on an already
 /// certified fragment. Zero remains unobserved and cannot be promoted into a
 /// certified revision by an offset-only update.
 #[inline(never)]

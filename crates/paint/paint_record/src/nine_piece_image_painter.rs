@@ -441,8 +441,8 @@ impl NinePieceImagePainter {
                 },
                 effective_zoom,
                 fragment.paint.resources.as_deref(),
-                (!fragment.paint.style.color_scheme_flags_is_normal)
-                    .then_some(u8::from(fragment.paint.style.used_dark_color_scheme)),
+                (!fragment.paint.style.color_scheme_flags_is_normal())
+                    .then_some(u8::from(fragment.paint.style.used_dark_color_scheme())),
             )
         });
         let generated_shader = border_image.shader.as_ref().map(|shader| {
@@ -546,7 +546,7 @@ impl NinePieceImagePainter {
                         image_interpolation_quality: fragment
                             .paint
                             .style
-                            .image_interpolation_quality,
+                            .image_interpolation_quality(),
                         document_image_container_key: document_image_container_key.clone(),
                         tile_rule_x: info.horizontal_rule,
                         tile_rule_y: info.vertical_rule,
@@ -585,7 +585,7 @@ impl NinePieceImagePainter {
                     rect: info.destination,
                     source_rect: info.source,
                     resource_id: image.id,
-                    image_interpolation_quality: fragment.paint.style.image_interpolation_quality,
+                    image_interpolation_quality: fragment.paint.style.image_interpolation_quality(),
                     document_image_container_key: document_image_container_key.clone(),
                     repeat_x: info.horizontal_rule != PaintImageTileRule::kStretch,
                     repeat_y: info.vertical_rule != PaintImageTileRule::kStretch,

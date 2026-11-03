@@ -1,7 +1,8 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
 // cpp: css_syntax_definition.h:26-75/.cc:26-170,244-367.
-// ConsumeSingleType (.cc:173-242) uses actual typed value consumers; image/url/
-// transform/CSSMath dependencies report Unsupported instead of guessing values.
+// ConsumeSingleType (.cc:173-242) uses the same typed value consumers as
+// ordinary declarations. Image/url dependencies remain explicit until their
+// parser context owner is available here.
 #![allow(non_snake_case)]
 use crate::{
     css_numeric_literal_value::IsLength,
@@ -11,7 +12,9 @@ use crate::{
     css_syntax_component::{CSSSyntaxComponent, CSSSyntaxRepeat, CSSSyntaxType},
     css_syntax_string_parser::{SyntaxType, ValidSyntaxIdent},
     production_css_value as values,
-    production_property_parser::{ConsumeColor, VariableTokenReplay},
+    production_property_parser::{
+        ConsumeColor, ConsumeMath, ParsePropertyTokens, PropertyParseErrorKind, VariableTokenReplay,
+    },
 };
 use foundation::{CSSPropertyID, String};
 use std::rc::Rc;
@@ -175,6 +178,17 @@ impl CSSSyntaxDefinition {
         }
         let mut unsupported = None;
         for component in &self.syntax_components_ {
+            if matches!(
+                component.GetType(),
+                CSSSyntaxType::kTransformFunction | CSSSyntaxType::kTransformList
+            ) {
+                match ConsumeTransformSyntax(component, data) {
+                    Ok(value) => return Ok(value),
+                    Err(SyntaxValueError::Unsupported(ty)) => unsupported = Some(ty),
+                    Err(SyntaxValueError::Invalid) => {}
+                }
+                continue;
+            }
             let mut s = CSSParserTokenStream::FromTokenizer(VariableTokenReplay::new(data));
             s.ConsumeWhitespace();
             match ConsumeComponentValues(component, &mut s) {
@@ -187,6 +201,36 @@ impl CSSSyntaxDefinition {
             .map(SyntaxValueError::Unsupported)
             .unwrap_or(SyntaxValueError::Invalid))
     }
+}
+fn ConsumeTransformSyntax(
+    syntax: &CSSSyntaxComponent,
+    data: &values::CSSVariableData,
+) -> Result<Rc<values::Value>, SyntaxValueError> {
+    use SyntaxValueError::*;
+    let ty = syntax.GetType();
+    let mut parsed = ParsePropertyTokens(
+        CSSPropertyID::kTransform,
+        data,
+        crate::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+    )
+    .map_err(|error| match error.kind {
+        PropertyParseErrorKind::Invalid => Invalid,
+        PropertyParseErrorKind::Unsupported => Unsupported(ty),
+    })?;
+    if parsed.len() != 1 {
+        return Err(Invalid);
+    }
+    let value = parsed.pop().expect("one transform declaration").ValueRef();
+    if ty == CSSSyntaxType::kTransformFunction
+        && syntax.GetRepeat() == CSSSyntaxRepeat::kNone
+        && !matches!(
+            value.Payload(),
+            crate::css_value::CSSValuePayload::kValueListClass(list) if list.values.len() == 1
+        )
+    {
+        return Err(Invalid);
+    }
+    Ok(value)
 }
 fn ConsumeComponentValues<T: TokenStreamTokenizer>(
     syntax: &CSSSyntaxComponent,
@@ -269,11 +313,32 @@ fn ConsumeSingleType<T: TokenStreamTokenizer>(
                 _ => Invalid,
             })
         }
-        kImage | kUrl | kTransformFunction | kTransformList => return Err(Unsupported(ty)),
+        kTransformFunction | kTransformList => return Err(Unsupported(ty)),
+        kImage | kUrl => return Err(Unsupported(ty)),
         kTokenStream => return Err(Invalid),
         _ => {
             if t.GetType() == kFunctionToken {
-                return Err(Unsupported(ty));
+                use crate::css_math_expression_node::CalculationResultCategory as Category;
+                use crate::css_math_function_value::ValueRange;
+                let categories: &[Category] = match ty {
+                    kNumber => &[Category::Number],
+                    kPercentage => &[Category::Percent],
+                    kLength => &[Category::Length],
+                    kLengthPercentage => &[
+                        Category::Length,
+                        Category::Percent,
+                        Category::LengthFunction,
+                    ],
+                    kAngle => &[Category::Angle],
+                    kTime => &[Category::Time],
+                    kResolution => &[Category::Resolution],
+                    _ => return Err(Unsupported(ty)),
+                };
+                return ConsumeMath(CSSPropertyID::kVariable, s, categories, ValueRange::All)
+                    .map_err(|error| match error.kind {
+                        PropertyParseErrorKind::Invalid => Invalid,
+                        PropertyParseErrorKind::Unsupported => Unsupported(ty),
+                    });
             }
             let unit = match t.GetType() {
                 kNumberToken => UnitType::kNumber,
@@ -330,4 +395,60 @@ fn ConsumeSingleType<T: TokenStreamTokenizer>(
     };
     s.ConsumeIncludingWhitespace();
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        css_parser_mode::CSSParserMode, css_value::CSSValuePayload,
+        production_property_parser::ParseCustomProperty,
+    };
+
+    fn variable_data(text: &str) -> Rc<values::CSSVariableData> {
+        let property = ParseCustomProperty(
+            "--fixture",
+            &String::from(text),
+            false,
+            CSSParserMode::kHTMLStandardMode,
+        )
+        .expect("custom property fixture parses");
+        let CSSValuePayload::kUnparsedDeclarationClass(value) = property.Value().Payload() else {
+            panic!("custom property fixture retains tokens")
+        };
+        value.data.clone()
+    }
+
+    fn syntax(kind: CSSSyntaxType) -> CSSSyntaxDefinition {
+        CSSSyntaxDefinition::new(vec![CSSSyntaxComponent::new(
+            kind,
+            &String::default(),
+            CSSSyntaxRepeat::kNone,
+        )])
+    }
+
+    #[test]
+    fn registered_transform_list_reuses_transform_declaration_consumer() {
+        let parsed = syntax(CSSSyntaxType::kTransformList)
+            .ParseTokens(&variable_data("translateX(12px) rotate(15deg)"))
+            .expect("transform list syntax accepts the declaration grammar");
+        assert_eq!(parsed.CssText().Utf8(), "translateX(12px) rotate(15deg)");
+    }
+
+    #[test]
+    fn registered_transform_function_rejects_a_list() {
+        assert!(matches!(
+            syntax(CSSSyntaxType::kTransformFunction)
+                .ParseTokens(&variable_data("translateX(12px) rotate(15deg)")),
+            Err(SyntaxValueError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn registered_length_accepts_typed_calc_expression() {
+        let parsed = syntax(CSSSyntaxType::kLength)
+            .ParseTokens(&variable_data("calc(100vw - 12px)"))
+            .expect("registered length syntax shares the typed CSS math consumer");
+        assert_eq!(parsed.CssText().Utf8(), "calc(100vw - 12px)");
+    }
 }

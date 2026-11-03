@@ -1,6 +1,6 @@
 //! Source-aligned SVG transformed visual bounds through production Page.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -8,6 +8,7 @@ use layoutng_assembly::internal::{
     layout_input::FontFace, layout_object::LayoutObject,
     layout_pass_scope::LayoutObjectFactoryScope,
 };
+use layoutng_assembly::layout_engine::PaintFragmentCursor;
 use page_mutation::PageMutation;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
@@ -186,7 +187,7 @@ fn assert_inside_clip_equal(visible: &Page, clipped: &Page) {
 
 #[test]
 fn circular_text_clip_preserves_inside_glyphs() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let visible = fixture(&circle_markup("visible", 300, "", "spacing"));
         let clipped = fixture(&circle_markup("hidden", 300, "", "spacing"));
@@ -196,7 +197,7 @@ fn circular_text_clip_preserves_inside_glyphs() {
 
 #[test]
 fn fractional_viewbox_and_length_adjust_keep_svg_clip_bounds() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for size in [240, 375] {
             for adjust in ["spacing", "spacingAndGlyphs"] {
@@ -210,7 +211,7 @@ fn fractional_viewbox_and_length_adjust_keep_svg_clip_bounds() {
 
 #[test]
 fn stroked_and_shadowed_path_text_keep_inside_clip_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for style in [
             "stroke:black;stroke-width:2",
@@ -225,7 +226,7 @@ fn stroked_and_shadowed_path_text_keep_inside_clip_pixels() {
 
 #[test]
 fn direct_rotated_svg_text_keeps_inside_clip_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let markup = |overflow| {
             format!(
@@ -240,7 +241,7 @@ fn direct_rotated_svg_text_keeps_inside_clip_pixels() {
 
 #[test]
 fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(&circle_markup("hidden", 300, "", "spacing"));
         let original = native(&page, "text") as *const LayoutObject;
@@ -270,17 +271,19 @@ fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
 }
 
 fn first_svg_data(
-    node: &layoutng_assembly::fragment_tree::FragmentPaintData,
+    node: PaintFragmentCursor<'_>,
 ) -> Option<&layoutng_assembly::fragment_tree::SvgTextPaintData> {
-    if let Some(svg) = node.paint.svg_text.as_deref() {
+    if let Some(svg) = node.PaintData().paint.svg_text.as_deref() {
         return Some(svg);
     }
-    node.children.iter().find_map(|child| first_svg_data(child))
+    node.Children()
+        .into_iter()
+        .find_map(|child| first_svg_data(child))
 }
 
 #[test]
 fn svg_parent_visual_bounds_expand_with_percentage_stroke_and_shadow() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let markup = |style| {
             format!(
@@ -291,9 +294,11 @@ fn svg_parent_visual_bounds_expand_with_percentage_stroke_and_shadow() {
         let stroke = fixture(&markup("stroke:black;stroke-width:2%"));
         let shadow = fixture(&markup("text-shadow:8px 3px 2px #555"));
         let rect = |page: &Page| {
-            first_svg_data(&page.CurrentFrame().unwrap().fragments)
-                .unwrap()
-                .visual_rect
+            first_svg_data(PaintFragmentCursor::FromHandle(
+                &page.CurrentFrame().unwrap().fragments,
+            ))
+            .unwrap()
+            .visual_rect
         };
         let base = rect(&plain);
         let stroked = rect(&stroke);
@@ -307,7 +312,35 @@ fn svg_parent_visual_bounds_expand_with_percentage_stroke_and_shadow() {
 }
 
 #[test]
-fn native_shadow_extents_keep_original_and_skip_inset() {
+fn svg_shaped_text_ink_overflow_recalculates_after_shadow_mutation() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut page = fixture(
+            r##"<svg width="300" height="240" viewBox="0 0 300 240"><text id="text" x="20" y="80" textLength="180" lengthAdjust="spacingAndGlyphs" transform="rotate(12 20 80)" style="font:24px SvgTextPathFixture">Bounds</text></svg>"##,
+        );
+        let rect = |page: &Page| {
+            first_svg_data(PaintFragmentCursor::FromHandle(
+                &page.CurrentFrame().unwrap().fragments,
+            ))
+            .unwrap()
+            .visual_rect
+        };
+        let before = rect(&page);
+        set_attribute(
+            &mut page,
+            "text",
+            "style",
+            "font:24px SvgTextPathFixture;text-shadow:8px 3px 2px #555",
+        );
+        page.RunTask().unwrap();
+        let after = rect(&page);
+        assert!(after.size.width > before.size.width);
+        assert!(after.size.height > before.size.height);
+    });
+}
+
+#[test]
+fn shadow_extents_keep_original_and_skip_inset() {
     use foundation::gfx;
     use layoutng_style::css::style_color::StyleColor;
     use layoutng_style::style::shadow_data::{ShadowData, ShadowStyle};

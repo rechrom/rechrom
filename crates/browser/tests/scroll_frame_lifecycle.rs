@@ -1,6 +1,6 @@
 //! Root scroll publishes one coherent native sticky/property/paint snapshot.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::internal::layout_input::FontFace;
@@ -73,7 +73,7 @@ fn fixture_with_theme(
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -127,7 +127,7 @@ fn root_scroll_state(
 
 #[test]
 fn phased_wheel_refreshes_cull_projection_during_scroll() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         use interaction::input_event::{WheelEvent, WheelPhase};
         use layoutng_assembly::internal::layout_input::Offset;
 
@@ -167,7 +167,7 @@ fn phased_wheel_refreshes_cull_projection_during_scroll() {
 
 #[test]
 fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             "body{height:1800px}#sticky{position:sticky;top:0;width:100px;height:20px;background:yellow}#fixed{position:fixed;top:7px;right:20px;width:23px;height:23px;background:black}#fixedparent{position:fixed;top:50px;right:20px;width:40px;height:60px}#fixedsticky{position:sticky;top:0;height:15px;background:black}.section{height:300px}#clip{width:40px;height:30px;overflow:hidden;border-radius:8px}#layer{width:70px;height:60px;background:magenta;opacity:.8}",
             "<div id=sticky></div><div id=fixed></div><div id=fixedparent><div id=fixedsticky></div></div><div class=section style='background:red'></div><div class=section style='background:lime'><div id=clip><div id=layer></div></div></div><div class=section style='background:blue'></div><div class=section style='background:cyan'></div><div class=section style='background:magenta'></div><div class=section style='background:yellow'></div>", true);
@@ -248,7 +248,7 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
 
 #[test]
 fn compositor_delta_acknowledgement_follows_commit_and_skips_second_default() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         use interaction::input_event::{InputEvent, WheelEvent, WheelPhase};
         use layoutng_assembly::internal::layout_input::Offset;
         let mut page = fixture("body{height:230px}", "<div></div>", true);
@@ -315,8 +315,8 @@ fn compositor_delta_acknowledgement_follows_commit_and_skips_second_default() {
 }
 
 #[test]
-fn native_post_layout_clamp_updates_dom_sticky_and_does_not_restore_on_expansion() {
-    native_test_thread::run(|| {
+fn post_layout_clamp_updates_dom_sticky_and_does_not_restore_on_expansion() {
+    test_thread::run(|| {
         let mut page = fixture(
             "#sticky{position:sticky;top:0;height:20px;background:yellow}#content{height:1800px;background:blue}#nested{width:100px;height:100px;overflow:auto}#inner{height:500px;background:red}",
             "<div id=sticky></div><div id=content></div><div id=nested><div id=inner></div></div>", true);
@@ -343,7 +343,7 @@ fn native_post_layout_clamp_updates_dom_sticky_and_does_not_restore_on_expansion
 
 #[test]
 fn owner_memory_diagnostics_are_read_only_and_do_not_advance_the_frame() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             "#box{height:500px;background:blue}",
             "<div id=box></div>",

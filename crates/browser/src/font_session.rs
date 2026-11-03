@@ -10,6 +10,12 @@ pub(crate) struct SystemFontSession {
     engine: FontEngineHandle,
     provider: Box<dyn SystemFontProvider>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SystemFontCompletion {
+    pub(crate) changed: bool,
+    pub(crate) bindings_changed: bool,
+}
 impl SystemFontSession {
     #[cfg(test)]
     pub(crate) fn with_provider(provider: Box<dyn SystemFontProvider>) -> Self {
@@ -50,23 +56,31 @@ impl SystemFontSession {
             collector.Clear();
         }
     }
-    /// Returns true only when new immutable faces were admitted. A answered
-    /// negative query never drives another layout; cached replies never perform
-    /// platform I/O twice. No Page callback or paint runs in this transaction.
-    pub(crate) fn CompletePass(&mut self, constraints: &mut ConstraintSpace) -> bool {
+    /// Complete the pure query outbox and distinguish a primary binding change
+    /// from contextual fallback ranks that only require text reshaping.
+    pub(crate) fn CompletePass(
+        &mut self,
+        constraints: &mut ConstraintSpace,
+    ) -> SystemFontCompletion {
+        let mut trace = browser_tracing::span("font", "SystemFonts.CompletePass");
         let Some(collector) = &constraints.font_queries else {
-            return false;
+            trace.set("queries", 0.0);
+            return SystemFontCompletion::default();
         };
         let previous_revision = collector.Revision();
+        let previous_binding_revision = collector.BindingRevision();
         self.engine
             .with_mut(|engine| engine.SetQueryCollector(Some(collector.clone())));
         let queries = collector.Drain();
+        trace.set("queries", queries.len() as f64);
         // An ordinary layout pass has no font-host work. Keep the exact shared
         // catalog generation already in ConstraintSpace and avoid rebuilding
         // or comparing any face metadata on the hot lifecycle path.
         if queries.is_empty() {
-            return false;
+            return SystemFontCompletion::default();
         }
+        let mut requests = 0usize;
+        let mut opened_faces = 0usize;
         for query in queries {
             // Discovery and exact-open are the two protocol phases. Stop
             // after open so a real shaping retry, not this host, decides whether
@@ -84,8 +98,29 @@ impl SystemFontSession {
                     .any(|r| matches!(r.query, font_engine::SystemFontQuery::OpenFace { .. }));
                 let mut admitted = false;
                 for request in pending.system_queries {
+                    let name = match &request.query {
+                        font_engine::SystemFontQuery::MatchFamily { .. } => {
+                            "SystemFonts.Resolve.MatchFamily"
+                        }
+                        font_engine::SystemFontQuery::MatchUniqueName { .. } => {
+                            "SystemFonts.Resolve.MatchUniqueName"
+                        }
+                        font_engine::SystemFontQuery::MatchGeneric { .. } => {
+                            "SystemFonts.Resolve.MatchGeneric"
+                        }
+                        font_engine::SystemFontQuery::Fallback { .. } => {
+                            "SystemFonts.Resolve.Fallback"
+                        }
+                        font_engine::SystemFontQuery::OpenFace { .. } => {
+                            "SystemFonts.Resolve.OpenFace"
+                        }
+                    };
+                    let _resolve = browser_tracing::span("font", name);
                     let answer = self.provider.Resolve(&request);
                     admitted |= matches!(&answer, font_engine::SystemFontAnswer::Face(face) if !face.bytes.is_empty());
+                    requests += 1;
+                    opened_faces += matches!(&answer, font_engine::SystemFontAnswer::Face(face) if !face.bytes.is_empty())
+                        as usize;
                     self.engine
                         .with_mut(|engine| {
                             engine.ApplyMutation(FontMutation::SystemFontResponse(
@@ -105,7 +140,17 @@ impl SystemFontSession {
         let resolved = self.engine.with_mut(|engine| engine.ResolvedFaces());
         let changed = constraints.fonts != resolved;
         constraints.fonts = resolved;
-        changed || collector.Revision() != previous_revision
+        let revision_changed = collector.Revision() != previous_revision;
+        let bindings_changed = changed || collector.BindingRevision() != previous_binding_revision;
+        trace.set("requests", requests as f64);
+        trace.set("opened_faces", opened_faces as f64);
+        trace.set("catalog_changed", changed as u8 as f64);
+        trace.set("revision_changed", revision_changed as u8 as f64);
+        trace.set("bindings_changed", bindings_changed as u8 as f64);
+        SystemFontCompletion {
+            changed: changed || revision_changed,
+            bindings_changed,
+        }
     }
 }
 
@@ -140,17 +185,42 @@ pub(crate) fn LayoutWithSystemFontsAtStage(
 ) -> bool {
     let mut updated = false;
     loop {
-        updated |= super::persistent_layout::LayoutDocumentWithEngineAtStage(
+        // Chromium does not publish a provisional fragment tree while font
+        // fallback is still resolving. Keep each retry on the resident source
+        // tree, then export exactly once after the query outbox is stable.
+        super::persistent_layout::LayoutDocumentWithEngineWithoutPublication(
             layout,
             document,
             interaction,
             constraints,
-            purpose,
         );
-        if !fonts.CompletePass(constraints) {
+        let completion = fonts.CompletePass(constraints);
+        if !completion.changed {
+            // The last provisional pass is already the settled native
+            // LayoutResult. Chromium publishes that same resident result when
+            // the font fallback queue is empty; it does not lay out the whole
+            // document once more merely to attach FragmentData for Paint.
+            // Export and certify the existing owner directly. Keep the normal
+            // layout entry as a defensive fallback if the resident result was
+            // invalidated by an unexpected host mutation.
+            if layout.PopulatePaintData() {
+                updated = true;
+            } else {
+                updated |= super::persistent_layout::LayoutDocumentWithEngineAtStage(
+                    layout,
+                    document,
+                    interaction,
+                    constraints,
+                    purpose,
+                );
+            }
             break;
         }
-        layout.ReleaseLayoutResult();
+        if !completion.bindings_changed {
+            layout.ApplyMutation(
+                layoutng_assembly::layout_engine::LayoutMutation::FontFallbackChanged,
+            );
+        }
         // Chromium's font invalidation dirties text layout while retaining the
         // attached LayoutObject tree. The provider/catalog changed underneath
         // the same typed style inputs, so only geometry needs another pass.
@@ -196,7 +266,7 @@ mod tests {
     }
     #[test]
     fn query_completion_preserves_alias_and_negative_answers_terminate() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             let calls = Rc::new(RefCell::new(vec![]));
             let mut session = SystemFontSession::with_provider(Box::new(Provider {
                 calls: calls.clone(),
@@ -211,20 +281,20 @@ mod tests {
                 locale: "en".into(),
             };
             collector.Push(query.clone());
-            assert!(session.CompletePass(&mut constraints));
+            assert!(session.CompletePass(&mut constraints).changed);
             assert_eq!(calls.borrow().len(), 2, "metadata then exact byte open");
             assert_eq!(constraints.fonts[0].family, "RequestedFont");
             assert!(!constraints.fonts[0].bytes.is_empty());
             collector.Push(query);
-            assert!(!session.CompletePass(&mut constraints));
+            assert!(!session.CompletePass(&mut constraints).changed);
             assert_eq!(calls.borrow().len(), 2, "known answers do not perform I/O");
             let missing = SystemFontQuery::MatchUniqueName {
                 name: "no such face".into(),
             };
             collector.Push(missing.clone());
-            assert!(!session.CompletePass(&mut constraints));
+            assert!(!session.CompletePass(&mut constraints).changed);
             collector.Push(missing);
-            assert!(!session.CompletePass(&mut constraints));
+            assert!(!session.CompletePass(&mut constraints).changed);
             assert_eq!(
                 calls.borrow().len(),
                 3,
@@ -234,7 +304,7 @@ mod tests {
     }
     #[test]
     fn layout_transaction_retries_before_exposing_final_font_resources() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             let calls = Rc::new(RefCell::new(vec![]));
             let mut fonts = SystemFontSession::with_provider(Box::new(Provider {
                 calls: calls.clone(),

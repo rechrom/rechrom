@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
 use layoutng_style::style::appearance::AppearanceValue;
-use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
+use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 
 pub use foundation::{
     BorderLineStyle, LayoutEdges as Edges, LayoutOffset as Offset, LayoutSize as Size,
@@ -816,8 +816,8 @@ pub struct GridTrackListInput {
     pub line_names: Vec<GridNamedLineInput>,
 }
 
-#[path = "../../../layout_algo_grid/src/native_grid_track_list_input.rs"]
-mod layout_algo_grid_native_grid_track_list_input;
+#[path = "../../../layout_algo_grid/src/grid_track_list_input.rs"]
+mod layout_algo_grid_grid_track_list_input;
 
 // cpp: layoutng/internal/layout_input.h:380-397
 #[repr(i32)]
@@ -892,6 +892,9 @@ pub struct ListMarkerImage {
     pub natural_width: f64,
     pub natural_height: f64,
     pub resolution_scale: f64,
+    /// Image::IsOpaque from the loaded StyleImage resource. Generated shaders
+    /// remain false because LayoutImage requires a loaded CachedImage.
+    pub known_to_be_opaque: bool,
 }
 // cpp: layoutng/internal/layout_input.h:425-618
 #[derive(Clone, Debug, PartialEq)]
@@ -1336,14 +1339,14 @@ pub enum TextDecorationStyle {
     kDashed,
     kWavy,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextDecorationPaint {
     pub underline: bool,
     pub overline: bool,
     pub line_through: bool,
     pub color: Option<Color>,
     pub style: TextDecorationStyle,
-    pub thickness: Option<f64>,
+    pub thickness: foundation::TextDecorationThickness,
     pub underline_offset: f64,
     pub underline_offset_auto: bool,
     pub skip_ink: bool,
@@ -1356,7 +1359,7 @@ impl Default for TextDecorationPaint {
             line_through: false,
             color: None,
             style: TextDecorationStyle::kSolid,
-            thickness: None,
+            thickness: foundation::TextDecorationThickness::default(),
             underline_offset: 0.0,
             underline_offset_auto: true,
             skip_ink: true,
@@ -1493,6 +1496,10 @@ impl Default for SvgViewportData {
 // Mutable dereference detaches shared storage, as the C++ accessors do.
 #[derive(Clone)]
 pub struct PaintStyle {
+    // Non-owning identity of the canonical Chromium ComputedStyle. The
+    // LayoutResult lease that owns the fragment keeps this managed object
+    // alive through PrePaint and Paint.
+    pub(super) source_address: usize,
     pub(super) data: std::sync::Arc<super::paint_input::PaintStyleData>,
 }
 
@@ -1506,12 +1513,21 @@ pub use foundation::{
 pub struct ContentLockState {
     pub is_locked: bool,
     pub should_layout_children: bool,
+    pub should_prepaint_children: bool,
+    pub should_paint_children: bool,
 }
 impl ContentLockState {
-    pub const fn new(locked: bool, layout_children: bool) -> Self {
+    pub const fn new(
+        locked: bool,
+        layout_children: bool,
+        prepaint_children: bool,
+        paint_children: bool,
+    ) -> Self {
         Self {
             is_locked: locked,
             should_layout_children: layout_children,
+            should_prepaint_children: prepaint_children,
+            should_paint_children: paint_children,
         }
     }
 }
@@ -1556,9 +1572,34 @@ pub enum SvgUseData {
     Local,
     UnsupportedReference,
     UnsupportedViewport,
-    UnsupportedImage,
     UnsupportedSwitch,
     UnbuiltInstance,
+}
+
+/// HTMLAreaElement's parsed shape. The focused-area relation is resolved by
+/// DOM, while LayoutImage supplies the container geometry and effective zoom.
+/// Source: core/html/html_area_element.cc:52-84,111-191.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageMapAreaShape {
+    #[default]
+    kRect,
+    kCircle,
+    kPoly,
+    kDefault,
+}
+
+/// Immutable focused image-map input published on the associated HTML image.
+/// Paint must not traverse DOM or reconstruct the map/image relation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FocusedImageMapArea {
+    pub shape: ImageMapAreaShape,
+    pub coordinates: Vec<f64>,
+    pub has_outline: bool,
+    pub outline_style_is_auto: bool,
+    pub outline_color: Color,
+    /// FocusRingStrokeWidth consumes the focused area's computed zoom, while
+    /// HTMLAreaElement::GetPath consumes the LayoutImage container zoom.
+    pub effective_zoom: f32,
 }
 
 #[derive(Clone)]
@@ -1569,7 +1610,15 @@ pub struct ElementData {
     pub remembered_block_size: Option<f64>,
     pub nowrap_attribute: bool,
     pub image_map_area: bool,
+    pub html_anchor: bool,
+    pub html_canvas: bool,
+    pub canvas_layout_subtree: bool,
+    pub drawable_attribute: bool,
     pub html_image: bool,
+    /// HTMLImageElement decoding preference. ImageElementBase retains the
+    /// content-transition state separately at the paint lifecycle boundary.
+    pub image_decoding_mode: image_resource::ImageDecodingMode,
+    pub focused_image_map_area: Option<FocusedImageMapArea>,
     pub html_ordered_or_unordered_list: bool,
     pub first_letter_pseudo: bool,
     pub viewport_defining: bool,
@@ -1580,6 +1629,17 @@ pub struct ElementData {
     pub natural_width: Option<f64>,
     pub natural_height: Option<f64>,
     pub natural_aspect_ratio: Option<f64>,
+    /// LayoutImageResource::HasImage plus the loaded CachedImage opacity fact
+    /// consumed by LayoutImage::ForegroundIsKnownToBeOpaqueInRect.
+    pub image_resource_is_loaded: bool,
+    /// LayoutImageResource::ErrorOccurred. A failed resource still causes the
+    /// normal image invalidation, but must not replace LayoutImage's retained
+    /// natural_dimensions_ member with the failed resource's empty size.
+    pub image_resource_error: bool,
+    pub image_resource_known_to_be_opaque: bool,
+    /// Image::MaybeAnimated, used only by LayoutImage's defer-capable paint
+    /// invalidation path.
+    pub image_resource_maybe_animated: bool,
     /// Chromium LayoutImage::ImageDevicePixelRatio: CSS pixels per selected
     /// resource pixel (the inverse of an image candidate's `2x` density).
     pub image_device_pixel_ratio: f64,
@@ -1644,8 +1704,8 @@ pub struct ElementData {
     pub document_role: DocumentRole,
 }
 
-#[path = "../../../layout_invalidation/src/native_element_data_equivalence.rs"]
-mod layout_invalidation_native_element_data_equivalence;
+#[path = "../../../layout_invalidation/src/element_data_equivalence.rs"]
+mod layout_invalidation_element_data_equivalence;
 
 impl Default for ElementData {
     // cpp: layoutng/internal/layout_input.h:791-942
@@ -1657,7 +1717,13 @@ impl Default for ElementData {
             remembered_block_size: None,
             nowrap_attribute: false,
             image_map_area: false,
+            html_anchor: false,
+            html_canvas: false,
+            canvas_layout_subtree: false,
+            drawable_attribute: false,
             html_image: false,
+            image_decoding_mode: Default::default(),
+            focused_image_map_area: None,
             html_ordered_or_unordered_list: false,
             first_letter_pseudo: false,
             viewport_defining: false,
@@ -1668,6 +1734,10 @@ impl Default for ElementData {
             natural_width: None,
             natural_height: None,
             natural_aspect_ratio: None,
+            image_resource_is_loaded: false,
+            image_resource_error: false,
+            image_resource_known_to_be_opaque: false,
+            image_resource_maybe_animated: false,
             image_device_pixel_ratio: 1.0,
             replaced_respects_css_overflow: false,
             row_span: 1,
@@ -1745,11 +1815,11 @@ pub struct CssClipRect {
 
 #[derive(Clone)]
 pub struct ComputedStyle {
-    /// The Chromium `ComputedStyle` produced by StyleEngine for this
-    /// projection.  DOM-to-layout metadata below remains the renderer-neutral
-    /// projection consumed by the Rust paint boundary; layout itself reuses
-    /// this exact immutable style object instead of reconstructing one.
-    pub native_style: *const NativeComputedStyle,
+    /// The Chromium `ComputedStyle` produced by StyleEngine. LayoutObject uses
+    /// this exact immutable style object. Production attachment leaves the
+    /// duplicated CSS fields below at their defaults; they support only the
+    /// older direct Layout input API and its tests.
+    pub style: *const StyleComputedStyle,
     /// Document-owned SVG resource input, separate from canonical CSS style.
     pub svg_clip_resources: super::paint_input::SvgClipResourceBinding,
     pub display: Display,
@@ -1787,8 +1857,8 @@ pub struct ComputedStyle {
     pub paint: PaintStyle,
 }
 
-#[path = "../../../layout_invalidation/src/native_computed_style_equivalence.rs"]
-mod layout_invalidation_native_computed_style_equivalence;
+#[path = "../../../layout_invalidation/src/computed_style_equivalence.rs"]
+mod layout_invalidation_computed_style_equivalence;
 
 #[cfg(test)]
 mod computed_style_layout_equivalence_tests {
@@ -1797,9 +1867,9 @@ mod computed_style_layout_equivalence_tests {
     use layoutng_style::style::computed_style::ComputedStyleBuilder;
 
     #[test]
-    fn native_only_alignment_changes_require_layout() {
+    fn only_alignment_changes_require_layout() {
         let _heap = foundation::LayoutHeapScope::new();
-        let initial = unsafe { &*NativeComputedStyle::GetInitialStyleSingleton() };
+        let initial = unsafe { &*StyleComputedStyle::GetInitialStyleSingleton() };
         let mut builder = ComputedStyleBuilder::from_style(initial);
         builder.SetTextAlign(foundation::ETextAlign::kCenter);
         let centered = builder.TakeStyle();
@@ -1807,19 +1877,19 @@ mod computed_style_layout_equivalence_tests {
         builder.SetTextAlign(foundation::ETextAlign::kRight);
         let right = builder.TakeStyle();
         let old = ComputedStyle {
-            native_style: centered,
+            style: centered,
             ..Default::default()
         };
         let mut new = old.clone();
-        new.native_style = right;
+        new.style = right;
         assert!(!old.LayoutEquivalent(&new));
         assert!(!new.LayoutEquivalent(&old));
     }
 
     #[test]
-    fn native_only_resolved_font_features_require_layout_and_keep_old_description() {
+    fn only_resolved_font_features_require_layout_and_keep_old_description() {
         let _heap = foundation::LayoutHeapScope::new();
-        let initial = unsafe { &*NativeComputedStyle::GetInitialStyleSingleton() };
+        let initial = unsafe { &*StyleComputedStyle::GetInitialStyleSingleton() };
         let make_style = |value| {
             let mut builder = ComputedStyleBuilder::from_style(initial);
             let mut description = initial.GetFontDescription().clone();
@@ -1844,15 +1914,15 @@ mod computed_style_layout_equivalence_tests {
         let same = make_style(1);
         let second = make_style(0);
         let old = ComputedStyle {
-            native_style: first,
+            style: first,
             ..Default::default()
         };
         let equivalent = ComputedStyle {
-            native_style: same,
+            style: same,
             ..Default::default()
         };
         let changed = ComputedStyle {
-            native_style: second,
+            style: second,
             ..Default::default()
         };
         assert!(old.LayoutEquivalent(&equivalent));
@@ -1869,18 +1939,18 @@ mod computed_style_layout_equivalence_tests {
     }
 
     #[test]
-    fn native_paint_only_changes_preserve_layout_equivalence() {
+    fn paint_only_changes_preserve_layout_equivalence() {
         let _heap = foundation::LayoutHeapScope::new();
-        let initial = unsafe { &*NativeComputedStyle::GetInitialStyleSingleton() };
+        let initial = unsafe { &*StyleComputedStyle::GetInitialStyleSingleton() };
         let mut builder = ComputedStyleBuilder::from_style(initial);
         builder.SetOpacity(0.5);
         let transparent = builder.TakeStyle();
         let old = ComputedStyle {
-            native_style: initial,
+            style: initial,
             ..Default::default()
         };
         let mut new = old.clone();
-        new.native_style = transparent;
+        new.style = transparent;
         new.paint.opacity = 0.5;
         assert!(old.LayoutEquivalent(&new));
         assert!(new.LayoutEquivalent(&old));
@@ -1910,7 +1980,7 @@ mod computed_style_layout_equivalence_tests {
     }
 
     #[test]
-    fn native_layer_and_inline_box_transitions_require_layout() {
+    fn layer_and_inline_box_transitions_require_layout() {
         let old = ComputedStyle::default();
         let mut painted_background = old.clone();
         painted_background.paint.background_color.alpha = 1.0;
@@ -1925,7 +1995,7 @@ mod computed_style_layout_equivalence_tests {
 impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
-            native_style: std::ptr::null(),
+            style: std::ptr::null(),
             svg_clip_resources: Default::default(),
             display: Display::kBlock,
             width: None,
@@ -1962,20 +2032,55 @@ impl Default for ComputedStyle {
     }
 }
 
+/// Document/resource objects associated with a canonical ComputedStyle.
+/// Chromium keeps these as client edges outside ComputedStyle; Layout retains
+/// only the small handles it needs after the synchronous DOM attachment call.
+#[derive(Clone, Default, PartialEq)]
+pub struct StyleResourceData {
+    pub image_resource_id: Option<u64>,
+    pub svg_filter_graphs: std::sync::Arc<Vec<super::paint_input::SvgFilterGraph>>,
+    pub svg_clip_resources: super::paint_input::SvgClipResourceBinding,
+    pub svg_mask_resource: Option<std::sync::Arc<super::paint_input::SvgMaskGraph>>,
+    pub svg_fill_server: Option<super::paint_input::SvgPaintServer>,
+    pub svg_stroke_server: Option<super::paint_input::SvgPaintServer>,
+    pub svg_markers: std::sync::Arc<[super::paint_input::SvgMarkerInstance]>,
+    pub replaced_image_shader: Option<std::sync::Arc<super::paint_input::PaintShader>>,
+}
+
+impl StyleResourceData {
+    pub fn FromLegacyInput(style: &ComputedStyle) -> Self {
+        Self {
+            image_resource_id: style.paint.image_resource_id,
+            svg_filter_graphs: std::sync::Arc::clone(&style.paint.svg_filter_graphs),
+            svg_clip_resources: style.svg_clip_resources.clone(),
+            svg_mask_resource: style.paint.svg_mask_resource.clone(),
+            svg_fill_server: style.paint.svg_fill_server.clone(),
+            svg_stroke_server: style.paint.svg_stroke_server.clone(),
+            svg_markers: style.paint.svg_markers.clone().into(),
+            replaced_image_shader: style.paint.replaced_image_shader.clone(),
+        }
+    }
+}
+
 // cpp: layoutng/internal/layout_input.h:988-1002
 #[derive(Clone, Default, PartialEq)]
-pub struct NativeNodeConstructionData {
+pub struct NodeConstructionData {
     pub id: u64,
     pub kind: NodeKind,
     pub style_generated: bool,
-    /// Immutable Style -> Layout projection. Attached Node metadata and the
-    /// incremental tree index retain this same owner instead of copying the
-    /// complete projected style at each side of the boundary.
+    /// The canonical Chromium style shared by Element, Node and LayoutObject.
+    pub computed_style: *const StyleComputedStyle,
+    /// A small production envelope containing the canonical pointer and
+    /// document resource bindings. The duplicated CSS fields are populated
+    /// only by the older direct Layout input API.
     pub style: std::sync::Arc<ComputedStyle>,
+    pub resources: std::sync::Arc<StyleResourceData>,
     pub text: String,
     pub element: Option<ElementData>,
     pub debug_name: String,
+    pub first_line_computed_style: *const StyleComputedStyle,
     pub first_line_style: Option<std::sync::Arc<ComputedStyle>>,
+    pub first_line_resources: Option<std::sync::Arc<StyleResourceData>>,
 }
 impl Default for NodeKind {
     fn default() -> Self {
@@ -2048,6 +2153,10 @@ pub struct ConstraintSpace {
     pub compatibility_mode: CompatibilityMode,
     pub printing: bool,
     pub vertical_scroll_enforced: bool,
+    /// Fullscreen::FullscreenElementFrom(document) exists and is not the
+    /// document element. PaintLayerScrollableArea::UserInputScrollable uses
+    /// this document-owned fact to disable LayoutView user scrolling.
+    pub fullscreen_element_blocks_layout_view_scroll: bool,
     pub scrollbar_theme: Option<ScrollbarThemeMetrics>,
     pub minimum_font_physical_size: Option<f32>,
     pub device_pixel_ratio: f64,
@@ -2086,6 +2195,7 @@ impl Default for ConstraintSpace {
             compatibility_mode: CompatibilityMode::kStandards,
             printing: false,
             vertical_scroll_enforced: false,
+            fullscreen_element_blocks_layout_view_scroll: false,
             scrollbar_theme: None,
             minimum_font_physical_size: None,
             device_pixel_ratio: 1.0,

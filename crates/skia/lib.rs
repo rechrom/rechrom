@@ -755,10 +755,10 @@ pub use base::allocator::partition_allocator::src::partition_alloc;
 
 // Genuine compiler primitive transport; all Skia arithmetic stays in Rust.
 pub mod interop {
-    #[cfg(sk_native_long_double_ffi)]
-    pub mod native_long_double;
+    #[cfg(sk_long_double_ffi)]
+    pub mod long_double;
     #[cfg(feature = "chromium_embedding")]
-    pub mod native_ostream;
+    pub mod ostream;
 }
 
 // Rust integration error boundary, not attributed to upstream source lines.

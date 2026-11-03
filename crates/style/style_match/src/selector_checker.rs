@@ -319,7 +319,7 @@ pub trait SelectorCheckerBackend: Sized {
     fn ScrollbarPressedPart(&self, s: &Self::CustomScrollbar) -> Self::ScrollbarPart;
     fn ScrollbarPartBits(&self, p: &Self::ScrollbarPart) -> u32;
     fn ScrollbarHorizontal(&self, s: &Self::CustomScrollbar) -> bool;
-    fn ScrollbarNativeThemeHasButtons(&self, s: &Self::CustomScrollbar) -> bool;
+    fn ScrollbarThemeHasButtons(&self, s: &Self::CustomScrollbar) -> bool;
     fn ScrollbarCornerVisible(&self, s: &Self::CustomScrollbar) -> bool;
     fn InPseudoHasChecking(&self, e: &Self::Element) -> bool;
     fn ExitHasCacheScope(&self, scope: Self::HasCacheScope);
@@ -1918,11 +1918,9 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
             kPseudoEnd => matches!(part, 32 | 64 | 16),
             kPseudoDoubleButton => false,
             kPseudoSingleButton => {
-                b.ScrollbarNativeThemeHasButtons(scrollbar) && matches!(part, 1 | 64 | 4 | 16)
+                b.ScrollbarThemeHasButtons(scrollbar) && matches!(part, 1 | 64 | 4 | 16)
             }
-            kPseudoNoButton => {
-                !b.ScrollbarNativeThemeHasButtons(scrollbar) && matches!(part, 4 | 16)
-            }
+            kPseudoNoButton => !b.ScrollbarThemeHasButtons(scrollbar) && matches!(part, 4 | 16),
             kPseudoCornerPresent => b.ScrollbarCornerVisible(scrollbar),
             _ => false,
         }
@@ -2606,7 +2604,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
     }
 }
 
-// cpp: selector_checker.cc:2288-3238. Native DOM predicates below read state;
+// cpp: selector_checker.cc:2288-3238. Canonical DOM predicates below read state;
 // pseudo dispatch, forced-state precedence and invalidation remain Rust.
 impl<B: SelectorCheckerBackend> SelectorChecker<B> {
     fn ForcedStatePair(&self, e: &B::Element, p: PseudoType, opposite: PseudoType) -> Option<bool> {

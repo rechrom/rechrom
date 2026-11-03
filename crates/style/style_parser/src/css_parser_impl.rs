@@ -269,7 +269,7 @@ pub trait CSSParserImplObserver {
 // denote actual missing Chromium types, never substitute empty CSS enums.
 // The rule dispatch operations below are assembly boundaries: a production
 // RuleBackend forwards them to the mapped methods on CSSParserImpl. Declaration
-// consumers are native methods below; grammar dependencies have no defaults.
+// consumers are computed style methods below; grammar dependencies have no defaults.
 pub trait CSSParserImplBackend: Sized {
     type Platform: CSSParserContextPlatform;
     type ValueBackend: CSSPropertyValueSetBackend;
@@ -298,7 +298,7 @@ pub trait CSSParserImplBackend: Sized {
 }
 
 // Required external property/variable/descriptor grammar operations. All
-// declaration and block consumers below execute their native mapped bodies.
+// declaration and block consumers below execute their computed style mapped bodies.
 pub trait CSSParserImplValueBackend: CSSParserImplBackend {
     type CSSVariableData;
     fn ParseAsUnresolvedCSSPropertyID(

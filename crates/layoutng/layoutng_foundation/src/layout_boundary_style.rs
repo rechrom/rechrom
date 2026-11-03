@@ -23,7 +23,7 @@ pub struct PaintColor {
 
 /// Writing modes stored in the public Layout -> Paint artifact. Sideways
 /// modes intentionally collapse to their physical vertical direction before
-/// crossing this boundary; native Layout keeps the five-value `WritingMode`.
+/// crossing this boundary; source Layout keeps the five-value `WritingMode`.
 // cpp: layoutng/internal/layout_input.h:54-57
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +80,7 @@ pub enum BorderLineStyle {
     kOutset,
 }
 
-/// Resolved native control appearance. `kAuto` must be resolved before layout.
+/// Resolved source control appearance. `kAuto` must be resolved before layout.
 // cpp: layoutng_style/style/appearance.h:30-61
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

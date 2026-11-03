@@ -236,6 +236,8 @@ impl Default for SvgRootSizingInfo {
 #[derive(Clone, Copy, Default)]
 pub struct SvgLayoutSupport {
     pub performance_owner: Option<&'static str>,
+    // Pure object geometry used by PhysicalBoxFragment outline collection.
+    pub text_object_bounding_box: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
     // Pure derived SVG Layout visual geometry, in local SVG user coordinates.
     pub text_visual_rect: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
     pub viewport_size: Option<fn(&LayoutObject) -> foundation::gfx::SizeF>,
@@ -250,6 +252,7 @@ pub struct SvgLayoutSupport {
         ) -> (
             Option<super::layout_input::TransformMatrix>,
             Option<layout_fragment::fragment_tree::SvgViewportGeometry>,
+            Option<foundation::gfx::RectF>,
         ),
     >,
     // Rust callback for the C++ LayoutObject::UpdateSVGLayout virtual override.

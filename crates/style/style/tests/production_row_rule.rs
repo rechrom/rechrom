@@ -14,12 +14,12 @@ use style::{
     },
     production_css_value as values, StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -37,13 +37,13 @@ fn parse(id: P, text: &str) -> Vec<values::PropertyValue> {
     .unwrap()
 }
 #[test]
-fn row_and_bidirectional_rule_lists_write_only_source_native_fields() {
+fn row_and_bidirectional_rule_lists_write_only_source_computed_style_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='column-rule:7px double green;row-rule:red solid 0.5px,thin dashed rgb(0,0,255)'><div id=c style='row-rule:inherit'></div><div id=i style='row-rule:initial'></div><div id=u style='row-rule:unset'></div><div id=r style='row-rule:9px double red;row-rule:dotted'></div></div><div id=both style='rule:2px solid red,4px dashed blue'></div><div id=parts style='rule-color:red,blue;rule-width:2px,4px;rule-style:solid,double'></div><div id=reset style='rule:9px double red;rule:none'></div>",
     );
     update(&mut owner);
-    for v in [native(&owner, "p"), native(&owner, "c")] {
+    for v in [computed_style(&owner, "p"), computed_style(&owner, "c")] {
         assert_eq!(v.RowRuleStyle().GetGapDataList().size(), 2);
         assert_eq!(
             v.RowRuleStyle().GetGapDataList().at(0).GetValue(),
@@ -61,21 +61,31 @@ fn row_and_bidirectional_rule_lists_write_only_source_native_fields() {
         );
         assert!(v.MaybeHasGapDecorations());
     }
-    assert_eq!(native(&owner, "p").ColumnRuleWidth().GetSingleValue(), 7);
     assert_eq!(
-        native(&owner, "p").ColumnRuleStyle().GetSingleValue(),
+        computed_style(&owner, "p")
+            .ColumnRuleWidth()
+            .GetSingleValue(),
+        7
+    );
+    assert_eq!(
+        computed_style(&owner, "p")
+            .ColumnRuleStyle()
+            .GetSingleValue(),
         S::kDouble
     );
-    for v in [native(&owner, "i"), native(&owner, "u")] {
+    for v in [computed_style(&owner, "i"), computed_style(&owner, "u")] {
         assert_eq!(v.RowRuleWidth().GetSingleValue(), 3);
         assert_eq!(v.RowRuleStyle().GetSingleValue(), S::kNone);
         assert!(v.RowRuleColor().GetSingleValue().IsCurrentColor());
     }
-    let r = native(&owner, "r");
+    let r = computed_style(&owner, "r");
     assert_eq!(r.RowRuleWidth().GetSingleValue(), 3);
     assert_eq!(r.RowRuleStyle().GetSingleValue(), S::kDotted);
     assert!(r.RowRuleColor().GetSingleValue().IsCurrentColor());
-    for v in [native(&owner, "both"), native(&owner, "parts")] {
+    for v in [
+        computed_style(&owner, "both"),
+        computed_style(&owner, "parts"),
+    ] {
         assert_eq!(v.ColumnRuleWidth().GetGapDataList().at(1).GetValue(), 4);
         assert_eq!(v.RowRuleWidth().GetGapDataList().at(1).GetValue(), 4);
         assert!(
@@ -88,14 +98,14 @@ fn row_and_bidirectional_rule_lists_write_only_source_native_fields() {
         );
     }
     assert_eq!(
-        native(&owner, "parts")
+        computed_style(&owner, "parts")
             .RowRuleStyle()
             .GetGapDataList()
             .at(1)
             .GetValue(),
         S::kDouble
     );
-    let reset = native(&owner, "reset");
+    let reset = computed_style(&owner, "reset");
     assert_eq!(reset.ColumnRuleWidth().GetSingleValue(), 3);
     assert_eq!(reset.RowRuleWidth().GetSingleValue(), 3);
     assert_eq!(reset.ColumnRuleStyle().GetSingleValue(), S::kNone);
@@ -166,7 +176,7 @@ fn bidirectional_rule_expansion_and_css_wide_preserve_all_six_longhands() {
         "<div id=p style='rule:5px ridge blue'><div id=c style='rule:inherit'></div><div id=i style='rule:initial'></div><div id=u style='rule:unset'></div><div id=parts style='rule-color:inherit;rule-width:inherit;rule-style:inherit'></div></div>",
     );
     update(&mut owner);
-    for v in [native(&owner, "c"), native(&owner, "parts")] {
+    for v in [computed_style(&owner, "c"), computed_style(&owner, "parts")] {
         assert_eq!(v.RowRuleWidth().GetSingleValue(), 5);
         assert_eq!(v.ColumnRuleWidth().GetSingleValue(), 5);
         assert_eq!(v.RowRuleStyle().GetSingleValue(), S::kRidge);
@@ -175,7 +185,7 @@ fn bidirectional_rule_expansion_and_css_wide_preserve_all_six_longhands() {
             v.RowRuleColor().GetSingleValue() == StyleColor::from_color(Color::FromRGB(0, 0, 255))
         );
     }
-    for v in [native(&owner, "i"), native(&owner, "u")] {
+    for v in [computed_style(&owner, "i"), computed_style(&owner, "u")] {
         assert_eq!(v.RowRuleWidth().GetSingleValue(), 3);
         assert_eq!(v.ColumnRuleWidth().GetSingleValue(), 3);
         assert_eq!(v.RowRuleStyle().GetSingleValue(), S::kNone);
@@ -183,7 +193,7 @@ fn bidirectional_rule_expansion_and_css_wide_preserve_all_six_longhands() {
     }
 }
 #[test]
-fn row_rule_invalid_repeat_and_native_context_boundaries_remain_typed() {
+fn row_rule_invalid_repeat_and_computed_style_context_boundaries_remain_typed() {
     let _heap = foundation::LayoutHeapScope::new();
     for (id, text) in [
         (P::kRowRuleWidth, "-1px"),

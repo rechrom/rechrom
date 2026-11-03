@@ -481,13 +481,13 @@ unsafe fn evaluate_3_way_intrinsic(
 // Source: src/sksl/ir/SkSLFunctionCall.cpp:348-357
 // Native pun_value uses equal-width memcpy after numeric conversion. Helpers preserve the
 // actual source conversion domain; Rust saturation may not fabricate an out-of-domain value.
-unsafe fn native_i32(v: f64) -> i32 {
+unsafe fn i32(v: f64) -> i32 {
     if !v.is_finite() || v < -2147483648.0 || v >= 2147483648.0 {
         std::process::abort();
     }
     v as i32
 }
-unsafe fn native_u32(v: f64) -> u32 {
+unsafe fn u32(v: f64) -> u32 {
     if !v.is_finite() || v < 0.0 || v >= 4294967296.0 {
         std::process::abort();
     }
@@ -777,11 +777,11 @@ mod Intrinsics {
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:443-443
     pub(super) fn scalar_evaluate_intBitsToFloat(a: f64, b: f64, c: f64) -> f64 {
-        f32::from_bits(unsafe { native_i32(a) } as u32) as f64
+        f32::from_bits(unsafe { i32(a) } as u32) as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:444-444
     pub(super) fn scalar_evaluate_uintBitsToFloat(a: f64, b: f64, c: f64) -> f64 {
-        f32::from_bits(unsafe { native_u32(a) }) as f64
+        f32::from_bits(unsafe { u32(a) }) as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:446-451
     pub(super) unsafe fn evaluate_length(
@@ -1335,7 +1335,7 @@ unsafe fn optimize_intrinsic_call(
                     let x = get(0, n);
                     let value =
                         (Intrinsics::scalar_evaluate_clamp(x as f64, 0.0, 1.0) * 65535.0).round();
-                    native_i32(value) as u32
+                    i32(value) as u32
                 }
             };
             let packed = ((pack(0) << 0) & 0x0000ffff) | ((pack(1) << 16) & 0xffff0000);
@@ -1352,7 +1352,7 @@ unsafe fn optimize_intrinsic_call(
                     let x = get(0, n);
                     let value =
                         (Intrinsics::scalar_evaluate_clamp(x as f64, -1.0, 1.0) * 32767.0).round();
-                    native_i32(value) as u32
+                    i32(value) as u32
                 }
             };
             let packed = ((pack(0) << 0) & 0x0000ffff) | ((pack(1) << 16) & 0xffff0000);

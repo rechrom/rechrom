@@ -4,7 +4,7 @@ mod proxy_connector;
 mod referrer_policy;
 mod request_trace;
 mod static_get;
-pub use referrer_policy::ReferrerPolicy;
+pub use referrer_policy::{IsSameOrigin, ReferrerPolicy};
 
 pub use http_request::{
     HTTPRequestData, HTTPRequestOperation, HTTPRequestPriority, HTTPRequestTransport,

@@ -171,7 +171,7 @@ fn ScrollChain(
         }
     }
     let user_scrollable = |overflow, horizontal| {
-        fragment.paint.scroll_container.map_or_else(
+        fragment.paint.scroll_container.as_ref().map_or_else(
             || {
                 matches!(overflow, Overflow::kAuto | Overflow::kScroll)
                     || (root && overflow == Overflow::kVisible)
@@ -185,7 +185,7 @@ fn ScrollChain(
             },
         )
     };
-    let (minimum, maximum) = fragment.paint.scroll_container.map_or_else(
+    let (minimum, maximum) = fragment.paint.scroll_container.as_ref().map_or_else(
         || {
             let maximum = Offset {
                 x: if user_scrollable(fragment.paint.overflow_x, true) {

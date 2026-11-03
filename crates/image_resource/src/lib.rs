@@ -13,6 +13,33 @@ use std::{
 
 pub type ImageId = u64;
 
+/// Pixel alpha representation published by the concrete image decoder.
+///
+/// Source: third_party/blink/renderer/platform/image-decoders/image_frame.h
+/// and webp/webp_image_decoder.cc:202-219. Chromium's WebP decoder can write
+/// libwebp's premultiplied `MODE_rgbA`/`MODE_bgrA` pixels directly into an
+/// ImageFrame, while other producers publish straight-alpha pixels. Keep this
+/// producer fact explicit instead of re-premultiplying an already canonical
+/// frame with a different rounding rule in Raster.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PaintImageAlphaType {
+    #[default]
+    Unpremultiplied,
+    Premultiplied,
+}
+
+/// Source: platform/graphics/image.h:268-280 and
+/// platform/graphics/paint/paint_image.h:495-505.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageDecodingMode {
+    #[default]
+    kUnspecified = 0,
+    kSync = 1,
+    kAsync = 2,
+}
+
 /// Stable identity of the immutable image value used by Paint and compositor
 /// image-animation state. Resource identity remains a separate concern: one
 /// resource keeps this value while its decoded frame/content revision changes.
@@ -84,10 +111,10 @@ impl fmt::Display for PaintImageMetadataUnavailable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ProducerFactsNotPublished => {
-                write!(f, "image producer did not publish native animation facts")
+                write!(f, "image producer did not publish animation facts")
             }
             Self::EncodedAnimationTimeline { format } => {
-                write!(f, "{format} image has no native multi-frame/timeline owner")
+                write!(f, "{format} image has no multi-frame/timeline owner")
             }
         }
     }
@@ -316,6 +343,15 @@ pub enum PaintImageContent {
     Document(Arc<DocumentPaintContent>),
 }
 
+/// One completely composited bitmap frame retained by the image producer.
+/// Source: cc/paint/paint_image_generator.h: FrameMetadata/GetPixels and
+/// cc/paint/paint_image.cc: GetSkImageForFrame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaintImageFrame {
+    pub duration: Duration,
+    pub pixels: Arc<Vec<u8>>,
+}
+
 impl Default for PaintImageContent {
     fn default() -> Self {
         Self::Bitmap(Arc::new(Vec::new()))
@@ -370,11 +406,25 @@ pub struct PaintImage {
     pub width: u32,
     pub height: u32,
     pub resolution_scale: f64,
+    /// Parsed positive Content-DPR response header. This response-owned fact
+    /// overrides candidate density only at an HTML image use.
+    pub content_dpr: Option<f64>,
+    /// ImageResourceContent::IsCorsSameOrigin() for this immutable response.
+    /// Cross-origin no-CORS images remain drawable normally but are suppressed
+    /// when PaintInfo requests a privacy-preserving subtree.
+    pub is_cors_same_origin: bool,
     /// Pixels remain in storage order; each CSS use decides whether to honor
     /// the encoded orientation.
     pub orientation: ImageOrientation,
+    /// Alpha representation of bitmap content and every bitmap animation
+    /// frame. Document images produce their own raster pixels and keep the
+    /// default straight-alpha representation.
+    pub alpha_type: PaintImageAlphaType,
     pub document_container_key: Option<ContainerKey>,
     pub content: PaintImageContent,
+    /// Present only for multi-frame bitmap images. The storage belongs to the
+    /// same immutable PaintImage value as the default frame in `content`.
+    pub animation_frames: Option<Arc<Vec<PaintImageFrame>>>,
 }
 
 impl Default for PaintImage {
@@ -387,9 +437,13 @@ impl Default for PaintImage {
             width: 0,
             height: 0,
             resolution_scale: 1.0,
+            content_dpr: None,
+            is_cors_same_origin: false,
             orientation: ImageOrientation::default(),
+            alpha_type: PaintImageAlphaType::default(),
             document_container_key: None,
             content: PaintImageContent::default(),
+            animation_frames: None,
         }
     }
 }
@@ -417,6 +471,21 @@ impl PaintImage {
         }
     }
 
+    /// Image::MaybeAnimated is deliberately more conservative than the
+    /// compositor's ShouldAnimate decision. Unknown producer metadata may
+    /// still change between paint invalidation and diagnostic repaint.
+    pub fn MaybeAnimated(&self) -> bool {
+        match &self.compositor_metadata {
+            Ok(metadata) => match &metadata.animation {
+                PaintImageAnimationMetadata::Known(info) => {
+                    info.animation_type == PaintImageAnimationType::Animated
+                }
+                PaintImageAnimationMetadata::Unavailable(_) => true,
+            },
+            Err(_) => true,
+        }
+    }
+
     pub fn IsLazyGenerated(&self) -> bool {
         matches!(&self.content, PaintImageContent::Document(_))
     }
@@ -436,8 +505,54 @@ impl PaintImage {
         }
     }
 
+    pub fn BitmapFramePixels(&self, frame_index: usize) -> Option<&Arc<Vec<u8>>> {
+        match &self.animation_frames {
+            Some(frames) => frames.get(frame_index).map(|frame| &frame.pixels),
+            None if frame_index == 0 => self.BitmapPixels(),
+            None => None,
+        }
+    }
+
+    pub fn BitmapAnimationFrames(&self) -> Option<&[PaintImageFrame]> {
+        self.animation_frames.as_deref().map(Vec::as_slice)
+    }
+
     pub fn IsDocumentImage(&self) -> bool {
         matches!(self.content, PaintImageContent::Document(_))
+    }
+}
+
+#[cfg(test)]
+mod paint_image_animation_tests {
+    use super::*;
+
+    #[test]
+    fn maybe_animated_is_conservative_when_producer_facts_are_unavailable() {
+        assert!(PaintImage::default().MaybeAnimated());
+        let static_image = PaintImage {
+            compositor_metadata: Ok(PaintImageMetadata {
+                animation: PaintImageAnimationMetadata::Known(
+                    PaintImageAnimationInfo::confirmed_static(),
+                ),
+                completion_state: PaintImageCompletionState::Done,
+                is_multipart: false,
+            }),
+            ..Default::default()
+        };
+        assert!(!static_image.MaybeAnimated());
+        let animated_image = PaintImage {
+            compositor_metadata: Ok(PaintImageMetadata {
+                animation: PaintImageAnimationMetadata::Known(PaintImageAnimationInfo {
+                    animation_type: PaintImageAnimationType::Animated,
+                    repetition_count: 0,
+                    frame_count: 2,
+                }),
+                completion_state: PaintImageCompletionState::Done,
+                is_multipart: false,
+            }),
+            ..Default::default()
+        };
+        assert!(animated_image.MaybeAnimated());
     }
 }
 

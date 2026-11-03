@@ -1,6 +1,6 @@
 //! ICU4X-backed Locale service shared with the browser, without OS lookups.
 //! Locale and formatter host services use the same ICU locale data.
-use super::native::*;
+use super::adapter::*;
 use icu_locale::{Locale, LocaleExpander};
 #[path = "quickjs_intl_format.rs"]
 mod format;
@@ -40,7 +40,7 @@ fn locale(ctx: &mut Context, _: &Value, args: &[Value], _: i32) -> JsResult<Valu
 }
 
 pub(super) fn install(ctx: &mut Context) -> JsResult<()> {
-    let service = Value::Object(ctx.new_native_function(locale, "locale", 2, 0));
+    let service = Value::Object(ctx.new_callback_function(locale, "locale", 2, 0));
     let factory = ctx.eval(r#"(service=>{
         const records=new WeakMap();
         class Locale {

@@ -7,10 +7,10 @@
 
 use font_engine::{Font, FontDescription, FontFamily, FontSelector};
 
-use crate::internal::layout_font_resolver::NativeFontRequest;
+use crate::internal::layout_font_resolver::FontRequest;
 use crate::internal::layout_input::WritingMode;
 
-use super::native_input::CurrentNativeFontResolver;
+use super::input::CurrentFontResolver;
 
 // C++ defines Font::Font(description, selector) here. A free Rust constructor
 // keeps that cross-crate implementation in its Bazel source owner.
@@ -26,7 +26,7 @@ pub fn FontFromSelector(description: &FontDescription, _selector: *mut FontSelec
         family = current.Next();
     }
 
-    let request = NativeFontRequest::new_auto(
+    let request = FontRequest::new_auto(
         description.ComputedSize() as f64,
         description.LetterSpacing() as f64,
         description.WordSpacing() as f64,
@@ -42,7 +42,7 @@ pub fn FontFromSelector(description: &FontDescription, _selector: *mut FontSelec
         description.Orientation(),
     )
     .WithBaseDescription(description);
-    let resolver = CurrentNativeFontResolver();
+    let resolver = CurrentFontResolver();
     let resolved = unsafe { &mut *resolver }.Resolve(&request);
     // Retain the engine-owned lazy fallback source. Projecting the catalog
     // through OrderedFontData would eagerly admit all fallback faces.

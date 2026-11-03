@@ -1,5 +1,6 @@
-//! Blink paints the bar caret after its editor foreground, under its normal
-//! clip/transform/effect state (BoxFragmentPainter::PaintCaretsIfNeeded).
+//! Blink paints block carets before editor text and bar/underscore carets
+//! after it, under the normal clip/transform/effect state
+//! (BoxFragmentPainter::PaintCaretsIfNeeded).
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
 use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_chunker::DisplayItemClientInfo;
@@ -93,7 +94,6 @@ pub(crate) fn PaintCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContex
             DisplayItemClientInfo {
                 is_cacheable: caret.display_item_client_is_cacheable,
                 invalidation_reason: Some(caret.display_item_client_invalidation_reason),
-                scrollbar_needs_update_display: None,
                 is_just_created: caret.display_item_client_is_just_created,
             },
             rect,
@@ -113,7 +113,7 @@ pub(crate) fn PaintCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContex
         DisplayItem {
             r#type: DisplayItemType::kDrawRect,
             rect,
-            color: fragment.paint.style.color,
+            color: fragment.paint.style.color(),
             ..Default::default()
         },
         DisplayItem {

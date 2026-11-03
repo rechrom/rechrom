@@ -7,7 +7,7 @@ use crate::pre_paint_tree_walk::{
 };
 use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
 use layoutng_assembly::internal::layout_input::{Offset, Position, TransformMatrix};
-use layoutng_assembly::layout_engine::NativePaintFragmentCursor;
+use layoutng_assembly::layout_engine::PaintFragmentCursor;
 use paint_model::geometry_mapper::{MapRectToRoot, MultiplyTransforms, TranslationTransform};
 use paint_model::PaintRect;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ struct GeometryNode<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct GeometryFragmentSource<'a>(NativePaintFragmentCursor<'a>);
+struct GeometryFragmentSource<'a>(PaintFragmentCursor<'a>);
 
 impl<'a> GeometryFragmentSource<'a> {
     fn Children(self) -> Vec<Self> {
@@ -43,7 +43,7 @@ impl std::ops::Deref for GeometryFragmentSource<'_> {
     }
 }
 
-// CSSOM line boxes are not paint children. Keep their native enumeration
+// CSSOM line boxes are not paint children. Keep their source enumeration
 // order while using the physical container's established coordinate mapping.
 struct InlineRectMapper<'a> {
     by_container: HashMap<
@@ -74,6 +74,7 @@ fn Gather<'a>(
         paint_space_origin,
         transforms,
         delta,
+        Offset::default(),
     );
     // The lightweight geometry walk keeps the same real scroll coordinate
     // spaces as PrePaint without constructing clips, effects or property nodes.
@@ -290,7 +291,7 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
             );
         }
         if fragment.node_id != 0
-            && fragment.paint.has_source
+            && fragment.paint.HasSource()
             && fragment.paint.establishes_paint_state
         {
             source_nodes
@@ -461,9 +462,7 @@ fn Collect(nodes: &[GeometryNode<'_>], index: usize, output: &mut HashMap<u64, V
     }
 }
 
-pub fn CollectNativeFragmentClientRects(
-    root: NativePaintFragmentCursor<'_>,
-) -> HashMap<u64, Vec<PaintRect>> {
+pub fn CollectFragmentClientRects(root: PaintFragmentCursor<'_>) -> HashMap<u64, Vec<PaintRect>> {
     CollectFragmentClientRectsFromSource(GeometryFragmentSource(root))
 }
 

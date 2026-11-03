@@ -99,7 +99,7 @@ mod bitmap_cache {
     // Native fields remain in this one Rec allocation; UnsafeCell grants only
     // the mutex-protected state projection, never a whole mutable Rec alias.
     pub struct BitmapCacheRec {
-        state: NativeState,
+        state: State,
         fMutex: SkMutex,
         fKey: BitmapKey,
         fRowBytes: usize,
@@ -121,7 +121,7 @@ mod bitmap_cache {
             Self {
                 fKey: BitmapKey::new(desc),
                 fMutex: SkMutex::new(),
-                state: NativeState {
+                state: State {
                     mutable: UnsafeCell::new(MutableState {
                         fDM: memory,
                         fMalloc: block,
@@ -137,7 +137,7 @@ mod bitmap_cache {
         }
     }
     // Source: src/core/SkBitmapCache.cpp:92-99
-    impl Drop for NativeState {
+    impl Drop for State {
         fn drop(&mut self) {
             let this = self.mutable.get_mut();
             crate::SkASSERT!(@source b"src/core/SkBitmapCache.cpp\0".as_ptr(),93; @condition b"0 == fExternalCounter\0".as_ptr(); 0==this.fExternalCounter);
@@ -308,7 +308,7 @@ mod bitmap_cache {
     // Adapted private grouping: Drop runs the original destructor body, then
     // fInfo dies before fDM. Mutable fields remain a separate UnsafeCell so an
     // immutable info query never overlaps a whole mutable state lease.
-    struct NativeState {
+    struct State {
         // Source: src/core/SkBitmapCache.cpp:176-176
         fInfo: SkImageInfo,
         mutable: UnsafeCell<MutableState>,
@@ -321,7 +321,7 @@ mod bitmap_cache {
     }
     // The native mutex synchronizes the sole Rec-owned storage and counter.
     // Callbacks carry unchecked Rec identity; there is no extra retained owner.
-    unsafe impl Send for NativeState {}
+    unsafe impl Send for State {}
     // Source: src/core/SkBitmapCache.h:51-53
     pub type BitmapRecPtr = Box<BitmapCacheRec>;
     impl SkBitmapCache {

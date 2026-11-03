@@ -466,7 +466,7 @@ fn constructor_proxy_is_checked_without_executing_it_or_reading_prototype_early(
 }
 
 #[test]
-fn argument_conversion_precedes_native_constructor_and_name_validation() {
+fn argument_conversion_precedes_source_constructor_and_name_validation() {
     run(r#"
         const accesses = [];
         const name = {toString() { accesses.push('name'); return 'x-conversion-order'; }};
@@ -506,7 +506,7 @@ fn argument_conversion_precedes_native_constructor_and_name_validation() {
 
 #[test]
 fn array_sequence_conversion_uses_pinned_blink_index_and_live_length_branch() {
-    // The pinned Blink NativeValueTraits array fast path ignores @@iterator and
+    // The pinned Blink ValueTraits array fast path ignores @@iterator and
     // reevaluates array length. This is deliberately source-aligned behavior.
     run(r#"
         const changes = [], conversions = [];
@@ -624,15 +624,15 @@ fn registry_and_node_brands_cannot_be_forged_or_replaced_by_author_projections()
         element.querySelectorAll = function() { throw new Error('author element traversal used'); };
         document.querySelectorAll = function() { throw new Error('author document traversal used'); };
         customElements._definitions = new Map();
-        class NativeCandidate extends HTMLElement {
+        class Candidate extends HTMLElement {
             static get observedAttributes() { return ['data-state']; }
             constructor() { super(); events.push('constructor'); }
             attributeChangedCallback(name, oldValue, value) { events.push(name + ':' + value); }
             connectedCallback() { events.push('connected'); }
         }
-        customElements.define('x-native-candidate', NativeCandidate);
+        customElements.define('x-native-candidate', Candidate);
         same(events, ['constructor', 'data-state:native', 'connected'], 'native identity, attributes and traversal drive upgrade');
-        check(element instanceof NativeCandidate, 'expando state cannot suppress upgrade');
+        check(element instanceof Candidate, 'expando state cannot suppress upgrade');
         element.attributeChangedCallback = function() { throw new Error('instance callback override used'); };
         setAttribute.call(element, 'data-state', 'updated');
         same(events, ['constructor', 'data-state:native', 'connected', 'data-state:updated'], 'instance callback override does not replace captured callback');
@@ -684,7 +684,7 @@ fn upgrades_are_shadow_including_and_detached_candidates_require_explicit_upgrad
 }
 
 #[test]
-fn autonomous_definitions_match_native_html_name_and_ignore_later_is_attributes() {
+fn autonomous_definitions_match_source_html_name_and_ignore_later_is_attributes() {
     run(r#"
         const button = document.createElement('button');
         button.setAttribute('is', 'x-native-name');
@@ -814,7 +814,7 @@ fn generic_sequence_domstring_failure_does_not_close_the_pinned_iterator() {
         let caught;
         try { customElements.define('x-iterator-no-close', FailedIterator); } catch (error) { caught = error; }
         check(caught === sentinel, 'item conversion error preserved');
-        check(returns === 0, 'pinned NativeValueTraits error path does not call iterator.return');
+        check(returns === 0, 'pinned ValueTraits error path does not call iterator.return');
         check(customElements.get('x-iterator-no-close') === undefined, 'failed sequence is not committed');
         Object.defineProperty(FailedIterator, 'observedAttributes', {value: []});
         customElements.define('x-iterator-no-close', FailedIterator);

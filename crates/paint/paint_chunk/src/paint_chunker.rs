@@ -8,7 +8,8 @@ use paint_model::PaintRect;
 pub use crate::DisplayItemClientInfo;
 use crate::{
     PaintChunk, PaintChunkBackgroundColorInfo, PaintChunkCompositorData, PaintHitTestData,
-    PaintHitTestOpaqueness,
+    PaintHitTestOpaqueness, PaintSelectionBound, PaintTrackedElementRect,
+    PaintTrackedElementSubRect, K_MIN_BACKGROUND_COLOR_COVERAGE_RATIO,
 };
 
 pub struct PaintChunker {
@@ -60,9 +61,34 @@ impl PaintChunker {
         self.current_effectively_invisible = invisible;
     }
 
+    pub fn current_effectively_invisible(&self) -> bool {
+        self.current_effectively_invisible
+    }
+
     pub fn force_new_chunk(&mut self) {
         self.will_force_new_chunk = true;
         self.next_chunk_id = None;
+    }
+
+    /// Source: `paint_chunker.cc:52-57` and the cached-subsequence move
+    /// constructor in `paint_chunk.h:60-82`.
+    pub fn AppendByMoving(&mut self, chunks: &mut Vec<PaintChunk>, mut chunk: PaintChunk) {
+        self.FinalizeLastChunkProperties(chunks);
+        let begin_index = chunks.last().map_or(0, |last| last.end_index);
+        let size = chunk.size();
+        chunk.begin_index = begin_index;
+        chunk.end_index = begin_index + size;
+        chunk.client_is_just_created = false;
+        chunk.is_moved_from_cached_subsequence = true;
+        chunks.push(chunk);
+    }
+
+    // Source: `paint_chunker.h:115-118`.
+    pub fn EnsureChunk(&mut self, chunks: &mut Vec<PaintChunk>) -> bool {
+        let (id, client) = self
+            .next_chunk_id
+            .expect("EnsureChunk requires a pending scoped chunk id");
+        self.ensure_current_chunk(chunks, id, client)
     }
 
     // paint_chunker.cc: EnsureCurrentChunk(). Property node identity determines
@@ -121,7 +147,7 @@ impl PaintChunker {
         )
     }
 
-    // paint_chunker.cc:104-106,138-139. An empty record still contributes its
+    // Source: `paint_chunker.cc:91-112,138-150`. An empty record still contributes its
     // VisualRect to bounds; only DrawsContent contributes drawable_bounds.
     pub fn increment_display_item(
         &mut self,
@@ -146,7 +172,7 @@ impl PaintChunker {
         if draws_content {
             chunk.drawable_bounds.union(visual_rect);
         }
-        // paint_chunker.cc:118-120, never union across unpainted gaps.
+        // Source: `paint_chunker.cc:110-112`: never union across unpainted gaps.
         chunk.rect_known_to_be_opaque =
             PaintRect::maximum_covered_rect(chunk.rect_known_to_be_opaque, rect_known_to_be_opaque);
         if raster_effect_outset as u8 > chunk.raster_effect_outset as u8 {
@@ -158,10 +184,159 @@ impl PaintChunker {
         created
     }
 
-    // Source: paint_chunker.cc:305-348. Scroll hit-test data is a metadata-only
+    // Source: `paint_chunker.cc:152-194`.
+    pub fn AddHitTestDataToCurrentChunk(
+        &mut self,
+        chunks: &mut Vec<PaintChunk>,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        rect: PaintRect,
+        touch_action: foundation::TouchAction,
+        blocking_wheel: bool,
+        opaqueness: PaintHitTestOpaqueness,
+    ) -> bool {
+        let created = self.ensure_current_chunk(chunks, id, client);
+        self.UnionBounds(chunks, rect, opaqueness);
+        let chunk = chunks.last_mut().expect("hit-test chunk");
+        if touch_action != foundation::TouchAction::kAuto {
+            let touch_action_rects = &mut chunk.EnsureHitTestData().touch_action_rects;
+            let bits = touch_action.bits() as u32;
+            if touch_action_rects
+                .last()
+                .is_none_or(|(last_rect, last_bits)| {
+                    !last_rect.contains(rect) || *last_bits != bits
+                })
+            {
+                touch_action_rects.push((rect, bits));
+            }
+        }
+        if blocking_wheel {
+            let wheel_event_rects = &mut chunk.EnsureHitTestData().wheel_event_rects;
+            if wheel_event_rects
+                .last()
+                .is_none_or(|last_rect| !last_rect.contains(rect))
+            {
+                wheel_event_rects.push(rect);
+            }
+        }
+        created
+    }
+
+    // Source: `paint_chunker.cc:196-204`.
+    pub fn CurrentChunkIsNonEmptyAndTransparentToHitTest(&self, chunks: &[PaintChunk]) -> bool {
+        if self.will_force_new_chunk
+            || chunks
+                .last()
+                .is_none_or(|last| !last.properties.same_nodes(&self.current_properties))
+        {
+            return false;
+        }
+        let chunk = chunks.last().expect("current chunk");
+        !chunk.bounds.is_empty()
+            && chunk.compositor.as_deref().is_some_and(|metadata| {
+                metadata.hit_test_opaqueness == PaintHitTestOpaqueness::Transparent
+            })
+    }
+
+    // Source: `paint_chunker.cc:206-220`.
+    pub fn AddRegionCaptureDataToCurrentChunk(
+        &mut self,
+        chunks: &mut Vec<PaintChunk>,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        crop_id: [u64; 2],
+        rect: PaintRect,
+    ) -> bool {
+        debug_assert_ne!(crop_id, [0; 2]);
+        let created = self.ensure_current_chunk(chunks, id, client);
+        let metadata = chunks
+            .last_mut()
+            .expect("region-capture chunk")
+            .compositor
+            .as_deref_mut()
+            .expect("region-capture compositor metadata");
+        let data = metadata
+            .region_capture_data
+            .get_or_insert_with(|| Box::new(Vec::new()));
+        if let Some(entry) = data.iter_mut().find(|(old_id, _)| *old_id == crop_id) {
+            entry.1 = rect;
+        } else {
+            data.push((crop_id, rect));
+            data.sort_by_key(|(id, _)| *id);
+        }
+        created
+    }
+
+    // Source: `paint_chunker.cc:222-244`.
+    pub fn AddTrackedElementDataToCurrentChunk(
+        &mut self,
+        chunks: &mut Vec<PaintChunk>,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        element_paint_rect: PaintRect,
+        tracked_element_sub_rects: &[PaintTrackedElementSubRect],
+    ) -> bool {
+        let created = self.ensure_current_chunk(chunks, id, client);
+        let metadata = chunks
+            .last_mut()
+            .expect("tracked-element chunk")
+            .compositor
+            .as_deref_mut()
+            .expect("tracked-element compositor metadata");
+        let data = metadata
+            .tracked_element_rects
+            .get_or_insert_with(|| Box::new(Vec::new()));
+        for sub_rect in tracked_element_sub_rects {
+            debug_assert_ne!(sub_rect.id, [0; 2]);
+            data.push(PaintTrackedElementRect {
+                feature: sub_rect.feature,
+                rect: sub_rect.GetEffectiveBounds(element_paint_rect),
+                id: sub_rect.id,
+                should_add_to_compositor_frame_metadata: sub_rect
+                    .should_add_to_compositor_frame_metadata,
+                should_exclude_fixed_and_sticky_occlusions: sub_rect
+                    .should_exclude_fixed_and_sticky_occlusions,
+                frame_token: sub_rect.frame_token,
+                parent_frame_token: sub_rect.parent_frame_token,
+            });
+        }
+        created
+    }
+
+    // Source: `paint_chunker.cc:246-289`.
+    pub fn AddSelectionToCurrentChunk(
+        &mut self,
+        chunks: &mut [PaintChunk],
+        start: Option<PaintSelectionBound>,
+        end: Option<PaintSelectionBound>,
+    ) {
+        let selection = chunks
+            .last_mut()
+            .expect("selection must have painted a current chunk")
+            .EnsureLayerSelectionData();
+        if let Some(start) = start {
+            debug_assert!(selection.start.is_none());
+            selection.start = Some(start);
+        }
+        if let Some(end) = end {
+            debug_assert!(selection.end.is_none());
+            selection.end = Some(end);
+        }
+    }
+
+    // Source: `paint_chunker.cc:291-298`.
+    pub fn RecordAnySelectionWasPainted(&mut self, chunks: &mut [PaintChunk]) {
+        chunks
+            .last_mut()
+            .expect("selection must have painted a current chunk")
+            .EnsureLayerSelectionData()
+            .any_selection_was_painted = true;
+    }
+
+    // Source: `paint_chunker.cc:300-339`. Scroll hit-test data is a metadata-only
     // paint chunk in the scroller's border-box property state. It deliberately
     // owns no DisplayItem; PAC consumes the typed hit-test payload directly.
-    pub fn RecordScrollHitTestData(
+    pub fn CreateScrollHitTestChunk(
         &mut self,
         chunks: &mut Vec<PaintChunk>,
         id: DisplayItemId,
@@ -173,18 +348,32 @@ impl PaintChunker {
         self.force_new_chunk();
         let created = self.ensure_current_chunk(chunks, id, client);
         debug_assert!(created);
-        let chunk = chunks.last_mut().expect("scroll hit-test chunk");
-        chunk.bounds.union(rect);
-        let compositor = chunk
-            .compositor
-            .as_deref_mut()
-            .expect("scroll hit-test compositor metadata");
-        compositor.hit_test_opaqueness = opaqueness;
-        compositor.hit_test_data = Some(Box::new(data));
+        self.UnionBounds(chunks, rect, opaqueness);
+        *chunks
+            .last_mut()
+            .expect("scroll hit-test chunk")
+            .EnsureHitTestData() = data;
         self.force_new_chunk();
     }
 
-    // Source: paint_chunker.cc:350-393. The record analysis result comes from
+    // Source: `paint_chunker.cc:341-348`.
+    fn UnionBounds(
+        &mut self,
+        chunks: &mut [PaintChunk],
+        rect: PaintRect,
+        opaqueness: PaintHitTestOpaqueness,
+    ) {
+        let chunk = chunks.last_mut().expect("current chunk");
+        let metadata = chunk
+            .compositor
+            .as_deref_mut()
+            .expect("current chunk compositor metadata");
+        metadata.hit_test_opaqueness =
+            UnionHitTestOpaqueness(chunk.bounds, metadata.hit_test_opaqueness, rect, opaqueness);
+        chunk.bounds.union(rect);
+    }
+
+    // Source: `paint_chunker.cc:110-123,350-388`. The record analysis result comes from
     // its actual producer; the canonical chunk retains its own derived fields.
     pub fn UpdateDrawingDerivedData(
         &mut self,
@@ -197,8 +386,10 @@ impl PaintChunker {
         let m = chunk
             .compositor
             .as_deref_mut()
-            .expect("source native metadata");
-        let min_area = 0.5 * chunk.bounds.width as f32 * chunk.bounds.height as f32;
+            .expect("source source metadata");
+        let min_area = K_MIN_BACKGROUND_COLOR_COVERAGE_RATIO
+            * chunk.bounds.width as f32
+            * chunk.bounds.height as f32;
         if candidate.background_area >= m.background_area || candidate.background_area >= min_area {
             if m.background_area >= min_area && candidate.background_color.alpha != 1. {
                 m.background_area = candidate.background_area;
@@ -233,20 +424,62 @@ impl PaintChunker {
         let m = chunk
             .compositor
             .as_deref_mut()
-            .expect("source native metadata");
+            .expect("source source metadata");
         if chunk.end_index - chunk.begin_index > 1
             || m.background_area != chunk.bounds.width as f32 * chunk.bounds.height as f32
         {
             m.background_is_solid_color = false;
         }
     }
-    // Source: paint_chunker.cc:15-20.
+    // Source: `paint_chunker.cc:15-16`.
     pub fn Finish(&mut self, chunks: &mut [PaintChunk]) {
         self.FinalizeLastChunkProperties(chunks);
     }
 }
 
-// Source primitive: ui/gfx/color_utils.cc:577-614. Quantize to native SkColor,
+// Source primitive: `cc/input/hit_test_opaqueness.cc:15-17,27-57`.
+fn UnionHitTestOpaqueness(
+    rect1: PaintRect,
+    opaqueness1: PaintHitTestOpaqueness,
+    rect2: PaintRect,
+    opaqueness2: PaintHitTestOpaqueness,
+) -> PaintHitTestOpaqueness {
+    if rect1.is_empty() {
+        return opaqueness2;
+    }
+    if rect2.is_empty() {
+        return opaqueness1;
+    }
+    let rank = |opaqueness| match opaqueness {
+        PaintHitTestOpaqueness::Transparent => 0,
+        PaintHitTestOpaqueness::Mixed => 1,
+        PaintHitTestOpaqueness::Opaque => 2,
+    };
+    if rank(opaqueness1) < rank(opaqueness2) {
+        return UnionHitTestOpaqueness(rect2, opaqueness2, rect1, opaqueness1);
+    }
+    match opaqueness1 {
+        PaintHitTestOpaqueness::Transparent => PaintHitTestOpaqueness::Transparent,
+        PaintHitTestOpaqueness::Mixed => PaintHitTestOpaqueness::Mixed,
+        PaintHitTestOpaqueness::Opaque => {
+            if opaqueness2 == PaintHitTestOpaqueness::Opaque {
+                let mut union = rect1;
+                union.union(rect2);
+                if union == PaintRect::maximum_covered_rect(rect1, rect2) {
+                    PaintHitTestOpaqueness::Opaque
+                } else {
+                    PaintHitTestOpaqueness::Mixed
+                }
+            } else if rect1.contains(rect2) {
+                PaintHitTestOpaqueness::Opaque
+            } else {
+                PaintHitTestOpaqueness::Mixed
+            }
+        }
+    }
+}
+
+// Source primitive: ui/gfx/color_utils.cc:577-614. Quantize to source SkColor,
 // source alpha normalization, ClampRound and conversion back to SkColor4f.
 fn ResultingPaintColor(
     f: layoutng_assembly::internal::layout_input_types::Color,
@@ -304,7 +537,6 @@ mod tests {
         let client = DisplayItemClientInfo {
             is_cacheable: true,
             invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
-            scrollbar_needs_update_display: None,
             is_just_created: false,
         };
         let root = PropertyTreeState::default();
@@ -323,7 +555,7 @@ mod tests {
             backface_visibility: Default::default(),
             scroll: None,
             sticky_constraint: None,
-            direct_compositing_reasons: Vec::new(),
+            direct_compositing_reasons: Default::default(),
         });
         let outer = id(10, DisplayItemIdType::kLayerChunk, 0);
         let inner = id(20, DisplayItemIdType::kLayerChunk, 3);
@@ -341,12 +573,98 @@ mod tests {
         chunker.update_properties(root); // Restore state, not the old ID.
         assert!(chunker.ensure_current_chunk(&mut chunks, drawing, client));
         assert_eq!(chunks[2].id, drawing);
-        assert!(chunks[2].matches(&chunks[2]));
+        assert!(chunks[2].Matches(&chunks[2]));
         let mut created = chunks[2].clone();
         created.client_is_just_created = true;
-        assert!(!created.matches(&chunks[2]));
+        assert!(!created.Matches(&chunks[2]));
         let mut uncacheable = chunks[2].clone();
         uncacheable.is_cacheable = false;
-        assert!(!chunks[2].matches(&uncacheable));
+        assert!(!chunks[2].Matches(&uncacheable));
+    }
+
+    #[test]
+    fn translated_chunk_metadata_paths_share_the_current_chunk() {
+        let client = DisplayItemClientInfo {
+            is_cacheable: true,
+            invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            is_just_created: false,
+        };
+        let hit_test_id = id(44, DisplayItemIdType::kHitTest, 0);
+        let outer = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 20.0,
+        };
+        let inner = PaintRect {
+            x: 2.0,
+            y: 2.0,
+            width: 4.0,
+            height: 4.0,
+        };
+        let separate = PaintRect { x: 30.0, ..inner };
+        let mut chunker = PaintChunker::default();
+        let mut chunks = Vec::new();
+        assert!(chunker.AddHitTestDataToCurrentChunk(
+            &mut chunks,
+            hit_test_id,
+            client,
+            outer,
+            foundation::TouchAction::kPanX,
+            true,
+            PaintHitTestOpaqueness::Opaque,
+        ));
+        assert!(!chunker.AddHitTestDataToCurrentChunk(
+            &mut chunks,
+            hit_test_id,
+            client,
+            inner,
+            foundation::TouchAction::kPanX,
+            true,
+            PaintHitTestOpaqueness::Transparent,
+        ));
+        assert_eq!(chunks[0].EnsureHitTestData().touch_action_rects.len(), 1);
+        assert_eq!(chunks[0].EnsureHitTestData().wheel_event_rects.len(), 1);
+        assert!(chunker.CurrentChunkIsNonEmptyAndTransparentToHitTest(&chunks) == false);
+        assert!(!chunker.AddHitTestDataToCurrentChunk(
+            &mut chunks,
+            hit_test_id,
+            client,
+            separate,
+            foundation::TouchAction::kAuto,
+            false,
+            PaintHitTestOpaqueness::Transparent,
+        ));
+        assert_eq!(
+            chunks[0].compositor.as_ref().unwrap().hit_test_opaqueness,
+            PaintHitTestOpaqueness::Mixed
+        );
+
+        let capture_id = id(44, DisplayItemIdType::kRegionCapture, 0);
+        assert!(!chunker.AddRegionCaptureDataToCurrentChunk(
+            &mut chunks,
+            capture_id,
+            client,
+            [1, 2],
+            inner,
+        ));
+        assert!(!chunker.AddRegionCaptureDataToCurrentChunk(
+            &mut chunks,
+            capture_id,
+            client,
+            [1, 2],
+            separate,
+        ));
+        assert_eq!(
+            chunks[0]
+                .compositor
+                .as_ref()
+                .unwrap()
+                .region_capture_data
+                .as_ref()
+                .unwrap()
+                .as_slice(),
+            &[([1, 2], separate)]
+        );
     }
 }

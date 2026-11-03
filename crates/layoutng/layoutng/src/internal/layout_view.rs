@@ -35,42 +35,42 @@ use super::scroll_types::{IncludeScrollbarsInRect, ScrollOffset};
 use super::scrollbar_mode::mojom::blink::ScrollbarMode;
 use super::variable_length_transform_result::VariableLengthTransformResult;
 
-#[path = "../../../layout_invalidation/src/native_layout_view_destruction.rs"]
-mod layout_invalidation_native_layout_view_destruction;
-use layout_invalidation_native_layout_view_destruction::LayoutViewWillBeDestroyed;
+#[path = "../../../layout_invalidation/src/layout_view_destruction.rs"]
+mod layout_invalidation_layout_view_destruction;
+use layout_invalidation_layout_view_destruction::LayoutViewWillBeDestroyed;
 
-#[path = "../../../layout_invalidation/src/native_layout_view_invalidation.rs"]
-mod layout_invalidation_native_layout_view_invalidation;
+#[path = "../../../layout_invalidation/src/layout_view_invalidation.rs"]
+mod layout_invalidation_layout_view_invalidation;
 
-#[path = "../../../layout_invalidation/src/native_layout_view_child_mutation.rs"]
-mod layout_invalidation_native_layout_view_child_mutation;
+#[path = "../../../layout_invalidation/src/layout_view_child_mutation.rs"]
+mod layout_invalidation_layout_view_child_mutation;
 
-#[path = "../../../layout_algo_block/src/native_layout_view_root_layout.rs"]
-mod layout_algo_block_native_layout_view_root_layout;
+#[path = "../../../layout_algo_block/src/layout_view_root_layout.rs"]
+mod layout_algo_block_layout_view_root_layout;
 
-#[path = "../../../layout_algo_block/src/native_layout_view_block_queries.rs"]
-mod layout_algo_block_native_layout_view_block_queries;
+#[path = "../../../layout_algo_block/src/layout_view_block_queries.rs"]
+mod layout_algo_block_layout_view_block_queries;
 
-#[path = "../../../layout_algo_svg/src/native_svg_text_descendant_index.rs"]
-mod layout_algo_svg_native_svg_text_descendant_index;
+#[path = "../../../layout_algo_svg/src/svg_text_descendant_index.rs"]
+mod layout_algo_svg_svg_text_descendant_index;
 
-#[path = "../../../layout_algo_inline/src/native_layout_view_variable_length_transform_index.rs"]
-mod layout_algo_inline_native_layout_view_variable_length_transform_index;
+#[path = "../../../layout_algo_inline/src/layout_view_variable_length_transform_index.rs"]
+mod layout_algo_inline_layout_view_variable_length_transform_index;
 
-#[path = "../../../layout_algo_list/src/native_layout_view_list_index.rs"]
-mod layout_algo_list_native_layout_view_list_index;
+#[path = "../../../layout_algo_list/src/layout_view_list_index.rs"]
+mod layout_algo_list_layout_view_list_index;
 
-#[path = "../../../layout_fragment/src/native_layout_view_geometry.rs"]
-mod layout_fragment_native_layout_view_geometry;
+#[path = "../../../layout_fragment/src/layout_view_geometry.rs"]
+mod layout_fragment_layout_view_geometry;
 
-#[path = "../../../layout_fragment/src/native_layout_view_fragment_queries.rs"]
-mod layout_fragment_native_layout_view_fragment_queries;
+#[path = "../../../layout_fragment/src/layout_view_fragment_queries.rs"]
+mod layout_fragment_layout_view_fragment_queries;
 
-#[path = "../../../layout_fragment/src/native_layout_view_paint_policy.rs"]
-mod layout_fragment_native_layout_view_paint_policy;
+#[path = "../../../layout_fragment/src/layout_view_paint_policy.rs"]
+mod layout_fragment_layout_view_paint_policy;
 
-#[path = "../../../layout_commit/src/native_layout_view_commit.rs"]
-mod layout_commit_native_layout_view_commit;
+#[path = "../../../layout_commit/src/layout_view_commit.rs"]
+mod layout_commit_layout_view_commit;
 
 // The corresponding C++ classes are only forward-declared in layout_view.h.
 #[repr(C)]
@@ -175,6 +175,10 @@ pub struct LayoutView {
     previous_background_rect_: Cell<PhysicalRect>,
     vertical_scrollbar_width_for_viewport_units_: i32,
     horizontal_scrollbar_height_for_viewport_units_: i32,
+    // LocalFrameView-owned meaningful-layout state represented on the
+    // resident layout root in this assembly.
+    visually_non_empty_pixel_count_: u64,
+    is_visually_non_empty_: bool,
     contains_annotations_: bool,
     contains_non_scaling_stroke_: bool,
 }
@@ -230,6 +234,8 @@ impl LayoutView {
             previous_background_rect_: Cell::new(PhysicalRect::default()),
             vertical_scrollbar_width_for_viewport_units_: 0,
             horizontal_scrollbar_height_for_viewport_units_: 0,
+            visually_non_empty_pixel_count_: 0,
+            is_visually_non_empty_: false,
             contains_annotations_: false,
             contains_non_scaling_stroke_: false,
         };
@@ -237,6 +243,12 @@ impl LayoutView {
         view.SetInline(false);
         view.SetIntrinsicLogicalWidthsDirty(MarkingBehavior::kMarkOnlyThis);
         view.SetPositionState(PositionedState::kIsOutOfFlowPositioned);
+        // Rechrom's LayoutView is the root of one independent Page domain.
+        // Chromium's GlobalRootScrollerController sets these bits on the
+        // selected root before PrePaint; keep that state on the same native
+        // LayoutObject owner so Paint exports kRootScroller without guessing.
+        view.SetIsEffectiveRootScroller(true);
+        view.SetIsGlobalRootScroller(true);
         view
     }
 
@@ -252,6 +264,27 @@ impl LayoutView {
     // cpp: layoutng/internal/layout_view_layout.cc:194-202
     pub fn WillBeDestroyed(&mut self) {
         LayoutViewWillBeDestroyed(self)
+    }
+
+    // cpp: core/frame/local_frame_view.h:1426-1435
+    pub fn IncrementVisuallyNonEmptyPixelCount(&mut self, size: &gfx::Size) {
+        if self.is_visually_non_empty_ {
+            return;
+        }
+        self.visually_non_empty_pixel_count_ = self
+            .visually_non_empty_pixel_count_
+            .wrapping_add(size.Area64());
+        if self.visually_non_empty_pixel_count_ > 32 * 32 {
+            self.is_visually_non_empty_ = true;
+        }
+    }
+
+    pub fn VisuallyNonEmptyPixelCount(&self) -> u64 {
+        self.visually_non_empty_pixel_count_
+    }
+
+    pub fn IsVisuallyNonEmpty(&self) -> bool {
+        self.is_visually_non_empty_
     }
 
     // cpp: layoutng/internal/layout_view.h:102-115

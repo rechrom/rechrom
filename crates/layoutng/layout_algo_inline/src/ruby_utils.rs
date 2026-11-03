@@ -10,8 +10,8 @@ use font_engine::fonts::shaping::shape_result::ShapeResult;
 use font_engine::fonts::shaping::shape_result_types::AdjustMidCluster;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use font_engine::fonts::shaping::text_spacing_trim::TextSpacingTrim;
-use font_engine::text::native::character::Character;
-use font_engine::text::native::unicode_category::Category;
+use font_engine::text::implementation::character::Character;
+use font_engine::text::implementation::unicode_category::Category;
 use foundation::{
     kNotFound, unicode, ERubyAlign, ERubyOverhang, ETextAlign, HeapVector, IsLtr, LayoutUnit,
     MakeGarbageCollected, RubyPosition, RuntimeEnabledFeatures, String, StringView,

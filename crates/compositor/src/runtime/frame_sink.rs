@@ -6,36 +6,36 @@ use super::{
 };
 use crate::adapter::{
     geometry::Size,
-    unbounded::{CompositorFrame as NativeFrame, FrameSink as NativeFrameSink, UnboundedTypes},
+    unbounded::{CompositorFrame as Frame, FrameSink as FrameSinkTransport, UnboundedTypes},
 };
 
 /// Native Bind registers only the source client identity. Future callbacks are
 /// delivered by the Page with a fresh live owner context; this object never
 /// stores a callable child-to-owner pointer.
 pub struct FrameSink<B: UnboundedTypes> {
-    native: Box<dyn NativeFrameSink<B>>,
+    backend: Box<dyn FrameSinkTransport<B>>,
 }
 impl<B: UnboundedTypes> FrameSink<B> {
-    pub fn new(native: Box<dyn NativeFrameSink<B>>) -> Self {
-        Self { native }
+    pub fn new(backend: Box<dyn FrameSinkTransport<B>>) -> Self {
+        Self { backend }
     }
 }
-impl<B: UnboundedTypes> NativeFrameSink<B> for FrameSink<B> {
+impl<B: UnboundedTypes> FrameSinkTransport<B> for FrameSink<B> {
     fn BindToClient(&mut self, client: B::ClientIdentity) -> bool {
-        self.native.BindToClient(client)
+        self.backend.BindToClient(client)
     }
     fn SetLocalSurfaceId(&mut self, id: &B::LocalSurfaceId) {
-        self.native.SetLocalSurfaceId(id)
+        self.backend.SetLocalSurfaceId(id)
     }
     fn DetachFromClient(&mut self) {
-        self.native.DetachFromClient()
+        self.backend.DetachFromClient()
     }
     fn SubmitCompositorFrame(&mut self, frame: B::Frame, hit_test_data_changed: bool) {
-        self.native
+        self.backend
             .SubmitCompositorFrame(frame, hit_test_data_changed)
     }
 }
-impl<M, V: FrameValueTypes> NativeFrame<RasterReturnedResource>
+impl<M, V: FrameValueTypes> Frame<RasterReturnedResource>
     for CompositorFrame<M, CompositorRenderPass<V>, RasterTransferableResource>
 {
     fn render_pass_list_is_empty(&self) -> bool {
@@ -101,10 +101,10 @@ impl<F> FrameOutput<F> {
 pub(crate) struct OutputFrameSink {
     client: Option<super::host_types::UnboundedClientIdentity>,
     local_surface_id: super::types::LocalSurfaceId,
-    output: FrameOutput<crate::NativeCompositorFrameSubmission>,
+    output: FrameOutput<crate::CompositorFrameSubmission>,
 }
 impl OutputFrameSink {
-    pub(crate) fn new(output: FrameOutput<crate::NativeCompositorFrameSubmission>) -> Self {
+    pub(crate) fn new(output: FrameOutput<crate::CompositorFrameSubmission>) -> Self {
         Self {
             client: None,
             local_surface_id: Default::default(),
@@ -112,7 +112,7 @@ impl OutputFrameSink {
         }
     }
 }
-impl NativeFrameSink<crate::NativeCompositorTypes> for OutputFrameSink {
+impl FrameSinkTransport<crate::CompositorTypes> for OutputFrameSink {
     fn BindToClient(&mut self, client: super::host_types::UnboundedClientIdentity) -> bool {
         assert!(self.client.is_none(), "native frame sink already bound");
         assert_ne!(client.0, 0, "native client identity is non-null");
@@ -127,7 +127,7 @@ impl NativeFrameSink<crate::NativeCompositorTypes> for OutputFrameSink {
     }
     fn SubmitCompositorFrame(
         &mut self,
-        frame: crate::NativeCompositorFrame,
+        frame: crate::CompositorFrame,
         _hit_test_data_changed: bool,
     ) {
         assert!(
@@ -156,7 +156,7 @@ impl NativeFrameSink<crate::NativeCompositorTypes> for OutputFrameSink {
                 .sum::<usize>() as f64,
         );
         trace.set("resources", frame.resource_list.len() as f64);
-        self.output.Submit(crate::NativeCompositorFrameSubmission {
+        self.output.Submit(crate::CompositorFrameSubmission {
             local_surface_id: self.local_surface_id,
             frame,
         });

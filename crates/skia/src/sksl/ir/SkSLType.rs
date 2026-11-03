@@ -299,7 +299,7 @@ pub unsafe trait Type: Symbol {
     }
     // Source: src/sksl/ir/SkSLType.h:385-388
     fn priority(&self) -> i32 {
-        native_type_debugfail("not a number type");
+        type_debugfail("not a number type");
         -1
     }
     // Source: src/sksl/ir/SkSLType.h:394-396
@@ -323,27 +323,27 @@ pub unsafe trait Type: Symbol {
     }
     // Source: src/sksl/ir/SkSLType.h:425-428
     fn textureType(&self) -> &dyn Type {
-        native_type_debugfail("not a sampler type");
+        type_debugfail("not a sampler type");
         self.as_type()
     }
     // Source: src/sksl/ir/SkSLType.h:435-438
     fn columns(&self) -> i32 {
-        native_type_debugfail("type does not have columns");
+        type_debugfail("type does not have columns");
         -1
     }
     // Source: src/sksl/ir/SkSLType.h:444-447
     fn rows(&self) -> i32 {
-        native_type_debugfail("type does not have rows");
+        type_debugfail("type does not have rows");
         -1
     }
     // Source: src/sksl/ir/SkSLType.h:450-453
     fn minimumValue(&self) -> f64 {
-        native_type_debugfail("type does not have a minimum value");
+        type_debugfail("type does not have a minimum value");
         f64::NEG_INFINITY
     }
     // Source: src/sksl/ir/SkSLType.h:455-458
     fn maximumValue(&self) -> f64 {
-        native_type_debugfail("type does not have a maximum value");
+        type_debugfail("type does not have a maximum value");
         f64::INFINITY
     }
     // Source: src/sksl/ir/SkSLType.h:463-465
@@ -360,22 +360,22 @@ pub unsafe trait Type: Symbol {
     }
     // Source: src/sksl/ir/SkSLType.h:482-485
     fn coercibleTypes(&self) -> &[NonNull<dyn Type>] {
-        native_type_debugfail("Internal error: not a generic type");
+        type_debugfail("Internal error: not a generic type");
         &[]
     }
     // Source: src/sksl/ir/SkSLType.h:487-490
     fn dimensions(&self) -> u32 {
-        native_type_debugfail("Internal error: not a texture type");
+        type_debugfail("Internal error: not a texture type");
         0
     }
     // Source: src/sksl/ir/SkSLType.h:492-495
     fn isDepth(&self) -> bool {
-        native_type_debugfail("Internal error: not a texture type");
+        type_debugfail("Internal error: not a texture type");
         false
     }
     // Source: src/sksl/ir/SkSLType.h:497-500
     fn isArrayedTexture(&self) -> bool {
-        native_type_debugfail("Internal error: not a texture type");
+        type_debugfail("Internal error: not a texture type");
         false
     }
     // Source: src/sksl/ir/SkSLType.h:502-504
@@ -438,12 +438,12 @@ pub unsafe trait Type: Symbol {
     }
     // Source: src/sksl/ir/SkSLType.h:562-565
     fn isMultisampled(&self) -> bool {
-        native_type_debugfail("not a texture type");
+        type_debugfail("not a texture type");
         false
     }
     // Source: src/sksl/ir/SkSLType.h:567-570
     fn textureAccess(&self) -> TextureAccess {
-        native_type_debugfail("not a texture type");
+        type_debugfail("not a texture type");
         TextureAccess::kSample
     }
     // Source: src/sksl/ir/SkSLType.h:572-574
@@ -520,7 +520,7 @@ pub unsafe trait Type: Symbol {
 
 // Selected Rust replacement for native SkDEBUGFAIL; only debug builds terminate.
 // Native SkLog decoration and trap signal differ and are counted adapted.
-fn native_type_debugfail(message: &str) {
+fn type_debugfail(message: &str) {
     #[cfg(debug_assertions)]
     {
         eprintln!("{message}");
@@ -1494,7 +1494,7 @@ unsafe impl Type for StructType {
                 n -= slots;
             }
         }
-        native_type_debugfail("slot index out of range");
+        type_debugfail("slot index out of range");
         self
     }
 }
@@ -1583,7 +1583,7 @@ impl PartialEq for FieldName {
 }
 #[derive(Default)]
 struct FieldNameHash;
-impl crate::src::core::SkTHash::NativeHash<FieldName> for FieldNameHash {
+impl crate::src::core::SkTHash::HashPolicy<FieldName> for FieldNameHash {
     fn hash(&self, value: &FieldName) -> u32 {
         crate::src::core::SkChecksum::Hash32(unsafe { value.0.as_ref() }, 0)
     }
@@ -2165,7 +2165,7 @@ pub unsafe fn toCompound<'a>(
             _ => std::process::abort(),
         }
     } else {
-        native_type_debugfail("unsupported toCompound type");
+        type_debugfail("unsupported toCompound type");
         &**types.fVoid
     }
 }
@@ -2211,7 +2211,7 @@ pub unsafe fn cloneType(
             Some(result)
         }
         _ => {
-            native_type_debugfail("don't know how to clone type");
+            type_debugfail("don't know how to clone type");
             None
         }
     }

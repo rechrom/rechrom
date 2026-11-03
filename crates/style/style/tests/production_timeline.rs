@@ -23,7 +23,7 @@ fn media() -> MediaValuesCachedData {
         ..Default::default()
     }
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let doc = owner.GetDocument();
     let node = (0..doc.NodeCount())
         .find(|&i| {
@@ -32,14 +32,20 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*doc.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe {
+        &*doc
+            .ResolvedStyleFor(node)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn names(values: &[foundation::AtomicString]) -> Vec<std::string::String> {
     values.iter().map(|n| n.Utf8()).collect()
 }
 
 #[test]
-fn timeline_shorthands_align_defaults_and_reset_native_lists() {
+fn timeline_shorthands_align_defaults_and_reset_computed_style_lists() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p></div><i id=r></i>");
     owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#p{scroll-timeline:--A x,none,--C inline;view-timeline:--V 10% 20px inline,none y,--W auto -2em}#r{scroll-timeline:--Old y,--Other x;scroll-timeline:--New;view-timeline:--Old 1px 2px x;view-timeline:--New}"));
@@ -50,7 +56,7 @@ fn timeline_shorthands_align_defaults_and_reset_native_lists() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     assert_eq!(names(p.ScrollTimelineName()), ["--A", "", "--C"]);
     assert!(p.ScrollTimelineName()[1].IsNull());
     assert_eq!(
@@ -70,7 +76,7 @@ fn timeline_shorthands_align_defaults_and_reset_native_lists() {
     assert_eq!(inset[1].GetEnd(), Length::Auto());
     assert_eq!(inset[2].GetStart(), Length::Auto());
     assert_eq!(inset[2].GetEnd(), &Length::Fixed(-32.));
-    let r = native(&owner, "r");
+    let r = computed_style(&owner, "r");
     assert_eq!(names(r.ScrollTimelineName()), ["--New"]);
     assert_eq!(r.ScrollTimelineAxis().as_slice(), [Axis::kBlock]);
     assert_eq!(names(r.ViewTimelineName()), ["--New"]);
@@ -80,7 +86,7 @@ fn timeline_shorthands_align_defaults_and_reset_native_lists() {
 }
 
 #[test]
-fn independent_lists_css_wide_and_scope_use_real_native_fields() {
+fn independent_lists_css_wide_and_scope_use_real_computed_style_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p><i id=c></i><i id=r></i><i id=u></i><i id=bad></i></div>",
@@ -93,8 +99,8 @@ fn independent_lists_css_wide_and_scope_use_real_native_fields() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
-    let c = native(&owner, "c");
+    let p = computed_style(&owner, "p");
+    let c = computed_style(&owner, "c");
     assert_eq!(p.ScrollTimelineName(), c.ScrollTimelineName());
     assert_eq!(p.ScrollTimelineAxis(), c.ScrollTimelineAxis());
     assert_eq!(p.ViewTimelineName(), c.ViewTimelineName());
@@ -113,7 +119,7 @@ fn independent_lists_css_wide_and_scope_use_real_native_fields() {
     assert!(!p.TimelineScope().IsNone());
     assert!(!p.TimelineScope().IsAll());
     for id in ["r", "u"] {
-        let s = native(&owner, id);
+        let s = computed_style(&owner, id);
         assert!(s.ScrollTimelineName().is_empty());
         assert!(s.ScrollTimelineAxis().is_empty());
         assert!(s.ViewTimelineName().is_empty());
@@ -121,7 +127,7 @@ fn independent_lists_css_wide_and_scope_use_real_native_fields() {
         assert!(s.ViewTimelineInset().is_empty());
         assert!(s.TimelineScope().IsNone());
     }
-    let bad = native(&owner, "bad");
+    let bad = computed_style(&owner, "bad");
     assert_eq!(names(bad.ScrollTimelineName()), ["--Saved"]);
     assert_eq!(bad.ScrollTimelineAxis().as_slice(), [Axis::kY]);
     assert_eq!(bad.ViewTimelineInset()[0].GetEnd(), &Length::Fixed(4.));
@@ -183,7 +189,7 @@ fn timeline_grammar_rejects_wrong_order_duplicates_and_disabled_flags() {
 }
 
 #[test]
-fn native_timeline_inset_preserves_zoom_math_and_inheritance_boundary() {
+fn timeline_inset_preserves_zoom_math_and_inheritance_boundary() {
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut b = ComputedStyleBuilder::from_style(initial);

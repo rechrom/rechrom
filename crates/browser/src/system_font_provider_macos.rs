@@ -12,6 +12,7 @@
 
 use super::HostFace;
 use font_engine::{FontPresentation, FontVariation, SystemFontQuery};
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::ptr;
 
@@ -73,7 +74,9 @@ extern "C" {
 #[cfg_attr(target_os = "macos", link(name = "CoreText", kind = "framework"))]
 extern "C" {
     fn CTFontDescriptorCreateWithAttributes(attributes: Ref) -> Ref;
+    fn CTFontDescriptorCreateCopyWithAttributes(descriptor: Ref, attributes: Ref) -> Ref;
     fn CTFontDescriptorCreateMatchingFontDescriptors(descriptor: Ref, mandatory: Ref) -> Ref;
+    fn CTFontCopyFontDescriptor(font: Ref) -> Ref;
     fn CTFontCreateWithFontDescriptor(descriptor: Ref, size: f64, matrix: Ref) -> Ref;
     fn CTFontCreateUIFontForLanguage(ui_type: u32, size: f64, language: Ref) -> Ref;
     fn CTFontCreateForStringWithLanguage(
@@ -461,21 +464,48 @@ unsafe fn Generic(generic: &str, weight: f64, italic: bool, locale: &str) -> Vec
             let Some(font) = font else {
                 return Vec::new();
             };
-            let Some(face) = Face(font.get()) else {
+            let Some(base_face) = Face(font.get()) else {
                 return Vec::new();
             };
-            let matches = Matching(
-                kCTFontFamilyNameAttribute,
-                &face.family,
-                weight,
-                italic,
-                locale,
-            );
-            return if matches.is_empty() {
-                vec![face]
-            } else {
-                matches
+            if (base_face.weight - weight).abs() < 0.01 && base_face.italic == italic {
+                return vec![base_face];
+            }
+            // Chromium keeps the descriptor returned for kCTFontUIFontSystem
+            // and applies the requested traits to that descriptor. Looking up
+            // the descriptor's family again enumerates the whole SF family and
+            // also loses the system-font identity carried by CoreText.
+            let Some(native_weight) = Number(Interpolate(weight, true)) else {
+                return vec![base_face];
             };
+            let Some(symbolic) = Number(if italic { 1.0 } else { 0.0 }) else {
+                return vec![base_face];
+            };
+            let Some(traits) = Dictionary(&[
+                (kCTFontWeightTrait, native_weight.get()),
+                (kCTFontSymbolicTrait, symbolic.get()),
+            ]) else {
+                return vec![base_face];
+            };
+            let Some(attributes) = Dictionary(&[(kCTFontTraitsAttribute, traits.get())]) else {
+                return vec![base_face];
+            };
+            let Some(descriptor) = Owned::new(CTFontCopyFontDescriptor(font.get())) else {
+                return vec![base_face];
+            };
+            let Some(descriptor) = Owned::new(CTFontDescriptorCreateCopyWithAttributes(
+                descriptor.get(),
+                attributes.get(),
+            )) else {
+                return vec![base_face];
+            };
+            let Some(styled) = Owned::new(CTFontCreateWithFontDescriptor(
+                descriptor.get(),
+                12.0,
+                ptr::null(),
+            )) else {
+                return vec![base_face];
+            };
+            return Face(styled.get()).map_or_else(|| vec![base_face], |face| vec![face]);
         }
         _ => return Vec::new(),
     };
@@ -680,9 +710,155 @@ unsafe fn Fallback(
     vec![StyledFallback(face, text, weight, italic, locale)]
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct HostFaceKey {
+    family: String,
+    path: String,
+    index: u32,
+    weight: u64,
+    italic: bool,
+    locales: Vec<String>,
+    color: bool,
+    variations: Vec<(u32, u32)>,
+    unique_name: String,
+}
+
+impl From<&HostFace> for HostFaceKey {
+    fn from(face: &HostFace) -> Self {
+        Self {
+            family: face.family.clone(),
+            path: face.path.clone(),
+            index: face.index,
+            weight: face.weight.to_bits(),
+            italic: face.italic,
+            locales: face.locales.clone(),
+            color: face.color,
+            variations: face
+                .variations
+                .iter()
+                .map(|variation| (variation.tag, variation.value.to_bits()))
+                .collect(),
+            unique_name: face.unique_name.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum QueryCacheKey {
+    MatchFamily {
+        family: String,
+        weight: u64,
+        italic: bool,
+        locale: String,
+    },
+    MatchUniqueName {
+        name: String,
+    },
+    MatchGeneric {
+        generic: String,
+        weight: u64,
+        italic: bool,
+        locale: String,
+    },
+    Fallback {
+        text: Vec<u16>,
+        weight: u64,
+        italic: bool,
+        locale: String,
+        presentation: u8,
+        base: Option<HostFaceKey>,
+    },
+    OpenFace {
+        id: String,
+    },
+}
+
+impl QueryCacheKey {
+    fn New(query: &SystemFontQuery, base: Option<&HostFace>) -> Self {
+        match query {
+            SystemFontQuery::MatchFamily {
+                family,
+                weight,
+                italic,
+                locale,
+            } => Self::MatchFamily {
+                family: family.clone(),
+                weight: weight.to_bits(),
+                italic: *italic,
+                locale: locale.clone(),
+            },
+            SystemFontQuery::MatchUniqueName { name } => {
+                Self::MatchUniqueName { name: name.clone() }
+            }
+            SystemFontQuery::MatchGeneric {
+                generic,
+                weight,
+                italic,
+                locale,
+            } => Self::MatchGeneric {
+                generic: generic.clone(),
+                weight: weight.to_bits(),
+                italic: *italic,
+                locale: locale.clone(),
+            },
+            SystemFontQuery::Fallback {
+                text,
+                weight,
+                italic,
+                locale,
+                presentation,
+                ..
+            } => Self::Fallback {
+                text: text.clone(),
+                weight: weight.to_bits(),
+                italic: *italic,
+                locale: locale.clone(),
+                presentation: match presentation {
+                    FontPresentation::Text => 0,
+                    FontPresentation::Emoji => 1,
+                },
+                base: base.map(HostFaceKey::from),
+            },
+            SystemFontQuery::OpenFace { id } => Self::OpenFace { id: id.0.clone() },
+        }
+    }
+}
+
+#[derive(Default)]
+struct QueryCacheState {
+    entries: HashMap<QueryCacheKey, Vec<HostFace>>,
+    order: VecDeque<QueryCacheKey>,
+}
+
+fn QueryCache() -> &'static std::sync::Mutex<QueryCacheState> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<QueryCacheState>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+pub(super) fn ClearQueryCache() {
+    let mut cache = QueryCache().lock().expect("CoreText query cache poisoned");
+    cache.entries.clear();
+    cache.order.clear();
+}
+
 pub(super) fn Query(query: &SystemFontQuery, base: Option<&HostFace>) -> Vec<HostFace> {
+    // Provider face ids are private to one Page. Cache the platform identity
+    // instead: the normalized query plus the immutable native base descriptor.
+    // Chromium's process FontCache likewise retains CoreText matches across
+    // documents; each Page still registers its own typed face ids afterward.
+    let key = QueryCacheKey::New(query, base);
+    if let Some(faces) = QueryCache()
+        .lock()
+        .expect("CoreText query cache poisoned")
+        .entries
+        .get(&key)
+    {
+        return faces.clone();
+    }
+
     // Every CF object stays on this stack; no native pointer escapes the adapter.
-    unsafe {
+    let faces = unsafe {
         match query {
             SystemFontQuery::MatchFamily {
                 family,
@@ -707,7 +883,20 @@ pub(super) fn Query(query: &SystemFontQuery, base: Option<&HostFace>) -> Vec<Hos
             } => Fallback(text, *weight, *italic, locale, *presentation, base),
             SystemFontQuery::OpenFace { .. } => Vec::new(),
         }
+    };
+    let mut cache = QueryCache().lock().expect("CoreText query cache poisoned");
+    if let Some(cached) = cache.entries.get(&key) {
+        return cached.clone();
     }
+    const MAX_QUERY_CACHE_ENTRIES: usize = 1024;
+    if cache.entries.len() == MAX_QUERY_CACHE_ENTRIES {
+        if let Some(oldest) = cache.order.pop_front() {
+            cache.entries.remove(&oldest);
+        }
+    }
+    cache.order.push_back(key.clone());
+    cache.entries.insert(key, faces.clone());
+    faces
 }
 
 /// Resolve the selected PostScript face only after the host opens its file.
@@ -738,7 +927,7 @@ pub(super) fn CollectionIndex(face: &HostFace, bytes: &[u8]) -> Option<u32> {
     // the collection. Ambiguous or missing identity is rejected, never guessed.
     #[cfg(target_os = "macos")]
     {
-        unsafe { NativeCollectionIndex(face, bytes, offsets) }
+        unsafe { MatchCollectionIndex(face, bytes, offsets) }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -746,7 +935,7 @@ pub(super) fn CollectionIndex(face: &HostFace, bytes: &[u8]) -> Option<u32> {
     }
 }
 #[cfg(target_os = "macos")]
-unsafe fn NativeCollectionIndex(face: &HostFace, bytes: &[u8], offsets: &[u8]) -> Option<u32> {
+unsafe fn MatchCollectionIndex(face: &HostFace, bytes: &[u8], offsets: &[u8]) -> Option<u32> {
     let font = FontForFace(face)?;
     let mut tables = Vec::new();
     for tag in [*b"name", *b"head"] {

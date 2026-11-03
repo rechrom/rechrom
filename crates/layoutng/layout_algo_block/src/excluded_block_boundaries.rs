@@ -50,7 +50,6 @@ excluded! {
 #[cfg(not(feature = "inline_extension"))]
 excluded! {
     fn LayoutInlineHasInlineFragments(inline: &LayoutInline) -> bool;
-    fn LayoutTextScaledFont(text: &LayoutText) -> *const Font;
     fn LayoutTextTransformAndSecureOriginalText(text: &mut LayoutText) -> ();
 }
 

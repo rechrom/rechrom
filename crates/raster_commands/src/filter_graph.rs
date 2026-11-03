@@ -23,8 +23,9 @@ pub struct RenderReflectionMaskLayer {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderReflectionMask {
     pub layers: Vec<RenderReflectionMaskLayer>,
-    /// Local/property coordinates to root device coordinates.
-    pub local_to_device: [f32; 6],
+    /// A retained conversion failure, rather than silently replacing an
+    /// unsupported private PaintRecord with a transparent mask.
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,19 +41,44 @@ pub struct RenderSvgFilterPrimitive {
     pub result: String,
     pub region: [f32; 4],
     pub linear_rgb: bool,
+    pub origin_tainted: bool,
     pub kind: RenderSvgFilterKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderSvgPreserveAspectRatioAlign {
+    None,
+    XMinYMin,
+    XMidYMin,
+    XMaxYMin,
+    XMinYMid,
+    XMidYMid,
+    XMaxYMid,
+    XMinYMax,
+    XMidYMax,
+    XMaxYMax,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderSvgMeetOrSlice {
+    Meet,
+    Slice,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderSvgFilterKind {
     GaussianBlur {
         x: f32,
         y: f32,
-        edge_mode: RenderSvgEdgeMode,
     },
     ColorMatrix([f32; 20]),
     Offset {
         x: f32,
         y: f32,
+    },
+    DropShadow {
+        sigma_x: f32,
+        sigma_y: f32,
+        dx: f32,
+        dy: f32,
+        color: [f32; 4],
     },
     Flood([f32; 4]),
     Blend {
@@ -68,8 +94,8 @@ pub enum RenderSvgFilterKind {
     ComponentTransfer([RenderSvgTransfer; 4]),
     Morphology {
         dilate: bool,
-        x: u32,
-        y: u32,
+        x: f32,
+        y: f32,
     },
     DisplacementMap {
         input2: String,
@@ -80,18 +106,22 @@ pub enum RenderSvgFilterKind {
     Turbulence {
         base_x: f32,
         base_y: f32,
-        octaves: u32,
+        octaves: i32,
         seed: f32,
         stitch: bool,
         fractal_noise: bool,
     },
-    Tile,
+    Tile {
+        source_region: [f32; 4],
+    },
     Image {
         href: String,
-        local_fragment: bool,
-        preserve_none: bool,
+        local_subtree: bool,
+        align: RenderSvgPreserveAspectRatioAlign,
+        meet_or_slice: RenderSvgMeetOrSlice,
         width: u32,
         height: u32,
+        orientation: crate::commands::ImageOrientation,
         pixels: std::sync::Arc<Vec<u8>>,
     },
     Convolve {
@@ -100,11 +130,9 @@ pub enum RenderSvgFilterKind {
         kernel: Vec<f32>,
         divisor: f32,
         bias: f32,
-        target_x: u32,
-        target_y: u32,
+        target_x: i32,
+        target_y: i32,
         edge_mode: RenderSvgEdgeMode,
-        unit_x: f32,
-        unit_y: f32,
         preserve_alpha: bool,
     },
     Lighting {
@@ -164,6 +192,17 @@ pub enum RenderSvgBlend {
     Screen,
     Darken,
     Lighten,
+    Overlay,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RenderSvgComposite {
@@ -173,4 +212,5 @@ pub enum RenderSvgComposite {
     Atop,
     Xor,
     Arithmetic,
+    Lighter,
 }

@@ -1,5 +1,5 @@
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use std::{
@@ -101,7 +101,7 @@ fn pump(page: &mut Page, condition: impl Fn(&Page) -> bool) {
 
 #[test]
 fn first_content_frame_waits_for_head_stylesheets_only() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let (mut styled, body, resources) = page();
         body.borrow_mut().extend([
             response(),
@@ -161,5 +161,100 @@ fn first_content_frame_waits_for_head_stylesheets_only() {
         failed.Open("https://stream.test/", 4096, 4096).unwrap();
         pump(&mut failed, |page| page.CurrentFrame().is_some());
         assert_eq!(failed.Document().GetDocument().StyleSheets(None).len(), 0);
+    });
+}
+
+#[test]
+fn parser_continuation_after_first_frame_paints_appended_nested_flex_sibling() {
+    test_thread::run(|| {
+        let (mut page, body, _) = page();
+        body.borrow_mut().extend([
+            response(),
+            URLLoadEvent::Data(
+                br#"<!doctype html><style>
+                    body{margin:0;background:white;font:20px sans-serif}
+                    #hero{display:flex;gap:12px;padding:20px}
+                    .button{display:flex;align-items:center;justify-content:center;
+                        width:220px;height:60px;background:#078a32;color:white}
+                    .secondary{background:#c22}
+                </style><div id=hero><a id=primary class=button><span><span>Primary</span></span></a>"#
+                    .to_vec(),
+            ),
+        ]);
+        page.Open("https://stream.test/", 4096, 4096).unwrap();
+        pump(&mut page, |page| page.CurrentFrame().is_some());
+        let first_sequence = page.CurrentFrame().unwrap().sequence;
+        assert!((0..page.Document().GetDocument().NodeCount()).all(|index| {
+            page.Document()
+                .GetDocument()
+                .Node(index)
+                .FindAttribute("id")
+                .is_none_or(|attribute| attribute.value != "secondary")
+        }));
+
+        body.borrow_mut().extend([
+            URLLoadEvent::Data(
+                br#"<a id=secondary class="button secondary"><span><span>Download app</span></span></a></div>"#
+                    .to_vec(),
+            ),
+            URLLoadEvent::Finished,
+        ]);
+        pump(&mut page, |page| {
+            page.CurrentFrame()
+                .is_some_and(|frame| frame.sequence > first_sequence)
+                && (0..page.Document().GetDocument().NodeCount()).any(|index| {
+                    page.Document()
+                        .GetDocument()
+                        .Node(index)
+                        .FindAttribute("id")
+                        .is_some_and(|attribute| attribute.value == "secondary")
+                })
+        });
+
+        let (secondary, text) = {
+            let owner = page.Document();
+            let document = owner.GetDocument();
+            let secondary = (0..document.NodeCount())
+                .find(|&index| {
+                    document
+                        .Node(index)
+                        .FindAttribute("id")
+                        .is_some_and(|attribute| attribute.value == "secondary")
+                })
+                .unwrap();
+            let mut stack = vec![secondary];
+            let mut text = None;
+            while let Some(index) = stack.pop() {
+                if document.Node(index).Type() == dom::persistent_document::DOMNodeType::kText
+                    && document.Node(index).Data().contains("Download")
+                {
+                    text = Some(document.Node(index).Id());
+                    break;
+                }
+                stack.extend(document.Node(index).Children().iter().copied());
+            }
+            (
+                document.Node(secondary).Id(),
+                text.expect("nested secondary text"),
+            )
+        };
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        assert!(
+            artifact.items.iter().any(|item| {
+                item.node_id == secondary
+                    && item.r#type == paint::paint_engine::DisplayItemType::kDrawRect
+                    && item.color.red > item.color.green
+            }),
+            "parser-appended secondary background must enter Paint"
+        );
+        assert!(
+            artifact.items.iter().any(|item| {
+                item.node_id == text
+                    && item.r#type == paint::paint_engine::DisplayItemType::kDrawGlyphRun
+                    && !item.is_shadow
+                    && !item.stroke_glyphs
+            }),
+            "parser-appended nested text must own a foreground glyph run"
+        );
     });
 }

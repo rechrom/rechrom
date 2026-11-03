@@ -221,6 +221,10 @@ fn OverflowClipRect(object: &LayoutBox, behavior: OverlayScrollbarClipBehavior) 
         _ => object.OverflowClipRectWithBehaviorBase(behavior),
     }
 }
+fn ComputedRowSpan(object: &LayoutBox) -> u32 {
+    debug_assert_eq!(object.RuntimeClass(), LayoutObjectClass::TableCell);
+    box_ref!(object, LayoutTableCell).ComputedRowSpan()
+}
 fn UpdateFromElement(object: &mut LayoutObject) {
     debug_assert!(object.RuntimeClass().IsTableClass());
     match object.RuntimeClass() {
@@ -248,6 +252,7 @@ pub(crate) fn Virtuals() -> TableObjectVirtuals {
         stitched_size: StitchedSize,
         physical_location: PhysicalLocation,
         overflow_clip_rect: OverflowClipRect,
+        computed_row_span: ComputedRowSpan,
         update_from_element: UpdateFromElement,
     }
 }

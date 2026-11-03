@@ -57,11 +57,6 @@ impl layoutng_assembly::layout_engine::PaintCommitOutput for PaintOutput {
 /// Seal metadata derived from completed record and chunk streams, then assign
 /// the immutable recording identity. This is the commit-stage hot path.
 pub fn FinalizeArtifact(recording: &mut paint_record::PaintRecording) {
-    recording.recorded_properties = recording
-        .chunks
-        .iter()
-        .map(|chunk| chunk.properties.clone())
-        .collect();
     recording.image_dependencies = Arc::new(ImageDependencyIndex::build(
         &recording.items,
         &recording.display_items,

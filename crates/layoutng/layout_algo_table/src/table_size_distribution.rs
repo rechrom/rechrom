@@ -84,7 +84,7 @@ pub fn ComputeGridInlineMinMax(
         node.AllowColumnPercentages(layout_pass)
     })
 }
-// A lazy closure retains the source's short-circuiting native ancestor query.
+// A lazy closure retains the source's short-circuiting source ancestor query.
 pub(crate) fn ComputeGridInlineMinMaxWithAllowance(
     columns: &Columns,
     undistributable: LayoutUnit,

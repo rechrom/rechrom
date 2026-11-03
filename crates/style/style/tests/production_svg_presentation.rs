@@ -35,7 +35,7 @@ fn media() -> MediaValuesCachedData {
         ..Default::default()
     }
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let doc = owner.GetDocument();
     let node = (0..doc.NodeCount())
         .find(|&i| {
@@ -44,11 +44,17 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*doc.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe {
+        &*doc
+            .ResolvedStyleFor(node)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 
 #[test]
-fn svg_presentation_production_cascade_reaches_native_fields_and_css_wide() {
+fn svg_presentation_production_cascade_reaches_computed_style_fields_and_css_wide() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<svg id=p><g id=c></g><g id=r></g><g id=b></g><g id=s></g><g id=bad></g></svg>",
@@ -61,14 +67,14 @@ fn svg_presentation_production_cascade_reaches_native_fields_and_css_wide() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     assert_eq!(p.BaselineShiftType(), EBaselineShiftType::kSuper);
     assert_eq!(p.BaselineShift(), &Length::Fixed(0));
     assert_eq!(p.CapStyle(), LineCap::kSquareCap);
     assert_eq!(p.JoinStyle(), LineJoin::kBevelJoin);
     assert_eq!(p.StrokeMiterLimit(), 5.);
     for id in ["p", "c", "r", "s"] {
-        let style = native(&owner, id);
+        let style = computed_style(&owner, id);
         assert!(
             style.MarkerStartResource().is_null()
                 && style.MarkerMidResource().is_null()
@@ -76,35 +82,41 @@ fn svg_presentation_production_cascade_reaches_native_fields_and_css_wide() {
         );
         assert!(style.D().is_null());
     }
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert_eq!(c.BaselineShiftType(), EBaselineShiftType::kSuper);
     assert_eq!(c.CapStyle(), p.CapStyle());
     assert_eq!(c.JoinStyle(), p.JoinStyle());
     assert_eq!(c.StrokeMiterLimit(), 5.);
-    let r = native(&owner, "r");
+    let r = computed_style(&owner, "r");
     assert_eq!(r.BaselineShift(), &Length::Fixed(0));
-    // Baseline shift is non-inherited; its native child type starts at length.
+    // Baseline shift is non-inherited; its computed style child type starts at length.
     assert_eq!(r.BaselineShiftType(), EBaselineShiftType::kLength);
     assert_eq!(r.CapStyle(), LineCap::kButtCap);
     assert_eq!(r.JoinStyle(), LineJoin::kMiterJoin);
     assert_eq!(r.StrokeMiterLimit(), 4.);
     assert_eq!(
-        native(&owner, "b").BaselineShiftType(),
+        computed_style(&owner, "b").BaselineShiftType(),
         EBaselineShiftType::kLength
     );
     assert_eq!(
-        native(&owner, "s").BaselineShiftType(),
+        computed_style(&owner, "s").BaselineShiftType(),
         EBaselineShiftType::kLength
     );
-    assert!(native(&owner, "s").BaselineShift().IsCalculated());
-    assert_eq!(native(&owner, "bad").BaselineShift(), &Length::Fixed(-4));
-    assert_eq!(native(&owner, "bad").CapStyle(), LineCap::kRoundCap);
-    assert_eq!(native(&owner, "bad").JoinStyle(), LineJoin::kMiterJoin);
-    assert_eq!(native(&owner, "bad").StrokeMiterLimit(), 7.);
+    assert!(computed_style(&owner, "s").BaselineShift().IsCalculated());
+    assert_eq!(
+        computed_style(&owner, "bad").BaselineShift(),
+        &Length::Fixed(-4)
+    );
+    assert_eq!(computed_style(&owner, "bad").CapStyle(), LineCap::kRoundCap);
+    assert_eq!(
+        computed_style(&owner, "bad").JoinStyle(),
+        LineJoin::kMiterJoin
+    );
+    assert_eq!(computed_style(&owner, "bad").StrokeMiterLimit(), 7.);
 }
 
 #[test]
-fn text_stroke_shorthand_resets_omitted_slots_and_uses_native_font_length() {
+fn text_stroke_shorthand_resets_omitted_slots_and_uses_computed_style_font_length() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p><i id=c></i><i id=red></i><i id=w></i><i id=r></i><i id=bad></i></div>",
@@ -117,20 +129,24 @@ fn text_stroke_shorthand_resets_omitted_slots_and_uses_native_font_length() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     assert_eq!(p.TextStrokeWidth(), 1.);
     assert_eq!(p.TextStrokeColor().GetColor().Param2(), 255.);
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert_eq!(c.TextStrokeWidth(), p.TextStrokeWidth());
     assert!(c.TextStrokeColor() == p.TextStrokeColor());
-    let red = native(&owner, "red");
+    let red = computed_style(&owner, "red");
     assert_eq!(red.TextStrokeWidth(), 0.);
     assert_eq!(red.TextStrokeColor().GetColor().Param0(), 255.);
-    assert_eq!(native(&owner, "w").TextStrokeWidth(), 2.);
-    assert!(native(&owner, "w").TextStrokeColor().IsCurrentColor());
-    assert_eq!(native(&owner, "r").TextStrokeWidth(), 0.);
-    assert!(native(&owner, "r").TextStrokeColor().IsCurrentColor());
-    assert_eq!(native(&owner, "bad").TextStrokeWidth(), 4.);
+    assert_eq!(computed_style(&owner, "w").TextStrokeWidth(), 2.);
+    assert!(computed_style(&owner, "w")
+        .TextStrokeColor()
+        .IsCurrentColor());
+    assert_eq!(computed_style(&owner, "r").TextStrokeWidth(), 0.);
+    assert!(computed_style(&owner, "r")
+        .TextStrokeColor()
+        .IsCurrentColor());
+    assert_eq!(computed_style(&owner, "bad").TextStrokeWidth(), 4.);
 }
 
 #[test]

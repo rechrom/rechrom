@@ -178,7 +178,7 @@ fn ExpandInternal<T: TokenStreamTokenizer>(
     Ok(out)
 }
 
-// longhands_custom.cc:1870-1920. Shared polygon is the genuine typed/native
+// longhands_custom.cc:1870-1920. Shared polygon is the genuine typed/computed style
 // basic shape currently available; other BasicShape/Path owners stay partial.
 fn BasicShapeAndBox<T: TokenStreamTokenizer>(
     id: CSSPropertyID,

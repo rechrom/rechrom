@@ -15,12 +15,12 @@ use style::{
     },
     production_css_value as values, StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -38,21 +38,21 @@ fn parse(id: P, text: &str) -> Vec<values::PropertyValue> {
     .unwrap()
 }
 #[test]
-fn text_box_edges_shorthand_default_reset_and_css_wide_are_native() {
+fn text_box_edges_shorthand_default_reset_and_css_wide_are_computed_style() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='text-box:cap alphabetic trim-start'><div id=c style='text-box:inherit'></div><div id=u style='text-box:unset'></div><div id=i style='text-box:initial'></div><div id=n style='text-box:trim-end text;text-box:normal'></div><div id=e style='text-box:text alphabetic'></div><div id=t style='text-box:trim-end'></div><div id=x style='text-box:ex text trim-both'></div></div>",
     );
     update(&mut owner);
     let (p, c, u, i, n, e, t, x) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "u"),
-        native(&owner, "i"),
-        native(&owner, "n"),
-        native(&owner, "e"),
-        native(&owner, "t"),
-        native(&owner, "x"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "n"),
+        computed_style(&owner, "e"),
+        computed_style(&owner, "t"),
+        computed_style(&owner, "x"),
     );
     for v in [p, c] {
         assert_eq!(*v.GetTextBoxEdge().Over(), E::kCap);
@@ -91,19 +91,19 @@ fn text_box_edges_shorthand_default_reset_and_css_wide_are_native() {
     );
 }
 #[test]
-fn text_fit_font_spacing_and_legacy_decoration_noop_preserve_native_fields() {
+fn text_fit_font_spacing_and_legacy_decoration_noop_preserve_computed_style_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='text-fit:grow per-line-all 150%;text-autospace:normal;text-spacing-trim:space-first;font-size:21px;text-decoration-line:underline;-webkit-text-decorations-in-effect:overline'><div id=c style='text-fit:inherit;text-autospace:inherit;text-spacing-trim:inherit;-webkit-text-decorations-in-effect:inherit'></div><div id=u style='text-fit:unset;text-autospace:unset;text-spacing-trim:unset'></div><div id=i style='text-fit:initial;text-autospace:initial;text-spacing-trim:initial;-webkit-text-decorations-in-effect:initial'></div><div id=s style='text-fit:shrink calc(40% + 35%);text-spacing-trim:trim-start'></div><div id=n style='text-fit:none consistent 200%;text-autospace:no-autospace;text-spacing-trim:space-all'></div></div>",
     );
     update(&mut owner);
     let (p, c, u, i, s, n) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "u"),
-        native(&owner, "i"),
-        native(&owner, "s"),
-        native(&owner, "n"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "s"),
+        computed_style(&owner, "n"),
     );
     for v in [p, c, u] {
         assert_eq!(v.GetTextFit().Type(), F::kGrow);

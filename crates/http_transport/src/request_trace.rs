@@ -1,7 +1,7 @@
 //! Diagnostic transport events. No context guard crosses an async suspension:
 //! Tokio can resume a request on another thread, so context is scoped only
 //! around each synchronous event emission. The recorder owns the event bound.
-use crate::http_request::{HTTPRequestData, HTTPRequestPriority, TransferError};
+use crate::http_request::{HTTPRequestData, TransferError};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Default)]
@@ -29,10 +29,7 @@ impl RequestTrace {
             &request.url,
             &[
                 ("streamed", u8::from(streamed) as f64),
-                (
-                    "priority",
-                    u8::from(request.priority == HTTPRequestPriority::High) as f64,
-                ),
+                ("priority", request.priority as u8 as f64),
             ],
         );
         trace

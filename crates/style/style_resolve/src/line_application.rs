@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Chromium native line and pagination Apply* branches and converters.
+//! Chromium computed style line and pagination Apply* branches and converters.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{
@@ -169,7 +169,7 @@ fn Alignment(
     })
 }
 // style_builder_converter.cc:4308-4330; CSSPrimitiveValue::ConvertTo<uint16_t>
-// uses ClampTo, so conversion saturates the native field rather than wrapping.
+// uses ClampTo, so conversion saturates the computed style field rather than wrapping.
 fn MaxLines(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -437,7 +437,7 @@ mod tests {
     use super::*;
     use crate::production_css_value as values;
     #[test]
-    fn hidden_line_native_branches_preserve_separate_legacy_and_extra_fields() {
+    fn hidden_line_computed_style_branches_preserve_separate_legacy_and_extra_fields() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);

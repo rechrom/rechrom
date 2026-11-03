@@ -1,4 +1,4 @@
-//! Canonical cc ColorFilter owner/factories/codec. The native filter value is
+//! Canonical cc ColorFilter owner/factories/codec. The source filter value is
 //! constructed by real Skia primitives; no compositor/host capability enters.
 #![allow(non_snake_case, non_camel_case_types)]
 use super::{blend_mode::BlendMode, color::Color4f};
@@ -15,19 +15,19 @@ pub enum Type {
     kTableARGB,
     kHighContrast,
 }
-pub trait NativeColorFilterValue {
+pub trait ColorFilterValue {
     fn filterColor4f(&self, color: Color4f) -> Color4f;
     fn asAColorMatrix(&self, matrix: &mut [f32; 20]) -> bool;
 }
-pub trait NativeColorTableValue {
+pub trait ColorTableValue {
     fn alphaTable(&self) -> &[u8; 256];
     fn redTable(&self) -> &[u8; 256];
     fn greenTable(&self) -> &[u8; 256];
     fn blueTable(&self) -> &[u8; 256];
 }
 pub trait ColorFilterBackend {
-    type Filter: NativeColorFilterValue;
-    type ColorTable: NativeColorTableValue;
+    type Filter: ColorFilterValue;
+    type ColorTable: ColorTableValue;
     type HighContrastConfig: Copy;
     fn Matrix(matrix: &[f32; 20]) -> Option<Self::Filter>;
     fn Blend(color: Color4f, mode: BlendMode) -> Option<Self::Filter>;
@@ -63,7 +63,7 @@ pub trait ColorFilterReader<B: ColorFilterBackend> {
     fn ReadData(&mut self, value: &mut [u8]);
     fn ReadConfig(&mut self) -> B::HighContrastConfig;
 }
-// Source: cc/paint/color_filter.cc:23-131. The native subclasses become
+// Source: cc/paint/color_filter.cc:23-131. The source subclasses become
 // exhaustive payload variants; Matrix has no second matrix copy in its owner.
 enum Data<B: ColorFilterBackend> {
     Matrix,
@@ -137,10 +137,10 @@ impl<B: ColorFilterBackend> ColorFilter<B> {
         Self::MakeTable(B::MakeColorTable(a, r, g, b))
     }
     pub fn MakeTable(table: Arc<B::ColorTable>) -> Arc<Self> {
-        let native = B::Table(&table);
+        let source = B::Table(&table);
         Arc::new(Self {
             data: Data::Table { table },
-            sk_color_filter_: native,
+            sk_color_filter_: source,
         })
     }
     // Source: cc/paint/color_filter.cc:118-131,178-181.

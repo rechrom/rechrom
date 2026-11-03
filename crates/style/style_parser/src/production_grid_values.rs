@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Typed CSSGridTemplateAreasValue, retaining the source native area map.
+//! Typed CSSGridTemplateAreasValue, retaining the source computed style area map.
 #![allow(non_snake_case)]
 use crate::css_value::CSSValueSubclass;
 use foundation::String;

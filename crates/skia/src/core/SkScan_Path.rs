@@ -200,10 +200,10 @@ pub unsafe fn update_edge(edge: *mut SkEdge, last_y: i32) -> bool {
 }
 // Source: src/core/SkScan_Path.cpp:219-225
 macro_rules! assert_return {
-    ($line:expr; $native_condition:expr; $cond:expr) => {
+    ($line:expr; $condition:expr; $cond:expr) => {
         if !$cond {
             crate::SkDEBUGFAILF!(@source b"src/core/SkScan_Path.cpp\0".as_ptr(), $line;
-                "assert(%s)", $native_condition);
+                "assert(%s)", $condition);
             return;
         }
     };

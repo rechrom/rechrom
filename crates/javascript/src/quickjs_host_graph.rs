@@ -1,4 +1,4 @@
-//! Native ownership half of traced wrappers. It consumes typed host facts;
+//! Host ownership half of traced wrappers. It consumes typed host facts;
 //! no DOM, host borrows, JS execution or source callbacks occur during GC.
 use super::*;
 use std::collections::{HashMap, HashSet};
@@ -78,7 +78,7 @@ impl HostGraph {
         work: &mut Vec<(HostObjectId, JsObject)>,
         keep: &mut Vec<JsObject>,
     ) -> JsResult<()> {
-        // Iterative native graph walk also handles deep trees and cycles.
+        // Iterative host graph walk also handles deep trees and cycles.
         while let Some((id, object)) = work.pop() {
             let edges = self
                 .edges
@@ -264,7 +264,7 @@ impl HostGraph {
         self.Populate(ctx, &mut work, &mut keep)?;
         // All allocations and new references are ready while old physical
         // edges/roots still protect their objects. Commit performs no JS
-        // allocation; removals cannot expose a half-published native graph.
+        // allocation; removals cannot expose a half-published host graph.
         for (object, slot, target) in prepared {
             if let Some(previous) = ctx.set_traced_reference(&object, slot, target.as_ref())? {
                 keep.push(previous);
@@ -334,8 +334,8 @@ pub(super) fn SynchronizeHostGraph(
     state.borrow_mut().host_graph.Apply(ctx, changes)
 }
 
-// Ordinary native wrappers are the cell itself. Exotic wrappers additionally
-// retain their public Proxy identity while the native target is reachable.
+// Ordinary host wrappers are the cell itself. Exotic wrappers additionally
+// retain their public Proxy identity while the host target is reachable.
 pub(super) fn AttachWrapper(
     ctx: &mut Context,
     object: &JsObject,

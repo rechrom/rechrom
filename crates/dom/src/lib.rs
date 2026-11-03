@@ -17,6 +17,8 @@ pub(crate) use test_html::{html_parser_host, html_tag_names, parser, text_decode
 
 pub mod user_interaction_state;
 pub use user_interaction_state::{InteractionStateMutation, UserInteractionState};
+pub mod use_counter;
+pub use use_counter::WebFeature;
 pub mod custom_elements;
 pub mod dom_mutation;
 pub mod error;
@@ -28,7 +30,9 @@ pub mod node_references;
 pub mod persistent_document;
 pub mod style_state;
 pub mod svg_path_parser;
-pub use persistent_document::{DOMAutofillState, PersistentDocument as Document, DOM};
+pub use persistent_document::{
+    DOMAutofillState, PersistentDocument as Document, StyleDocument, DOM,
+};
 
 // cpp: dom/document.h:158-163
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,6 +42,11 @@ pub struct ImageResourceMetadata {
     pub natural_height: f64,
     pub resolution_scale: f64,
     pub orientation: ::image_resource::ImageOrientation,
+    /// Image::IsOpaque published by the decoded resource owner.
+    pub known_to_be_opaque: bool,
+    /// ImageResourceContent::IsCorsSameOrigin(), retained for SVG feImage's
+    /// FilterEffect origin-taint decision.
+    pub is_cors_same_origin: bool,
 }
 
 impl Default for ImageResourceMetadata {
@@ -48,6 +57,8 @@ impl Default for ImageResourceMetadata {
             natural_height: 0.0,
             resolution_scale: 1.0,
             orientation: Default::default(),
+            known_to_be_opaque: false,
+            is_cors_same_origin: false,
         }
     }
 }

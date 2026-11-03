@@ -38,6 +38,21 @@ pub struct LayoutViewportGeometry {
     pub root_scroller_visible_size: Option<LayoutIntSize>,
     pub transition_snapshot_size: Option<LayoutIntSize>,
     pub overscroll_type: LayoutOverscrollType,
+    /// PaintLayerScrollableArea::VisualViewportSuppliesScrollbars().
+    pub visual_viewport_supplies_scrollbars: bool,
+    /// Settings::GetHideScrollbars().
+    pub hide_scrollbars: bool,
+    /// Settings::GetAllowCustomScrollbarInMainFrame().
+    pub allow_custom_scrollbar_in_main_frame: bool,
+    /// LocalFrame::IsMainFrame().
+    pub is_main_frame: bool,
+    /// VisualViewport::IsActiveViewport().
+    pub visual_viewport_is_active: bool,
+    /// Resolved PaintLayerScrollableArea::ShouldSupplyScrollbarsForVisualViewport
+    /// results. Frame/Page/VisualViewport ownership remains outside Layout;
+    /// these immutable axis facts are its input boundary.
+    pub should_supply_horizontal_scrollbar_for_visual_viewport: bool,
+    pub should_supply_vertical_scrollbar_for_visual_viewport: bool,
 }
 
 impl Default for LayoutViewportGeometry {
@@ -47,6 +62,14 @@ impl Default for LayoutViewportGeometry {
             root_scroller_visible_size: None,
             transition_snapshot_size: None,
             overscroll_type: LayoutOverscrollType::kNone,
+            visual_viewport_supplies_scrollbars: false,
+            hide_scrollbars: false,
+            // Chromium settings.json5:383-386.
+            allow_custom_scrollbar_in_main_frame: true,
+            is_main_frame: false,
+            visual_viewport_is_active: false,
+            should_supply_horizontal_scrollbar_for_visual_viewport: false,
+            should_supply_vertical_scrollbar_for_visual_viewport: false,
         }
     }
 }

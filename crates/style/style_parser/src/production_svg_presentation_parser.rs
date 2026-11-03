@@ -5,7 +5,7 @@
 // Includes existing typed helpers reused by this cluster. Effective lines
 // exclude comments/blank/preprocessor/namespace/using/visibility/brace-only
 // lines. Nested CSSMath, ColorFunctionParser, ResolveColorValue wrapper,
-// keyword tables and native generated field bodies are outside this scope;
+// keyword tables and computed style generated field bodies are outside this scope;
 // their dependencies remain explicit in both ledgers. Partial is not complete.
 //
 // Parser ranges (under third_party/blink/renderer/core unless generated):

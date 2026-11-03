@@ -1,4 +1,4 @@
-//! Actual converted PaintOp ownership. Native records keep their producer Arc
+//! Actual converted PaintOp ownership. PaintRecord records keep their producer Arc
 //! and range. Iterators project one resident operation at a time; no wrapper
 //! list, property-tree copy or retained compositor owner is created.
 use super::{CpuPaintWorkletInputs, CpuWorkletInput, PaintOp, PaintRecord};
@@ -45,7 +45,7 @@ pub struct CpuPaintRecordImage {
 
 pub trait CpuPaintImageValue: Send + Sync {
     /// The source PaintImage GetSwSkImage allocation, with actual premul pixels.
-    fn GetSwSkImage(&self) -> std::io::Result<Arc<Vec<u8>>>;
+    fn GetSwSkImage(&self, frame_index: usize) -> std::io::Result<Arc<Vec<u8>>>;
     fn GetPaintRecord(&self) -> Option<CpuPaintRecordImage>;
     fn stable_id(&self) -> crate::adapter::image_animation::PaintImageId;
     fn ShouldAnimate(&self) -> bool;
@@ -60,7 +60,10 @@ pub trait CpuPaintImageValue: Send + Sync {
     fn GetReinterpretAsSRGB(&self) -> bool;
 }
 #[derive(Clone)]
-pub struct CpuPaintImage(pub Arc<dyn CpuPaintImageValue>);
+pub struct CpuPaintImage(
+    pub Arc<dyn CpuPaintImageValue>,
+    pub crate::adapter::layer_tree_host_impl::HostImageDecodingMode,
+);
 #[derive(Clone)]
 pub struct CpuDrawImage {
     pub image: CpuPaintImage,
@@ -218,7 +221,7 @@ pub trait CpuPaintValueServices<R: CpuSkiaBackend>: Send + Sync {
     fn TraceRasterBegin(&self, total_ops: usize) -> bool;
     fn TraceRasterEnd(&self, rastered_ops: usize);
 }
-/// Raster consumes this stream directly. Native variants borrow the original
+/// Raster consumes this stream directly. PaintRecord variants borrow the original
 /// Paint replay ABI; converted variants retain the canonical cc paint commands.
 pub trait CpuPaintCanvas<R: CpuSkiaBackend>: DisplayCanvas {
     fn Playback(
@@ -278,7 +281,7 @@ impl<R: CpuSkiaBackend> Clone for CpuClipPath<R> {
 }
 
 pub enum CpuPaintOp<R: CpuSkiaBackend> {
-    NativeAtom(super::NativePaintSource),
+    Atom(super::PaintSource),
     DrawRect(RectF, CpuPaintFlags<R>),
     DrawPath {
         path: Arc<R::Path>,
@@ -332,7 +335,7 @@ pub enum CpuPaintOp<R: CpuSkiaBackend> {
     Noop,
 }
 pub enum CpuPaintStorage<R: CpuSkiaBackend> {
-    Native(PaintRecord),
+    PaintRecord(PaintRecord),
     Converted(Vec<CpuPaintOp<R>>),
 }
 pub struct CpuPaintOpBuffer<R: CpuSkiaBackend> {
@@ -350,7 +353,7 @@ impl<R: CpuSkiaBackend> CpuPaintOpBuffer<R> {
             values,
         }
     }
-    pub fn from_native(record: PaintRecord, values: Arc<dyn CpuPaintValueServices<R>>) -> Self {
+    pub fn from_source(record: PaintRecord, values: Arc<dyn CpuPaintValueServices<R>>) -> Self {
         let mut result = Self::new(values);
         for op in super::lowering::LowerPaintRecord(record, result.values.clone()) {
             result.push(op);
@@ -365,7 +368,7 @@ impl<R: CpuSkiaBackend> CpuPaintOpBuffer<R> {
     pub fn allocation_capacity(&self) -> usize {
         match &self.storage {
             CpuPaintStorage::Converted(v) => v.capacity() * std::mem::size_of::<CpuPaintOp<R>>(),
-            CpuPaintStorage::Native(_) => 0,
+            CpuPaintStorage::PaintRecord(_) => 0,
         }
     }
     pub fn storage(&self) -> &CpuPaintStorage<R> {
@@ -377,7 +380,7 @@ impl<R: CpuSkiaBackend> CpuPaintOpBuffer<R> {
     fn converted_mut(&mut self) -> &mut Vec<CpuPaintOp<R>> {
         match &mut self.storage {
             CpuPaintStorage::Converted(ops) => ops,
-            CpuPaintStorage::Native(_) => panic!("immutable native record cannot be edited"),
+            CpuPaintStorage::PaintRecord(_) => panic!("immutable native record cannot be edited"),
         }
     }
 }
@@ -401,8 +404,8 @@ impl<R: CpuSkiaBackend> Default for CpuPaintRecord<R> {
     }
 }
 impl<R: CpuSkiaBackend> CpuPaintRecord<R> {
-    pub fn from_native(record: PaintRecord, values: Arc<dyn CpuPaintValueServices<R>>) -> Self {
-        Self::Buffer(Arc::new(CpuPaintOpBuffer::from_native(record, values)))
+    pub fn from_source(record: PaintRecord, values: Arc<dyn CpuPaintValueServices<R>>) -> Self {
+        Self::Buffer(Arc::new(CpuPaintOpBuffer::from_source(record, values)))
     }
     pub fn buffer(&self) -> Option<&CpuPaintOpBuffer<R>> {
         match self {
@@ -416,7 +419,7 @@ impl<R: CpuSkiaBackend> CpuPaintRecord<R> {
 }
 pub struct CpuPaintTypes<R: CpuSkiaBackend>(PhantomData<fn() -> R>);
 pub enum CpuPaintOpRef<'a, R: CpuSkiaBackend> {
-    Native {
+    PaintRecord {
         op: &'a PaintOp,
         record: &'a PaintRecord,
     },
@@ -435,7 +438,7 @@ impl<'a, R: CpuSkiaBackend> Iterator for CpuPaintIter<'a, R> {
             None => self.index,
         };
         let result = match &self.buffer.storage {
-            CpuPaintStorage::Native(record) => CpuPaintOpRef::Native {
+            CpuPaintStorage::PaintRecord(record) => CpuPaintOpRef::PaintRecord {
                 op: record.ops().get(index)?,
                 record,
             },
@@ -476,7 +479,7 @@ impl<R: CpuSkiaBackend> DisplayPaintOp<CpuPaintTypes<R>> for CpuPaintOpRef<'_, R
         use paint::paint_engine::DisplayItemType as T;
         use DisplayPaintOpType as D;
         match self {
-            Self::Native { op, .. } => match op.r#type {
+            Self::PaintRecord { op, .. } => match op.r#type {
                 T::kSave => D::Save,
                 T::kRestore => D::Restore,
                 T::kConcat => D::Concat,
@@ -505,7 +508,7 @@ impl<R: CpuSkiaBackend> DisplayPaintOp<CpuPaintTypes<R>> for CpuPaintOpRef<'_, R
     }
     fn HasDrawTextOps(&self) -> bool {
         match self {
-            Self::Native { op, .. } => {
+            Self::PaintRecord { op, .. } => {
                 op.r#type == paint::paint_engine::DisplayItemType::kDrawGlyphRun
             }
             Self::Converted(CpuPaintOp::DrawRecord(record)) => {
@@ -519,7 +522,7 @@ impl<R: CpuSkiaBackend> DisplayPaintOp<CpuPaintTypes<R>> for CpuPaintOpRef<'_, R
     }
     fn TextNodeId(&self) -> Option<u64> {
         match self {
-            Self::Native { op, .. }
+            Self::PaintRecord { op, .. }
                 if op.r#type == paint::paint_engine::DisplayItemType::kDrawGlyphRun =>
             {
                 Some(op.node_id)
@@ -535,7 +538,7 @@ impl<R: CpuSkiaBackend> DisplayPaintOp<CpuPaintTypes<R>> for CpuPaintOpRef<'_, R
     }
     fn ConcatPreserves2DAxisAlignment(&self) -> bool {
         match self {
-            Self::Native { op, .. } => {
+            Self::PaintRecord { op, .. } => {
                 let m = Transform::<R>::FromColMajor(&op.transform.values);
                 crate::cc::base::math_util::MathUtil::SkM44Preserves2DAxisAlignment(&Matrix44Ref(
                     &m,
@@ -549,14 +552,14 @@ impl<R: CpuSkiaBackend> DisplayPaintOp<CpuPaintTypes<R>> for CpuPaintOpRef<'_, R
     }
     fn ConcatTransposesAxes(&self) -> bool {
         match self {
-            Self::Native { op, .. } => op.transform.values[0] as f32 == 0.,
-            Self::Converted(CpuPaintOp::Concat(m)) => m.native().rc(0, 0) as f32 == 0.,
+            Self::PaintRecord { op, .. } => op.transform.values[0] as f32 == 0.,
+            Self::Converted(CpuPaintOp::Concat(m)) => m.as_source().rc(0, 0) as f32 == 0.,
             _ => panic!("source ConcatOp required"),
         }
     }
     fn DrawImageRectGeometry(&self) -> Option<(f32, f32, f32, f32)> {
         match self {
-            Self::Native { op, .. }
+            Self::PaintRecord { op, .. }
                 if op.r#type == paint::paint_engine::DisplayItemType::kDrawImageRect =>
             {
                 Some((
@@ -571,7 +574,7 @@ impl<R: CpuSkiaBackend> DisplayPaintOp<CpuPaintTypes<R>> for CpuPaintOpRef<'_, R
     }
     fn DrawImageUsesNearestNeighbor(&self) -> bool {
         match self {
-            Self::Native { op, .. } => {
+            Self::PaintRecord { op, .. } => {
                 op.image_interpolation_quality
                     == foundation::graphics_enums::InterpolationQuality::kInterpolationNone
             }
@@ -641,7 +644,7 @@ impl<R: CpuSkiaBackend> DisplayPaintOpBuffer<CpuPaintTypes<R>> for CpuPaintOpBuf
     }
     fn size(&self) -> usize {
         match &self.storage {
-            CpuPaintStorage::Native(record) => record.len(),
+            CpuPaintStorage::PaintRecord(record) => record.len(),
             CpuPaintStorage::Converted(ops) => ops.len(),
         }
     }
@@ -779,7 +782,7 @@ impl<R: CpuSkiaBackend> DisplayPaintOpBuffer<CpuPaintTypes<R>> for CpuPaintOpBuf
 struct Matrix44Ref<'a, R: CpuSkiaBackend>(&'a Transform<R>);
 impl<R: CpuSkiaBackend> crate::adapter::geometry::Matrix44 for Matrix44Ref<'_, R> {
     fn rc(&self, row: usize, col: usize) -> f32 {
-        self.0.native().rc(row, col) as f32
+        self.0.as_source().rc(row, col) as f32
     }
 }
 
@@ -893,7 +896,7 @@ impl<
 impl<R: CpuSkiaBackend> Clone for CpuPaintOp<R> {
     fn clone(&self) -> Self {
         match self {
-            Self::NativeAtom(source) => Self::NativeAtom(source.clone()),
+            Self::Atom(source) => Self::Atom(source.clone()),
             Self::DrawRect(r, f) => Self::DrawRect(*r, f.clone()),
             Self::DrawPath { path, flags } => Self::DrawPath {
                 path: path.clone(),
@@ -967,11 +970,11 @@ impl<R: CpuSkiaBackend> Clone for CpuPaintOp<R> {
 }
 impl<R: CpuSkiaBackend> CpuPaintOpBuffer<R> {
     /// Source PaintOpBuffer::DeepCopyAsRecord explicitly creates a new converted
-    /// operation owner. Native record leases keep their original producer Arc;
+    /// operation owner. PaintRecord record leases keep their original producer Arc;
     /// this does not clone a PaintArtifact, source item or property tree.
     pub fn DeepCopyAsRecord(&self) -> CpuPaintRecord<R> {
         let storage = match &self.storage {
-            CpuPaintStorage::Native(r) => CpuPaintStorage::Native(r.clone()),
+            CpuPaintStorage::PaintRecord(r) => CpuPaintStorage::PaintRecord(r.clone()),
             CpuPaintStorage::Converted(ops) => CpuPaintStorage::Converted(ops.clone()),
         };
         CpuPaintRecord::Buffer(Arc::new(Self {
@@ -983,14 +986,14 @@ impl<R: CpuSkiaBackend> CpuPaintOpBuffer<R> {
     pub fn RetainOpAt(&self, index: usize) -> CpuPaintOp<R> {
         match &self.storage {
             CpuPaintStorage::Converted(ops) => ops[index].clone(),
-            CpuPaintStorage::Native(record) => CpuPaintOp::NativeAtom(
-                super::lowering::NativePaintSource::At(record.clone(), index),
-            ),
+            CpuPaintStorage::PaintRecord(record) => {
+                CpuPaintOp::Atom(super::lowering::PaintSource::At(record.clone(), index))
+            }
         }
     }
     pub fn AppendBuffer(&mut self, source: &Self) {
         match &source.storage {
-            CpuPaintStorage::Native(_) => {
+            CpuPaintStorage::PaintRecord(_) => {
                 self.push(CpuPaintOp::DrawRecord(source.DeepCopyAsRecord()));
             }
             CpuPaintStorage::Converted(ops) => {
@@ -1017,7 +1020,7 @@ impl<R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpBuffe
     }
     fn GetOp(&self, offset: usize) -> Self::Op<'_> {
         match &self.storage {
-            CpuPaintStorage::Native(record) => CpuPaintOpRef::Native {
+            CpuPaintStorage::PaintRecord(record) => CpuPaintOpRef::PaintRecord {
                 op: &record.ops()[offset],
                 record,
             },
@@ -1037,7 +1040,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
         use paint::cc::paint::paint_op_buffer_iterator::PaintOpType as T;
         use paint::paint_engine::DisplayItemType as N;
         match self {
-            Self::Native { op, .. } => match op.r#type {
+            Self::PaintRecord { op, .. } => match op.r#type {
                 N::kSave => T::kSave,
                 N::kRestore => T::kRestore,
                 N::kConcat => T::kConcat,
@@ -1073,7 +1076,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
                 ),
             },
             Self::Converted(op) => match op {
-                CpuPaintOp::NativeAtom(source) => Self::Native {
+                CpuPaintOp::Atom(source) => Self::PaintRecord {
                     op: source.op(),
                     record: source.record(),
                 }
@@ -1126,7 +1129,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
     }
     fn IsPaintOpWithFlags(self) -> bool {
         match self {
-            Self::Native { .. } => self.IsDrawOp() || matches!(paint::cc::paint::paint_op_buffer_iterator::PaintOpView::GetType(self), paint::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayer | paint::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayerFilters),
+            Self::PaintRecord { .. } => self.IsDrawOp() || matches!(paint::cc::paint::paint_op_buffer_iterator::PaintOpView::GetType(self), paint::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayer | paint::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayerFilters),
             Self::Converted(
                 CpuPaintOp::DrawRRect(..)
                 | CpuPaintOp::DrawRect(..)
@@ -1138,9 +1141,9 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
     }
     fn FlagsSupportFoldingAlpha(self) -> bool {
         match self {
-            Self::Native { op, .. } => {
+            Self::PaintRecord { op, .. } => {
                 op.blend_mode == paint::paint_property_tree::PaintBlendMode::kNormal
-                    && op.filters.is_empty()
+                    && op.canonical_filters.is_empty()
                     && !op.is_shadow
                     && op.r#type != paint::paint_engine::DisplayItemType::kDrawBoxShadow
             }
@@ -1163,7 +1166,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
     } // Neither producer stream has a DrawImage paint-worklet variant.
     fn SaveLayerAlpha(self) -> f32 {
         match self {
-            Self::Native { op, .. }
+            Self::PaintRecord { op, .. }
                 if op.r#type == paint::paint_engine::DisplayItemType::kSaveLayerAlpha =>
             {
                 op.opacity
@@ -1205,7 +1208,7 @@ impl<R: CpuSkiaBackend> DisplayPlaybackItem
 impl<R: CpuSkiaBackend> CpuPaintOp<R> {
     pub fn AsRef(&self) -> CpuPaintOpRef<'_, R> {
         match self {
-            Self::NativeAtom(source) => CpuPaintOpRef::Native {
+            Self::Atom(source) => CpuPaintOpRef::PaintRecord {
                 op: source.op(),
                 record: source.record(),
             },

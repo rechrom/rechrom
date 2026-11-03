@@ -122,7 +122,7 @@ fn level_four_math_functions_keep_chromium_categories_and_evaluation() {
     }
 }
 #[test]
-fn mixed_percentages_retain_native_used_value_basis_and_clamp_at_computation() {
+fn mixed_percentages_retain_computed_style_used_value_basis_and_clamp_at_computation() {
     let mut resolver = |value, unit| match unit {
         UnitType::kPixels => Ok(value),
         UnitType::kEms => Ok(value * 20.0),
@@ -247,28 +247,28 @@ fn variables_and_container_numeric_ranges_compute_through_production_style() {
         "{:?}",
         engine.Diagnostics()
     );
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Width().Pixels(), 60.0);
-    assert!(native.Height().IsCalculated());
+    assert_eq!(computed_style.Width().Pixels(), 60.0);
+    assert!(computed_style.Height().IsCalculated());
     assert_eq!(
-        native
+        computed_style
             .Height()
             .GetCalculationValue()
             .Evaluate(100.0, &foundation::EvaluationInput::default()),
         48.0
     );
-    assert_eq!(native.MarginLeft().Pixels(), 25.0);
-    assert_eq!(native.PaddingTop().Pixels(), 5.0);
-    assert_eq!(native.PaddingBottom().Pixels(), 7.0);
-    assert_eq!(native.Opacity(), 0.5);
-    assert_eq!(native.ZIndex(), -1);
+    assert_eq!(computed_style.MarginLeft().Pixels(), 25.0);
+    assert_eq!(computed_style.PaddingTop().Pixels(), 5.0);
+    assert_eq!(computed_style.PaddingBottom().Pixels(), 7.0);
+    assert_eq!(computed_style.Opacity(), 0.5);
+    assert_eq!(computed_style.ZIndex(), -1);
     owner.GetDocumentMut().SetAttribute(
         outer,
         dom::persistent_document::DOMAttribute {
@@ -283,20 +283,20 @@ fn variables_and_container_numeric_ranges_compute_through_production_style() {
         "{:?}",
         engine.Diagnostics()
     );
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.Width().Pixels(), 100.0);
-    assert_eq!(native.MarginLeft().Pixels(), 0.0);
+    assert_eq!(computed_style.Width().Pixels(), 100.0);
+    assert_eq!(computed_style.MarginLeft().Pixels(), 0.0);
 }
 
 #[test]
-fn css_math_keeps_double_precision_until_native_lowering() {
+fn css_math_keeps_double_precision_until_computed_style_lowering() {
     for (text, expected) in [
         ("sign(1e-50)", 1.0),
         ("sign(-1e-50)", -1.0),
@@ -378,7 +378,7 @@ fn number_and_angle_results_retain_nested_percentage_dependencies() {
 }
 
 #[test]
-fn typed_math_leaves_lower_to_native_calculations_in_canonical_units() {
+fn typed_math_leaves_lower_to_computed_style_calculations_in_canonical_units() {
     let mut resolver = |value, unit| match unit {
         UnitType::kPixels => Ok(value),
         _ => Err(MathError::MissingLengthContext),
@@ -404,12 +404,15 @@ fn typed_math_leaves_lower_to_native_calculations_in_canonical_units() {
     ] {
         let expression = expression(text);
         let direct = expression.ComputeValue(&mut resolver, Some(basis)).unwrap();
-        let native = expression
+        let computed_style = expression
             .ToCalculationExpression(&mut resolver)
             .unwrap()
             .Evaluate(basis as f32, &foundation::EvaluationInput::default());
         assert!((direct - expected).abs() < 1e-12, "{text}: {direct}");
-        assert!((native as f64 - expected).abs() < 0.001, "{text}: {native}");
+        assert!(
+            (computed_style as f64 - expected).abs() < 0.001,
+            "{text}: {computed_style}"
+        );
     }
     for (text, expected) in [
         ("calc(500ms)", 0.5),

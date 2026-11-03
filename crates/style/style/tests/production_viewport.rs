@@ -35,7 +35,7 @@ fn media() -> MediaValuesCachedData {
         ..Default::default()
     }
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let doc = owner.GetDocument();
     let node = (0..doc.NodeCount())
         .find(|&i| {
@@ -44,11 +44,17 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*doc.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe {
+        &*doc
+            .ResolvedStyleFor(node)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 
 #[test]
-fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
+fn clip_rect_and_page_locale_reach_computed_style_cascade_with_css_wide() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p><i id=c></i><i id=r></i><i id=u></i><i id=bad></i></div>",
@@ -58,7 +64,7 @@ fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
         &CSSString::from("@page ChapterCase { size: a4 landscape; }"),
         CSSParserMode::kHTMLStandardMode,
     );
-    // The Size consumer/native fields exist; the actual @page entry point is
+    // The Size consumer/computed style fields exist; the actual @page entry point is
     // still an owner boundary. Do not infer a paginated document cascade.
     assert!(sheet
         .diagnostics
@@ -75,7 +81,7 @@ fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     assert!(!p.HasAutoClip());
     assert_eq!(p.Clip().Top(), &Length::Fixed(-1));
     assert!(p.Clip().Right().IsAuto());
@@ -84,7 +90,7 @@ fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
     assert_eq!(p.Page().Utf8(), "ChapterCase");
     assert_eq!(p.Locale().Utf8().to_ascii_lowercase(), "fr-ca");
     assert!(!p.GetFontDescription().Locale().is_null());
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert_eq!(c.Clip(), p.Clip());
     assert_eq!(c.Page(), p.Page());
     assert_eq!(
@@ -92,7 +98,7 @@ fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
         p.GetFontDescription().Locale()
     );
     for id in ["r", "u"] {
-        let style = native(&owner, id);
+        let style = computed_style(&owner, id);
         assert!(style.HasAutoClip());
         assert!(style.Page().IsNull());
         if id == "r" {
@@ -104,17 +110,17 @@ fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
             );
         }
     }
-    assert_eq!(native(&owner, "p").Zoom(), 1.);
-    assert_eq!(native(&owner, "p").EffectiveZoom(), 1.);
-    assert_eq!(native(&owner, "c").Zoom(), 1.);
-    assert_eq!(native(&owner, "c").EffectiveZoom(), 1.);
+    assert_eq!(computed_style(&owner, "p").Zoom(), 1.);
+    assert_eq!(computed_style(&owner, "p").EffectiveZoom(), 1.);
+    assert_eq!(computed_style(&owner, "c").Zoom(), 1.);
+    assert_eq!(computed_style(&owner, "c").EffectiveZoom(), 1.);
     for id in ["r", "u", "bad"] {
-        let style = native(&owner, id);
+        let style = computed_style(&owner, id);
         assert_eq!(style.Zoom(), 1.);
         assert_eq!(style.EffectiveZoom(), 1.);
         assert!(style.ObjectViewBox().is_none());
     }
-    let bad = native(&owner, "bad");
+    let bad = computed_style(&owner, "bad");
     assert_eq!(bad.Clip().Top(), &Length::Fixed(1));
     assert_eq!(bad.Clip().Right(), &Length::Fixed(2));
     assert_eq!(bad.Page().Utf8(), "SavedName");
@@ -122,7 +128,7 @@ fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
 }
 
 #[test]
-fn page_size_typed_values_convert_to_native_unzoomed_dimensions() {
+fn page_size_typed_values_convert_to_computed_style_unzoomed_dimensions() {
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut b = ComputedStyleBuilder::from_style(initial);
@@ -267,18 +273,34 @@ fn zoom_updates_effective_zoom_and_font_metrics_and_clip_keeps_typed_quad() {
     Apply(P::kClip, &mut b, None, &value, 16., &media()).unwrap();
     assert_eq!(b.Clip().Top(), &Length::Fixed(2));
     assert_eq!(b.Clip().Bottom(), &Length::Fixed(-6));
-    assert_eq!(
-        ParseProperty(
-            P::kObjectViewBox,
-            &CSSString::from("inset(1px)"),
-            false,
-            CSSParserMode::kHTMLStandardMode
-        )
-        .err()
-        .unwrap()
-        .kind,
-        PropertyParseErrorKind::Unsupported
-    );
+    for (text, class) in [
+        ("inset(1px 2px)", "inset"),
+        ("rect(1px auto 20px 3px)", "rect"),
+        ("xywh(1px 2px 30px 40px)", "xywh"),
+    ] {
+        let value = parse(P::kObjectViewBox, text);
+        match (class, value.Payload()) {
+            ("inset", CSSValuePayload::kBasicShapeInsetClass(_))
+            | ("rect", CSSValuePayload::kBasicShapeRectClass(_))
+            | ("xywh", CSSValuePayload::kBasicShapeXYWHClass(_)) => {}
+            _ => panic!("typed object-view-box shape required for {text}"),
+        }
+        Apply(P::kObjectViewBox, &mut b, None, &value, 16., &media()).unwrap();
+        assert!(b.ObjectViewBox().is_some(), "{text}");
+    }
+    let parent = unsafe { &*b.TakeStyle() };
+    let mut child = ComputedStyleBuilder::from_style(initial);
+    child.SetEffectiveZoom(1.0);
+    Apply(
+        P::kObjectViewBox,
+        &mut child,
+        Some(parent),
+        &parse(P::kObjectViewBox, "inherit"),
+        16.,
+        &media(),
+    )
+    .unwrap();
+    assert!(child.ObjectViewBox().is_some());
 }
 
 #[test]
@@ -306,6 +328,7 @@ fn viewport_grammar_invalid_values_and_quirks_are_precise() {
         (P::kWebkitLocale, "'en' 'fr'"),
         (P::kObjectViewBox, "polygon(0 0,1px 1px,0 1px)"),
         (P::kObjectViewBox, "circle(2px)"),
+        (P::kObjectViewBox, "xywh(0 0 -1px 2px)"),
     ] {
         assert_eq!(
             ParseProperty(

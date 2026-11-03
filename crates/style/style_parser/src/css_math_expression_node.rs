@@ -120,7 +120,7 @@ impl CSSMathExpressionNode {
     /// css_math_expression_node.cc: AccumulateLengthUnitTypes.
     ///
     /// Property application uses this to transfer dependency bits after the
-    /// winning typed value has reached the native builder.  Keep the walk on
+    /// winning typed value has reached the computed style builder.  Keep the walk on
     /// the typed expression tree so no serialized CSS is consulted.
     pub fn UsesUnit(&self, unit: UnitType) -> bool {
         match self {
@@ -488,7 +488,7 @@ impl CSSMathExpressionNode {
             }
         }
     }
-    // cpp: css_math_expression_node.cc:1375-1402,3133-3277. Platform's native
+    // cpp: css_math_expression_node.cc:1375-1402,3133-3277. Platform's computed style
     // immutable calculation tree retains comparison functions and percentages.
     pub fn ToCalculationExpression(
         &self,
@@ -1053,7 +1053,7 @@ fn Sum<T: TokenStreamTokenizer>(
 }
 
 // Chromium CSSMathExpressionOperation evaluates double values. The foundation
-// helpers implement the float instantiations for the native calculation tree;
+// helpers implement the float instantiations for the computed style calculation tree;
 // retain double precision here until the actual platform lowering boundary.
 // cpp: platform/geometry/math_functions.h:24-283; ui/gfx/geometry/sin_cos_degrees.h.
 fn nearest_multiples(mut a: f64, mut b: f64) -> (f64, f64) {

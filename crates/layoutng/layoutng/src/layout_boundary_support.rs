@@ -2,14 +2,14 @@
 
 use layout_fragment::fragment_tree::LayoutResultHandle;
 use layout_fragment::layout_result::LayoutResult;
-use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
+use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use std::sync::Arc;
 
 use foundation::{TrustedIdentityHashMap, TrustedIdentityHashSet};
 pub use layout_commit::LayoutUpdateKind;
 
-use crate::internal::constraint_space::ConstraintSpace as NativeConstraintSpace;
-use crate::internal::layout_input::{ComputedStyle, ConstraintSpace, PaintStyle};
+use crate::internal::constraint_space::ConstraintSpace as LayoutConstraintSpace;
+use crate::internal::layout_input::{ConstraintSpace, PaintStyle};
 use crate::internal::layout_node_metadata::Node;
 use crate::internal::layout_object::LayoutObject;
 
@@ -24,11 +24,16 @@ pub trait LayoutBoundaryEnvironment {
 
 /// Immutable boundary inputs which remain valid while LayoutObject style
 /// ownership is unchanged. Physical fragments are commonly rebuilt for a new
-/// viewport constraint, but their native/source ComputedStyle pair is not.
+/// viewport constraint, but their source/source ComputedStyle pair is not.
 #[derive(Clone, Copy)]
 pub(crate) struct LayoutBoundarySourceEntry {
     pub(crate) node: *const Node,
     pub(crate) logical_tree_order: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct LayoutBoundaryStyleSourceEntry {
+    pub(crate) resources: *const crate::internal::layout_input::StyleResourceData,
 }
 
 #[derive(Default)]
@@ -40,15 +45,15 @@ pub struct LayoutBoundaryCache {
     pub(crate) sticky_objects: Arc<Vec<*mut LayoutObject>>,
     pub(crate) sources: LayoutBoundaryHashMap<*const LayoutObject, LayoutBoundarySourceEntry>,
     pub(crate) style_sources:
-        LayoutBoundaryHashMap<*const NativeComputedStyle, *const ComputedStyle>,
-    /// Layout objects whose paint can escape an ancestor line's bounds. These
-    /// keep the corresponding inline subtree in Chromium's CullRect projection.
-    pub(crate) uncullable_objects: Arc<foundation::TrustedIdentityHashSet<*const LayoutObject>>,
-    // Native fragment/item identities remain stable while a LayoutResult is
+        LayoutBoundaryHashMap<*const StyleComputedStyle, LayoutBoundaryStyleSourceEntry>,
+    // Chromium fragment/item identities remain stable while a LayoutResult is
     // retained. Chromium keeps the corresponding FragmentData identity across
     // cull-rect updates; preserve the same identity in fragment-local Paint
-    // data so PrePaint does not mistake a retained native owner for a new one.
+    // data so PrePaint does not mistake a retained source owner for a new one.
     pub(crate) fragment_identity_result: usize,
+    /// The current result-level Paint state. Clones of the same source result
+    /// share it; a newly published LayoutResult receives a distinct owner.
+    pub(crate) fragment_paint_result: Option<LayoutResultHandle>,
     pub(crate) fragment_instance_ids: LayoutBoundaryHashMap<(u8, usize), u64>,
     pub(crate) next_fragment_instance_id: u64,
 }
@@ -62,8 +67,8 @@ impl LayoutBoundaryCache {
         self.sticky_objects = Arc::default();
         self.sources.clear();
         self.style_sources.clear();
-        self.uncullable_objects = Arc::default();
         self.fragment_identity_result = 0;
+        self.fragment_paint_result = None;
         self.fragment_instance_ids.clear();
         self.next_fragment_instance_id = 0;
     }
@@ -75,12 +80,12 @@ pub struct LayoutBoundarySupport {
     pub create_environment:
         Option<fn(&mut LayoutObject, &ConstraintSpace) -> Box<dyn LayoutBoundaryEnvironment>>,
     pub prepare_constraints:
-        Option<fn(&ComputedStyle, &ConstraintSpace, bool) -> NativeConstraintSpace>,
+        Option<fn(&StyleComputedStyle, &ConstraintSpace, bool) -> LayoutConstraintSpace>,
     pub prepare_tree: Option<
         fn(
             &mut LayoutObject,
             &ConstraintSpace,
-            &NativeConstraintSpace,
+            &LayoutConstraintSpace,
             bool,
             bool,
             bool,

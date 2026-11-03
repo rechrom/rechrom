@@ -52,7 +52,7 @@ fn run(script: &str) {
 }
 
 #[test]
-fn slot_interface_uses_native_prototypes_and_receiver_brands() {
+fn slot_interface_uses_source_prototypes_and_receiver_brands() {
     run(r#"
       const slot=document.createElement('slot');
       check(slot instanceof HTMLSlotElement&&slot instanceof HTMLElement,'native slot prototype');
@@ -65,7 +65,7 @@ fn slot_interface_uses_native_prototypes_and_receiver_brands() {
     "#);
 }
 #[test]
-fn slot_name_reflects_through_native_brand_and_mutation() {
+fn slot_name_reflects_through_source_brand_and_mutation() {
     run(r#"
       const s=document.createElement('slot'),d=Object.getOwnPropertyDescriptor(HTMLSlotElement.prototype,'name');
       check(s.name==='','default name');s.name=42;check(s.getAttribute('name')==='42','reflected write');s.setAttribute('name','next');check(s.name==='next','reflected read');
@@ -102,7 +102,7 @@ fn flattened_slots_recurse_fallback_and_preserve_light_dom_slot_nodes() {
     "#);
 }
 #[test]
-fn assigned_options_dictionary_and_native_brand_order() {
+fn assigned_options_dictionary_and_source_brand_order() {
     run(r#"
       const s=document.createElement('slot');
       for(const x of [undefined,null,{},()=>{}])check(s.assignedNodes(x).length===0,'empty dictionary');

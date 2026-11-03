@@ -4,6 +4,13 @@
 pub struct RuntimeEnabledFeatures;
 
 impl RuntimeEnabledFeatures {
+    pub const fn PaintUnderInvalidationCheckingEnabled() -> bool {
+        // Chromium exposes this as a diagnostic runtime feature. Rechrom's
+        // source compositor rejects configurations without the required
+        // diagnostic raster backend, so ordinary page paint keeps it off.
+        false
+    }
+
     pub const fn AnchorPositionAdjustmentWithoutOverflowEnabled() -> bool {
         true
     }
@@ -158,6 +165,11 @@ impl RuntimeEnabledFeatures {
         false
     }
 
+    pub const fn SvgFilterPaintsForHiddenContentEnabled() -> bool {
+        // Chromium runtime_enabled_features.json5:6036-6039: stable.
+        true
+    }
+
     pub const fn TabAlignmentWithFloatsEnabled() -> bool {
         true
     }
@@ -179,6 +191,11 @@ impl RuntimeEnabledFeatures {
     }
 
     pub const fn TextAutoSpaceIgnoreRubyAnnotationEnabled() -> bool {
+        true
+    }
+
+    pub const fn TextAreaResizerFixedSizeEnabled() -> bool {
+        // Chromium runtime_enabled_features.json5:6241-6244: stable.
         true
     }
 

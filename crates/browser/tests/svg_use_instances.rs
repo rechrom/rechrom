@@ -1,9 +1,10 @@
 //! Ordinary SVG use instances retain DOM/style/layout ownership across mutations.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
+use dom::persistent_document::DOMNamespace;
 use layoutng_assembly::internal::layout_input::FontFace;
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
@@ -128,7 +129,7 @@ const SIMPLE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="120" hei
 
 #[test]
 fn local_use_has_real_shadow_instance_and_inherited_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let p = fixture(SIMPLE);
         let owner = p.Document();
@@ -182,7 +183,7 @@ fn instance_root(p: &Page, name: &str) -> Option<u64> {
 
 #[test]
 fn source_geometry_href_id_replacement_refresh_without_mutating_old_frames() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg width="120" height="80"><defs id="definitions"><rect id="geometry" width="20" height="20"/><rect id="other" width="40" height="10"/></defs><use id="instance" href="#geometry" x="10" y="15" fill="blue"/></svg>"##,
@@ -215,7 +216,7 @@ fn source_geometry_href_id_replacement_refresh_without_mutating_old_frames() {
 
 #[test]
 fn nested_uses_and_siblings_preserve_branch_local_transform_and_color() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg width="160" height="100"><defs><rect id="box" width="10" height="10"/><g id="pair"><use href="#box"/><use href="#box" x="20"/></g></defs><use id="blue" href="#pair" transform="translate(10 10) scale(2)" fill="blue"/><use id="red" href="#pair" x="90" y="20" fill="red"/></svg>"##,
@@ -239,7 +240,7 @@ fn nested_uses_and_siblings_preserve_branch_local_transform_and_color() {
 
 #[test]
 fn instance_rules_use_source_scope_but_clone_ancestry_and_host_inheritance() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<style id="sheet">#source-parent rect{fill:red}.shape{fill:var(--ink,currentColor)}</style><svg width="140" height="80"><defs id="source-parent" color="red"><rect id="box" class="shape" width="15" height="15"/></defs><use id="one" href="#box" x="10" y="10" color="blue"/><use id="two" href="#box" x="40" y="10" style="--ink:green"/></svg>"##,
@@ -280,8 +281,8 @@ fn instance_rules_use_source_scope_but_clone_ancestry_and_host_inheritance() {
 }
 
 #[test]
-fn use_xy_css_percent_transform_and_viewport_changes_reach_native_layout() {
-    native_test_thread::run(|| {
+fn use_xy_css_percent_transform_and_viewport_changes_reach_source_layout() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg id="viewport" width="100" height="80"><defs><rect id="box" width="10" height="10"/></defs><use id="instance" href="#box" x="99" y="99" style="x:20%;y:10px" transform="translate(5 5) scale(2)" fill="blue"/></svg>"##,
@@ -301,7 +302,7 @@ fn use_xy_css_percent_transform_and_viewport_changes_reach_native_layout() {
 
 #[test]
 fn cycle_missing_wrong_kind_and_disallowed_descendants_do_not_paint() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let p = fixture(
             r##"<div id="wrong"></div><svg width="120" height="80"><defs><g id="a"><rect width="10" height="10"/><use href="#a"/></g><g id="filtered"><foreignObject width="50" height="50"><div>hidden</div></foreignObject><rect width="10" height="10"/></g></defs><use id="cyclic" href="#a" x="10" y="10" fill="blue"/><use id="missing" href="#missing"/><use id="wronguse" href="#wrong"/><use id="filtereduse" href="#filtered" x="40" y="10" fill="red"/></svg>"##,
@@ -321,7 +322,7 @@ fn cycle_missing_wrong_kind_and_disallowed_descendants_do_not_paint() {
 
 #[test]
 fn local_href_overrides_xlink_and_inline_matches_fetched_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="80"><defs><rect id="a" width="20" height="20" fill="blue"/><rect id="b" width="40" height="20" fill="red"/></defs><use id="one" xlink:href="#a" x="10" y="10"/><use id="two" href="#a" xlink:href="#b" x="50" y="10"/></svg>"##;
         let inline = fixture(SVG);
@@ -334,8 +335,8 @@ fn local_href_overrides_xlink_and_inline_matches_fetched_pixels() {
 }
 
 #[test]
-fn unsupported_use_features_have_explicit_dom_status() {
-    native_test_thread::run(|| {
+fn supported_image_and_unsupported_use_features_have_explicit_dom_status() {
+    test_thread::run(|| {
         use dom::persistent_document::SVGUseInstanceStatus as Status;
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(
@@ -345,8 +346,6 @@ fn unsupported_use_features_have_explicit_dom_status() {
         doc.UpdateSVGUseInstances();
         for (name, expected) in [
             ("external", Status::UnsupportedReference),
-            ("viewport", Status::UnsupportedViewport),
-            ("bitmap", Status::UnsupportedImage),
             ("conditional", Status::UnsupportedSwitch),
         ] {
             let host = (0..doc.NodeCount())
@@ -362,12 +361,33 @@ fn unsupported_use_features_have_explicit_dom_status() {
                 .Children()
                 .is_empty());
         }
+        let viewport = (0..doc.NodeCount())
+            .find(|&i| {
+                doc.Node(i)
+                    .FindAttribute("id")
+                    .is_some_and(|a| a.value == "viewport")
+            })
+            .unwrap();
+        assert_eq!(doc.SVGUseInstanceStatus(viewport), Some(Status::Ready));
+        let instance = doc.Node(doc.ShadowRoot(viewport).unwrap()).Children()[0];
+        assert!(doc.Node(instance).IsElement("svg", DOMNamespace::kSVG));
+
+        let bitmap = (0..doc.NodeCount())
+            .find(|&i| {
+                doc.Node(i)
+                    .FindAttribute("id")
+                    .is_some_and(|a| a.value == "bitmap")
+            })
+            .unwrap();
+        assert_eq!(doc.SVGUseInstanceStatus(bitmap), Some(Status::Ready));
+        let instance = doc.Node(doc.ShadowRoot(bitmap).unwrap()).Children()[0];
+        assert!(doc.Node(instance).IsElement("image", DOMNamespace::kSVG));
     });
 }
 
 #[test]
 fn clip_resource_uses_instance_visibility_and_refreshes_source_style() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg width="100" height="80"><defs><rect id="box" width="20" height="20"/></defs><clipPath id="clip"><use id="clipuse" href="#box" x="10" visibility="hidden"/></clipPath><rect width="80" height="80" fill="blue" clip-path="url(#clip)"/></svg>"##,
@@ -397,7 +417,7 @@ fn clip_resource_uses_instance_visibility_and_refreshes_source_style() {
 
 #[test]
 fn duplicate_id_tree_order_and_host_detachment_clear_live_instances() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg width="100" height="80"><defs id="definitions"><rect id="box" width="10" height="10" fill="blue"/><rect id="box" width="20" height="20" fill="red"/></defs><g id="hosts"><use id="instance" href="#box" x="10" y="10"/></g></svg>"##,
@@ -427,7 +447,7 @@ fn duplicate_id_tree_order_and_host_detachment_clear_live_instances() {
 
 #[test]
 fn commons_exact_asset_matches_explicit_nested_instance_control() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let original = COMMONS;
         let arrow = r##"<g clip-path="url(#aa)"><path d="M-11 180v118h22V180"/><path d="m-43 185 43-75 43 75"/></g>"##;
@@ -477,7 +497,7 @@ const COMMONS: &str = r###"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="
 
 #[test]
 fn separate_author_shadow_scopes_choose_local_targets_and_rules() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<style>.shape{fill:red}</style><svg width="0" height="0"><defs><rect id="box" width="40" height="40"/></defs></svg><div id="host"></div>"##,
@@ -538,7 +558,7 @@ fn separate_author_shadow_scopes_choose_local_targets_and_rules() {
 
 #[test]
 fn source_subtree_and_nested_href_changes_refresh_retained_consumers() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg width="140" height="80"><defs><rect id="a" width="10" height="10"/><rect id="b" width="20" height="20"/><g id="group"><use id="nested" href="#a"/></g></defs><use id="instance" href="#group" x="10" y="10" fill="blue"/></svg>"##,
@@ -557,7 +577,7 @@ fn source_subtree_and_nested_href_changes_refresh_retained_consumers() {
 
 #[test]
 fn display_visibility_and_explicit_target_styles_recascade_instances() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(&SIMPLE.replace(
             "</svg>",

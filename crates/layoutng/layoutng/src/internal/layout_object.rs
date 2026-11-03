@@ -48,86 +48,90 @@ use super::layout_box::LayoutBox;
 use super::layout_box_model_object::{LayoutBoxModelObject, PaintLayer};
 use super::layout_input::{CompatibilityMode, DocumentRole, ViewportGeometry};
 use super::layout_input_types::ControlThemeMetrics;
-use super::layout_node_metadata::{ContentLockBlocksChildLayout, Element, Node};
+use super::layout_node_metadata::{
+    ContentLockBlocksChildLayout, ContentLockBlocksChildPaint, ContentLockBlocksChildPrePaint,
+    Element, Node,
+};
 use super::layout_object_child_list::LayoutObjectChildList;
+use super::layout_object_factory_set::LayoutObjectFactorySet;
+use super::layout_pass_scope::LayoutObjectFactoryScope;
 // cpp: layoutng/internal/layout_object.h:278-278
 pub use super::loader::resource::image_resource_observer::CanDeferInvalidation;
 use super::map_coordinates_flags::MapCoordinatesFlags;
 use super::outline_info::LayoutOutlineInfo;
 use super::outline_rect_collector::OutlineRectCollector;
-use super::pre_paint_disable_side_effects_scope::PrePaintDisableSideEffectsScope;
 use super::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReasons;
 use super::scrollbar_theme_metrics::{RequireScrollbarTheme, ScrollbarThemeMetrics};
 use super::selection_state::SelectionState;
 use super::style_variant::StyleVariant;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_state_propagation.rs"]
-mod layout_invalidation_native_layout_object_state_propagation;
-use layout_invalidation_native_layout_object_state_propagation::{
+#[path = "../../../layout_invalidation/src/layout_object_state_propagation.rs"]
+mod layout_invalidation_layout_object_state_propagation;
+use layout_invalidation_layout_object_state_propagation::{
     LayoutObjectDepthSlow, LayoutObjectSetDepthIncludingDescendants,
     LayoutObjectSetDescendantNeedsPaintPropertyUpdate,
     LayoutObjectSetScrollAnchorDisablingStyleChangedOnAncestor,
 };
 
-#[path = "../../../layout_invalidation/src/native_layout_object_image_observers.rs"]
-mod layout_invalidation_native_layout_object_image_observers;
+#[path = "../../../layout_invalidation/src/layout_object_image_observers.rs"]
+mod layout_invalidation_layout_object_image_observers;
 
-#[path = "../../../layout_fragment/src/native_layout_object_fragment_queries.rs"]
-mod layout_fragment_native_layout_object_fragment_queries;
+#[path = "../../../layout_fragment/src/layout_object_fragment_queries.rs"]
+mod layout_fragment_layout_object_fragment_queries;
 
-#[path = "../../../layout_fragment/src/native_layout_object_selection_queries.rs"]
-mod layout_fragment_native_layout_object_selection_queries;
+#[path = "../../../layout_fragment/src/layout_object_selection_queries.rs"]
+mod layout_fragment_layout_object_selection_queries;
 
-#[path = "../../../layout_fragment/src/native_layout_object_paint_dispatch.rs"]
-mod layout_fragment_native_layout_object_paint_dispatch;
+#[path = "../../../layout_fragment/src/layout_object_paint_dispatch.rs"]
+mod layout_fragment_layout_object_paint_dispatch;
 
-#[path = "../../../layout_fragment/src/native_layout_object_paint_state.rs"]
-mod layout_fragment_native_layout_object_paint_state;
+#[path = "../../../layout_fragment/src/layout_object_paint_state.rs"]
+mod layout_fragment_layout_object_paint_state;
 
-#[path = "../../../layout_fragment/src/native_layout_object_effective_style.rs"]
-mod layout_fragment_native_layout_object_effective_style;
+#[path = "../../../layout_fragment/src/layout_object_effective_style.rs"]
+mod layout_fragment_layout_object_effective_style;
 
-#[path = "../../../layout_fragment/src/native_layout_object_gap_queries.rs"]
-mod layout_fragment_native_layout_object_gap_queries;
+#[path = "../../../layout_fragment/src/layout_object_gap_queries.rs"]
+mod layout_fragment_layout_object_gap_queries;
 
-#[path = "../../../layout_fragment/src/native_layout_object_inline_fragment_state.rs"]
-mod layout_fragment_native_layout_object_inline_fragment_state;
+#[path = "../../../layout_fragment/src/layout_object_inline_fragment_state.rs"]
+mod layout_fragment_layout_object_inline_fragment_state;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_paint_invalidation.rs"]
-mod layout_invalidation_native_layout_object_paint_invalidation;
+#[path = "../../../layout_invalidation/src/layout_object_paint_invalidation.rs"]
+mod layout_invalidation_layout_object_paint_invalidation;
 
-#[path = "../../../layout_fragment/src/native_layout_object_layer_queries.rs"]
-mod layout_fragment_native_layout_object_layer_queries;
+#[path = "../../../layout_fragment/src/layout_object_layer_queries.rs"]
+mod layout_fragment_layout_object_layer_queries;
 
-#[path = "../../../layout_fragment/src/native_layout_object_coordinate_conversion.rs"]
-mod layout_fragment_native_layout_object_coordinate_conversion;
+#[path = "../../../layout_fragment/src/layout_object_coordinate_conversion.rs"]
+mod layout_fragment_layout_object_coordinate_conversion;
 
-#[path = "../../../layout_fragment/src/native_layout_object_bounding_geometry.rs"]
-mod layout_fragment_native_layout_object_bounding_geometry;
+#[path = "../../../layout_fragment/src/layout_object_bounding_geometry.rs"]
+mod layout_fragment_layout_object_bounding_geometry;
 
-#[path = "../../../layout_fragment/src/native_layout_object_scroll_container_queries.rs"]
-mod layout_fragment_native_layout_object_scroll_container_queries;
+#[path = "../../../layout_fragment/src/layout_object_scroll_container_queries.rs"]
+mod layout_fragment_layout_object_scroll_container_queries;
 
-#[path = "../../../layout_algo_inline/src/native_layout_object_editing_queries.rs"]
-mod layout_algo_inline_native_layout_object_editing_queries;
-pub use layout_algo_inline_native_layout_object_editing_queries::{
+#[path = "../../../layout_algo_inline/src/layout_object_editing_queries.rs"]
+mod layout_algo_inline_layout_object_editing_queries;
+pub use layout_algo_inline_layout_object_editing_queries::{
     AssociatedLayoutObjectOf, AssociatedLayoutObjectOfDefault,
 };
 
-#[path = "../../../layout_algo_list/src/native_layout_object_list_marker_queries.rs"]
-mod layout_algo_list_native_layout_object_list_marker_queries;
+#[path = "../../../layout_algo_list/src/layout_object_list_marker_queries.rs"]
+mod layout_algo_list_layout_object_list_marker_queries;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_layer_mutation.rs"]
-mod layout_invalidation_native_layout_object_layer_mutation;
+#[path = "../../../layout_invalidation/src/layout_object_layer_mutation.rs"]
+mod layout_invalidation_layout_object_layer_mutation;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_style_services.rs"]
-mod layout_invalidation_native_layout_object_style_services;
+#[path = "../../../layout_invalidation/src/layout_object_style_services.rs"]
+mod layout_invalidation_layout_object_style_services;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_prepaint_invalidation.rs"]
-mod layout_invalidation_native_layout_object_prepaint_invalidation;
+#[path = "../../../layout_invalidation/src/layout_object_prepaint_invalidation.rs"]
+mod layout_invalidation_layout_object_prepaint_invalidation;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_display_lock.rs"]
-mod layout_invalidation_native_layout_object_display_lock;
+#[path = "../../../layout_invalidation/src/layout_object_display_lock.rs"]
+mod layout_invalidation_layout_object_display_lock;
 
 // These are forward declarations in the owning C++ header. Their concrete
 // layouts belong to the hit-test and paint implementations.
@@ -548,6 +552,11 @@ pub struct LayoutObject {
     display_item_client_: DisplayItemClient,
     image_resource_observer_: ImageResourceObserver,
     runtime_class_: Cell<LayoutObjectClass>,
+    // Rust's translated packages do not share a C++ vtable. Keep the exact
+    // factory/vtable set that constructed this source object by reference so
+    // later FragmentData and Paint lifecycle calls dispatch through the same
+    // implementation without a thread-local adapter or copied metadata.
+    factory_set_: *const LayoutObjectFactorySet,
     pub(crate) bitfields_: LayoutObjectBitfields,
     style_: Member<ComputedStyle>,
     node_: Member<Node>,
@@ -622,34 +631,11 @@ unsafe extern "Rust" {
         point: &gfx::PointF,
         mode: MapCoordinatesFlags,
     ) -> gfx::PointF;
-    fn LayoutObjectLocalToAncestorRectProvider(
-        object: &LayoutObject,
-        rect: &PhysicalRect,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalRect;
     fn LayoutObjectLocalToAncestorTransformProvider(
         object: &LayoutObject,
         ancestor: *const LayoutBoxModelObject,
         mode: MapCoordinatesFlags,
     ) -> gfx::Transform;
-    fn LayoutObjectContainingScrollContainerAnyAxisProvider(
-        object: &LayoutObject,
-        ignore_layout_view_for_fixed_pos: bool,
-    ) -> *const LayoutBox;
-    fn LayoutObjectContainingScrollContainerLayerAnyAxisProvider(
-        object: &LayoutObject,
-        ignore_layout_view_for_fixed_pos: bool,
-    ) -> *const PaintLayer;
-    fn LayoutObjectContainingScrollContainerLayerForAxisProvider(
-        object: &LayoutObject,
-        axis: PhysicalAxis,
-        ignore_layout_view_for_fixed_pos: bool,
-    ) -> *const PaintLayer;
-    fn LayoutObjectOffsetFromAncestorProvider(
-        object: &LayoutObject,
-        ancestor: *const LayoutObject,
-    ) -> PhysicalOffset;
     fn LayoutObjectAbsoluteBoundingBoxRectFProvider(
         object: &LayoutObject,
         mode: MapCoordinatesFlags,
@@ -962,14 +948,12 @@ unsafe extern "Rust" {
         gap_index: usize,
         line_index: Option<usize>,
     ) -> usize;
-    fn LayoutObjectChildPrePaintBlockedByDisplayLockProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectAssertClearedPaintInvalidationFlagsProvider(object: *const LayoutObject);
     fn DispatchLayoutObjectUpdateAnonymousChildStyle(
         object: *const LayoutObject,
         child: *const LayoutObject,
         builder: &mut ComputedStyleBuilder,
     );
-    fn LayoutObjectSetShouldDelayFullPaintInvalidationProvider(object: *mut LayoutObject);
     fn LayoutObjectSetShouldInheritContainerTimingRootProvider(
         object: *mut LayoutObject,
         inherit: bool,
@@ -977,13 +961,6 @@ unsafe extern "Rust" {
     fn LayoutObjectClearPaintFlagsProvider(object: *mut LayoutObject);
     fn LayoutObjectEnsureIsReadyForPaintInvalidationProvider(object: *mut LayoutObject);
     fn LayoutObjectDecoratedNameProvider(object: *const LayoutObject) -> BlinkString;
-    fn LayoutObjectHasDistortingVisualEffectsProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectHasNonZeroEffectiveOpacityProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectEnclosingLayerProvider(object: *const LayoutObject) -> *mut PaintLayer;
-    fn LayoutObjectPaintingLayerProvider(
-        object: *const LayoutObject,
-        max_depth: i32,
-    ) -> *mut PaintLayer;
     fn LayoutObjectAddLayersProvider(object: *mut LayoutObject, parent_layer: *mut PaintLayer);
     fn LayoutObjectRemoveLayersProvider(object: *mut LayoutObject, parent_layer: *mut PaintLayer);
     fn LayoutObjectMoveLayersProvider(
@@ -1033,19 +1010,12 @@ unsafe extern "Rust" {
         object: *mut LayoutObject,
         mark_style_dirty: bool,
     );
-    fn LayoutObjectRecalcNormalFlowChildVisualOverflowIfNeededProvider(object: *mut LayoutObject);
     fn LayoutObjectCanUpdateSelectionOnRootLineBoxesProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectAbsoluteSelectionRectProvider(object: *const LayoutObject) -> PhysicalRect;
-    fn LayoutObjectCanBeSelectionLeafProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsSelectedProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsSelectableProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectVisibleToHitTestRequestProvider(
         object: *const LayoutObject,
         request: &HitTestRequest,
     ) -> bool;
-    fn LayoutObjectCanvasForDrawingLayoutObjectProvider(
-        object: *const LayoutObject,
-    ) -> *mut LayoutObject;
     fn LayoutObjectSetShouldInvalidatePaintForHitTestProvider(object: *mut LayoutObject);
     fn LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundImageProvider(
         object: *mut LayoutObject,
@@ -1065,8 +1035,6 @@ unsafe extern "Rust" {
     fn LayoutObjectMarkBlockingWheelEventHandlerChangedProvider(object: *mut LayoutObject);
     fn LayoutObjectMarkSoftNavigationContextChangedProvider(object: *mut LayoutObject);
     fn LayoutObjectMarkContainerTimingChangedProvider(object: *mut LayoutObject);
-    fn LayoutObjectChildPaintBlockedByDisplayLockProvider(object: *const LayoutObject) -> bool;
-    fn MutableForPaintingSetShouldCheckForPaintInvalidationProvider(object: *mut LayoutObject);
     fn MutableForPaintingSetShouldDoFullPaintInvalidationProvider(
         object: *mut LayoutObject,
         reason: PaintInvalidationReason,
@@ -1075,7 +1043,6 @@ unsafe extern "Rust" {
         object: *mut LayoutObject,
         reason: PaintInvalidationReason,
     );
-    fn MutableForPaintingSetOnlyThisNeedsPaintPropertyUpdateProvider(object: *mut LayoutObject);
     fn LayoutObjectMaybeClearIsScrollAnchorObjectProvider(object: *mut LayoutObject);
     fn LayoutObjectSetSVGDescendantMayHaveTransformRelatedOperationsProvider(
         object: *mut LayoutObject,
@@ -1097,7 +1064,6 @@ unsafe extern "Rust" {
     fn LayoutObjectFirstLineStyleWithoutFallbackProvider(
         object: *const LayoutObject,
     ) -> *const ComputedStyle;
-    fn LayoutObjectMarkSelfPaintingLayerForVisualOverflowRecalcProvider(object: *mut LayoutObject);
     fn LayoutObjectGetImageOrientationProvider(
         object: *const LayoutObject,
     ) -> RespectImageOrientationEnum;
@@ -1214,9 +1180,14 @@ impl MutableForPainting {
         unsafe { &mut *self.layout_object_ }.EnsureIsReadyForPaintInvalidation();
     }
 
-    // cpp: layoutng/internal/layout_object.h:2978-2978
+    // cpp: core/layout/layout_object.h:3089-3095
     pub fn SetShouldCheckForPaintInvalidation(&mut self) {
-        unsafe { MutableForPaintingSetShouldCheckForPaintInvalidationProvider(self.layout_object_) }
+        let object = unsafe { &mut *self.layout_object_ };
+        object.CheckIsNotDestroyed();
+        object
+            .bitfields_
+            .should_check_layout_for_paint_invalidation_ = true;
+        object.bitfields_.should_check_for_paint_invalidation_ = true;
     }
 
     // cpp: layoutng/internal/layout_object.h:2979-2979
@@ -1241,9 +1212,12 @@ impl MutableForPainting {
 
     // cpp: layoutng/internal/layout_object.h:3001-3001
     pub fn SetOnlyThisNeedsPaintPropertyUpdate(&mut self) {
-        unsafe {
-            MutableForPaintingSetOnlyThisNeedsPaintPropertyUpdateProvider(self.layout_object_)
-        }
+        // Source: core/layout/layout_object.h:3132-3138. This mutator lives in
+        // the same owner as LayoutObject's bitfield, so no external provider or
+        // ancestor propagation is involved.
+        let object = unsafe { &mut *self.layout_object_ };
+        object.CheckIsNotDestroyed();
+        object.bitfields_.needs_paint_property_update_ = true;
     }
 
     // cpp: layoutng/internal/layout_object.h:2990-2992
@@ -2533,7 +2507,6 @@ impl LayoutObject {
     // cpp: layoutng/internal/layout_object.h:3073-3080
     pub fn GetMutableForPainting(&self) -> MutableForPainting {
         self.CheckIsNotDestroyed();
-        debug_assert!(!PrePaintDisableSideEffectsScope::IsDisabled());
         MutableForPainting::new(self)
     }
 
@@ -2551,6 +2524,7 @@ impl LayoutObject {
                 &LAYOUT_OBJECT_IMAGE_OBSERVER_VTABLE,
             ),
             runtime_class_: Cell::new(LayoutObjectClass::Base),
+            factory_set_: LayoutObjectFactoryScope::Objects(),
             bitfields_: bitfields,
             style_: Member::default(),
             node_: Member::from_ptr(node),
@@ -2570,6 +2544,10 @@ impl LayoutObject {
 
     pub fn RuntimeClass(&self) -> LayoutObjectClass {
         self.runtime_class_.get()
+    }
+
+    pub fn FactorySet(&self) -> *const LayoutObjectFactorySet {
+        self.factory_set_
     }
 
     // cpp: layoutng/internal/layout_object_fragment_data.cc:52-55
@@ -4181,4 +4159,31 @@ pub fn ShowLayoutTree(object: *const LayoutObject) {
 #[cfg(debug_assertions)]
 pub fn ShowLayoutTreeWithSecond(object1: *const LayoutObject, object2: *const LayoutObject) {
     unsafe { ShowLayoutTreeWithSecondProvider(object1, object2) }
+}
+
+#[cfg(test)]
+mod mutable_for_painting_tests {
+    use super::*;
+
+    #[test]
+    fn local_paint_invalidation_sets_only_the_source_inline_bits() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut object = LayoutObject::new_base(std::ptr::null_mut());
+        object
+            .bitfields_
+            .should_check_layout_for_paint_invalidation_ = false;
+        object.bitfields_.should_check_for_paint_invalidation_ = false;
+
+        object
+            .GetMutableForPainting()
+            .SetShouldCheckForPaintInvalidation();
+
+        assert!(
+            object
+                .bitfields_
+                .should_check_layout_for_paint_invalidation_
+        );
+        assert!(object.bitfields_.should_check_for_paint_invalidation_);
+        object.SetDestroyedForTesting();
+    }
 }

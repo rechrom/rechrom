@@ -1,6 +1,8 @@
-use super::filter_operation::OperationType;
-use super::forward::{FilterOperation, SVGResourceClient};
-use foundation::{HeapVector, Member, RectF, Visitor, WtfSizeT};
+use super::filter_operation::{
+    BlurFilterOperation, BoxReflectFilterOperation, DropShadowFilterOperation, OperationType,
+};
+use super::forward::FilterOperation;
+use foundation::{gfx, FloatValueForLength, HeapVector, Member, RectF, Visitor, WtfSizeT};
 
 impl foundation::Traceable for FilterOperations {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
@@ -78,9 +80,11 @@ impl FilterOperations {
     }
 
     // cpp: layoutng_style/style/filter_operations.h:72-75
-    // Native effect mapping / SVG resource-client owner is not translated.
+    // cpp: core/style/filter_operations.cc:90-96
     pub fn MapRect(&self, rect: &RectF) -> RectF {
-        unsafe { FilterOperationsMapRect(self, rect) }
+        self.Operations().iter().fold(*rect, |mapped, operation| {
+            unsafe { &*operation.Get() }.MapRect(&mapped)
+        })
     }
 
     // cpp: layoutng_style/style/filter_operations.h:77
@@ -113,18 +117,6 @@ impl FilterOperations {
         self.Operations()
             .iter()
             .any(|operation| unsafe { &*operation.Get() }.UsesCurrentColor())
-    }
-
-    // cpp: layoutng_style/style/filter_operations.h:82
-    // Native effect mapping / SVG resource-client owner is not translated.
-    pub fn AddClient(&self, client: &mut SVGResourceClient) {
-        unsafe { FilterOperationsAddClient(self, client) }
-    }
-
-    // cpp: layoutng_style/style/filter_operations.h:83
-    // Native effect mapping / SVG resource-client owner is not translated.
-    pub fn RemoveClient(&self, client: &mut SVGResourceClient) {
-        unsafe { FilterOperationsRemoveClient(self, client) }
     }
 }
 
@@ -177,8 +169,90 @@ impl Default for FilterOperationsWrapper {
     }
 }
 
-unsafe extern "Rust" {
-    fn FilterOperationsMapRect(value: &FilterOperations, rect: &RectF) -> RectF;
-    fn FilterOperationsAddClient(value: &FilterOperations, client: &mut SVGResourceClient);
-    fn FilterOperationsRemoveClient(value: &FilterOperations, client: &mut SVGResourceClient);
+fn GaussianBlurMapEffect(std_deviation: gfx::SizeF, rect: &RectF) -> RectF {
+    // Source: platform/graphics/filters/fe_gaussian_blur.cc:39-70.
+    fn kernel_size(deviation: f32) -> i32 {
+        if deviation == 0.0 {
+            return 0;
+        }
+        let approximate_box_width =
+            (deviation * (0.75 * (2.0 * std::f32::consts::PI).sqrt()) + 0.5).floor() as i32;
+        2.max(approximate_box_width)
+    }
+
+    let horizontal = 1.5 * kernel_size(std_deviation.width()) as f32;
+    let vertical = 1.5 * kernel_size(std_deviation.height()) as f32;
+    let mut result = *rect;
+    result.OutsetEdges(gfx::OutsetsF::new(
+        vertical, horizontal, vertical, horizontal,
+    ));
+    result
+}
+
+impl FilterOperation {
+    // Source: core/style/filter_operation.h:128-129 and
+    // core/style/filter_operation.cc:45-50,78-90. ReferenceFilterOperation's
+    // source SVG Filter edge is intentionally absent from the immutable style
+    // value until resource resolution installs it, so its source fallback is
+    // the identity mapping.
+    pub fn MapRect(&self, rect: &RectF) -> RectF {
+        unsafe {
+            match self.GetType() {
+                OperationType::kBlur => {
+                    let blur = &*(self as *const _ as *const BlurFilterOperation);
+                    let deviation = gfx::SizeF::new(
+                        FloatValueForLength(blur.StdDeviationXY().X(), 0.0),
+                        FloatValueForLength(blur.StdDeviationXY().Y(), 0.0),
+                    );
+                    GaussianBlurMapEffect(deviation, rect)
+                }
+                OperationType::kDropShadow => {
+                    let shadow =
+                        (&*(self as *const _ as *const DropShadowFilterOperation)).Shadow();
+                    let mut offset_rect = *rect;
+                    offset_rect.Offset(shadow.X(), shadow.Y());
+                    let deviation = gfx::SizeF::new(shadow.BlurValue(), shadow.BlurValue());
+                    let mut result = GaussianBlurMapEffect(deviation, &offset_rect);
+                    result.Union(*rect);
+                    result
+                }
+                OperationType::kBoxReflect => (&*(self as *const _
+                    as *const BoxReflectFilterOperation))
+                    .Reflection()
+                    .MapRect(rect),
+                _ => *rect,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::shadow_data::{ShadowData, ShadowStyle};
+    use super::*;
+    use crate::css::style_color::StyleColor;
+    use foundation::Length;
+
+    #[test]
+    fn moving_css_filters_map_rect_with_source_kernel_geometry() {
+        let rect = RectF::new(gfx::PointF::new(10.0, 20.0), gfx::SizeF::new(30.0, 40.0));
+        let blur = BlurFilterOperation::new(&Length::Fixed(2.0));
+        assert_eq!(
+            blur.MapRect(&rect),
+            RectF::new(gfx::PointF::new(4.0, 14.0), gfx::SizeF::new(42.0, 52.0))
+        );
+
+        let shadow = DropShadowFilterOperation::new(ShadowData::new(
+            gfx::Vector2dF::new(4.0, -2.0),
+            2.0,
+            0.0,
+            ShadowStyle::kNormal,
+            StyleColor::default(),
+            1.0,
+        ));
+        assert_eq!(
+            shadow.MapRect(&rect),
+            RectF::new(gfx::PointF::new(8.0, 12.0), gfx::SizeF::new(42.0, 52.0))
+        );
+    }
 }

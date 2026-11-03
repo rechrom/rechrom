@@ -12,6 +12,12 @@ pub struct ScrollbarThemeMetrics {
     pub minimum_thumb_length: i32,
     pub has_buttons: bool,
     pub uses_overlay_scrollbars: bool,
+    /// ScrollbarTheme::AllowsHitTest(). Most desktop themes allow it; mobile
+    /// overlay themes may disable scrollbar hit testing entirely.
+    pub allows_hit_test: bool,
+    /// ScrollbarTheme::ShouldDisableInvisibleScrollbars(). Platform themes
+    /// resolve this before Layout; the macOS theme supplies false.
+    pub should_disable_invisible_scrollbars: bool,
     pub track_color: Color,
     pub thumb_color: Color,
     pub button_color: Color,
@@ -26,6 +32,8 @@ impl Default for ScrollbarThemeMetrics {
             minimum_thumb_length: 0,
             has_buttons: false,
             uses_overlay_scrollbars: false,
+            allows_hit_test: true,
+            should_disable_invisible_scrollbars: true,
             track_color: Color {
                 red: 0.94,
                 green: 0.94,

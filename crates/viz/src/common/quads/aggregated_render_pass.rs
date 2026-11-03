@@ -6,17 +6,16 @@
 
 use compositor_core::adapter::{geometry::Rect, layer_tree_host_impl::ContentColorUsage};
 use compositor_core::runtime::{
-    frame::{DrawQuad, FrameValueTypes, QuadMaterial, RenderPassId},
+    frame::{DrawQuad as FrameDrawQuad, FrameValueTypes, QuadMaterial, RenderPassId},
     skia::SkRegion,
 };
-use compositor_core::NativeCompositorTypes;
+use compositor_core::CompositorTypes;
 
-pub type NativeTransform = compositor_core::runtime::geometry::Transform<SkRegion>;
-pub type NativeSharedQuadState = compositor_core::runtime::frame::SharedQuadState<NativeTransform>;
-pub type NativeDrawQuad =
-    DrawQuad<<NativeCompositorTypes as FrameValueTypes>::PictureDisplayItemList>;
-pub type NativeFilters = <NativeCompositorTypes as FrameValueTypes>::FrameFilters;
-pub type NativePath = <NativeCompositorTypes as FrameValueTypes>::FramePath;
+pub type Transform = compositor_core::runtime::geometry::Transform<SkRegion>;
+pub type SharedQuadState = compositor_core::runtime::frame::SharedQuadState<Transform>;
+pub type DrawQuad = FrameDrawQuad<<CompositorTypes as FrameValueTypes>::PictureDisplayItemList>;
+pub type FrameFilters = <CompositorTypes as FrameValueTypes>::FrameFilters;
+pub type Path = <CompositorTypes as FrameValueTypes>::FramePath;
 
 // Source: components/viz/common/quads/aggregated_render_pass.h:41-65
 // Source: components/viz/common/quads/aggregated_render_pass.cc:34-86
@@ -25,7 +24,7 @@ pub struct AggregatedRenderPass {
     pub id: u64,
     pub output_rect: Rect,
     pub damage_rect: Rect,
-    pub transform_to_root_target: NativeTransform,
+    pub transform_to_root_target: Transform,
     pub content_color_usage: ContentColorUsage,
     pub has_transparent_background: bool,
     pub cache_render_pass: bool,
@@ -33,11 +32,11 @@ pub struct AggregatedRenderPass {
     pub generate_mipmap: bool,
     pub is_from_surface_root_pass: bool,
     pub video_capture_enabled: bool,
-    pub filters: NativeFilters,
-    pub backdrop_filters: NativeFilters,
-    pub backdrop_filter_bounds: Option<NativePath>,
-    pub shared_quad_state_list: Vec<NativeSharedQuadState>,
-    pub quad_list: Vec<NativeDrawQuad>,
+    pub filters: FrameFilters,
+    pub backdrop_filters: FrameFilters,
+    pub backdrop_filter_bounds: Option<Path>,
+    pub shared_quad_state_list: Vec<SharedQuadState>,
+    pub quad_list: Vec<DrawQuad>,
 }
 impl Default for AggregatedRenderPass {
     fn default() -> Self {
@@ -45,7 +44,7 @@ impl Default for AggregatedRenderPass {
             id: 0,
             output_rect: Rect::default(),
             damage_rect: Rect::default(),
-            transform_to_root_target: NativeTransform::default(),
+            transform_to_root_target: Transform::default(),
             content_color_usage: ContentColorUsage::kSRGB,
             has_transparent_background: true,
             cache_render_pass: false,
@@ -53,8 +52,8 @@ impl Default for AggregatedRenderPass {
             generate_mipmap: false,
             is_from_surface_root_pass: false,
             video_capture_enabled: false,
-            filters: NativeFilters::default(),
-            backdrop_filters: NativeFilters::default(),
+            filters: FrameFilters::default(),
+            backdrop_filters: FrameFilters::default(),
             backdrop_filter_bounds: None,
             shared_quad_state_list: Vec::new(),
             quad_list: Vec::new(),
@@ -68,7 +67,7 @@ impl AggregatedRenderPass {
         pass.quad_list.reserve(draw_quad_size);
         pass
     }
-    pub fn SetNew(&mut self, id: u64, output: Rect, damage: Rect, transform: NativeTransform) {
+    pub fn SetNew(&mut self, id: u64, output: Rect, damage: Rect, transform: Transform) {
         assert_ne!(id, 0);
         assert!(damage.IsEmpty() || output.Contains(damage));
         self.id = id;
@@ -83,7 +82,7 @@ impl AggregatedRenderPass {
         id: u64,
         output: Rect,
         damage: Rect,
-        transform: NativeTransform,
+        transform: Transform,
         color_usage: ContentColorUsage,
         transparent: bool,
         cache: bool,
@@ -107,9 +106,9 @@ impl AggregatedRenderPass {
     // Source: components/viz/common/quads/aggregated_render_pass.cc:87-153
     pub fn CopyFromAndAppendRenderPassDrawQuad(
         &mut self,
-        quad: &NativeDrawQuad,
+        quad: &DrawQuad,
         render_pass_id: RenderPassId,
-    ) -> &NativeDrawQuad {
+    ) -> &DrawQuad {
         assert!(!self.shared_quad_state_list.is_empty());
         let mut copy = quad.clone();
         match &mut copy.material {
@@ -128,7 +127,7 @@ impl AggregatedRenderPass {
         self.quad_list.push(copy);
         self.quad_list.last().expect("appended quad")
     }
-    pub fn CopyFromAndAppendDrawQuad(&mut self, quad: &NativeDrawQuad) -> &NativeDrawQuad {
+    pub fn CopyFromAndAppendDrawQuad(&mut self, quad: &DrawQuad) -> &DrawQuad {
         assert!(!self.shared_quad_state_list.is_empty());
         assert!(!matches!(quad.material, QuadMaterial::SharedElement { .. }));
         let mut copy = quad.clone();
@@ -183,28 +182,28 @@ impl AggregatedRenderPass {
     pub fn OutputRect(&self) -> Rect {
         self.output_rect
     }
-    pub fn SharedQuadStates(&self) -> &[NativeSharedQuadState] {
+    pub fn SharedQuadStates(&self) -> &[SharedQuadState] {
         &self.shared_quad_state_list
     }
     pub fn TrySharedQuadState(
         &self,
         handle: compositor_core::runtime::frame::SharedQuadStateHandle,
-    ) -> Option<&NativeSharedQuadState> {
+    ) -> Option<&SharedQuadState> {
         self.shared_quad_state_list.get(handle.Index())
     }
-    pub fn Quads(&self) -> &[NativeDrawQuad] {
+    pub fn Quads(&self) -> &[DrawQuad] {
         &self.quad_list
     }
     pub fn DamageRect(&self) -> Rect {
         self.damage_rect
     }
-    pub fn Filters(&self) -> &NativeFilters {
+    pub fn Filters(&self) -> &FrameFilters {
         &self.filters
     }
-    pub fn BackdropFilters(&self) -> &NativeFilters {
+    pub fn BackdropFilters(&self) -> &FrameFilters {
         &self.backdrop_filters
     }
-    pub fn BackdropFilterBounds(&self) -> Option<&NativePath> {
+    pub fn BackdropFilterBounds(&self) -> Option<&Path> {
         self.backdrop_filter_bounds.as_ref()
     }
 }

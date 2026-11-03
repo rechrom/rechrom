@@ -1,4 +1,4 @@
-//! Package-owned trace entry points for fragment work performed by native
+//! Package-owned trace entry points for fragment work performed by source
 //! assembly adapters. Keeping the complete phase vocabulary here prevents
 //! assembly and commit code from relabelling fragment costs as their own.
 
@@ -10,7 +10,6 @@ pub enum TracePhase {
     IndexObjects,
     RebuildBoundaryObjectIndex,
     UpdateStickyOffsets,
-    BuildPaintCullRect,
     PopulateFragmentPaintData,
     ResolveLogicalParents,
     PopulateGlobalPaintData,
@@ -46,7 +45,6 @@ impl TracePhase {
             Self::IndexObjects => "layout_fragment.IndexObjects",
             Self::RebuildBoundaryObjectIndex => "layout_fragment.RebuildBoundaryObjectIndex",
             Self::UpdateStickyOffsets => "layout_fragment.UpdateStickyOffsets",
-            Self::BuildPaintCullRect => "layout_fragment.BuildPaintCullRect",
             Self::PopulateFragmentPaintData => "layout_fragment.PopulateFragmentPaintData",
             Self::ResolveLogicalParents => "layout_fragment.ResolveLogicalParents",
             Self::PopulateGlobalPaintData => "layout_fragment.PopulateGlobalPaintData",
@@ -73,13 +71,13 @@ pub fn span(phase: TracePhase) -> browser_tracing::Span {
     browser_tracing::span(phase.category(), phase.name())
 }
 
-/// Trace export of the canonical native fragment graph at publication time.
+/// Trace export of the canonical source fragment graph at publication time.
 #[inline(never)]
 pub fn export_tree() -> browser_tracing::Span {
     span(TracePhase::ExportTree)
 }
 
-/// Trace a native fragment traversal used to answer CSSOM client rectangles.
+/// Trace a source fragment traversal used to answer CSSOM client rectangles.
 #[inline(never)]
 pub fn client_rects() -> browser_tracing::Span {
     span(TracePhase::ClientRects)

@@ -1,10 +1,14 @@
-//! CSS filter value owners used by native computed style. Raster effect
+//! CSS filter value owners used by source computed style. Raster effect
 //! construction remains with the renderer; these objects preserve the source
 //! class values, equality, and GC lifetime rather than a filter-present flag.
 #![allow(non_snake_case)]
 
+use super::box_reflection::BoxReflection;
 use super::shadow_data::ShadowData;
-use foundation::{Length, LengthPoint, String, Traceable, Visitor};
+use foundation::{
+    gfx::{Point, Size},
+    Length, LengthPoint, String, Traceable, Visitor,
+};
 use std::ops::Deref;
 
 // cpp: core/style/filter_operation.h:63-81
@@ -30,10 +34,11 @@ pub enum OperationType {
     kTurbulence,
 }
 
-// The virtual interface dispatches by the immutable native operation type.
+// The virtual interface dispatches by the immutable source operation type.
 // Every concrete CSS operation retains this base at offset zero.
 // cpp: core/style/filter_operation.h:58-149
 #[repr(C)]
+#[derive(Debug)]
 pub struct FilterOperation {
     type_: OperationType,
 }
@@ -113,6 +118,10 @@ impl PartialEq for FilterOperation {
                         == (*(other as *const Self as *const BasicColorMatrixFilterOperation))
                             .amount_
                 }
+                OperationType::kColorMatrix => {
+                    (*(self as *const Self as *const ColorMatrixFilterOperation)).values_
+                        == (*(other as *const Self as *const ColorMatrixFilterOperation)).values_
+                }
                 OperationType::kInvert
                 | OperationType::kOpacity
                 | OperationType::kBrightness
@@ -129,7 +138,22 @@ impl PartialEq for FilterOperation {
                     (*(self as *const Self as *const DropShadowFilterOperation)).shadow_
                         == (*(other as *const Self as *const DropShadowFilterOperation)).shadow_
                 }
-                _ => unimplemented!("native equality for non-CSS filter class {:?}", self.type_),
+                OperationType::kConvolveMatrix => {
+                    *(self as *const Self as *const ConvolveMatrixFilterOperation)
+                        == *(other as *const Self as *const ConvolveMatrixFilterOperation)
+                }
+                OperationType::kComponentTransfer => {
+                    *(self as *const Self as *const ComponentTransferFilterOperation)
+                        == *(other as *const Self as *const ComponentTransferFilterOperation)
+                }
+                OperationType::kTurbulence => {
+                    *(self as *const Self as *const TurbulenceFilterOperation)
+                        == *(other as *const Self as *const TurbulenceFilterOperation)
+                }
+                OperationType::kBoxReflect => {
+                    *(self as *const Self as *const BoxReflectFilterOperation)
+                        == *(other as *const Self as *const BoxReflectFilterOperation)
+                }
             }
         }
     }
@@ -180,6 +204,24 @@ impl BasicColorMatrixFilterOperation {
     }
     pub fn Amount(&self) -> f64 {
         self.amount_
+    }
+}
+
+// cpp: core/style/filter_operation.h:221-244.
+#[repr(C)]
+pub struct ColorMatrixFilterOperation {
+    base_: FilterOperation,
+    values_: Vec<f32>,
+}
+impl ColorMatrixFilterOperation {
+    pub fn new(values: Vec<f32>) -> Self {
+        Self {
+            base_: FilterOperation::new(OperationType::kColorMatrix),
+            values_: values,
+        }
+    }
+    pub fn Values(&self) -> &[f32] {
+        &self.values_
     }
 }
 
@@ -235,6 +277,259 @@ pub struct DropShadowFilterOperation {
     base_: FilterOperation,
     shadow_: ShadowData,
 }
+
+// cpp: core/style/filter_operation.h:398-416
+#[repr(C)]
+#[derive(Debug)]
+pub struct BoxReflectFilterOperation {
+    base_: FilterOperation,
+    reflection_: BoxReflection,
+}
+impl BoxReflectFilterOperation {
+    pub fn new(reflection: &BoxReflection) -> Self {
+        Self {
+            base_: FilterOperation::new(OperationType::kBoxReflect),
+            reflection_: reflection.clone(),
+        }
+    }
+    pub fn Reflection(&self) -> &BoxReflection {
+        &self.reflection_
+    }
+}
+// cpp: core/style/filter_operation.cc:107-111
+impl PartialEq for BoxReflectFilterOperation {
+    fn eq(&self, other: &Self) -> bool {
+        self.reflection_ == other.reflection_
+    }
+}
+
+// cpp: platform/graphics/filters/fe_convolve_matrix.h:34-50 and
+// core/style/filter_operation.h:425-473.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConvolveMatrixEdgeMode {
+    kUnknown,
+    kDuplicate,
+    kWrap,
+    kNone,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct ConvolveMatrixFilterOperation {
+    base_: FilterOperation,
+    kernel_size_: Size,
+    divisor_: f32,
+    bias_: f32,
+    target_offset_: Point,
+    edge_mode_: ConvolveMatrixEdgeMode,
+    preserve_alpha_: bool,
+    kernel_matrix_: Vec<f32>,
+}
+impl ConvolveMatrixFilterOperation {
+    pub fn new(
+        kernel_size: Size,
+        divisor: f32,
+        bias: f32,
+        target_offset: Point,
+        edge_mode: ConvolveMatrixEdgeMode,
+        preserve_alpha: bool,
+        kernel_matrix: Vec<f32>,
+    ) -> Self {
+        Self {
+            base_: FilterOperation::new(OperationType::kConvolveMatrix),
+            kernel_size_: kernel_size,
+            divisor_: divisor,
+            bias_: bias,
+            target_offset_: target_offset,
+            edge_mode_: edge_mode,
+            preserve_alpha_: preserve_alpha,
+            kernel_matrix_: kernel_matrix,
+        }
+    }
+    pub fn KernelSize(&self) -> Size {
+        self.kernel_size_
+    }
+    pub fn Divisor(&self) -> f32 {
+        self.divisor_
+    }
+    pub fn Bias(&self) -> f32 {
+        self.bias_
+    }
+    pub fn TargetOffset(&self) -> Point {
+        self.target_offset_
+    }
+    pub fn EdgeMode(&self) -> ConvolveMatrixEdgeMode {
+        self.edge_mode_
+    }
+    pub fn PreserveAlpha(&self) -> bool {
+        self.preserve_alpha_
+    }
+    pub fn KernelMatrix(&self) -> &[f32] {
+        &self.kernel_matrix_
+    }
+}
+impl PartialEq for ConvolveMatrixFilterOperation {
+    fn eq(&self, other: &Self) -> bool {
+        self.kernel_size_ == other.kernel_size_
+            && self.divisor_ == other.divisor_
+            && self.bias_ == other.bias_
+            && self.target_offset_ == other.target_offset_
+            && self.edge_mode_ == other.edge_mode_
+            && self.preserve_alpha_ == other.preserve_alpha_
+            && self.kernel_matrix_ == other.kernel_matrix_
+    }
+}
+
+// cpp: platform/graphics/filters/fe_component_transfer.h:32-78 and
+// core/style/filter_operation.h:482-514.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComponentTransferType {
+    kUnknown,
+    kIdentity,
+    kTable,
+    kDiscrete,
+    kLinear,
+    kGamma,
+}
+#[derive(Clone, Debug)]
+pub struct ComponentTransferFunction {
+    pub r#type: ComponentTransferType,
+    pub slope: f32,
+    pub intercept: f32,
+    pub amplitude: f32,
+    pub exponent: f32,
+    pub offset: f32,
+    pub table_values: Vec<f32>,
+}
+impl Default for ComponentTransferFunction {
+    fn default() -> Self {
+        Self {
+            r#type: ComponentTransferType::kUnknown,
+            slope: 0.0,
+            intercept: 0.0,
+            amplitude: 0.0,
+            exponent: 0.0,
+            offset: 0.0,
+            table_values: Vec::new(),
+        }
+    }
+}
+impl PartialEq for ComponentTransferFunction {
+    fn eq(&self, other: &Self) -> bool {
+        if self.r#type != other.r#type {
+            return false;
+        }
+        match self.r#type {
+            ComponentTransferType::kIdentity => true,
+            ComponentTransferType::kLinear => {
+                self.slope == other.slope && self.intercept == other.intercept
+            }
+            ComponentTransferType::kGamma => {
+                self.amplitude == other.amplitude
+                    && self.exponent == other.exponent
+                    && self.offset == other.offset
+            }
+            ComponentTransferType::kTable | ComponentTransferType::kDiscrete => {
+                self.table_values == other.table_values
+            }
+            ComponentTransferType::kUnknown => false,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct ComponentTransferFilterOperation {
+    base_: FilterOperation,
+    functions_: [ComponentTransferFunction; 4],
+}
+impl PartialEq for ComponentTransferFilterOperation {
+    fn eq(&self, other: &Self) -> bool {
+        self.functions_ == other.functions_
+    }
+}
+impl ComponentTransferFilterOperation {
+    pub fn new(functions: [ComponentTransferFunction; 4]) -> Self {
+        Self {
+            base_: FilterOperation::new(OperationType::kComponentTransfer),
+            functions_: functions,
+        }
+    }
+    pub fn Functions(&self) -> &[ComponentTransferFunction; 4] {
+        &self.functions_
+    }
+}
+
+// cpp: platform/graphics/filters/fe_turbulence.h:32-40 and
+// core/style/filter_operation.h:523-565.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurbulenceType {
+    kUnknown,
+    kFractalNoise,
+    kTurbulence,
+}
+#[repr(C)]
+#[derive(Debug)]
+pub struct TurbulenceFilterOperation {
+    base_: FilterOperation,
+    type_: TurbulenceType,
+    base_frequency_x_: f32,
+    base_frequency_y_: f32,
+    num_octaves_: i32,
+    seed_: f32,
+    stitch_tiles_: bool,
+}
+impl PartialEq for TurbulenceFilterOperation {
+    fn eq(&self, other: &Self) -> bool {
+        self.type_ == other.type_
+            && self.base_frequency_x_ == other.base_frequency_x_
+            && self.base_frequency_y_ == other.base_frequency_y_
+            && self.num_octaves_ == other.num_octaves_
+            && self.seed_ == other.seed_
+            && self.stitch_tiles_ == other.stitch_tiles_
+    }
+}
+impl TurbulenceFilterOperation {
+    pub fn new(
+        type_: TurbulenceType,
+        base_frequency_x: f32,
+        base_frequency_y: f32,
+        num_octaves: i32,
+        seed: f32,
+        stitch_tiles: bool,
+    ) -> Self {
+        Self {
+            base_: FilterOperation::new(OperationType::kTurbulence),
+            type_: type_,
+            base_frequency_x_: base_frequency_x,
+            base_frequency_y_: base_frequency_y,
+            num_octaves_: num_octaves,
+            seed_: seed,
+            stitch_tiles_: stitch_tiles,
+        }
+    }
+    pub fn Type(&self) -> TurbulenceType {
+        self.type_
+    }
+    pub fn BaseFrequencyX(&self) -> f32 {
+        self.base_frequency_x_
+    }
+    pub fn BaseFrequencyY(&self) -> f32 {
+        self.base_frequency_y_
+    }
+    pub fn NumOctaves(&self) -> i32 {
+        self.num_octaves_
+    }
+    pub fn Seed(&self) -> f32 {
+        self.seed_
+    }
+    pub fn StitchTiles(&self) -> bool {
+        self.stitch_tiles_
+    }
+}
 impl DropShadowFilterOperation {
     pub fn new(shadow: ShadowData) -> Self {
         Self {
@@ -259,9 +554,14 @@ macro_rules! base_first_css_filter {
 base_first_css_filter!(
     ReferenceFilterOperation,
     BasicColorMatrixFilterOperation,
+    ColorMatrixFilterOperation,
     BasicComponentTransferFilterOperation,
     BlurFilterOperation,
-    DropShadowFilterOperation
+    DropShadowFilterOperation,
+    BoxReflectFilterOperation,
+    ConvolveMatrixFilterOperation,
+    ComponentTransferFilterOperation,
+    TurbulenceFilterOperation
 );
 impl Traceable for ReferenceFilterOperation {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
@@ -270,6 +570,11 @@ impl Traceable for ReferenceFilterOperation {
 }
 
 impl Traceable for BasicColorMatrixFilterOperation {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        self.base_.Trace(visitor);
+    }
+}
+impl Traceable for ColorMatrixFilterOperation {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         self.base_.Trace(visitor);
     }
@@ -288,5 +593,50 @@ impl Traceable for DropShadowFilterOperation {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         self.shadow_.Trace(visitor);
         self.base_.Trace(visitor);
+    }
+}
+impl Traceable for BoxReflectFilterOperation {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        self.base_.Trace(visitor);
+    }
+}
+impl Traceable for ConvolveMatrixFilterOperation {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        self.base_.Trace(visitor);
+    }
+}
+impl Traceable for ComponentTransferFilterOperation {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        self.base_.Trace(visitor);
+    }
+}
+impl Traceable for TurbulenceFilterOperation {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        self.base_.Trace(visitor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canvas_filter_equality_keeps_source_class_rules() {
+        let unknown = || ComponentTransferFunction::default();
+        assert_ne!(unknown(), unknown(), "C++ UNKNOWN is never equal");
+
+        let identity = || ComponentTransferFunction {
+            r#type: ComponentTransferType::kIdentity,
+            ..Default::default()
+        };
+        let left = ComponentTransferFilterOperation::new(std::array::from_fn(|_| identity()));
+        let right = ComponentTransferFilterOperation::new(std::array::from_fn(|_| identity()));
+        assert_eq!(&*left, &*right);
+
+        let left =
+            TurbulenceFilterOperation::new(TurbulenceType::kFractalNoise, 0.1, 0.2, 3, 4.0, true);
+        let right =
+            TurbulenceFilterOperation::new(TurbulenceType::kFractalNoise, 0.1, 0.2, 3, 4.0, true);
+        assert_eq!(&*left, &*right);
     }
 }

@@ -1,4 +1,4 @@
-use crate::{native_test_thread, table_size_distribution::*};
+use crate::{table_size_distribution::*, test_thread};
 use foundation::LayoutUnit;
 use layoutng_assembly::internal::table_layout_algorithm_types::{
     CellBlockConstraint, CellInlineConstraint, ColspanCell, Column, Columns, Row, RowspanCell,
@@ -43,8 +43,8 @@ impl<'a> Fields<'a> {
     }
 }
 #[test]
-fn native_table_size_distribution_matches_unchanged_cpp() {
-    native_test_thread::run(distribution_body);
+fn table_size_distribution_matches_unchanged_cpp() {
+    test_thread::run(distribution_body);
 }
 fn distribution_body() {
     let inputs = include_str!("../../../../artifacts/cpp-reference/table-distribution-input.tsv");

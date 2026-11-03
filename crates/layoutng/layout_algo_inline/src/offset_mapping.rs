@@ -11,7 +11,7 @@ pub enum OffsetMapping {}
 mod translated {
     use std::cell::Cell;
 
-    use font_engine::text::native::character::Character;
+    use font_engine::text::implementation::character::Character;
     use foundation::{
         DynamicTo, HeapHashMap, HeapVector, Member, String, Traceable, UChar, Visitor,
     };

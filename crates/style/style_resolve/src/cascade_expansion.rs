@@ -22,6 +22,7 @@
 use super::cascade_filter::CascadeFilter;
 use super::cascade_priority::CascadePriority;
 use super::match_result::{MatchedProperties, MatchedPropertySet};
+use crate::css_property_name::CSSPropertyName;
 use crate::css_property_value::{CSSPropertyValue, CSSPropertyValueBackend};
 use crate::properties::css_property::CSSProperty;
 use crate::valid_property_filter::ValidPropertyFilter;
@@ -36,7 +37,12 @@ use foundation::{
 pub trait CascadeExpansionBackend {
     type Dispatch: CSSPropertyValueBackend;
     type Document;
-    fn Properties(&self, set: &dyn MatchedPropertySet) -> Vec<CSSPropertyValue<Self::Dispatch>>;
+    fn PropertyCount(&self, set: &dyn MatchedPropertySet) -> usize;
+    fn ForEachProperty(
+        &self,
+        set: &dyn MatchedPropertySet,
+        visitor: &mut dyn FnMut(usize, &CSSPropertyValue<Self::Dispatch>),
+    );
     fn CustomPropertyMetadata(&self, name: &AtomicString, document: &Self::Document)
         -> CSSProperty;
     fn IsAffectedByAll(&self, property: &CSSProperty) -> bool;
@@ -96,56 +102,63 @@ pub fn ExpandCascade<B: CascadeExpansionBackend>(
     document: &B::Document,
     index: usize,
     backend: &B,
-    mut custom: impl FnMut(CascadePriority, &AtomicString),
-    mut regular: impl FnMut(CascadePriority, CSSPropertyID),
+    mut output: impl FnMut(CascadePriority, CSSPropertyName),
 ) {
-    let properties = backend.Properties(matched.properties.as_ref());
-    if properties.len() > kMaxDeclarationIndex + 1 || index > kMaxMatchedPropertiesIndex {
+    if backend.PropertyCount(matched.properties.as_ref()) > kMaxDeclarationIndex + 1
+        || index > kMaxMatchedPropertiesIndex
+    {
         return;
     }
     let filter = CreateExpansionFilter(matched);
     let expand_visited = !filter.Requires(CSSProperty::kNotVisited);
-    for (declaration, reference) in properties.iter().enumerate() {
-        let id = reference.PropertyID();
-        let data = &matched.data_;
-        let priority = CascadePriority::FromParts(
-            data.origin,
-            reference.IsImportant(),
-            data.tree_order,
-            data.is_inline_style(),
-            data.is_try_style(),
-            data.is_try_tactics_style,
-            data.layer_order,
-            index as u16,
-            declaration as u16,
-        );
-        if id == CSSPropertyID::kVariable {
-            let property = backend.CustomPropertyMetadata(reference.CustomPropertyName(), document);
-            if filter.Accepts(&property) {
-                custom(priority, reference.CustomPropertyName());
-            }
-        } else if id == CSSPropertyID::kAll {
-            for i in kIntFirstCSSProperty..=kIntLastCSSProperty {
-                let expanded = ConvertToCSSPropertyID(i);
-                if !IsInAllExpansion(expanded, backend) {
-                    continue;
+    backend.ForEachProperty(
+        matched.properties.as_ref(),
+        &mut |declaration, reference| {
+            let id = reference.PropertyID();
+            let data = &matched.data_;
+            let priority = CascadePriority::FromParts(
+                data.origin,
+                reference.IsImportant(),
+                data.tree_order,
+                data.is_inline_style(),
+                data.is_try_style(),
+                data.is_try_tactics_style,
+                data.layer_order,
+                index as u16,
+                declaration as u16,
+            );
+            if id == CSSPropertyID::kVariable {
+                let property =
+                    backend.CustomPropertyMetadata(reference.CustomPropertyName(), document);
+                if filter.Accepts(&property) {
+                    output(
+                        priority,
+                        CSSPropertyName::custom(reference.CustomPropertyName().clone()),
+                    );
                 }
-                if filter.Accepts(CSSProperty::Get(expanded)) {
-                    regular(priority, expanded);
+            } else if id == CSSPropertyID::kAll {
+                for i in kIntFirstCSSProperty..=kIntLastCSSProperty {
+                    let expanded = ConvertToCSSPropertyID(i);
+                    if !IsInAllExpansion(expanded, backend) {
+                        continue;
+                    }
+                    if filter.Accepts(CSSProperty::Get(expanded)) {
+                        output(priority, CSSPropertyName::new(expanded));
+                    }
                 }
-            }
-        } else {
-            let property = CSSProperty::Get(id);
-            if filter.Accepts(property) {
-                regular(priority, id);
-            }
-            if expand_visited {
-                if let Some(visited) = property.GetVisitedProperty() {
-                    if filter.Accepts(visited) {
-                        regular(priority, visited.PropertyID());
+            } else {
+                let property = CSSProperty::Get(id);
+                if filter.Accepts(property) {
+                    output(priority, CSSPropertyName::new(id));
+                }
+                if expand_visited {
+                    if let Some(visited) = property.GetVisitedProperty() {
+                        if filter.Accepts(visited) {
+                            output(priority, CSSPropertyName::new(visited.PropertyID()));
+                        }
                     }
                 }
             }
-        }
-    }
+        },
+    );
 }

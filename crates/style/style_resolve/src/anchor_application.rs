@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Anchor positioning native fields and real Chromium converters.
+//! Anchor positioning computed style fields and real Chromium converters.
 #![allow(non_snake_case)]
 use super::*;
 use crate::production_position_area as area;
@@ -27,7 +27,7 @@ pub(super) fn IsAnchorProperty(id: CSSPropertyID) -> bool {
     )
 }
 // converter.cc:2287-2294. The existing production owner operates in the null
-// document-root scope domain. Preserve native scoped names, never plain strings.
+// document-root scope domain. Preserve computed style scoped names, never plain strings.
 // Shadow/non-null scope and StyleResolverState::HasTreeScopedReference need an
 // actual owner boundary and remain partial in the source ledger.
 pub(super) fn Name(
@@ -65,7 +65,7 @@ fn Names(
         ScopedCSSNameList::new(HeapVector::from(names)),
     )))
 }
-// converter.cc:2366-2390. Reuse this native scope owner for TriggerScope.
+// converter.cc:2366-2390. Reuse this computed style scope owner for TriggerScope.
 pub(super) fn ConvertNameScope(
     id: CSSPropertyID,
     v: &Value,
@@ -99,7 +99,7 @@ pub(super) fn ConvertNameScope(
     ))
 }
 // converter.cc:3999-4217. Single-value repetition and the default second span
-// are intentionally distinct; physical resolution belongs to native PositionArea.
+// are intentionally distinct; physical resolution belongs to computed style PositionArea.
 fn Area(
     id: CSSPropertyID,
     v: &Value,
@@ -142,7 +142,7 @@ fn Fallback(
     let mut name = Member::default();
     let mut tactics = kNoTryTactics;
     let mut count = 0;
-    // converter.cc:4219-4247; native TryTacticList has capacity 3, while the
+    // converter.cc:4219-4247; computed style TryTacticList has capacity 3, while the
     // source parser recognizes 5 flips. Keep the unsupported capacity explicit.
     for v in &list.values {
         if matches!(v.Payload(), CSSValuePayload::kCustomIdentClass(_)) {
@@ -196,7 +196,7 @@ pub(super) fn Apply(
             };
             b.SetAnchorScopeOwned(scope);
         }
-        // longhands_custom.cc:252-265; state.cc:383-394. Native data is real;
+        // longhands_custom.cc:252-265; state.cc:383-394. Canonical data is real;
         // the AnchorEvaluator / conversion AnchorData owner remains a collaborator.
         kPositionAnchor => {
             let anchor = if initial {

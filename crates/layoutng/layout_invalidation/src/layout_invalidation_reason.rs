@@ -2,6 +2,15 @@
 
 use std::ffi::c_char;
 
+// cpp: layoutng/internal/layout_invalidation_reason.cc:9.  The extracted
+// package needs a source address for newly reachable Rust-only call paths;
+// the C++ bridge symbols below remain available to mixed-language owners.
+static K_UNKNOWN_REASON: &[u8; 8] = b"Unknown\0";
+
+pub fn UnknownReason() -> *const c_char {
+    K_UNKNOWN_REASON.as_ptr().cast()
+}
+
 // The source declares these unsized character arrays but supplies no
 // definitions. Each Rust static names the first byte of the corresponding
 // external array; callers pass its address and never read it as a scalar.

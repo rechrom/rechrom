@@ -1,4 +1,4 @@
-//! Native ImageResourceObserver mixin receiver for translated owner classes.
+//! Chromium ImageResourceObserver mixin receiver for translated owner classes.
 #![allow(non_snake_case)]
 use foundation::String as BlinkString;
 use std::{cell::Cell, ffi::c_void};
@@ -13,7 +13,7 @@ pub struct ImageResourceObserver {
     receiver: Cell<*mut c_void>,
 }
 impl ImageResourceObserver {
-    /// Derived native owners embed this mixin and bind their stable address
+    /// Derived source owners embed this mixin and bind their stable address
     /// before registering it with a StyleImage. No observer token is invented.
     pub fn new_for_derived(vtable: &'static ImageResourceObserverVTable) -> Self {
         Self {
@@ -26,7 +26,7 @@ impl ImageResourceObserver {
         let old = self.receiver.get();
         assert!(
             old.is_null() || old == receiver,
-            "native image observer owner moved"
+            "source image observer owner moved"
         );
         self.receiver.set(receiver);
     }

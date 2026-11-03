@@ -339,8 +339,8 @@ impl<R: CpuSkiaBackend> crate::adapter::layer_tree_host_impl::HostImplGTypes
 {
     type LayerTreeMutator = super::host_owners::LayerTreeMutator;
 }
-impl<R: CpuSkiaBackend> metadata::NativeMetadataTypes for CpuCompositorTypes<R> {}
-impl<R: CpuSkiaBackend> frame::NativeFrameTypes for CpuCompositorTypes<R> {}
+impl<R: CpuSkiaBackend> metadata::MetadataTypes for CpuCompositorTypes<R> {}
+impl<R: CpuSkiaBackend> frame::FrameTypes for CpuCompositorTypes<R> {}
 
 /// This is a real canonical constructor call, compiled for the same family as
 /// the output frame/input/layer owners; all external capabilities are injected.
@@ -357,8 +357,8 @@ const _: fn() = || {
         B: HostImplTypes
             + InputHandlerTypes
             + crate::adapter::frame_data::FrameDataTypes
-            + metadata::NativeMetadataTypes
-            + frame::NativeFrameTypes,
+            + metadata::MetadataTypes
+            + frame::FrameTypes,
     >() {
     }
     require::<Cpu>();
@@ -421,14 +421,12 @@ pub fn CreateCpuClientHost<R: CpuSkiaBackend>(
 #[allow(dead_code)]
 fn AssertCpuClientCommit(
     host: &mut crate::cc::trees::client_layer_tree_host_impl::ClientLayerTreeHostImpl<
-        crate::NativeCompositorTypes,
+        crate::CompositorTypes,
     >,
-    state: &mut crate::cc::trees::commit_state::CommitState<crate::NativeCompositorTypes>,
-    unsafe_state: &crate::cc::trees::commit_state::ThreadUnsafeCommitState<
-        crate::NativeCompositorTypes,
-    >,
-    main: &mut super::sync::MainSynchronizationContext<'_, '_, crate::NativeCompositorTypes>,
-    services: &mut super::host_services::CpuHostServices<crate::NativeCompositorTypes>,
+    state: &mut crate::cc::trees::commit_state::CommitState<crate::CompositorTypes>,
+    unsafe_state: &crate::cc::trees::commit_state::ThreadUnsafeCommitState<crate::CompositorTypes>,
+    main: &mut super::sync::MainSynchronizationContext<'_, '_, crate::CompositorTypes>,
+    services: &mut super::host_services::CpuHostServices<crate::CompositorTypes>,
 ) {
     let mut context = crate::adapter::client_layer_tree_host_impl::ClientHostContext { services };
     host.BeginCommit(state.source_frame_number, state.trace_id, &mut context);

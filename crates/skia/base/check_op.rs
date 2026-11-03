@@ -50,7 +50,7 @@ pub fn CheckOpValueStr_nullptr() -> *mut c_char {
 /// Safety: the actual native string remains pinned and supplies its original
 /// NUL-terminated c_str view for the synchronous matching strdup call.
 pub unsafe fn CheckOpValueStr_native_string<S: StdStringStorage>(
-    value: Pin<&NativeStdString<S>>,
+    value: Pin<&StdString<S>>,
 ) -> *mut c_char {
     unsafe { strdup(value.c_str()) }
 }
@@ -71,18 +71,18 @@ pub fn CheckOpValueStr_cstring(value: &core::ffi::CStr) -> *mut c_char {
 }
 // Source: base/check_op.cc:106-112
 number_string!(CheckOpValueStr_double, f64, "%.6lf");
-use crate::interop::native_ostream::{
-    NativeOStream, NativeStdString, NativeStringStream, StdStringStorage, StringStreamStorage,
+use crate::interop::ostream::{
+    OStream, StdString, StdStringStorage, StringStream, StringStreamStorage,
 };
 use core::{mem::MaybeUninit, pin::Pin};
 
 // Rust cleanup projection for the same original stack native object. The pin
 // borrow is not a second stream/string owner or allocation; it executes the
 // original automatic native destructor exactly once, including Rust unwinding.
-struct NativeStackValue<'a, T> {
+struct StackValue<'a, T> {
     value: Pin<&'a mut T>,
 }
-impl<T> Drop for NativeStackValue<'_, T> {
+impl<T> Drop for StackValue<'_, T> {
     fn drop(&mut self) {
         unsafe {
             core::ptr::drop_in_place(self.value.as_mut().get_unchecked_mut());
@@ -97,14 +97,14 @@ impl<T> Drop for NativeStackValue<'_, T> {
 /// cannot retain the borrowed stream. No storage layout or instance is guessed.
 pub unsafe fn StreamValToStr<SS: StringStreamStorage, ST: StdStringStorage>(
     v: *const c_void,
-    stream_func: unsafe fn(&mut NativeOStream<'_>, *const c_void),
+    stream_func: unsafe fn(&mut OStream<'_>, *const c_void),
 ) -> *mut c_char {
-    let mut stream_slot = core::pin::pin!(MaybeUninit::<NativeStringStream<SS>>::uninit());
+    let mut stream_slot = core::pin::pin!(MaybeUninit::<StringStream<SS>>::uninit());
     let stream_ptr = unsafe { stream_slot.as_mut().get_unchecked_mut().as_mut_ptr() };
     unsafe {
-        NativeStringStream::<SS>::initialize_at_assuming_native_abi(stream_ptr);
+        StringStream::<SS>::initialize_at_assuming_native_abi(stream_ptr);
     }
-    let mut ss = NativeStackValue {
+    let mut ss = StackValue {
         value: unsafe {
             stream_slot
                 .as_mut()
@@ -117,13 +117,13 @@ pub unsafe fn StreamValToStr<SS: StringStreamStorage, ST: StdStringStorage>(
             stream_func(&mut out, v);
         }
     }
-    let mut string_slot = core::pin::pin!(MaybeUninit::<NativeStdString<ST>>::uninit());
+    let mut string_slot = core::pin::pin!(MaybeUninit::<StdString<ST>>::uninit());
     unsafe {
         ss.value
             .as_mut()
             .take_str_at(string_slot.as_mut().get_unchecked_mut().as_mut_ptr());
     }
-    let message = NativeStackValue {
+    let message = StackValue {
         value: unsafe {
             string_slot
                 .as_mut()
@@ -144,16 +144,16 @@ pub unsafe fn CreateCheckOpLogMessageString<ST: StdStringStorage>(
     v1: *mut c_char,
     v2: *mut c_char,
 ) -> *mut c_char {
-    let mut slot = core::pin::pin!(MaybeUninit::<NativeStdString<ST>>::uninit());
+    let mut slot = core::pin::pin!(MaybeUninit::<StdString<ST>>::uninit());
     unsafe {
-        NativeStdString::<ST>::checkop_strcat_at_assuming_native_abi(
+        StdString::<ST>::checkop_strcat_at_assuming_native_abi(
             slot.as_mut().get_unchecked_mut().as_mut_ptr(),
             expr,
             v1,
             v2,
         );
     }
-    let message = NativeStackValue {
+    let message = StackValue {
         value: unsafe {
             slot.as_mut()
                 .map_unchecked_mut(|slot| slot.assume_init_mut())
@@ -201,14 +201,14 @@ impl CheckOpValue for [u8] {
 }
 // Source: base/check_op.h:61-61
 #[derive(Clone, Copy)]
-pub struct NativeNullptr;
-impl CheckOpValue for NativeNullptr {
+pub struct Nullptr;
+impl CheckOpValue for Nullptr {
     unsafe fn CheckOpValueStr(&self) -> *mut c_char {
         CheckOpValueStr_nullptr()
     }
 }
 // Source: base/check_op.h:67-67
-impl<S: StdStringStorage> CheckOpValue for NativeStdString<S> {
+impl<S: StdStringStorage> CheckOpValue for StdString<S> {
     /// Safety includes the same original native pinned-address lifetime/ABI
     /// contract; this borrow never takes another string owner.
     unsafe fn CheckOpValueStr(&self) -> *mut c_char {
@@ -220,7 +220,7 @@ impl<S: StdStringStorage> CheckOpValue for NativeStdString<S> {
 /// Maps the actual SupportsOstreamOperator<const T&> concept to the concrete
 /// source type's original operator<<. No blanket formatter/provider is supplied.
 pub trait CheckOstreamValue {
-    fn stream_into(&self, stream: &mut NativeOStream<'_>);
+    fn stream_into(&self, stream: &mut OStream<'_>);
 }
 pub unsafe fn CheckOpValueStr_stream<
     T: CheckOstreamValue,
@@ -229,7 +229,7 @@ pub unsafe fn CheckOpValueStr_stream<
 >(
     value: &T,
 ) -> *mut c_char {
-    unsafe fn stream<T: CheckOstreamValue>(out: &mut NativeOStream<'_>, value: *const c_void) {
+    unsafe fn stream<T: CheckOstreamValue>(out: &mut OStream<'_>, value: *const c_void) {
         // Rust shared-reference address is never an overloaded C++ operator&.
         // This is the corresponding addressof/const-volatile removal boundary;
         // native Objective-C ARC and actual volatile references are not invented.
@@ -242,32 +242,32 @@ pub unsafe fn CheckOpValueStr_stream<
 // Source: base/check_op.h:82-101
 // Concrete actual ostream operator domains needed by the generic overload.
 impl CheckOstreamValue for i8 {
-    fn stream_into(&self, out: &mut NativeOStream<'_>) {
+    fn stream_into(&self, out: &mut OStream<'_>) {
         out.insert_char(*self as u8);
     }
 }
 impl CheckOstreamValue for u8 {
-    fn stream_into(&self, out: &mut NativeOStream<'_>) {
+    fn stream_into(&self, out: &mut OStream<'_>) {
         out.insert_char(*self);
     }
 }
 impl CheckOstreamValue for i16 {
-    fn stream_into(&self, out: &mut NativeOStream<'_>) {
+    fn stream_into(&self, out: &mut OStream<'_>) {
         out.insert_short(*self);
     }
 }
 impl CheckOstreamValue for u16 {
-    fn stream_into(&self, out: &mut NativeOStream<'_>) {
+    fn stream_into(&self, out: &mut OStream<'_>) {
         out.insert_ushort(*self);
     }
 }
 impl CheckOstreamValue for bool {
-    fn stream_into(&self, out: &mut NativeOStream<'_>) {
+    fn stream_into(&self, out: &mut OStream<'_>) {
         out.insert_bool(*self);
     }
 }
 impl CheckOstreamValue for f32 {
-    fn stream_into(&self, out: &mut NativeOStream<'_>) {
+    fn stream_into(&self, out: &mut OStream<'_>) {
         out.insert_float(*self);
     }
 }

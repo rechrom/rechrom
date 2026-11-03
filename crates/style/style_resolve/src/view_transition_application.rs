@@ -1,6 +1,6 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
 //! style_builder_converter.cc:2809-2865 and generated Apply* branches.
-//! Native fields store genuine document-root names/groups. Document/shadow
+//! Canonical fields store genuine document-root names/groups. Document/shadow
 //! TreeScope/HasTreeScopedReference remain external, never fake snapshot owners.
 #![allow(non_snake_case)]
 use super::*;
@@ -25,7 +25,7 @@ fn Name(
         return match k.0 {
             CSSValueID::kNone => Ok(Member::default()),
             // Both source variants require state.GetDocument() as TreeScope.
-            // That native DOM owner is unbound; never substitute null scope.
+            // That computed style DOM owner is unbound; never substitute null scope.
             CSSValueID::kAuto | CSSValueID::kMatchElement => {
                 Err(LonghandApplicationError::Unsupported(id))
             }
@@ -89,7 +89,7 @@ fn Group(
         return Err(LonghandApplicationError::InvalidValue(id));
     }
     // The source group owns an AtomicString, not ScopedCSSName. Preserve
-    // ConvertCustomIdent's native identity before extracting exactly that field.
+    // ConvertCustomIdent's computed style identity before extracting exactly that field.
     Ok(StyleViewTransitionGroup::Create(name))
 }
 pub(super) fn Apply(
@@ -190,7 +190,7 @@ mod tests {
             .collect()
     }
     #[test]
-    fn production_view_transition_document_root_custom_name_and_class_native_identity() {
+    fn production_view_transition_document_root_custom_name_and_class_computed_style_identity() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(&mut b,None,"view-transition-name:Hero\\2d Main;view-transition-class:Card card Card auto match-element");
@@ -228,7 +228,7 @@ mod tests {
         );
     }
     #[test]
-    fn production_view_transition_group_keywords_and_custom_native_value() {
+    fn production_view_transition_group_keywords_and_custom_computed_style_value() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         for (value, index) in [("normal", 0), ("nearest", 1), ("contain", 2)] {

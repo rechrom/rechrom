@@ -56,6 +56,7 @@ for (const [property,axis] of [['scrollX','x'],['pageXOffset','x'],['scrollY','y
 }
 
 const request = __request;
+const requestSync = __requestSync;
 const cancelRequest = __cancelRequest;
 const randomHex = __randomHex;
 const queueTask = __queueTask;
@@ -393,6 +394,15 @@ const objectURLs = new Map();
 class URL {
   constructor(input,base) {this._parts=__urlParts(String(input),base===undefined?String(input):String(base));this._params=new URLSearchParams(this._parts.search);
     this._params._changed=()=>{this.search=this._params.toString();};}
+  // cpp: third_party/blink/renderer/core/url/url.cc:82-116
+  static parse(input, base) {
+    try { return arguments.length < 2 ? new URL(input) : new URL(input, base); }
+    catch { return null; }
+  }
+  static canParse(input, base) {
+    try { arguments.length < 2 ? new URL(input) : new URL(input, base); return true; }
+    catch { return false; }
+  }
   get href(){return this._parts.href;} set href(value){this._parts=__urlParts(String(value));this._params._pairs=new URLSearchParams(this._parts.search)._pairs;}
   get origin(){return this._parts.origin;} get searchParams(){return this._params;}
   toString(){return this.href;} toJSON(){return this.href;}
@@ -537,9 +547,9 @@ class XMLHttpRequest extends EventTarget {
   }
   _fire(type) { this.dispatchEvent(new Event(type)); }
   open(method, url, async = true) {
-    if (!async) throw new Error('Synchronous XMLHttpRequest is unsupported');
     this._cancel();
     this._generation++; this._method = String(method).toUpperCase(); this._url = String(url);
+    this._async = Boolean(async);
     this.readyState = 1; this._sent = false; this._fire('readystatechange');
   }
   setRequestHeader(name, value) { if (/[\r\n]/.test(String(name)+String(value))) throw new TypeError('Invalid header'); this._headers[String(name).toLowerCase()] = String(value); }
@@ -573,7 +583,29 @@ class XMLHttpRequest extends EventTarget {
   }
   send(body = null) {
     if (this.readyState !== 1 || this._sent) throw new Error('InvalidStateError');
-    this._sent = true; this._fire('loadstart'); const generation = this._generation;
+    this._sent = true;
+    if (!this._async) {
+      // Chromium XMLHttpRequest::CreateRequest selects
+      // kRequestSynchronously and does not dispatch intermediate events while
+      // send() is blocked (xml_http_request.cc:1097-1169).
+      let result;
+      try {
+        result = requestSync(this._method, this._url, body == null ? '' : String(body), Object.entries(this._headers).map(([k,v])=>k+':'+v).join('\n'));
+      } catch (error) {
+        this.status = 0; this.responseText = ''; this.response = ''; this.responseURL = '';
+        this.readyState = 4; this._sent = false;
+        throw new DOMException('Failed to load XMLHttpRequest', 'NetworkError');
+      }
+      this.status = result.status; this.responseURL = result.url; this._mime = this._overrideMime || result.mime;
+      const text = new TextDecoder().decode(result.bytes);
+      this.responseText = text;
+      this.response = this.responseType === 'arraybuffer' ? result.bytes.slice(0)
+        : this.responseType === 'blob' ? new Blob([result.bytes], {type:this._mime})
+        : this.responseType === 'json' ? JSON.parse(text) : text;
+      this.readyState = 4; this._sent = false;
+      return;
+    }
+    this._fire('loadstart'); const generation = this._generation;
     const started = this._started = performance.now();
     this._requestId = request(this._method, this._url, body == null ? '' : String(body), Object.entries(this._headers).map(([k,v])=>k+':'+v).join('\n'), (status, bytes, url, mime) => {
       if (generation !== this._generation) return;
@@ -982,13 +1014,58 @@ class ResizeObserverEntry {
     this.contentBoxSize=[size]; this.borderBoxSize=[size]; this.devicePixelContentBoxSize=[size];
   }
 }
+// cpp: third_party/blink/renderer/core/resize_observer/
+//      resize_observer.cc:71-98
+//      resize_observation.cc:49-60,88-116
+// Blink retains the last delivered logical size for every observation.  A
+// lifecycle update only activates an observation when that size is out of
+// sync; calling observe() again for the same target and box is a no-op.
+const resizeObservers=new Set(), pendingResizeObservers=new Set();
+let resizeDeliveryScheduled=false;
+function queueResizeDelivery(observer) {
+  pendingResizeObservers.add(observer);
+  if(resizeDeliveryScheduled)return;
+  resizeDeliveryScheduled=true;
+  setTimeout(()=>{
+    resizeDeliveryScheduled=false;
+    const observers=[...pendingResizeObservers];pendingResizeObservers.clear();
+    for(const observer of observers)observer._deliver();
+  },0);
+}
+function computeResizeObservations(observers) {
+  const rects=new Map();
+  for(const observer of observers) {
+    const entries=[];
+    for(const [target,observation] of observer._observations) {
+      let rect=rects.get(target);
+      if(!rect) {rect=observerRect(target.getBoundingClientRect());rects.set(target,rect);}
+      if(observation.width===rect.width&&observation.height===rect.height)continue;
+      observation.width=rect.width;observation.height=rect.height;
+      entries.push(new ResizeObserverEntry(target,rect));
+    }
+    if(entries.length) {observer._records.push(...entries);queueResizeDelivery(observer);}
+  }
+}
 class ResizeObserver {
-  constructor(callback) { if(typeof callback!=='function')throw new TypeError('ResizeObserver callback must be a function');this._callback=callback;this._targets=new Set();this._scheduled=false; }
-  observe(target) { if(!(target instanceof Element))throw new TypeError('Element required');this._targets.add(target);this._schedule(); }
-  unobserve(target) { this._targets.delete(target); }
-  disconnect() { this._targets.clear(); }
-  _schedule() { if(this._scheduled)return;this._scheduled=true;setTimeout(()=>{this._scheduled=false;const entries=[];for(const target of this._targets)entries.push(new ResizeObserverEntry(target,observerRect(target.getBoundingClientRect())));if(entries.length)this._callback(entries,this);},0); }
+  constructor(callback) { if(typeof callback!=='function')throw new TypeError('ResizeObserver callback must be a function');this._callback=callback;this._observations=new Map();this._records=[]; }
+  observe(target,options={}) {
+    if(!(target instanceof Element))throw new TypeError('Element required');
+    const box=options.box===undefined?'content-box':String(options.box);
+    if(!['content-box','border-box','device-pixel-content-box'].includes(box))throw new TypeError('Invalid ResizeObserver box');
+    const current=this._observations.get(target);
+    if(current&&current.box===box)return;
+    this._observations.set(target,{box,width:NaN,height:NaN});
+    resizeObservers.add(this);
+    computeResizeObservations([this]);
+  }
+  unobserve(target) { this._observations.delete(target);if(!this._observations.size)resizeObservers.delete(this); }
+  disconnect() { this._observations.clear();this._records.length=0;resizeObservers.delete(this);pendingResizeObservers.delete(this); }
+  _deliver() { const entries=this._records.splice(0);if(entries.length)this._callback(entries,this); }
 }
 globalThis.ResizeObserverEntry=ResizeObserverEntry;
 globalThis.ResizeObserver=ResizeObserver;
+Object.defineProperty(globalThis,'__browserUpdateResizeObservations',{
+  value(){computeResizeObservations(resizeObservers);},
+  configurable:true
+});
 })()

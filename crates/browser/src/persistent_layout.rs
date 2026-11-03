@@ -5,7 +5,7 @@ use layout_fragment::LayoutResultHandle;
 use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::{
     internal::layout_input::ConstraintSpace,
-    layout_engine::{LayoutEngine, NativePaintFragmentCursor},
+    layout_engine::{LayoutEngine, PaintFragmentCursor},
 };
 
 // cpp: browser/browser.cc:1733-1743
@@ -86,6 +86,26 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
     updated
 }
 
+/// Run a provisional source layout for host effects such as system-font
+/// misses, but do not export a fragment graph that Page could publish. The
+/// native LayoutObject tree retains the result so the final certified pass can
+/// reuse it after the host has completed every effect.
+pub(crate) fn LayoutDocumentWithEngineWithoutPublication(
+    engine: &mut LayoutEngine,
+    owner: &mut DOM,
+    interaction: &UserInteractionState,
+    constraints: &ConstraintSpace,
+) {
+    let _trace = browser_tracing::span("layout", "Page.LayoutWithoutPublication");
+    let mut heap_scope = foundation::LayoutHeapScope::new();
+    owner.EmitConstraints(constraints, |mutation| {
+        engine.ApplyMutation(mutation);
+    });
+    owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
+    engine.RunLayoutWithoutPublication();
+    heap_scope.DeferCollection();
+}
+
 /// Prove query geometry against current typed attribute inputs. This does not
 /// synchronize paint: the ordinary frame still consumes the document impact.
 pub(crate) fn MeasurementInputsMatch(
@@ -106,8 +126,9 @@ pub(crate) fn MeasurementInputsMatch(
             LayoutMutation::PaintInput {
                 node_id,
                 style,
+                resources,
                 element,
-            } => engine.GeometryInputMatches(node_id, style, &element),
+            } => engine.GeometryInputMatches(node_id, style, resources, &element),
             _ => unreachable!("EmitPaintInputs emits typed inputs"),
         })
     });
@@ -134,7 +155,23 @@ pub(crate) fn PopulatePaintDataWithEngine(
     let mut heap_scope = foundation::LayoutHeapScope::new();
     heap_scope.DeferCollection();
     let state = owner.GetDocument().StyleState();
-    let nodes = state.paint_style_nodes.iter().copied().collect::<Vec<_>>();
+    let mut nodes = Vec::new();
+    // ImagePainter reads the focused HTMLAreaElement through its LayoutImage.
+    // A style/focus change on the display:none area therefore refreshes the
+    // associated image's typed ElementData input, not an invented area box.
+    for id in state.paint_style_nodes.iter().copied() {
+        let paint_owner = if let Some(image) = owner.GetDocument().ImageMapImageForAreaId(id) {
+            if !owner.GetDocument().ImageMapAreaHasPotentialPath(id) {
+                continue;
+            }
+            image
+        } else {
+            id
+        };
+        if !nodes.contains(&paint_owner) {
+            nodes.push(paint_owner);
+        }
+    }
     trace.set(
         "requires_export",
         state.paint_style_requires_export as u8 as f64,
@@ -223,40 +260,29 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     // changes. Rechrom culls while projecting native fragments, so request a
     // fresh projection from the unchanged LayoutResult at the same boundary.
     fn changed_enough(
-        node: NativePaintFragmentCursor<'_>,
+        node: PaintFragmentCursor<'_>,
         id: u64,
         offset: layoutng_assembly::internal::layout_input::Offset,
     ) -> bool {
-        const DISTANCE: f64 = 512.0;
-        let ratio = node
-            .paint
-            .resources
-            .as_ref()
-            .map_or(1.0, |resources| resources.device_pixel_ratio)
-            .max(f64::MIN_POSITIVE);
-        let threshold = DISTANCE * ratio;
-        node.node_id == id
-            && node.paint_cull_scroll_offset.is_some_and(|origin| {
-                (offset.x - origin.x).abs() >= threshold || (offset.y - origin.y).abs() >= threshold
-            })
+        node.node_id == id && paint::CullRectUpdater::HasScrolledEnough(&node, offset)
             || node
                 .Children()
                 .into_iter()
                 .any(|child| changed_enough(child, id, offset))
     }
-    let native_root = NativePaintFragmentCursor::FromHandle(fragments);
+    let root = PaintFragmentCursor::FromHandle(fragments);
     let cull_rect_changed_enough = changes
         .iter()
-        .any(|&(id, offset)| changed_enough(native_root, id, offset));
+        .any(|&(id, offset)| changed_enough(root, id, offset));
     // CullRectUpdater runs during each PrePaint lifecycle. Its hysteresis
     // decides whether the changed offset requires a fresh projection; a wheel
     // phase does not defer that decision until the gesture ends.
     let refresh_cull_rect = cull_rect_changed_enough;
-    fn contains(node: NativePaintFragmentCursor<'_>, id: u64) -> bool {
+    fn contains(node: PaintFragmentCursor<'_>, id: u64) -> bool {
         node.node_id == id || node.Children().into_iter().any(|child| contains(child, id))
     }
     if !owner.GetDocument().StyleState().impact.IsEmpty()
-        || !changes.iter().all(|&(id, _)| contains(native_root, id))
+        || !changes.iter().all(|&(id, _)| contains(root, id))
     {
         return None;
     }
@@ -342,7 +368,7 @@ mod tests {
 
     #[test]
     fn phased_scroll_refreshes_cull_projection_at_hysteresis_boundary() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use layoutng_assembly::internal::layout_input::Offset;
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
@@ -387,7 +413,7 @@ mod tests {
 
     #[test]
     fn engine_owns_tree_after_document_release() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><div style='display:block;width:80px;height:30px'></div></body></html>",
             );
@@ -396,16 +422,10 @@ mod tests {
             let cs = crate::CreateBrowserConstraints(320, 200);
             engine.ApplyMutation(LayoutMutation::Constraints(&cs));
             let interaction = UserInteractionState::default();
-            let root = crate::native_test_thread::BuildDOMProjection(
-                &mut owner,
-                &interaction,
-                &mut engine,
-            );
-            let same_root = crate::native_test_thread::BuildDOMProjection(
-                &mut owner,
-                &interaction,
-                &mut engine,
-            );
+            let root =
+                crate::test_thread::BuildDOMProjection(&mut owner, &interaction, &mut engine);
+            let same_root =
+                crate::test_thread::BuildDOMProjection(&mut owner, &interaction, &mut engine);
             assert_eq!(root, same_root);
             let stats = engine.GetLayoutTree().unwrap().UpdateStats();
             assert!(stats.reused >= 3, "{stats:?}");
@@ -431,7 +451,7 @@ mod tests {
 
     #[test]
     fn identical_constraints_reuse_layout_clean_projection() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><div style='display:block;width:80px;height:30px'></div></body></html>",
             );
@@ -467,7 +487,7 @@ mod tests {
 
     #[test]
     fn scroll_layout_entry_retains_result_and_matches_fresh_layout() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use layoutng_assembly::internal::layout_input::Offset;
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
@@ -545,7 +565,7 @@ mod tests {
 
     #[test]
     fn positioned_scroll_descendants_refresh_paint_properties() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use layoutng_assembly::internal::layout_input::Offset;
             for position in ["sticky", "fixed", "absolute"] {
                 let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
@@ -587,7 +607,7 @@ mod tests {
 
     #[test]
     fn scroll_metadata_reuses_layout_with_positioned_and_floating_descendants() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use layoutng_assembly::internal::layout_input::Offset;
 
             for placement in [
@@ -685,7 +705,7 @@ mod tests {
 
     #[test]
     fn paint_color_update_reuses_geometry_and_matches_fresh_pixels() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
@@ -791,7 +811,7 @@ mod tests {
     }
     #[test]
     fn inline_background_presence_changes_match_fresh_pixels() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
@@ -849,7 +869,7 @@ mod tests {
     }
     #[test]
     fn persistent_tree_noop_reuses_objects_styles_and_cached_results() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><div id='a' style='width:80px;height:30px'>hello</div><div id='b' style='height:40px'></div></body></html>"
@@ -862,7 +882,7 @@ mod tests {
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
             engine.ApplyMutation(LayoutMutation::Constraints(&cs));
-            let root = crate::native_test_thread::BuildDOMProjection(
+            let root = crate::test_thread::BuildDOMProjection(
                 &mut owner,
                 &UserInteractionState::default(),
                 &mut engine,
@@ -876,7 +896,7 @@ mod tests {
             let style = unsafe { &*a }.StyleRef() as *const _;
             let heap = foundation::LayoutHeapAllocationCountForTesting();
             foundation::CollectLayoutHeapForTesting();
-            let root_again = crate::native_test_thread::BuildDOMProjection(
+            let root_again = crate::test_thread::BuildDOMProjection(
                 &mut owner,
                 &UserInteractionState::default(),
                 &mut engine,
@@ -904,7 +924,7 @@ mod tests {
     }
     #[test]
     fn persistent_tree_style_text_structure_and_reattach_update_in_place() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use dom::persistent_document::{DOMAttribute, DOMNamespace};
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner = html::html_parser::ParseHTML(
@@ -918,7 +938,7 @@ mod tests {
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
             engine.ApplyMutation(LayoutMutation::Constraints(&cs));
-            let root = crate::native_test_thread::BuildDOMProjection(
+            let root = crate::test_thread::BuildDOMProjection(
                 &mut owner,
                 &UserInteractionState::default(),
                 &mut engine,
@@ -945,7 +965,7 @@ mod tests {
                 .GetDocumentMut()
                 .SetTextContent(text_index, "updated text".into());
             resolve(&mut owner);
-            let again = crate::native_test_thread::BuildDOMProjection(
+            let again = crate::test_thread::BuildDOMProjection(
                 &mut owner,
                 &UserInteractionState::default(),
                 &mut engine,
@@ -973,7 +993,7 @@ mod tests {
             owner.GetDocumentMut().InsertBefore(body, c, a_index);
             owner.GetDocumentMut().InsertBefore(body, b_index, c);
             resolve(&mut owner);
-            let again = crate::native_test_thread::BuildDOMProjection(
+            let again = crate::test_thread::BuildDOMProjection(
                 &mut owner,
                 &UserInteractionState::default(),
                 &mut engine,
@@ -997,7 +1017,7 @@ mod tests {
                 },
             );
             resolve(&mut owner);
-            let again = crate::native_test_thread::BuildDOMProjection(
+            let again = crate::test_thread::BuildDOMProjection(
                 &mut owner,
                 &UserInteractionState::default(),
                 &mut engine,
@@ -1020,7 +1040,7 @@ mod tests {
     }
     #[test]
     fn persistent_mixed_inline_reorder_matches_fresh_tree_pixels() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
@@ -1079,7 +1099,7 @@ mod tests {
     }
     #[test]
     fn persistent_tree_recovers_after_failed_projection() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner = html::html_parser::ParseHTML("<html><body>hello</body></html>");
@@ -1130,7 +1150,7 @@ mod tests {
     }
     #[test]
     fn line_clamp_relayout_finishes_for_nested_video_titles() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><section style='display:grid;grid-template-columns:100px 100px'>\
@@ -1285,10 +1305,10 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn persistent_native_tree_controls_first_letter_and_ids_match_cpp() {
-        crate::native_test_thread::run(native_tree_body);
+    fn persistent_source_tree_controls_first_letter_and_ids_match_cpp() {
+        crate::test_thread::run(tree_body);
     }
-    fn native_tree_body() {
+    fn tree_body() {
         let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
         let mut owner = html::html_parser::ParseHTML(include_str!(
             "../../../artifacts/cpp-reference/persistent-tree.html"
@@ -1315,6 +1335,7 @@ mod tests {
                 natural_height: 24.0,
                 resolution_scale: 2.0,
                 orientation: Default::default(),
+                known_to_be_opaque: false,
             },
         );
         let interaction = UserInteractionState {
@@ -1338,11 +1359,8 @@ mod tests {
             }
             resolve_for(&mut owner, 1024, 768);
             let assembly = crate::CreateLayoutAssembly();
-            let root = crate::native_test_thread::BuildDOMProjection(
-                &mut owner,
-                &interaction,
-                &mut engine,
-            );
+            let root =
+                crate::test_thread::BuildDOMProjection(&mut owner, &interaction, &mut engine);
             let _factory_scope =
                 layoutng_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
                     &assembly.objects,
@@ -1409,7 +1427,7 @@ mod heap_lifecycle_tests {
     use super::*;
     #[test]
     fn unchanged_layout_does_not_collect_other_pages_but_new_objects_still_collect() {
-        crate::native_test_thread::run(|| {
+        crate::test_thread::run(|| {
             use std::{cell::Cell, rc::Rc};
             struct Sentinel(Rc<Cell<usize>>);
             impl foundation::Traceable for Sentinel {

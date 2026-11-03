@@ -165,7 +165,7 @@ pub fn analyze(s: &Snapshot) -> Value {
             "InputToPresentReturn" => latencies.push(milliseconds(e.duration_ns)),
             "InputOwnerQueue" => owner_wait.push(milliseconds(e.duration_ns)),
             "InputQueue" => input_wait.push(milliseconds(e.duration_ns)),
-            "NativePresentQueue" => present_wait.push(milliseconds(e.duration_ns)),
+            "PresentQueue" => present_wait.push(milliseconds(e.duration_ns)),
             "InputNoFrame" => {
                 if wheel_ids.contains(&e.context.input_id) {
                     no_frame_inputs += 1;
@@ -563,7 +563,7 @@ pub fn analyze(s: &Snapshot) -> Value {
             }
             "InputOwnerQueue" => ("input_owner_wait", "Native input owner wait"),
             "InputQueue" => ("input_frame_wait", "Frame-aligned input wait"),
-            "NativePresentQueue" => ("native_present_wait", "Window-thread presentation wait"),
+            "PresentQueue" => ("present_wait", "Window-thread presentation wait"),
             "ForegroundTasks" | "BackgroundTasks" => {
                 ("long_task", "Main-thread task > one interval")
             }
@@ -658,7 +658,7 @@ pub fn analyze(s: &Snapshot) -> Value {
         "vsync":if s.instants.iter().any(|e|e.name=="VSync") {"source pulses"} else {"handled boundaries only"},
         "wheel_samples":if wheel_ids.is_empty() {"unavailable"} else {"native UI enqueue"},
         "scroll_motion":if series.is_empty() {"unavailable"} else {"logical CSS offsets at commit"},
-        "native_to_ui_latency":"unavailable","presentation":if present_wait.is_empty() {"commit API return only; window-thread receipt unobserved"} else {"window-thread receipt and transaction return; not scanout"},
+        "to_ui_latency":"unavailable","presentation":if present_wait.is_empty() {"commit API return only; window-thread receipt unobserved"} else {"window-thread receipt and transaction return; not scanout"},
         "physical_display":"unavailable","displayed_scroll_motion":"unavailable",
         "display_opportunities":if display_targets.is_empty() {"unavailable"} else {"native estimated targets; not physical presentation feedback"},
         "js":"instrumented callbacks and tasks; no sampled JS stack"},
@@ -666,7 +666,7 @@ pub fn analyze(s: &Snapshot) -> Value {
         "commits":commits.values().map(Vec::len).sum::<usize>(),"no_submit_cycles":no_submit,"idle_pulses":idle,"unobserved_pulses":unobserved,
         "deadline_misses":deadline_misses,"scroll_commit_gaps":gap_count,"presentation_failures":failures,"wheel_no_frame_outcomes":no_frame_inputs,"cancelled_wheel_updates":frames.values().map(|f|f.cancelled_wheel).sum::<usize>(),
         "estimated_display_gaps":display_phase_gaps,"estimated_display_collisions":display_phase_collisions,
-        "scroll_commit_interval":percentiles(gaps),"input_to_commit":percentiles(latencies),"input_owner_wait":percentiles(owner_wait),"input_frame_wait":percentiles(input_wait),"native_present_wait":percentiles(present_wait)},
+        "scroll_commit_interval":percentiles(gaps),"input_to_commit":percentiles(latencies),"input_owner_wait":percentiles(owner_wait),"input_frame_wait":percentiles(input_wait),"present_wait":percentiles(present_wait)},
         "frames":ledger,"issues":issues,"scroll_series":series,"commit_intervals":intervals})
 }
 
@@ -713,7 +713,7 @@ mod tests {
         }
     }
     #[test]
-    fn short_frames_can_cross_then_share_native_display_opportunities() {
+    fn short_frames_can_cross_then_share_source_display_opportunities() {
         let mut instants: Vec<_> = (0..5)
             .map(|i| {
                 event(

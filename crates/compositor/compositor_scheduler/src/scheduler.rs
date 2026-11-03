@@ -1182,6 +1182,13 @@ impl<B: SchedulerTypes> Scheduler<B> {
         };
         let has_no_deadline_task = !self.begin_impl_frame_deadline_timer_.IsRunning();
         if has_no_deadline_task || new_deadline != self.deadline_ {
+            let now = self.Now();
+            let mut package_trace = browser_tracing::span(
+                "compositor.scheduler",
+                "Compositor.Scheduler.ScheduleDeadline",
+            );
+            package_trace.set("mode", self.deadline_mode_ as u8 as f64);
+            package_trace.set("delay_us", (new_deadline - now).InMicrosecondsF().max(0.0));
             let _trace =
                 self.trace_scope("cc", "Scheduler::ScheduleBeginImplFrameDeadline", || {
                     vec![

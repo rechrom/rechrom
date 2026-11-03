@@ -3,7 +3,7 @@
 //! https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinarysetwithowndescriptor
 //! https://html.spec.whatwg.org/multipage/input.html#dom-input-checked
 //! All assertions use public DOM/ECMAScript operations through the real bindings.
-use dom::dom_mutation::ApplyDOMMutations;
+use dom::dom_mutation::{ApplyDOMMutations, TryApplyDOMMutations};
 use javascript::{
     javascript_runtime::JavaScriptRuntime, quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
 };
@@ -45,10 +45,10 @@ fn run_steps(scripts: &[&str]) {
         .SetScopedMutationEmitter(Rc::new(move |mutation, runtime| {
             let bindings = scoped_bindings.upgrade().unwrap();
             let notification = bindings.borrow().PrepareMutationNotification(mutation);
-            ApplyDOMMutations(
+            TryApplyDOMMutations(
                 scoped_document.borrow_mut().GetDocumentMut(),
                 std::slice::from_ref(mutation),
-            );
+            )?;
             DOMJavaScriptBindings::DeliverMutationNotification(
                 &bindings,
                 notification,
@@ -62,6 +62,7 @@ fn run_steps(scripts: &[&str]) {
                     );
                 },
             );
+            Ok(())
         }));
     // This bindings-only fixture has no Page. Supply its at-target dispatch
     // adapter through the same injected service used by the embedding.
@@ -149,6 +150,70 @@ fn preformatted_elements_use_html_pre_element_interface() {
         check(!(document.createElement('div') instanceof HTMLPreElement), 'div is not preformatted interface');
         check(!(document.createElementNS('http://www.w3.org/2000/svg', 'pre') instanceof HTMLPreElement), 'namespace brand');
         throwsTypeError(() => new HTMLPreElement(), 'illegal direct constructor');
+    "#);
+}
+
+#[test]
+fn list_items_use_html_li_element_interface() {
+    run(r#"
+        check(typeof HTMLLIElement === 'function', 'HTMLLIElement global');
+        const item = document.createElement('li');
+        check(item instanceof HTMLLIElement, 'li prototype');
+        check(item instanceof HTMLElement, 'li HTML prototype');
+        equal(Object.prototype.toString.call(item), '[object HTMLLIElement]', 'li interface name');
+        check(!(document.createElement('div') instanceof HTMLLIElement), 'div is not a list item');
+        check(!(document.createElementNS('http://www.w3.org/2000/svg', 'li') instanceof HTMLLIElement), 'namespace brand');
+        throwsTypeError(() => new HTMLLIElement(), 'illegal direct constructor');
+    "#);
+}
+
+#[test]
+fn divs_use_html_div_element_interface() {
+    run(r#"
+        check(typeof HTMLDivElement === 'function', 'HTMLDivElement global');
+        const div = document.createElement('div');
+        check(div instanceof HTMLDivElement, 'div prototype');
+        check(div instanceof HTMLElement, 'div HTML prototype');
+        equal(Object.prototype.toString.call(div), '[object HTMLDivElement]', 'div interface name');
+        check(!(document.createElement('span') instanceof HTMLDivElement), 'span is not a div');
+        check(!(document.createElementNS('http://www.w3.org/2000/svg', 'div') instanceof HTMLDivElement), 'namespace brand');
+        throwsTypeError(() => new HTMLDivElement(), 'illegal direct constructor');
+    "#);
+}
+
+#[test]
+fn remove_child_rejection_is_a_not_found_dom_exception_without_host_panic() {
+    run(r#"
+        const root = document.getElementById('root');
+        const child = document.createElement('span');
+        root.appendChild(child);
+        root.removeChild(child);
+        let caught;
+        try { root.removeChild(child); } catch (error) { caught = error; }
+        check(caught instanceof DOMException, 'removeChild rejection is a DOMException');
+        equal(caught.name, 'NotFoundError', 'removeChild rejection name');
+        check(child.parentNode === null && root.childNodes.length === 0,
+              'failed removal leaves the tree unchanged');
+    "#);
+}
+
+#[test]
+fn normalize_merges_adjacent_text_and_removes_empty_text_recursively() {
+    run(r#"
+        const root = document.getElementById('root');
+        const first = document.createTextNode('a');
+        const empty = document.createTextNode('');
+        const second = document.createTextNode('b');
+        const nested = document.createElement('span');
+        nested.append(document.createTextNode('c'), document.createTextNode(''), document.createTextNode('d'));
+        root.append(first, empty, second, nested);
+        root.normalize();
+        equal(root.childNodes.length, 2, 'root text nodes merged');
+        check(root.firstChild === first, 'first text identity retained');
+        equal(first.data, 'ab', 'root text content merged');
+        equal(nested.childNodes.length, 1, 'nested text nodes merged');
+        equal(nested.firstChild.data, 'cd', 'nested text content merged');
+        throwsTypeError(() => Node.prototype.normalize.call({}), 'Node brand');
     "#);
 }
 
@@ -243,7 +308,7 @@ fn autonomous_element_data_accessor_is_not_silently_discarded() {
 }
 
 #[test]
-fn unrelated_interfaces_accept_regular_expandos_without_native_interception() {
+fn unrelated_interfaces_accept_regular_expandos_without_source_interception() {
     run(r#"
         const cases = [
             [document.createElement('div'), ['checked', 'indeterminate', 'value', 'data']],
@@ -267,7 +332,7 @@ fn unrelated_interfaces_accept_regular_expandos_without_native_interception() {
 }
 
 #[test]
-fn own_data_property_shadows_native_input_accessor_until_deleted() {
+fn own_data_property_shadows_input_accessor_until_deleted() {
     run(r#"
         const input = document.createElement('input');
         input.setAttribute('type', 'checkbox');
@@ -288,7 +353,7 @@ fn own_data_property_shadows_native_input_accessor_until_deleted() {
 }
 
 #[test]
-fn own_accessor_shadows_native_input_getter_and_setter() {
+fn own_accessor_shadows_input_getter_and_setter() {
     run(r#"
         const input = document.createElement('input'), calls = [];
         input.checked = false;
@@ -310,7 +375,7 @@ fn own_accessor_shadows_native_input_getter_and_setter() {
 }
 
 #[test]
-fn inherited_author_descriptor_shadows_native_input_accessor() {
+fn inherited_author_descriptor_shadows_input_accessor() {
     run(r#"
         const input = document.createElement('input'), state = Symbol('state'), calls = [];
         input.checked = false;
@@ -410,7 +475,7 @@ fn inherited_author_exceptions_are_not_swallowed_by_host_dispatch() {
 }
 
 #[test]
-fn getter_only_and_nonwritable_properties_reject_writes_without_native_mutation() {
+fn getter_only_and_nonwritable_properties_reject_writes_without_source_mutation() {
     run(r#"
         for (const inherited of [false, true]) {
             for (const accessor of [false, true]) {
@@ -455,7 +520,7 @@ fn checked_accessor_is_owned_by_input_prototype_with_webidl_flags() {
 }
 
 #[test]
-fn saved_native_checked_accessors_enforce_native_brand_not_prototype_identity() {
+fn saved_source_checked_accessors_enforce_source_brand_not_prototype_identity() {
     run(r#"
         const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked');
         check(descriptor && descriptor.get && descriptor.set, 'native checked accessor exists');
@@ -479,7 +544,7 @@ fn saved_native_checked_accessors_enforce_native_brand_not_prototype_identity() 
 }
 
 #[test]
-fn native_input_booleans_use_webidl_boolean_conversion() {
+fn input_booleans_use_webidl_boolean_conversion() {
     run(r#"
         const input = document.createElement('input');
         const conversions = [
@@ -501,7 +566,7 @@ fn native_input_booleans_use_webidl_boolean_conversion() {
 }
 
 #[test]
-fn native_controls_keep_live_state_separate_from_content_attributes() {
+fn controls_keep_live_state_separate_from_content_attributes() {
     run(r#"
         const input = document.createElement('input');
         input.setAttribute('type', 'text');
@@ -536,7 +601,7 @@ fn native_controls_keep_live_state_separate_from_content_attributes() {
 }
 
 #[test]
-fn reflect_get_and_set_native_accessor_use_distinct_input_receiver() {
+fn reflect_get_and_set_source_accessor_use_distinct_input_receiver() {
     run(r#"
         const target = document.createElement('input'), receiver = document.createElement('input');
         target.checked = false;
@@ -558,7 +623,7 @@ fn reflect_get_and_set_native_accessor_use_distinct_input_receiver() {
 }
 
 #[test]
-fn reflect_native_accessor_rejects_non_input_receiver_without_mutating_target() {
+fn reflect_source_accessor_rejects_non_input_receiver_without_mutating_target() {
     run(r#"
         const input = document.createElement('input');
         input.checked = false;
@@ -591,7 +656,7 @@ fn reflect_author_accessors_receive_the_explicit_receiver() {
 }
 
 #[test]
-fn reflect_writable_data_descriptor_creates_receiver_property_without_native_setter() {
+fn reflect_writable_data_descriptor_creates_receiver_property_without_source_setter() {
     run(r#"
         const target = document.createElement('input'), receiver = document.createElement('input');
         target.checked = false;
@@ -613,7 +678,7 @@ fn reflect_writable_data_descriptor_creates_receiver_property_without_native_set
 }
 
 #[test]
-fn deleting_or_replacing_native_prototype_accessor_changes_ordinary_lookup() {
+fn deleting_or_replacing_source_prototype_accessor_changes_ordinary_lookup() {
     run(r#"
         const prototype = HTMLInputElement.prototype;
         const descriptor = Object.getOwnPropertyDescriptor(prototype, 'checked');
@@ -664,7 +729,7 @@ fn saved_input_value_accessors_reject_other_control_interfaces_before_conversion
 }
 
 #[test]
-fn own_id_and_text_content_descriptors_shadow_inherited_native_accessors() {
+fn own_id_and_text_content_descriptors_shadow_inherited_source_accessors() {
     run(r#"
         const element = document.createElement('div');
         element.setAttribute('id', 'native id');
@@ -693,7 +758,7 @@ fn own_id_and_text_content_descriptors_shadow_inherited_native_accessors() {
 }
 
 #[test]
-fn own_and_inherited_method_shadows_override_native_projection() {
+fn own_and_inherited_method_shadows_override_source_projection() {
     run(r#"
         for (const [member, arity] of [['getAttribute', 1], ['setAttribute', 2], ['querySelector', 1]]) {
             const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, member);
@@ -786,11 +851,18 @@ fn parent_node_children_accessors_have_interface_ownership_and_readonly_semantic
 }
 
 #[test]
-fn character_data_owns_data_accessor_and_keeps_native_brand_after_prototype_change() {
+fn character_data_owns_data_accessor_and_keeps_source_brand_after_prototype_change() {
     run(r#"
         check(typeof CharacterData === 'function', 'CharacterData is exposed');
         equal(Object.getPrototypeOf(Text.prototype), CharacterData.prototype, 'Text inherits CharacterData');
         equal(Object.getPrototypeOf(Comment.prototype), CharacterData.prototype, 'Comment inherits CharacterData');
+        check(typeof CDATASection === 'function', 'CDATASection is exposed');
+        equal(Object.getPrototypeOf(CDATASection.prototype), Text.prototype, 'CDATASection inherits Text');
+        check(typeof ProcessingInstruction === 'function', 'ProcessingInstruction is exposed');
+        equal(Object.getPrototypeOf(ProcessingInstruction.prototype), CharacterData.prototype,
+              'ProcessingInstruction inherits CharacterData');
+        throwsTypeError(() => new CDATASection(), 'CDATASection is not directly constructible');
+        throwsTypeError(() => new ProcessingInstruction(), 'ProcessingInstruction is not directly constructible');
         check(!Object.hasOwn(Node.prototype, 'data'), 'data is not a Node member');
         check(!Object.hasOwn(Text.prototype, 'data'), 'Text inherits data');
         const descriptor = Object.getOwnPropertyDescriptor(CharacterData.prototype, 'data');
@@ -889,7 +961,7 @@ fn nullable_and_dom_string_properties_apply_their_own_null_conversion() {
 }
 
 #[test]
-fn native_dom_string_setters_reject_symbols_and_preserve_conversion_exception_identity() {
+fn dom_string_setters_reject_symbols_and_preserve_conversion_exception_identity() {
     run(r#"
         const input = document.createElement('input'), textarea = document.createElement('textarea');
         const select = document.createElement('select'), option = document.createElement('option');
@@ -925,7 +997,7 @@ fn native_dom_string_setters_reject_symbols_and_preserve_conversion_exception_id
 }
 
 #[test]
-fn author_event_handler_shadow_preserves_native_handler_identity() {
+fn author_event_handler_shadow_preserves_source_handler_identity() {
     run(r#"
         const element = document.createElement('button'), authorWrites = [];
         const nativeHandler = function(event) { return event; };
@@ -1047,7 +1119,7 @@ fn event_listener_cycles_follow_target_and_dispatch_lifetimes() {
 }
 
 #[test]
-fn mutation_observer_interest_and_node_list_lifetime_follow_native_ownership() {
+fn mutation_observer_interest_and_node_list_lifetime_follow_source_ownership() {
     run_steps(&[
         r#"
         const root=document.getElementById('root'), target=document.createElement('section');
@@ -1104,4 +1176,30 @@ fn mutation_observer_interest_and_node_list_lifetime_follow_native_ownership() {
         equal(removedNodeRef.deref(),undefined,'unreferenced removed wrapper is reclaimable');
         "#,
     ]);
+}
+
+#[test]
+fn constructed_mouse_event_preserves_ui_event_webidl_state_across_dispatch() {
+    run(r#"
+        const related=document.createElement('aside');
+        const event=new MouseEvent('click',{
+            bubbles:true,cancelable:true,detail:2,screenX:11,screenY:12,
+            clientX:21.5,clientY:22.5,movementX:3,movementY:-4,
+            ctrlKey:true,modifierCapsLock:true,button:1,buttons:4,relatedTarget:related
+        });
+        check(event instanceof MouseEvent && event instanceof UIEvent && event instanceof Event,'event inheritance');
+        equal(event.type,'click','type');equal(event.detail,2,'detail');equal(event.which,2,'legacy which');
+        equal(event.screenX,11,'screen x');equal(event.clientY,22.5,'client y');
+        equal(event.pageX,21.5,'page x');equal(event.x,event.clientX,'x aliases client x');
+        equal(event.movementY,-4,'movement y');equal(event.buttons,4,'buttons');
+        equal(event.relatedTarget,related,'related target');
+        check(event.getModifierState('Control') && event.getModifierState('CapsLock'),'modifier state');
+        check(!event.getModifierState('Unknown'),'unknown modifier');
+        const target=document.getElementById('root');let seen;
+        target.addEventListener('click',value=>{seen=value;value.preventDefault();});
+        equal(target.dispatchEvent(event),false,'cancelled dispatch');equal(seen,event,'same event object');
+        event.initMouseEvent('mouseup',false,false,null,1,1,2,3,4,false,false,true,false,2,related);
+        equal(event.type,'mouseup','legacy initializer type');equal(event.clientX,3,'legacy client x');
+        check(event.shiftKey && event.which===3,'legacy modifier and button');
+    "#);
 }

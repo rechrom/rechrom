@@ -1,4 +1,4 @@
-//! Canonical cc PaintFlags state and decisions. External native objects are
+//! Canonical cc PaintFlags state and decisions. External source objects are
 //! reference-counted values, never services pointing back at a layer or tree.
 #![allow(non_snake_case, non_camel_case_types)]
 use super::{
@@ -85,7 +85,7 @@ impl DynamicRangeLimitMixture {
     }
 }
 // Source: cc/paint/paint_flags.h:185-220. Bit fields are represented by one
-// actual u32, including native truncation and equality of the complete word.
+// actual u32, including source truncation and equality of the complete word.
 #[derive(Clone, Copy, Debug)]
 pub struct CorePaintFlags {
     color_: Color4f,
@@ -132,7 +132,7 @@ impl CorePaintFlags {
         match self.bits(6, 2) {
             0 => Style::kFill_Style,
             1 => Style::kStroke_Style,
-            _ => unreachable!("native validated style"),
+            _ => unreachable!("source validated style"),
         }
     }
     pub fn setStyle(&mut self, value: Style) {
@@ -295,9 +295,9 @@ pub trait PaintFlagsTypes {
     type DrawLooper: PaintValueEquals;
     type ImageFilter: PaintFilterValue<Self::ContentColorUsage>;
 }
-// Native Skia values and operations only. No classification, buffer traversal,
+// Chromium Skia values and operations only. No classification, buffer traversal,
 // Paint policy, owner lookup or layer/tree capability is admitted here.
-pub trait NativePaintValue<B: PaintFlagsTypes + ?Sized> {
+pub trait PaintValue<B: PaintFlagsTypes + ?Sized> {
     fn setPathEffect(&mut self, value: &B::PathEffect);
     fn setShader(&mut self, value: &B::Shader, quality: FilterQuality);
     fn setColorFilter(&mut self, value: &B::ColorFilter);
@@ -313,13 +313,13 @@ pub trait NativePaintValue<B: PaintFlagsTypes + ?Sized> {
     fn setStyle(&mut self, value: Style);
 }
 pub trait PaintFlagsRasterTypes: PaintFlagsTypes + Sized {
-    type NativePaint: NativePaintValue<Self> + Default;
+    type Paint: PaintValue<Self> + Default;
     type Canvas;
     type Path;
     type Rect;
     fn FillPathWithPaint(
         src: &Self::Path,
-        paint: Self::NativePaint,
+        paint: Self::Paint,
         dst: &mut Self::Path,
         cull: Option<&Self::Rect>,
         scale: f32,
@@ -327,8 +327,8 @@ pub trait PaintFlagsRasterTypes: PaintFlagsTypes + Sized {
     fn ApplyLooper(
         looper: &Self::DrawLooper,
         canvas: &mut Self::Canvas,
-        paint: Self::NativePaint,
-        proc: &mut dyn FnMut(&mut Self::Canvas, Self::NativePaint),
+        paint: Self::Paint,
+        proc: &mut dyn FnMut(&mut Self::Canvas, Self::Paint),
     );
 }
 // Source: cc/paint/paint_flags.h:222-348.
@@ -361,7 +361,7 @@ impl<B: PaintFlagsTypes> Default for PaintFlags<B> {
     }
 }
 impl<B: PaintFlagsTypes> Clone for PaintFlags<B> {
-    // Source: cc/paint/paint_flags.cc:60-70. Arc moves/clones preserve native
+    // Source: cc/paint/paint_flags.cc:60-70. Arc moves/clones preserve source
     // sk_sp ownership; normal Rust field drop matches cc:72.
     fn clone(&self) -> Self {
         Self {
@@ -550,7 +550,7 @@ impl<B: PaintFlagsTypes> PaintFlags<B> {
     }
 }
 impl<B: PaintFlagsRasterTypes> PaintFlags<B> {
-    // Source: cc/paint/paint_flags.cc:117-128. The native Skia primitive owns
+    // Source: cc/paint/paint_flags.cc:117-128. The source Skia primitive owns
     // the temporary PathBuilder and detach; no Paint decision is delegated.
     pub fn getFillPath(
         &self,
@@ -562,8 +562,8 @@ impl<B: PaintFlagsRasterTypes> PaintFlags<B> {
         B::FillPathWithPaint(src, self.ToSkPaint(), dst, cull, scale)
     }
     // Source: cc/paint/paint_flags.cc:147-172.
-    pub fn ToSkPaint(&self) -> B::NativePaint {
-        let mut paint = B::NativePaint::default();
+    pub fn ToSkPaint(&self) -> B::Paint {
+        let mut paint = B::Paint::default();
         if let Some(v) = &self.path_effect_ {
             paint.setPathEffect(v)
         }
@@ -588,11 +588,7 @@ impl<B: PaintFlagsRasterTypes> PaintFlags<B> {
         paint
     }
     // Source: cc/paint/paint_flags.h:307-318.
-    pub fn DrawToSk(
-        &self,
-        canvas: &mut B::Canvas,
-        mut proc: impl FnMut(&mut B::Canvas, B::NativePaint),
-    ) {
+    pub fn DrawToSk(&self, canvas: &mut B::Canvas, mut proc: impl FnMut(&mut B::Canvas, B::Paint)) {
         let paint = self.ToSkPaint();
         if let Some(looper) = self.getLooper() {
             B::ApplyLooper(looper, canvas, paint, &mut proc)

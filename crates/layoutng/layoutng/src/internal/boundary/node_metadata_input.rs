@@ -8,16 +8,16 @@ use super::super::form_node_metadata::{
     HTMLAreaElement, HTMLFormControlElement, HTMLImageElement, HTMLInputElement,
     SliderThumbElement, SpinButtonElement, TextControlElement, TextControlInnerEditorElement,
 };
-use super::super::layout_input::{DocumentRole, NativeNodeConstructionData, NodeKind};
+use super::super::layout_input::{DocumentRole, NodeConstructionData, NodeKind};
 use super::super::layout_node_metadata::{
-    ContainerNode, Element, ElementMetadataError, NativeNodeMetadataRelations, Node, NodeDowncast,
+    ContainerNode, Element, ElementMetadataError, Node, NodeDowncast, NodeMetadataRelations,
 };
 use super::super::layout_object_factory_set::LayoutObjectFactorySet;
 
-#[path = "../../../../layout_invalidation/src/native_node_metadata_finalize.rs"]
-mod layout_invalidation_native_node_metadata_finalize;
-#[path = "../../../../layout_invalidation/src/native_node_metadata_incremental_relations.rs"]
-mod layout_invalidation_native_node_metadata_incremental_relations;
+#[path = "../../../../layout_invalidation/src/node_metadata_finalize.rs"]
+mod layout_invalidation_node_metadata_finalize;
+#[path = "../../../../layout_invalidation/src/node_metadata_incremental_relations.rs"]
+mod layout_invalidation_node_metadata_incremental_relations;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetadataFactoryError {
@@ -28,8 +28,8 @@ pub enum MetadataFactoryError {
 }
 
 // cpp: layoutng/internal/boundary/node_metadata_input.cc:17-69
-pub fn CreateNativeElementMetadata(
-    input: &NativeNodeConstructionData,
+pub fn CreateElementMetadata(
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
     factories: &LayoutObjectFactorySet,
 ) -> Result<*mut Element, MetadataFactoryError> {
@@ -135,7 +135,7 @@ unsafe fn dynamic_node<T: NodeDowncast>(node: *mut Node) -> *mut T {
     }
 }
 
-impl NativeNodeMetadataRelations {
+impl NodeMetadataRelations {
     pub(crate) fn ResetForTreeUpdate(node: &mut Node) {
         node.set_control_host(std::ptr::null_mut());
         let text_control = foundation::DynamicTo::<TextControlElement>(&mut *node);
@@ -151,13 +151,11 @@ impl NativeNodeMetadataRelations {
 
     // cpp: layoutng/internal/boundary/node_metadata_input.cc:74-144
     pub fn AttachIncrementalRelations(node: &mut Node) -> Result<(), MetadataRelationsError> {
-        layout_invalidation_native_node_metadata_incremental_relations::AttachIncrementalRelations(
-            node,
-        )
+        layout_invalidation_node_metadata_incremental_relations::AttachIncrementalRelations(node)
     }
 
     // cpp: layoutng/internal/boundary/node_metadata_input.cc:146-263
     pub fn FinalizeTreeRelations(root: &mut Node) -> Result<(), MetadataRelationsError> {
-        layout_invalidation_native_node_metadata_finalize::FinalizeTreeRelations(root)
+        layout_invalidation_node_metadata_finalize::FinalizeTreeRelations(root)
     }
 }

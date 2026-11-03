@@ -39,7 +39,7 @@ pub fn InteractionStateNeedsPaint(
         };
         loop {
             if let Some(resolved) = document.ResolvedStyleFor(index) {
-                if unsafe { resolved.native_style.Get().as_ref() }
+                if unsafe { resolved.computed_style_owner.Get().as_ref() }
                     .is_some_and(|style| style.HasEffectiveAppearance())
                 {
                     return true;

@@ -243,7 +243,7 @@ pub const SK_BUILD_FOR_FUZZER: bool = option_env!("SK_BUILD_FOR_FUZZER").is_some
 // environment entries are not inferred from the host: the embedding must export
 // effective user-config/command-line definitions to rustc. Absent overrides use
 // the same native target defaults. Only resolved decimal shifts 0/16 are accepted.
-const fn native_shift_input(value: &str) -> u32 {
+const fn shift_input(value: &str) -> u32 {
     match value.as_bytes() {
         [b'0'] => 0,
         [b'1', b'6'] => 16,
@@ -258,7 +258,7 @@ const NATIVE_BUILD_FOR_WIN: bool = option_env!("SK_BUILD_FOR_WIN").is_some()
         && crate::include::private::SkFeatures::SK_BUILD_FOR_WIN);
 // Source: include/core/SkTypes.h:38-44
 pub const SK_R32_SHIFT: u32 = match option_env!("SK_R32_SHIFT") {
-    Some(value) => native_shift_input(value),
+    Some(value) => shift_input(value),
     None => {
         if NATIVE_BUILD_FOR_WIN {
             16
@@ -270,7 +270,7 @@ pub const SK_R32_SHIFT: u32 = match option_env!("SK_R32_SHIFT") {
 const _: () = assert!(SK_R32_SHIFT == 0 || SK_R32_SHIFT == 16, "");
 // Source: include/core/SkTypes.h:46-50
 pub const SK_B32_SHIFT: u32 = match option_env!("SK_B32_SHIFT") {
-    Some(value) => native_shift_input(value),
+    Some(value) => shift_input(value),
     None => 16 - SK_R32_SHIFT,
 };
 const _: () = assert!(SK_B32_SHIFT == 16 - SK_R32_SHIFT, "");

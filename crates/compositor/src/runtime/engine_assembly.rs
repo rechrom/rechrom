@@ -1,16 +1,14 @@
 //! Private canonical Scheduler/Host command loop. No layer/tile/job/frame plan
 //! crosses the Engine command/effect boundary.
 use super::{
-    engine_core::NativeEngineCore,
+    engine_core::EngineCore,
     execution::{EngineTask, EngineTaskQueue},
+    host_lifecycle::{HostLifecycleEffect, HostLifecycleEffects},
     main_endpoint::MainHostEffect,
-    native_host_lifecycle::{HostLifecycleEffect, HostLifecycleEffects},
-    native_render::NativeRenderServices,
-    native_resource_events::{NativeResourceEffect, NativeResourceEffects},
-    native_scheduler::{
-        NativeSchedulerEffect, NativeSchedulerEffects, NativeSchedulerHost, NativeTimingHistory,
-    },
+    render::RenderServices,
+    resource_events::{ResourceEffect, ResourceEffects},
     resources::RasterReturnedResource,
+    scheduler_services::{EngineSchedulerHost, SchedulerEffect, SchedulerEffects, TimingHistory},
 };
 use crate::{
     adapter::{begin_frame::BeginFrameArgs, layer_tree_host_impl::HostImplContext},
@@ -27,34 +25,34 @@ use crate::{
 use paint::PaintArtifact;
 use std::sync::Arc;
 
-pub(crate) struct NativeEngineAssembly {
-    core: NativeEngineCore,
+pub(crate) struct EngineAssembly {
+    core: EngineCore,
     scheduler: Scheduler,
     commands: EngineTaskQueue,
     lifecycle: HostLifecycleEffects,
-    scheduler_effects: NativeSchedulerEffects,
-    main_features: NativeRenderServices,
+    scheduler_effects: SchedulerEffects,
+    main_features: RenderServices,
     needs_begin_frames: bool,
     deferred: Option<HostLifecycleEffect>,
-    resource_effects: NativeResourceEffects,
-    latency_monitors: super::native_latency::NativeLatencyMonitorRegistry,
-    input_client: Arc<super::native_input_client::NativeInputHandlerClient>,
+    resource_effects: ResourceEffects,
+    latency_monitors: super::latency_info_swap_promise_monitor::LatencyMonitorRegistry,
+    input_client: Arc<super::input_client::QueuedInputHandlerClient>,
     smoothness_priority_expiration_notifier:
         Arc<crate::cc::base::delayed_unique_notifier::DelayedUniqueNotifier>,
 }
-impl NativeEngineAssembly {
+impl EngineAssembly {
     pub(crate) fn new(
-        mut core: NativeEngineCore,
+        mut core: EngineCore,
         settings: SchedulerSettings,
-        scheduler_host: Arc<NativeSchedulerHost>,
-        timing: Arc<NativeTimingHistory>,
+        scheduler_host: Arc<EngineSchedulerHost>,
+        timing: Arc<TimingHistory>,
         commands: EngineTaskQueue,
         lifecycle: HostLifecycleEffects,
-        scheduler_effects: NativeSchedulerEffects,
-        main_features: NativeRenderServices,
-        resource_effects: NativeResourceEffects,
-        latency_monitors: super::native_latency::NativeLatencyMonitorRegistry,
-        input_client: Arc<super::native_input_client::NativeInputHandlerClient>,
+        scheduler_effects: SchedulerEffects,
+        main_features: RenderServices,
+        resource_effects: ResourceEffects,
+        latency_monitors: super::latency_info_swap_promise_monitor::LatencyMonitorRegistry,
+        input_client: Arc<super::input_client::QueuedInputHandlerClient>,
     ) -> Result<Self, CompositorError> {
         // Host and Scheduler share the exact same reporting allocation. Event
         // metrics submission is the canonical move-only SubmitInfo, not an ID.
@@ -157,6 +155,16 @@ impl NativeEngineAssembly {
         self.Poll()
     }
 
+    /// Establishes the widget state before the first main-frame request.
+    pub(crate) fn SetViewport(
+        &mut self,
+        viewport: CompositorViewportState,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.core.SetViewportState(viewport)?;
+        self.scheduler.SetVisible(viewport.visible, &mut self.core);
+        self.Poll()
+    }
+
     /// Main-thread commit demand, before Blink produces DataForCommit.
     ///
     /// Source: cc/trees/proxy_main.cc:741-756;
@@ -237,6 +245,35 @@ impl NativeEngineAssembly {
         let mut context = HostImplContext {
             services: &mut self.core.services,
         };
+        // A gesture phase boundary cannot overtake scroll updates that were
+        // queued for the previous BeginImplFrame. InputHandlerProxy preserves
+        // this ordering in its compositor event queue before dispatching the
+        // next GestureScrollBegin/End. Flushing only at End lets a rapid new
+        // finger gesture relatch first, so the previous gesture's queued
+        // momentum is then applied to the new latch and visibly snaps the
+        // page.
+        if matches!(
+            input,
+            CompositorInput::Wheel {
+                phase: ScrollPhase::Begin | ScrollPhase::End,
+                ..
+            }
+        ) {
+            let pending = self.input_client.TakeQueued();
+            if !pending.is_empty() {
+                host.WithInputHandler(&mut context, |input, runtime| {
+                    let input = input.expect("source bound InputHandler");
+                    for update in pending {
+                        input.ScrollUpdateWithElasticOverscroll(
+                            runtime,
+                            ScrollState::new(update.data),
+                            TimeDelta::default(),
+                            update.event_timestamp,
+                        );
+                    }
+                });
+            }
+        }
         if matches!(
             input,
             CompositorInput::Wheel {
@@ -246,30 +283,15 @@ impl NativeEngineAssembly {
         ) {
             self.input_client.BeginGesture();
         }
-        if matches!(
-            input,
-            CompositorInput::Wheel {
-                phase: ScrollPhase::End,
-                ..
-            }
-        ) {
-            let pending = self.input_client.TakeQueued();
-            if !pending.is_empty() {
-                host.WithInputHandler(&mut context, |input, runtime| {
-                    let input = input.expect("source bound InputHandler");
-                    for data in pending {
-                        input.ScrollUpdate(runtime, ScrollState::new(data), TimeDelta::default());
-                    }
-                });
-            }
-        }
         if let CompositorInput::Wheel {
             position,
             delta,
             unconstrained_delta,
             granularity,
             is_inertial,
+            event_timestamp,
             phase: ScrollPhase::Update,
+            ..
         } = input
         {
             let compositor_owned = host.WithInputHandler(&mut context, |input, runtime| {
@@ -293,17 +315,15 @@ impl NativeEngineAssembly {
                 data.is_in_inertial_phase = is_inertial;
                 data.delta_granularity = granularity;
                 data.from_user_input = true;
-                let route = self.input_client.RouteUpdate(data, self.scheduler.Now());
-                if route != super::native_input_client::ScrollUpdateRoute::Dispatch {
+                let route = self.input_client.RouteUpdate(data, event_timestamp);
+                if route != super::input_client::ScrollUpdateRoute::Dispatch {
                     // Source: blink InputHandlerProxy::RouteToTypeSpecificHandler.
                     // The transition from an empty compositor event queue to a
                     // non-empty queue requests one BeginImplFrame through cc's
                     // resident InputHandler/LayerTreeHostImpl/Scheduler chain.
                     // The output bit below mirrors the current subscription to
                     // the embedder; it is not a substitute for this cc state.
-                    if route
-                        == super::native_input_client::ScrollUpdateRoute::EnqueueAndRequestAnimation
-                    {
+                    if route == super::input_client::ScrollUpdateRoute::EnqueueAndRequestAnimation {
                         host.WithInputHandler(&mut context, |input, runtime| {
                             input
                                 .expect("source bound InputHandler")
@@ -348,6 +368,8 @@ impl NativeEngineAssembly {
                 unconstrained_delta,
                 granularity,
                 is_inertial,
+                has_synthetic_phase,
+                event_timestamp,
                 phase,
             } => {
                 let position = point(position)?;
@@ -381,8 +403,12 @@ impl NativeEngineAssembly {
                         data.delta_granularity = granularity;
                         data.from_user_input = true;
                         let mut state = ScrollState::new(data);
-                        let status =
-                            input.ScrollBegin(runtime, &mut state, ScrollInputType::kWheel);
+                        let status = input.ScrollBeginWithElasticOverscroll(
+                            runtime,
+                            &mut state,
+                            ScrollInputType::kWheel,
+                            has_synthetic_phase,
+                        );
                         compositor_owned = status.thread == ScrollThread::kScrollOnImplThread
                             && status.main_thread_hit_test_reasons.empty();
                     }
@@ -399,15 +425,22 @@ impl NativeEngineAssembly {
                         data.is_in_inertial_phase = is_inertial;
                         data.delta_granularity = granularity;
                         data.from_user_input = true;
-                        let _result = input.ScrollUpdate(
+                        let _result = input.ScrollUpdateWithElasticOverscroll(
                             runtime,
                             ScrollState::new(data),
                             TimeDelta::default(),
+                            event_timestamp,
                         );
                     }
                     if phase == ScrollPhase::End {
                         compositor_owned = input.IsCurrentlyScrolling(runtime);
-                        input.ScrollEnd(runtime, true, None);
+                        input.ScrollEndWithElasticOverscroll(
+                            runtime,
+                            true,
+                            None,
+                            event_timestamp,
+                            has_synthetic_phase,
+                        );
                     }
                     compositor_owned
                 }))
@@ -879,7 +912,7 @@ impl NativeEngineAssembly {
     // Only native values/once callbacks cross this same-sequence mailbox. The
     // original compositor callbacks have already run synchronously at the C
     // delegate call; Scheduler feedback precedes the posted main callbacks.
-    fn ResourceEffect(&mut self, effect: NativeResourceEffect) {
+    fn ResourceEffect(&mut self, effect: ResourceEffect) {
         let delegate = self
             .core
             .host
@@ -888,14 +921,14 @@ impl NativeEngineAssembly {
             .Base()
             .delegate_for_testing();
         match effect {
-            NativeResourceEffect::DidLoseLayerTreeFrameSink { delegate: target } => {
+            ResourceEffect::DidLoseLayerTreeFrameSink { delegate: target } => {
                 assert_eq!(target, delegate);
                 self.scheduler.DidLoseLayerTreeFrameSink(&mut self.core);
                 self.core
                     .effects
                     .push(CompositorMainThreadEffect::LayerTreeFrameSinkLost);
             }
-            NativeResourceEffect::CanDrawStateChanged {
+            ResourceEffect::CanDrawStateChanged {
                 delegate: target,
                 can_draw: _,
             } => {
@@ -915,13 +948,13 @@ impl NativeEngineAssembly {
                     });
                 self.scheduler.SetCanDraw(can_draw, &mut self.core);
             }
-            NativeResourceEffect::PageScaleAnimationCompleted { delegate: target } => {
+            ResourceEffect::PageScaleAnimationCompleted { delegate: target } => {
                 assert_eq!(target, delegate);
                 self.core
                     .effects
                     .push(CompositorMainThreadEffect::PageScaleAnimationCompleted);
             }
-            NativeResourceEffect::VideoBeginFrame { controller, args } => {
+            ResourceEffect::VideoBeginFrame { controller, args } => {
                 self.core
                     .effects
                     .push(CompositorMainThreadEffect::VideoBeginFrame {
@@ -929,7 +962,7 @@ impl NativeEngineAssembly {
                         args,
                     });
             }
-            NativeResourceEffect::VideoNeedsBeginFrames {
+            ResourceEffect::VideoNeedsBeginFrames {
                 delegate: target,
                 needs,
             } => {
@@ -938,7 +971,7 @@ impl NativeEngineAssembly {
                     .effects
                     .push(CompositorMainThreadEffect::VideoNeedsBeginFrames { needs });
             }
-            NativeResourceEffect::Presented {
+            ResourceEffect::Presented {
                 delegate: target,
                 token,
                 mut callbacks,
@@ -953,7 +986,7 @@ impl NativeEngineAssembly {
                     callback(&details);
                 }
             }
-            NativeResourceEffect::TransitionFinished {
+            ResourceEffect::TransitionFinished {
                 delegate: target,
                 sequence,
                 rects,
@@ -963,7 +996,7 @@ impl NativeEngineAssembly {
                     .main
                     .NotifyTransitionRequestsFinished(sequence, &rects);
             }
-            NativeResourceEffect::CustomMetrics {
+            ResourceEffect::CustomMetrics {
                 delegate: target,
                 results,
             } => {
@@ -1037,7 +1070,10 @@ impl NativeEngineAssembly {
                     EngineTask::RasterWorkCompleted => (CompositorPackage::Raster, "Compositor.Raster.WorkCompleted"),
                     EngineTask::RasterFailure(_) => (CompositorPackage::Raster, "Compositor.Raster.Failure"),
                 };
-                let _task_trace = Span(task_package, task_name);
+                let mut task_trace = Span(task_package, task_name);
+                if let EngineTask::DidNotProduceFrame { reason, .. } = &task {
+                    task_trace.set("reason", *reason as u8 as f64);
+                }
                 self.Task(task)?;
                 tasks_processed += 1;
                 progressed = true;
@@ -1055,7 +1091,7 @@ impl NativeEngineAssembly {
                 progressed = true;
             }
             while let Some(effect) = self.scheduler_effects.Pop() {
-                let NativeSchedulerEffect::NeedsBeginFrameChanged { needed, .. } = effect;
+                let SchedulerEffect::NeedsBeginFrameChanged { needed, .. } = effect;
                 self.needs_begin_frames = needed;
             }
             let can_draw = {
@@ -1144,7 +1180,7 @@ impl NativeEngineAssembly {
         })
     }
 }
-impl Drop for NativeEngineAssembly {
+impl Drop for EngineAssembly {
     fn drop(&mut self) {
         self.smoothness_priority_expiration_notifier.Shutdown();
         self.scheduler.Stop();

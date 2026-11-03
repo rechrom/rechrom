@@ -104,9 +104,11 @@ pub use media_queries::preferred_color_scheme::PreferredColorScheme;
 pub use media_value_change::MediaValueChange;
 pub use pending_sheet_type::PendingSheetType;
 pub use production_style_sheet_projection::{
-    CSSDeclarationMutation, CSSInlineDeclarationMutation, GetInlineCSSDeclaration, ParseCSS,
-    ParseCSSDeclarationList, ParseCSSWithBase, ParseUserAgentCSS, ParseUserAgentCSSWithRole,
-    SetCSSDeclaration, SetInlineCSSDeclaration,
+    CSSDeclarationMutation, CSSInlineDeclarationMutation, CSSStyleSheetImportRequest,
+    CSSStyleSheetImportRequests, CSSStyleSheetRuleMutationError, DeleteCSSStyleSheetRule,
+    GetInlineCSSDeclaration, InsertCSSStyleSheetRule, ParseCSS, ParseCSSDeclarationList,
+    ParseCSSWithBase, ParseUserAgentCSS, ParseUserAgentCSSWithRole, SetCSSDeclaration,
+    SetInlineCSSDeclaration,
 };
 pub use style_engine::{
     AllowMarkForReattachFromRebuildLayoutTreeScope, AllowMarkStyleDirtyFromRecalcScope,

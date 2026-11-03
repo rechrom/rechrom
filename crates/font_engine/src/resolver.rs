@@ -1,7 +1,7 @@
 //! Platform-neutral catalog selection and resolved font caching.
 //!
-//! The caller supplies immutable font bytes and an optional native backend.
-//! Catalog registration validates metadata only; font files and native faces
+//! The caller supplies immutable font bytes and an optional platform backend.
+//! Catalog registration validates metadata only; font files and platform faces
 //! are opened when a request actually selects them.
 
 use std::cell::{OnceCell, RefCell};
@@ -40,7 +40,7 @@ impl Default for FontUnicodeRange {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontFace {
     pub family: String,
-    pub native_family: String,
+    pub resolved_family: String,
     pub metrics_family: String,
     pub weight: f64,
     pub italic: bool,
@@ -48,6 +48,9 @@ pub struct FontFace {
     pub bytes: crate::SharedFontBytes,
     pub face_index: u32,
     pub variations: Vec<FontVariation>,
+    /// Feature defaults from the selected `@font-face` descriptor. Element
+    /// `font-feature-settings` and `font-variant-*` values retain precedence.
+    pub font_feature_settings: ResolvedFontFeatures,
     pub unicode_ranges: Vec<FontUnicodeRange>,
     /// Platform-catalog classification consumed by FontEngine's fallback
     /// iterator. This does not affect an explicitly requested family.
@@ -117,13 +120,14 @@ impl Default for FontFace {
     fn default() -> Self {
         Self {
             family: String::new(),
-            native_family: String::new(),
+            resolved_family: String::new(),
             metrics_family: String::new(),
             weight: 400.0,
             italic: false,
             bytes: crate::SharedFontBytes::default(),
             face_index: 0,
             variations: Vec::new(),
+            font_feature_settings: Vec::new(),
             unicode_ranges: Vec::new(),
             fallback_role: FontFallbackRole::kFamilyOnly,
             fallback_locales: Vec::new(),
@@ -251,19 +255,24 @@ impl InputFontFace {
                 1.0,
                 &variations,
             ));
-            // Native system-ui carries the host's optical instance. Do not
-            // replace it with axes derived from CSS pixels or weight.
-            let native_system_ui = face.family == "system-ui";
             PreparedFontFace {
-                supports_optical_size: !native_system_ui && font.HasVariationAxis(OPTICAL_SIZE_TAG),
-                supports_weight: !native_system_ui && font.HasVariationAxis(WEIGHT_TAG),
+                // FontPlatformDataFromNSFont applies registered CSS axes to
+                // system-ui too. In particular, font-optical-sizing:auto uses
+                // the specified CSS size before explicit variation settings.
+                supports_optical_size: face
+                    .variations
+                    .iter()
+                    .any(|axis| axis.tag == OPTICAL_SIZE_TAG)
+                    || font.HasVariationAxis(OPTICAL_SIZE_TAG),
+                supports_weight: face.variations.iter().any(|axis| axis.tag == WEIGHT_TAG)
+                    || font.HasVariationAxis(WEIGHT_TAG),
                 font,
                 backend: factory.map(|factory| {
                     factory.Create(
                         &face.bytes,
                         face.face_index,
                         &face.variations,
-                        &face.native_family,
+                        &face.resolved_family,
                         &face.metrics_family,
                         face.weight,
                         face.italic,
@@ -339,7 +348,7 @@ impl FontFallbackSource for ResolvedFontSource {
                     self.weight,
                     description,
                 );
-                let native_variations: Vec<OpenTypeVariation> = variations
+                let open_type_variations: Vec<OpenTypeVariation> = variations
                     .iter()
                     .map(|variation| OpenTypeVariation {
                         tag: variation.tag,
@@ -348,7 +357,7 @@ impl FontFallbackSource for ResolvedFontSource {
                     .collect();
                 let open_type_font = prepared.font.WithSizeVariationsAndSpecifiedSize(
                     effective_size as f64,
-                    &native_variations,
+                    &open_type_variations,
                     self.specified_size,
                 );
                 let backend = prepared.backend.as_ref().map(|backend| {
@@ -365,7 +374,11 @@ impl FontFallbackSource for ResolvedFontSource {
                     self.weight >= 600.0 && face.weight < 600.0 && !prepared.supports_weight,
                     self.italic && !face.italic,
                     description.TextRendering(),
-                    ResolvedFeaturesForSelection(description, selection),
+                    ResolvedFeaturesForSelection(
+                        description,
+                        selection,
+                        &face.source.font_feature_settings,
+                    ),
                     self.orientation,
                     face.unicode_ranges.clone(),
                 ));
@@ -424,7 +437,7 @@ impl ResolvedFontSource {
         priority: crate::FontFallbackPriority,
         queries: &FontQueryCollector,
     ) -> Option<SystemFontQuery> {
-        use crate::text::native::character::Character;
+        use crate::text::implementation::character::Character;
         let mut meaningful = false;
         for character in char::decode_utf16(text.iter().copied()) {
             let character = character.unwrap_or(char::REPLACEMENT_CHARACTER) as i32;
@@ -455,7 +468,7 @@ impl ResolvedFontSource {
     }
 }
 
-/// Owns catalog matching, native face admission, and resolved request caches.
+/// Owns catalog matching, platform face admission, and resolved request caches.
 ///
 /// Construction never parses catalog bytes. Resolution admits the primary
 /// face; ordered fallback faces are admitted only when Font's iterator selects
@@ -808,8 +821,9 @@ struct FontFaceSelection {
 fn ResolvedFeaturesForSelection(
     description: &FontDescription,
     selection: &FontFaceSelection,
+    descriptor_features: &[crate::FontFeatureValue],
 ) -> ResolvedFontFeatures {
-    if let Some(family) = &selection.requested_family {
+    let mut resolved = if let Some(family) = &selection.requested_family {
         if let Some((_, features)) =
             description
                 .ResolvedFontFeaturesForFamilies()
@@ -818,23 +832,49 @@ fn ResolvedFeaturesForSelection(
                     requested == family || EqualFamilyName(&requested.Utf8(), &family.Utf8())
                 })
         {
-            return features.clone();
+            features.clone()
+        } else {
+            description.FontVariantAlternatesValue().map_or_else(
+                ResolvedFontFeatures::default,
+                |alternates| {
+                    let no_lookup = |_: &AtomicString| Vec::new();
+                    alternates
+                        .Resolve(
+                            no_lookup, no_lookup, no_lookup, no_lookup, no_lookup, no_lookup,
+                        )
+                        .GetResolvedFontFeatures()
+                        .clone()
+                },
+            )
+        }
+    } else {
+        // No table still requires resolution for historical-forms. Do not carry
+        // named features from another requested family into platform fallback.
+        description.FontVariantAlternatesValue().map_or_else(
+            ResolvedFontFeatures::default,
+            |alternates| {
+                let no_lookup = |_: &AtomicString| Vec::new();
+                alternates
+                    .Resolve(
+                        no_lookup, no_lookup, no_lookup, no_lookup, no_lookup, no_lookup,
+                    )
+                    .GetResolvedFontFeatures()
+                    .clone()
+            },
+        )
+    };
+    // cpp: platform/fonts/resolved_font_features.cc:14-42. CSS properties
+    // override the @font-face descriptor, and font-variant-alternates has the
+    // same higher priority when it resolves to the same OpenType tag.
+    let property_settings = description.FeatureSettings();
+    for feature in descriptor_features {
+        let property_has_tag = property_settings
+            .is_some_and(|settings| settings.iter().any(|setting| setting.Tag() == feature.tag));
+        if !property_has_tag && !resolved.iter().any(|existing| existing.tag == feature.tag) {
+            resolved.push(*feature);
         }
     }
-    // No table still requires resolution for historical-forms. Do not carry
-    // named features from another requested family into platform fallback.
-    description.FontVariantAlternatesValue().map_or_else(
-        ResolvedFontFeatures::default,
-        |alternates| {
-            let no_lookup = |_: &AtomicString| Vec::new();
-            alternates
-                .Resolve(
-                    no_lookup, no_lookup, no_lookup, no_lookup, no_lookup, no_lookup,
-                )
-                .GetResolvedFontFeatures()
-                .clone()
-        },
-    )
+    resolved
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:259-292
@@ -892,7 +932,7 @@ fn OrderFontFaces(
                 return (0, 0);
             };
             if queries.FaceId(&face.source).is_none() {
-                // Caller/CSS-owned faces retain precedence over native aliases.
+                // Caller/CSS-owned faces retain precedence over platform aliases.
                 (0, 0)
             } else if let Some(rank) = queries.MatchRank(&query, &face.source) {
                 (1, rank)
@@ -1052,7 +1092,7 @@ mod tests {
             _bytes: &[u8],
             _face_index: u32,
             _variations: &[FontVariation],
-            _native_family: &str,
+            _resolved_family: &str,
             _metrics_family: &str,
             _weight: f64,
             _italic: bool,
@@ -1147,6 +1187,47 @@ mod tests {
     }
 
     #[test]
+    fn face_descriptor_features_merge_below_element_feature_settings() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut fixture = face("Family", 'A' as u32, FontFallbackRole::kFamilyOnly);
+        fixture.font_feature_settings = vec![feature(b"kern", 0), feature(b"liga", 0)];
+        let mut resolver = FontResolver::new(&[fixture], None);
+        let families = vec!["Family".into()];
+
+        let mut descriptor_only = FontDescription::default();
+        descriptor_only.SetSpecifiedSize(16.0);
+        let font = resolver
+            .Resolve(&request(&families).WithBaseDescription(&descriptor_only))
+            .clone();
+        assert_eq!(
+            resolved_features(&font, 0),
+            &[feature(b"kern", 0), feature(b"liga", 0)]
+        );
+
+        let mut element_override = descriptor_only.clone();
+        let mut settings = crate::FontSettings::default();
+        settings.Append(crate::FontFeature::new(u32::from_be_bytes(*b"liga"), 1));
+        element_override.SetFeatureSettings(Some(Arc::new(settings)));
+        let font = resolver
+            .Resolve(&request(&families).WithBaseDescription(&element_override))
+            .clone();
+        assert_eq!(resolved_features(&font, 0), &[feature(b"kern", 0)]);
+
+        let named_override = alternates_description(&[("Family", b"liga")]);
+        let font = resolver
+            .Resolve(&request(&families).WithBaseDescription(&named_override))
+            .clone();
+        assert_eq!(
+            resolved_features(&font, 0),
+            &[
+                feature(b"liga", 1),
+                feature(b"hist", 1),
+                feature(b"kern", 0)
+            ]
+        );
+    }
+
+    #[test]
     fn named_alternates_follow_each_requested_family_and_unicode_range_face() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut first_range = face("First", 'A' as u32, FontFallbackRole::kFamilyOnly);
@@ -1160,7 +1241,7 @@ mod tests {
             end: 0x42,
         }];
         let mut second_family = face("Second", 'C' as u32, FontFallbackRole::kFamilyOnly);
-        second_family.native_family = "Internal native family".into();
+        second_family.resolved_family = "Internal resolved family".into();
         second_family.metrics_family = "Different metrics family".into();
         let faces = [
             first_range,
@@ -1173,7 +1254,7 @@ mod tests {
             ("FIRST", b"ss02"),
             ("Second", b"ss03"),
             ("Platform", b"ss04"),
-            ("Internal native family", b"ss05"),
+            ("Internal resolved family", b"ss05"),
         ]);
         let families = vec!["missing".into(), "FIRST".into(), "Second".into()];
         let font = resolver
@@ -1238,10 +1319,10 @@ mod tests {
     fn explicit_generic_has_aliases_but_default_catalog_face_has_no_css_identity() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut generic = face("serif", 'A' as u32, FontFallbackRole::kFamilyOnly);
-        generic.native_family = "Native Default".into();
+        generic.resolved_family = "Resolved Default".into();
         let mut resolver = FontResolver::new(&[generic], None);
         let description =
-            alternates_description(&[("serif", b"ss02"), ("Native Default", b"ss03")]);
+            alternates_description(&[("serif", b"ss02"), ("Resolved Default", b"ss03")]);
         let explicit = resolver
             .Resolve(&request(&["serif".into()]).WithBaseDescription(&description))
             .clone();
@@ -1258,17 +1339,17 @@ mod tests {
     }
 
     #[test]
-    fn later_explicit_family_and_native_alias_keep_requested_identity() {
+    fn later_explicit_family_and_platform_alias_keep_requested_identity() {
         let _heap = foundation::LayoutHeapScope::new();
-        let mut native = face("CSS Alias", 'A' as u32, FontFallbackRole::kFamilyOnly);
-        native.native_family = "Native Name".into();
-        native.metrics_family = "Metrics Name".into();
-        let mut resolver = FontResolver::new(&[native], None);
+        let mut platform_face = face("CSS Alias", 'A' as u32, FontFallbackRole::kFamilyOnly);
+        platform_face.resolved_family = "Resolved Name".into();
+        platform_face.metrics_family = "Metrics Name".into();
+        let mut resolver = FontResolver::new(&[platform_face], None);
         let families = vec!["Missing".into(), "CSS Alias".into()];
         let description = alternates_description(&[
             ("Missing", b"ss02"),
             ("CSS Alias", b"ss03"),
-            ("Native Name", b"ss04"),
+            ("Resolved Name", b"ss04"),
         ]);
         let font = resolver.Resolve(&request(&families).WithBaseDescription(&description));
         assert_eq!(
@@ -1456,7 +1537,7 @@ mod tests {
     }
 
     #[test]
-    fn registering_catalog_never_reads_font_bytes_or_creates_native_faces() {
+    fn registering_catalog_never_reads_font_bytes_or_creates_platform_faces() {
         let calls = Arc::new(AtomicUsize::new(0));
         let faces: Vec<FontFace> = (0..256)
             .map(|index| FontFace {
@@ -1629,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn size_adjust_reads_only_primary_and_reuses_admitted_native_face() {
+    fn size_adjust_reads_only_primary_and_reuses_admitted_platform_face() {
         let _heap = foundation::LayoutHeapScope::new();
         let calls = Arc::new(AtomicUsize::new(0));
         let faces = vec![
@@ -1694,10 +1775,13 @@ mod tests {
     #[test]
     fn admitted_family_still_requests_new_weight_style_and_locale() {
         let _heap = foundation::LayoutHeapScope::new();
-        let native = face("requested", 'A' as u32, FontFallbackRole::kFamilyOnly);
+        let platform_face = face("requested", 'A' as u32, FontFallbackRole::kFamilyOnly);
         let queries = FontQueryCollector::default();
-        queries.RegisterFace(&native, crate::SystemFontFaceId("native-regular".into()));
-        let mut resolver = FontResolver::new(&[native], None);
+        queries.RegisterFace(
+            &platform_face,
+            crate::SystemFontFaceId("system-regular".into()),
+        );
+        let mut resolver = FontResolver::new(&[platform_face], None);
         resolver.SetQueryCollector(Some(queries.clone()));
         let families = vec!["requested".to_owned()];
         resolver.Resolve(&request(&families));
@@ -1729,7 +1813,7 @@ mod tests {
         resolver.Resolve(&request(&["owned-web-face".to_owned()]));
         assert!(
             queries.Drain().is_empty(),
-            "a CSS-owned family does not discover an unrelated native alias"
+            "a CSS-owned family does not discover an unrelated platform alias"
         );
     }
 
@@ -1739,9 +1823,9 @@ mod tests {
         let en = face("sans-serif", 'A' as u32, FontFallbackRole::kFamilyOnly);
         let ja = face("sans-serif", 'B' as u32, FontFallbackRole::kFamilyOnly);
         let queries = FontQueryCollector::default();
-        for (native, locale) in [(&en, "en"), (&ja, "ja")] {
+        for (platform_face, locale) in [(&en, "en"), (&ja, "ja")] {
             let id = crate::SystemFontFaceId(locale.into());
-            queries.RegisterFace(native, id.clone());
+            queries.RegisterFace(platform_face, id.clone());
             queries.RegisterMatches(
                 &SystemFontQuery::MatchGeneric {
                     generic: "sans-serif".into(),
@@ -1765,7 +1849,7 @@ mod tests {
             assert_eq!(
                 resolver.FaceIndex(primary),
                 index,
-                "the exact locale's native answer wins"
+                "the exact locale.s platform answer wins"
             );
         }
         let css = face("sans-serif", 'C' as u32, FontFallbackRole::kFamilyOnly);

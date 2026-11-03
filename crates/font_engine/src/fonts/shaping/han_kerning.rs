@@ -6,9 +6,9 @@
 use super::harfbuzz_shaper::{GlyphData, GlyphDataList, HarfBuzzShaper};
 use crate::fonts::glyph::Glyph;
 use crate::fonts::simple_font_data::SimpleFontData;
-use crate::text::native::character::Character;
-use crate::text::native::harfbuzz as hb;
-use crate::text::native::layout_locale::LayoutLocale;
+use crate::text::implementation::character::Character;
+use crate::text::implementation::harfbuzz as hb;
+use crate::text::implementation::layout_locale::LayoutLocale;
 use foundation::gfx::RectF;
 use foundation::{HanKerningCharType as CharType, String, TextDirection};
 

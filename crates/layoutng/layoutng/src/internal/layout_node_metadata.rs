@@ -7,7 +7,7 @@ use foundation::{
     gfx, AtomicString, LayoutUnit, MakeGarbageCollected, Member, ScopedCSSName,
     String as BlinkString, Visitor,
 };
-use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
+use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use layoutng_style::style::computed_style_constants::PseudoId;
 
 use super::boundary::layout_boundary::ReusableLayoutEnvironment;
@@ -15,7 +15,7 @@ use super::form_control_types::FormControlType;
 use super::layout_box::LayoutBox;
 use super::layout_input::{
     CompatibilityMode, ComputedStyle as InputComputedStyle, ContentLockState, DocumentRole,
-    ElementData, NativeNodeConstructionData, NodeKind, PaintPathVerb, SvgLengthAdjust,
+    ElementData, NodeConstructionData, NodeKind, PaintPathVerb, StyleResourceData, SvgLengthAdjust,
     SvgShapeGeometry, ViewportGeometry,
 };
 use super::layout_input_types::{ControlThemeMetrics, IntSize, ScrollbarThemeMetrics};
@@ -23,22 +23,22 @@ use super::layout_object::LayoutObject;
 use super::scroll_types::ScrollOffset;
 use super::svg_length_adjust_type::SVGLengthAdjustType;
 
-#[path = "../../../layout_algo_svg/src/native_svg_metadata_validation.rs"]
-mod layout_algo_svg_native_metadata_validation;
-use layout_algo_svg_native_metadata_validation::ValidateSvgElementInput;
-#[path = "../../../layout_invalidation/src/native_timeline_trigger_metadata.rs"]
-mod layout_invalidation_native_timeline_trigger_metadata;
-use layout_invalidation_native_timeline_trigger_metadata::PopulateTimelineTriggerNames;
-#[path = "../../../layout_algo_list/src/native_list_marker_lookup.rs"]
-mod layout_algo_list_native_marker_lookup;
-#[path = "../../../layout_invalidation/src/native_element_metadata_input.rs"]
-mod layout_invalidation_native_element_metadata_input;
-#[path = "../../../layout_invalidation/src/native_metadata_append.rs"]
-mod layout_invalidation_native_metadata_append;
-#[path = "../../../layout_invalidation/src/native_node_input_state.rs"]
-mod layout_invalidation_native_node_input_state;
-#[path = "../../../layout_invalidation/src/native_node_metadata_tree.rs"]
-mod layout_invalidation_native_node_metadata_tree;
+#[path = "../../../layout_algo_svg/src/svg_metadata_validation.rs"]
+mod layout_algo_svg_metadata_validation;
+use layout_algo_svg_metadata_validation::ValidateSvgElementInput;
+#[path = "../../../layout_invalidation/src/timeline_trigger_metadata.rs"]
+mod layout_invalidation_timeline_trigger_metadata;
+use layout_invalidation_timeline_trigger_metadata::PopulateTimelineTriggerNames;
+#[path = "../../../layout_algo_list/src/list_marker_lookup.rs"]
+mod layout_algo_list_marker_lookup;
+#[path = "../../../layout_invalidation/src/element_metadata_input.rs"]
+mod layout_invalidation_element_metadata_input;
+#[path = "../../../layout_invalidation/src/metadata_append.rs"]
+mod layout_invalidation_metadata_append;
+#[path = "../../../layout_invalidation/src/node_input_state.rs"]
+mod layout_invalidation_node_input_state;
+#[path = "../../../layout_invalidation/src/node_metadata_tree.rs"]
+mod layout_invalidation_node_metadata_tree;
 
 // This header mapping remains in progress while cross-file declarations and
 // the owning tree builder are connected.
@@ -100,6 +100,7 @@ pub struct StandaloneNodeData {
     pub paginated: bool,
     pub fragmentainer_block_size: Option<f64>,
     pub vertical_scroll_enforced: bool,
+    pub fullscreen_element_blocks_layout_view_scroll: bool,
     pub device_pixel_ratio: f64,
     pub canvas_draw_element_enabled: bool,
     pub prefer_non_composited_scrolling_enabled: bool,
@@ -111,8 +112,8 @@ pub struct StandaloneNodeData {
     pub input_id: u64,
     pub input_kind: NodeKind,
     pub input_is_style_generated: bool,
-    pub input_style: Arc<InputComputedStyle>,
-    pub input_first_line_style_data: Option<Arc<InputComputedStyle>>,
+    pub input_style_resources: Arc<StyleResourceData>,
+    pub input_first_line_style_resources: Option<Arc<StyleResourceData>>,
     pub debug_name: String,
     pub element_data: Option<ElementData>,
     pub reusable_layout_environment: Option<Arc<ReusableLayoutEnvironment>>,
@@ -122,8 +123,8 @@ pub struct StandaloneNodeData {
 }
 impl StandaloneNodeData {
     #[inline(always)]
-    pub fn new(input: &NativeNodeConstructionData) -> Self {
-        layout_invalidation_native_node_input_state::NewStandaloneNodeData(input)
+    pub fn new(input: &NodeConstructionData) -> Self {
+        layout_invalidation_node_input_state::NewStandaloneNodeData(input)
     }
 }
 
@@ -134,7 +135,7 @@ pub struct Node {
     input_tree_sealed_: bool,
     input_font_dirty_: bool,
     has_first_line_styles_: bool,
-    first_line_style_: Member<NativeComputedStyle>,
+    first_line_style_: Member<StyleComputedStyle>,
     input_data_: Box<StandaloneNodeData>,
     global_input_owner_: Member<Node>,
     control_host_: Member<Element>,
@@ -142,7 +143,7 @@ pub struct Node {
     viewport_defining_element_: Member<Element>,
     type_: NodeType,
     is_container_: bool,
-    style_: Member<NativeComputedStyle>,
+    style_: Member<StyleComputedStyle>,
     layout_object_: Member<LayoutObject>,
     parent_: Member<ContainerNode>,
     previous_: Member<Node>,
@@ -158,8 +159,8 @@ pub enum NodeMetadataError {
 impl Node {
     // cpp: layoutng/internal/layout_node_metadata.cc:85-93
     pub(crate) fn new(
-        input: &NativeNodeConstructionData,
-        style: *const NativeComputedStyle,
+        input: &NodeConstructionData,
+        style: *const StyleComputedStyle,
         node_type: NodeType,
         container: bool,
     ) -> Result<Self, NodeMetadataError> {
@@ -179,7 +180,7 @@ impl Node {
             viewport_defining_element_: Member::default(),
             type_: node_type,
             is_container_: container,
-            style_: Member::from_ptr(style as *mut NativeComputedStyle),
+            style_: Member::from_ptr(style as *mut StyleComputedStyle),
             layout_object_: Member::default(),
             parent_: Member::default(),
             previous_: Member::default(),
@@ -209,7 +210,7 @@ impl Node {
     pub fn InputHasFirstLineStyles(&self) -> bool {
         self.GlobalInputOwner().has_first_line_styles_
     }
-    pub fn InputFirstLineStyle(&self) -> *const NativeComputedStyle {
+    pub fn InputFirstLineStyle(&self) -> *const StyleComputedStyle {
         self.first_line_style_.Get()
     }
 
@@ -267,6 +268,10 @@ impl Node {
     pub fn InputVerticalScrollEnforced(&self) -> bool {
         self.GlobalInputData().vertical_scroll_enforced
     }
+    pub fn InputFullscreenElementBlocksLayoutViewScroll(&self) -> bool {
+        self.GlobalInputData()
+            .fullscreen_element_blocks_layout_view_scroll
+    }
     pub fn InputDevicePixelRatio(&self) -> f64 {
         self.GlobalInputData().device_pixel_ratio
     }
@@ -298,14 +303,38 @@ impl Node {
     pub fn InputIsStyleGenerated(&self) -> bool {
         self.input_data_.input_is_style_generated
     }
-    pub fn InputStyle(&self) -> &InputComputedStyle {
-        self.input_data_.input_style.as_ref()
+    pub fn InputStyleResources(&self) -> &StyleResourceData {
+        self.input_data_.input_style_resources.as_ref()
     }
-    pub fn InputFirstLineStyleData(&self) -> &Option<Arc<InputComputedStyle>> {
-        &self.input_data_.input_first_line_style_data
+    pub fn InputFirstLineStyleResources(&self) -> &Option<Arc<StyleResourceData>> {
+        &self.input_data_.input_first_line_style_resources
     }
     pub fn InputDebugName(&self) -> &String {
         &self.input_data_.debug_name
+    }
+    pub fn InputIsHTMLAnchorElement(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.html_anchor)
+    }
+    pub fn InputIsHTMLCanvasElement(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.html_canvas)
+    }
+    pub fn InputCanvasLayoutSubtree(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.canvas_layout_subtree)
+    }
+    pub fn InputHasDrawableAttribute(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.drawable_attribute)
     }
     pub fn InputControlTheme(&self) -> &ControlThemeMetrics {
         &self.GlobalInputData().control_theme
@@ -317,20 +346,20 @@ impl Node {
     }
 
     // cpp: layoutng/internal/layout_node_metadata.h:115-126
-    pub fn GetComputedStyle(&self) -> *const NativeComputedStyle {
+    pub fn GetComputedStyle(&self) -> *const StyleComputedStyle {
         self.style_.Get()
     }
-    pub fn ComputedStyleRef(&self) -> &NativeComputedStyle {
+    pub fn ComputedStyleRef(&self) -> &StyleComputedStyle {
         assert!(!self.style_.Get().is_null());
         unsafe { &*self.style_.Get() }
     }
-    pub fn SetComputedStyle(&mut self, style: *const NativeComputedStyle) {
-        self.style_ = Member::from_ptr(style as *mut NativeComputedStyle);
+    pub fn SetComputedStyle(&mut self, style: *const StyleComputedStyle) {
+        self.style_ = Member::from_ptr(style as *mut StyleComputedStyle);
     }
     // The owning layout tree updates source data without replacing node identity.
     #[inline(always)]
-    pub fn UpdateInputData(&mut self, input: &NativeNodeConstructionData) {
-        layout_invalidation_native_node_input_state::UpdateNodeInputData(self, input)
+    pub fn UpdateInputData(&mut self, input: &NodeConstructionData) {
+        layout_invalidation_node_input_state::UpdateNodeInputData(self, input)
     }
 
     // Scroll translation is paint state, not a font or geometry invalidation.
@@ -380,11 +409,11 @@ impl Node {
     }
 
     pub(crate) fn DetachForTreeUpdate(&mut self) {
-        layout_invalidation_native_metadata_append::DetachForTreeUpdate(self)
+        layout_invalidation_metadata_append::DetachForTreeUpdate(self)
     }
 
-    pub fn SetInputFirstLineStyle(&mut self, style: *const NativeComputedStyle) {
-        self.first_line_style_ = Member::from_ptr(style as *mut NativeComputedStyle);
+    pub fn SetInputFirstLineStyle(&mut self, style: *const StyleComputedStyle) {
+        self.first_line_style_ = Member::from_ptr(style as *mut StyleComputedStyle);
     }
     pub fn GetLayoutObject(&self) -> *mut LayoutObject {
         self.layout_object_.Get()
@@ -405,13 +434,16 @@ impl Node {
         self.input_data_.paginated = input.fragmentainer_block_size.is_some();
         self.input_data_.fragmentainer_block_size = input.fragmentainer_block_size;
         self.input_data_.vertical_scroll_enforced = input.vertical_scroll_enforced;
+        self.input_data_
+            .fullscreen_element_blocks_layout_view_scroll =
+            input.fullscreen_element_blocks_layout_view_scroll;
         self.input_data_.device_pixel_ratio = input.device_pixel_ratio;
         self.input_data_.canvas_draw_element_enabled = input.canvas_draw_element_enabled;
         self.input_data_.prefer_non_composited_scrolling_enabled =
             input.prefer_non_composited_scrolling_enabled;
-        // Host viewport inputs are CSS pixels. Native constraints and layout
+        // Host viewport inputs are CSS pixels. Chromium constraints and layout
         // objects use layout-zoom coordinates; convert once at this boundary,
-        // independently of device scale, just like PrepareNativeConstraints.
+        // independently of device scale, just like PrepareConstraints.
         self.input_data_.viewport = input.viewport.map(|mut viewport| {
             let scaled = |size: IntSize| IntSize {
                 width: (size.width as f64 * input.layout_zoom_factor).round() as i32,
@@ -447,7 +479,7 @@ impl Node {
         self.next_.Get()
     }
 
-    // Rust accessors for the C++ friend NativeNodeMetadataRelations. Keeping
+    // Rust accessors for the C++ friend NodeMetadataRelations. Keeping
     // the fields private to this module avoids exposing relation mutations to
     // ordinary callers while the implementation lives in boundary/.
     pub(crate) fn set_control_host(&mut self, host: *mut Element) {
@@ -497,14 +529,6 @@ impl Node {
         visitor.Trace(&self.style_);
         visitor.Trace(&self.first_line_style_);
         visitor.Trace(&self.input_data_.bound_font);
-        // Input descriptors retain canonical styles independently of the
-        // font-bound style_ and first_line_style_ used by the LayoutObject.
-        visitor.Trace(&Member::from_ptr(
-            self.input_data_.input_style.native_style.cast_mut(),
-        ));
-        if let Some(style) = &self.input_data_.input_first_line_style_data {
-            visitor.Trace(&Member::from_ptr(style.native_style.cast_mut()));
-        }
         visitor.Trace(&self.layout_object_);
         visitor.Trace(&self.parent_);
         visitor.Trace(&self.previous_);
@@ -532,8 +556,8 @@ pub enum AppendChildError {
 #[allow(non_snake_case)]
 impl ContainerNode {
     pub(crate) fn new(
-        input: &NativeNodeConstructionData,
-        style: *const NativeComputedStyle,
+        input: &NodeConstructionData,
+        style: *const StyleComputedStyle,
         node_type: NodeType,
     ) -> Result<Self, NodeMetadataError> {
         Ok(Self {
@@ -553,11 +577,11 @@ impl ContainerNode {
 
     // cpp: layoutng/internal/layout_node_metadata.cc:202-215
     pub fn AppendChild(&mut self, child: &mut Node) -> Result<(), AppendChildError> {
-        layout_invalidation_native_metadata_append::AppendChild(self, child)
+        layout_invalidation_metadata_append::AppendChild(self, child)
     }
 
     pub(crate) fn InsertForTreeUpdate(&mut self, child: &mut Node, before: *mut Node) {
-        layout_invalidation_native_metadata_append::InsertForTreeUpdate(self, child, before)
+        layout_invalidation_metadata_append::InsertForTreeUpdate(self, child, before)
     }
 
     // cpp: layoutng/internal/layout_node_metadata.cc:217-221
@@ -578,6 +602,30 @@ pub fn ContentLockBlocksChildLayout(node: *const Node) -> bool {
     element
         .InputContentLockState()
         .is_some_and(|state| !state.should_layout_children)
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_object.h:3309-3313
+#[allow(non_snake_case)]
+pub fn ContentLockBlocksChildPrePaint(node: *const Node) -> bool {
+    if node.is_null() || !unsafe { &*node }.IsElementNode() {
+        return false;
+    }
+    let element = unsafe { &*node.cast::<Element>() };
+    element
+        .InputContentLockState()
+        .is_some_and(|state| !state.should_prepaint_children)
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_object.h:3315-3319
+#[allow(non_snake_case)]
+pub fn ContentLockBlocksChildPaint(node: *const Node) -> bool {
+    if node.is_null() || !unsafe { &*node }.IsElementNode() {
+        return false;
+    }
+    let element = unsafe { &*node.cast::<Element>() };
+    element
+        .InputContentLockState()
+        .is_some_and(|state| !state.should_paint_children)
 }
 
 // The base Node is at offset zero, as with the C++ public inheritance.
@@ -618,15 +666,15 @@ const _: () = assert!(std::mem::offset_of!(Text, node) == 0);
 
 // cpp: layoutng/internal/layout_node_metadata.h:277-288
 // The two static relation methods are defined by boundary/node_metadata_input.cc.
-pub struct NativeNodeMetadataRelations;
+pub struct NodeMetadataRelations;
 
 // cpp: layoutng/internal/layout_node_metadata.h:249-253
 // The constructor dispatch belongs to boundary/node_metadata_input.cc.
-pub use super::boundary::node_metadata_input::CreateNativeElementMetadata;
+pub use super::boundary::node_metadata_input::CreateElementMetadata;
 
 // cpp: layoutng/internal/layout_node_metadata.h:266-274
 // Foundation's DynamicTo adapter can delegate these C++ DowncastTraits
-// predicates when the native metadata tree is connected.
+// predicates when the source metadata tree is connected.
 #[allow(non_snake_case)]
 pub trait NodeDowncast {
     fn AllowFrom(node: &Node) -> bool;
@@ -657,8 +705,8 @@ pub enum TextMetadataError {
 impl Text {
     // cpp: layoutng/internal/layout_node_metadata.cc:495-499
     pub fn new(
-        input: &NativeNodeConstructionData,
-        style: *const NativeComputedStyle,
+        input: &NodeConstructionData,
+        style: *const StyleComputedStyle,
         data: BlinkString,
     ) -> Result<Self, TextMetadataError> {
         let node =
@@ -682,7 +730,7 @@ impl Text {
     }
 }
 
-// Element and ContainerNode also begin with Node; native downcasts must
+// Element and ContainerNode also begin with Node; source downcasts must
 // validate NodeType and ElementType before converting a raw base pointer.
 // cpp: layoutng/internal/layout_node_metadata.h:186-247
 #[repr(C)]
@@ -833,7 +881,7 @@ impl Element {
 
     // cpp: layoutng/internal/layout_node_metadata.cc:463-473
     pub fn InputListMarker(&self) -> *mut Element {
-        layout_algo_list_native_marker_lookup::InputListMarker(self)
+        layout_algo_list_marker_lookup::InputListMarker(self)
     }
     pub fn InputListMarkerLayoutObject(&self) -> *mut LayoutObject {
         let marker = self.InputListMarker();

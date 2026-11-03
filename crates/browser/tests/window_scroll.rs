@@ -1,8 +1,8 @@
 //! Window CSSOM View calls use the existing viewport scroll owner and lifecycle.
 //! Chromium 6c1d401fcca5e1b0030563a90c2f2bba168e0c15:
 //! third_party/blink/renderer/core/frame/local_dom_window.cc:1832-1876,1942-2083.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::internal::layout_input::FontFace;
@@ -75,7 +75,7 @@ fn fixture_with_theme(
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -101,8 +101,8 @@ fn check(page: &mut Page, expression: &str) {
     assert!(result.Succeeded(), "{:?}", result.exception);
 }
 #[test]
-fn numeric_window_scroll_updates_native_viewport_geometry_and_events() {
-    native_test_thread::run(|| {
+fn numeric_window_scroll_updates_source_viewport_geometry_and_events() {
+    test_thread::run(|| {
         let mut page = fixture("body{width:1000px;height:2400px}#anchor{position:absolute;left:600px;top:1500px;width:20px;height:20px}#fixed{position:fixed;top:0;left:0;width:20px;height:20px}", "<div id=anchor></div><div id=fixed></div>", true);
         let old = page.CurrentFrame().unwrap().fragments.clone();
         check(
@@ -140,7 +140,7 @@ fn numeric_window_scroll_updates_native_viewport_geometry_and_events() {
 
 #[test]
 fn scroll_dictionary_conversion_normalization_and_layout_flush() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             "body{width:1000px;height:2400px}",
             "<div id=anchor style='height:20px'></div>",
@@ -179,8 +179,8 @@ fn scroll_dictionary_conversion_normalization_and_layout_flush() {
 }
 
 #[test]
-fn viewport_scroll_uses_page_zoom_and_negative_native_ranges() {
-    native_test_thread::run(|| {
+fn viewport_scroll_uses_page_zoom_and_negative_source_ranges() {
+    test_thread::run(|| {
         for zoom in [2.0, 0.8] {
             let mut page = fixture_with_theme(
                 "body{width:1000px;height:2400px}",
@@ -227,7 +227,7 @@ fn viewport_scroll_uses_page_zoom_and_negative_native_ranges() {
 
 #[test]
 fn smooth_scroll_falls_back_without_begin_frames_and_snap_remains_atomic() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         {
             let mut page = fixture(
                 "html{scroll-behavior:smooth}body{height:2400px}",
@@ -262,8 +262,8 @@ fn smooth_scroll_falls_back_without_begin_frames_and_snap_remains_atomic() {
 }
 
 #[test]
-fn relative_scroll_preserves_native_scroll_origin_float_roundtrip() {
-    native_test_thread::run(|| {
+fn relative_scroll_preserves_source_scroll_origin_float_roundtrip() {
+    test_thread::run(|| {
         let mut page = fixture(
             "html{direction:rtl}body{width:1324px;height:2400px}",
             "<div></div>",

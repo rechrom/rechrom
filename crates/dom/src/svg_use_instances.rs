@@ -11,7 +11,6 @@ pub enum SVGUseInstanceStatus {
     CyclicReference,
     UnsupportedReference,
     UnsupportedViewport,
-    UnsupportedImage,
     UnsupportedSwitch,
 }
 
@@ -209,10 +208,32 @@ impl PersistentDocument {
         let mut branch = ancestors.to_vec();
         branch.push(host);
         match self.SVGInstanceNode(target, &mut branch) {
-            Ok(root) => SVGUseInstancePlan {
-                status: Ready,
-                root: Some(Box::new(root)),
-            },
+            Ok(mut root) => {
+                // SVGUseElement::CreateInstanceTree creates an SVGSVGElement
+                // viewport for a referenced <symbol>. A referenced <svg>
+                // remains an SVGSVGElement. In both cases width/height on the
+                // <use> override the referenced viewport dimensions; absent
+                // dimensions retain the nested SVG 100% defaults.
+                if matches!(self.arena[target].Name(), "svg" | "symbol") {
+                    root.name = "svg".into();
+                    for name in ["width", "height"] {
+                        root.attributes.retain(|attribute| {
+                            !(attribute.local_name == name && attribute.namespace_uri.is_empty())
+                        });
+                        if let Some(attribute) = node.attributes.iter().find(|attribute| {
+                            attribute.local_name == name
+                                && attribute.namespace_uri.is_empty()
+                                && attribute.prefix.is_empty()
+                        }) {
+                            root.attributes.push(attribute.clone());
+                        }
+                    }
+                }
+                SVGUseInstancePlan {
+                    status: Ready,
+                    root: Some(Box::new(root)),
+                }
+            }
             Err(status) => empty(status),
         }
     }
@@ -223,11 +244,8 @@ impl PersistentDocument {
         ancestors: &mut Vec<usize>,
     ) -> Result<InstanceNode, SVGUseInstanceStatus> {
         let node = &self.arena[source];
-        match node.Name() {
-            "svg" | "symbol" => return Err(SVGUseInstanceStatus::UnsupportedViewport),
-            "image" => return Err(SVGUseInstanceStatus::UnsupportedImage),
-            "switch" => return Err(SVGUseInstanceStatus::UnsupportedSwitch),
-            _ => {}
+        if node.Name() == "switch" {
+            return Err(SVGUseInstanceStatus::UnsupportedSwitch);
         }
         let instance = node
             .IsElement("use", DOMNamespace::kSVG)

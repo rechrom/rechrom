@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Generated Apply and native value owners for three stable properties.
+//! Generated Apply and computed style value owners for three stable properties.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{MakeGarbageCollected, Member, StyleInitialLetter, StyleNameScope};
@@ -37,7 +37,7 @@ fn Number(id: CSSPropertyID, value: &Value) -> std::result::Result<f64, Longhand
     Ok(crate::css_value_clamping_utils::CSSValueClampingUtils::ClampDouble(n))
 }
 
-// style_builder_converter.cc:2398-2433, native style_initial_letter.cc:14-39.
+// style_builder_converter.cc:2398-2433, computed style style_initial_letter.cc:14-39.
 fn InitialLetter(
     id: CSSPropertyID,
     v: &Value,
@@ -58,7 +58,7 @@ fn InitialLetter(
         return Err(LonghandApplicationError::InvalidValue(id));
     }
     let size = Number(id, &list.values[0])? as f32;
-    // Source parser accepts calc(<1) but the native owner DCHECKs >=1.
+    // Source parser accepts calc(<1) but the computed style owner DCHECKs >=1.
     // Keep that boundary explicit instead of inventing a minimum-one clamp.
     if size < 1. {
         return Err(LonghandApplicationError::Unsupported(id));
@@ -76,7 +76,7 @@ fn InitialLetter(
     }
     let sink = Number(id, second)?;
     // The explicit sink uses C++ double->int, not saturated_cast. Undefined
-    // out-of-int-range values cannot be fabricated as a saturated native sink.
+    // out-of-int-range values cannot be fabricated as a saturated computed style sink.
     if sink < 1. || sink > i32::MAX as f64 {
         return Err(LonghandApplicationError::Unsupported(id));
     }

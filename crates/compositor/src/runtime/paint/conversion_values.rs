@@ -82,14 +82,14 @@ impl<B: PaintChunksTypes<PaintArtifact = PaintArtifact, DisplayItem = DisplayIte
         a: &Arc<PaintArtifact>,
         s: &dyn PaintChunksServices<B>,
     ) -> B::PaintRecord {
-        s.NativePaintRecord(a, self)
+        s.PaintRecord(a, self)
     }
     fn PaintScrollbar(
         &self,
         a: &Arc<PaintArtifact>,
         s: &dyn PaintChunksServices<B>,
     ) -> B::PaintRecord {
-        s.NativePaintRecord(a, self)
+        s.PaintRecord(a, self)
     }
     fn ScrollbarElementId(&self) -> ElementId {
         ElementId::new(

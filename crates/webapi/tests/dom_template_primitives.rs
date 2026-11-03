@@ -51,7 +51,7 @@ fn run(script: &str) {
     assert!(result.Succeeded(), "{:?}", result.exception);
 }
 #[test]
-fn element_has_attributes_uses_live_native_list() {
+fn element_has_attributes_uses_live_source_list() {
     run(r#"
         const e=document.createElement('div');
         check(!e.hasAttributes(),'empty');e.setAttribute('id','x');check(e.hasAttributes(),'added');
@@ -109,7 +109,7 @@ fn document_import_node_rejects_documents_shadow_roots_and_invalid_receivers() {
     "#);
 }
 #[test]
-fn import_options_and_attribute_overrides_keep_native_semantics() {
+fn import_options_and_attribute_overrides_keep_source_semantics() {
     run(r#"
         const e=document.getElementById('source');
         Object.defineProperty(e,'attributes',{value:[],configurable:true});
@@ -123,7 +123,7 @@ fn import_options_and_attribute_overrides_keep_native_semantics() {
 }
 
 #[test]
-fn import_node_brand_checks_use_native_identity_after_prototype_changes() {
+fn import_node_brand_checks_use_source_identity_after_prototype_changes() {
     run(r#"
         for(const call of [()=>Element.prototype.hasAttributes.call(window),()=>Element.prototype.getAttributeNames.call(window),()=>Document.prototype.importNode.call(window,document.body)]){let threw=false;try{call()}catch(e){threw=e instanceof TypeError}check(threw,'global object incompatible receiver');}
         const e=document.getElementById('source');Object.setPrototypeOf(e,null);

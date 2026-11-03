@@ -28,7 +28,7 @@ pub(crate) fn CollectPresentationAttributes(
     }
     // SVGElement's common CSS-facing attribute map. Element-specific animated
     // geometry properties join these hints below ordinary author declarations;
-    // the native cascade, including explicit auto/zero, owns the final value.
+    // the computed style cascade, including explicit auto/zero, owns the final value.
     // Transform is supplied by SVGTransformableElement.
     const PROPERTIES: &[&str] = &[
         "alignment-baseline",
@@ -300,13 +300,13 @@ mod tests {
             .unwrap()
     }
 
-    fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+    fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
         let document = owner.GetDocument();
         unsafe {
             &*document
                 .ResolvedStyleFor(node(document, id))
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
     }
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn svg_geometry_hints_reach_native_cascade_without_overriding_css_auto_or_zero() {
+    fn svg_geometry_hints_reach_computed_style_cascade_without_overriding_css_auto_or_zero() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(
             "<svg id=root width=100 height=80>\
@@ -374,33 +374,33 @@ mod tests {
             "{:?}",
             engine.Diagnostics()
         );
-        assert_eq!(native(&owner, "root").Width(), &Length::Fixed(100));
-        assert_eq!(native(&owner, "root").Height(), &Length::Fixed(80));
-        let rect = native(&owner, "rect");
+        assert_eq!(computed_style(&owner, "root").Width(), &Length::Fixed(100));
+        assert_eq!(computed_style(&owner, "root").Height(), &Length::Fixed(80));
+        let rect = computed_style(&owner, "rect");
         assert_eq!(rect.X(), &Length::Fixed(3));
         assert_eq!(rect.Y(), &Length::Fixed(4));
         assert_eq!(rect.Width(), &Length::Fixed(20));
         assert_eq!(rect.Height(), &Length::Fixed(30));
         assert_eq!(rect.Rx(), &Length::Fixed(5));
         assert_eq!(rect.Ry(), &Length::Fixed(6));
-        let auto = native(&owner, "auto");
+        let auto = computed_style(&owner, "auto");
         assert!(auto.Width().IsAuto());
         assert_eq!(auto.Height(), &Length::Fixed(0));
         assert!(auto.Rx().IsAuto());
-        let zero = native(&owner, "zero");
+        let zero = computed_style(&owner, "zero");
         assert_eq!(zero.X(), &Length::Fixed(0));
         assert_eq!(zero.Y(), &Length::Fixed(0));
         assert_eq!(zero.Width(), &Length::Fixed(0));
         assert!(zero.Height().IsAuto());
-        assert_eq!(native(&owner, "circle").Cx(), &Length::Percent(25.));
-        assert_eq!(native(&owner, "circle").Cy(), &Length::Fixed(7));
-        assert_eq!(native(&owner, "circle").R(), &Length::Fixed(8));
-        assert_eq!(native(&owner, "ellipse").Cx(), &Length::Fixed(9));
-        assert_eq!(native(&owner, "ellipse").Cy(), &Length::Fixed(10));
-        assert_eq!(native(&owner, "ellipse").Rx(), &Length::Fixed(11));
-        assert_eq!(native(&owner, "ellipse").Ry(), &Length::Fixed(12));
-        assert_eq!(native(&owner, "use").X(), &Length::Fixed(13));
-        assert_eq!(native(&owner, "use").Y(), &Length::Fixed(14));
-        assert!(native(&owner, "use").Width().IsAuto());
+        assert_eq!(computed_style(&owner, "circle").Cx(), &Length::Percent(25.));
+        assert_eq!(computed_style(&owner, "circle").Cy(), &Length::Fixed(7));
+        assert_eq!(computed_style(&owner, "circle").R(), &Length::Fixed(8));
+        assert_eq!(computed_style(&owner, "ellipse").Cx(), &Length::Fixed(9));
+        assert_eq!(computed_style(&owner, "ellipse").Cy(), &Length::Fixed(10));
+        assert_eq!(computed_style(&owner, "ellipse").Rx(), &Length::Fixed(11));
+        assert_eq!(computed_style(&owner, "ellipse").Ry(), &Length::Fixed(12));
+        assert_eq!(computed_style(&owner, "use").X(), &Length::Fixed(13));
+        assert_eq!(computed_style(&owner, "use").Y(), &Length::Fixed(14));
+        assert!(computed_style(&owner, "use").Width().IsAuto());
     }
 }

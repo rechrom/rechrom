@@ -6,7 +6,7 @@ use crate::common::surfaces::surface_id::SurfaceId;
 use compositor_core::adapter::{
     begin_frame::BeginFrameArgs, geometry::Rect, scheduler_host::BeginFrameAck,
 };
-use compositor_core::{runtime::frame::RenderPassId, NativeCompositorFrame};
+use compositor_core::{runtime::frame::RenderPassId, CompositorFrame};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Instant,
@@ -206,8 +206,8 @@ impl DisplayDamageTracker {
     pub fn UpdateFrame(
         &mut self,
         id: SurfaceId,
-        frame: &NativeCompositorFrame,
-        previous: Option<&NativeCompositorFrame>,
+        frame: &CompositorFrame,
+        previous: Option<&CompositorFrame>,
     ) -> SurfaceDamageState {
         let token = frame.metadata.frame_token;
         let old = self.states_.get(&id);

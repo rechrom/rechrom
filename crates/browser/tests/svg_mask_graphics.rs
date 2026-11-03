@@ -1,6 +1,6 @@
 //! External SVG graphics through the production resource, image, mask and raster path.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
 use std::{cell::RefCell, io, rc::Rc};
@@ -61,7 +61,7 @@ fn fixture_html(html: String, svg: &str) -> (Page, Rc<RefCell<Vec<String>>>) {
         Rc::new(RefCell::new(decoder)),
         c,
         Some(ScriptEnvironment {
-            runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+            runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                 4 * 1024 * 1024,
             )),
             xhr: Box::new(XHR),
@@ -94,7 +94,7 @@ fn evaluate(page: &mut Page, script: &str) {
 
 #[test]
 fn stroked_svg_is_visible_as_mask_and_image() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (p, requests) = fixture(GRAPHIC);
         let mut pixels = vec![0; 160 * 60];
@@ -135,7 +135,7 @@ fn stroked_svg_is_visible_as_mask_and_image() {
 
 #[test]
 fn connected_shadow_pseudo_mask_fetches_and_paints_external_graphic() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut p, requests) = fixture_html(
             "<!doctype html><style>body{margin:0;background:white}</style><div id=host></div>"
@@ -196,7 +196,7 @@ fn empty_fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
         GRAPHIC,
     )
 }
-fn assert_native_mask_ready(page: &Page, id: &str) {
+fn assert_source_mask_ready(page: &Page, id: &str) {
     let owner = page.Document();
     let d = owner.GetDocument();
     let i = (0..d.NodeCount())
@@ -204,7 +204,7 @@ fn assert_native_mask_ready(page: &Page, id: &str) {
         .unwrap();
     let r = d.ResolvedStyleFor(i).unwrap();
     let pseudo = r.before.as_ref().unwrap();
-    let style = unsafe { &*pseudo.native_style.Get() };
+    let style = unsafe { &*pseudo.computed_style_owner.Get() };
     let image = unsafe { &*style.MaskLayers().GetImage() };
     assert!(image.IsLoaded() && image.CanRender() && !image.IsLoading() && !image.ErrorOccurred());
     let sources = r.ReferencedStyleImageSources();
@@ -216,7 +216,7 @@ fn assert_native_mask_ready(page: &Page, id: &str) {
 }
 #[test]
 fn closed_nested_shadow_masks_match_static_graphic_pixels_and_keep_old_artifact() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (control, _) = fixture(GRAPHIC);
         let expected = pixels(&control);
@@ -237,7 +237,7 @@ fn closed_nested_shadow_masks_match_static_graphic_pixels_and_keep_old_artifact(
                 );
             }
         }
-        assert_native_mask_ready(&p, "nested-mask");
+        assert_source_mask_ready(&p, "nested-mask");
         assert_eq!(
             requests
                 .borrow()
@@ -251,7 +251,7 @@ fn closed_nested_shadow_masks_match_static_graphic_pixels_and_keep_old_artifact(
             &mut p,
             "style.textContent=style.textContent.replace('nested.svg','replacement.svg')",
         );
-        assert_native_mask_ready(&p, "nested-mask");
+        assert_source_mask_ready(&p, "nested-mask");
         assert_eq!(pixels(&p), actual);
         assert_eq!(
             requests
@@ -266,7 +266,7 @@ fn closed_nested_shadow_masks_match_static_graphic_pixels_and_keep_old_artifact(
 }
 #[test]
 fn detached_shadow_css_waits_for_connection_and_shared_urls_are_deduplicated() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut p, requests) = empty_fixture();
         evaluate(
@@ -300,7 +300,7 @@ fn detached_shadow_css_waits_for_connection_and_shared_urls_are_deduplicated() {
 }
 #[test]
 fn shadow_and_light_image_load_events_follow_shadow_including_order_once() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut p, requests) = empty_fixture();
         evaluate(
@@ -327,7 +327,7 @@ fn shadow_and_light_image_load_events_follow_shadow_including_order_once() {
 }
 #[test]
 fn failed_shadow_image_delivers_error_once() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut p, requests) = empty_fixture();
         evaluate(

@@ -1,9 +1,9 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Class dispatch for the native computed CSS values carried by StyleImage.
+//! Class dispatch for the source computed CSS values carried by StyleImage.
 #![allow(non_snake_case)]
 
+use super::css_gradient_value::CSSGradientValue;
 use super::css_image_value::CSSImageValue;
-use crate::style::generated_gradient_image::CSSGeneratedGradientValue;
 
 #[repr(C)]
 pub struct CSSValue {
@@ -23,9 +23,9 @@ impl CSSValue {
         Self { class_type }
     }
 
-    pub(crate) fn gradient(&self) -> &CSSGeneratedGradientValue {
+    pub(crate) fn gradient(&self) -> &CSSGradientValue {
         assert!(self.IsImageGeneratorValue());
-        // All native gradient allocations embed CSSValue first.
+        // All source gradient allocations embed CSSValue first.
         unsafe { &*(self as *const Self).cast() }
     }
 
@@ -35,13 +35,10 @@ impl CSSValue {
     }
 
     pub fn Hash(&self) -> u32 {
-        if self.IsImageValue() {
-            // cpp: css_value.cc:640-692. Image values use the source's
-            // pointer-identity hash, independently of deep URL equality.
-            self as *const Self as usize as u32
-        } else {
-            self.gradient().Data().Hash()
-        }
+        // cpp: core/css/css_value.cc:640-692. Every CSS value class admitted
+        // here (image and the three gradients) uses pointer identity. False
+        // negatives are explicitly allowed by the source hash contract.
+        self as *const Self as usize as u32
     }
 
     pub fn IsImageValue(&self) -> bool {
@@ -52,7 +49,7 @@ impl CSSValue {
         !self.IsImageValue()
     }
 
-    // cpp: css_value.cc:161-166. These native values admit images and
+    // cpp: css_value.cc:161-166. These source values admit images and
     // gradients; URL images are the only admitted class containing a URL.
     pub fn MayContainUrl(&self) -> bool {
         self.IsImageValue()

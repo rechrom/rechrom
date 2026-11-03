@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native border color, radius and spacing Apply* branches.
+//! Canonical border color, radius and spacing Apply* branches.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::LengthSize;

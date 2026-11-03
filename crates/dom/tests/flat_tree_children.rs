@@ -97,8 +97,8 @@ fn ua_flat_tree_remains_canonical_even_when_layout_uses_existing_control_adapter
     let host = d.CreateElementDefault(DOMNamespace::kHTML, "div".into());
     let light = element(d, "span", host);
     let root = d.AttachShadowRoot(host, DOMShadowRootMode::kUserAgent);
-    let native = element(d, "div", root);
-    assert_eq!(d.FlatTreeChildren(host).as_ref(), &[native]);
+    let source = element(d, "div", root);
+    assert_eq!(d.FlatTreeChildren(host).as_ref(), &[source]);
     assert_eq!(d.FlatTreeParentElement(light), None);
-    assert_eq!(d.FlatTreeParentElement(native), Some(host));
+    assert_eq!(d.FlatTreeParentElement(source), Some(host));
 }

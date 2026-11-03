@@ -1,6 +1,6 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
-pub mod native;
+pub mod ubidi_ffi;
 
 // C ABI values from the vendored ICU headers used by the C++ tree.
 // cpp: icu_bidi/unicode/ubidi.h:340-340

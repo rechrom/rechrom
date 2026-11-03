@@ -1025,14 +1025,14 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplHServices<B> for CpuHostS
             .MutatorHasInvalidationAnimation(host)
     }
 
-    fn MutatorHasNativePropertyAnimation(
+    fn MutatorHasPropertyAnimation(
         &self,
         host: &<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::MutatorHost,
     ) -> bool {
         self.animation
             .as_ref()
             .expect("native animation facet is currently lent")
-            .MutatorHasNativePropertyAnimation(host)
+            .MutatorHasPropertyAnimation(host)
     }
 
     fn MutatorHasViewTransition(

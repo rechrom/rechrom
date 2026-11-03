@@ -9,7 +9,7 @@ use layoutng_style::style::computed_style::ComputedStyle;
 // cpp: layoutng_svg/block_style.h:9-9
 // cpp: layoutng_svg/block_style.cc:12-18
 pub fn SquaredLocalSvgTextScale(block: &LayoutBlock) -> f64 {
-    let transform = block.TransformForLayout();
+    let transform = block.Transform();
     if transform.is_null() {
         return 1.0;
     }

@@ -81,7 +81,7 @@ fn EmptyAndAddCustom() {
 
 // cpp: cascade_map_test.cc:107-135,137-172
 #[test]
-fn AddNativeAndMutateWinner() {
+fn AddAndMutateWinner() {
     let mut map = CascadeMap::new();
     let color = CSSPropertyName::new(CSSPropertyID::kColor);
     let display = CSSPropertyName::new(CSSPropertyID::kDisplay);

@@ -40,7 +40,7 @@ macro_rules! SkLog {
         unsafe{$crate::src::core::SkLog::SkLog_FileLine(
             $file,$line as core::ffi::c_int,$priority,$format $(,$argument)*);}
     }};
-    ($priority:expr,$format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("Chromium logging requires @source native_file_ptr,native_line; format,args to preserve original C++ caller location")};
+    ($priority:expr,$format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("Chromium logging requires @source file_ptr,line; format,args to preserve original C++ caller location")};
 }
 #[cfg(skia_use_default_log)]
 #[macro_export]

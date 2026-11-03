@@ -74,7 +74,7 @@ impl<R: CpuSkiaBackend> crate::adapter::property_tree_manager::PropertyTreeManag
     }
     fn UniformScaleTransform(scale: f32) -> super::geometry::Transform<R> {
         let mut t = super::geometry::Transform::default();
-        t.native_mut().Scale(scale, scale);
+        t.transform_mut().Scale(scale, scale);
         t
     }
     fn SourceToDestinationProjection(
@@ -154,7 +154,7 @@ impl<R: CpuSkiaBackend> TileTypes for CpuCompositorTypes<R> {
 impl<R: CpuSkiaBackend> compositor_tile::picture_layer_tiling_types::PictureLayerTilingTypes
     for CpuCompositorTypes<R>
 {
-    type RasterSource = paint::NativeRasterSource<R>;
+    type RasterSource = paint::RasterSourceStorage<R>;
     type RegionBackend = R;
     type OcclusionTransform = super::geometry::Transform<R>;
     type PaintWorkletRecordMap = crate::adapter::picture_layer_impl::PaintWorkletRecordMap<

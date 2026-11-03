@@ -166,7 +166,7 @@ fn Axis(
         _ => return Err(LonghandApplicationError::InvalidValue(id)),
     })
 }
-// Generated native fields: longhands.cc ApplyInitial/Inherit/Value.
+// Generated computed style fields: longhands.cc ApplyInitial/Inherit/Value.
 pub(super) fn Apply(
     id: CSSPropertyID,
     b: &mut ComputedStyleBuilder,

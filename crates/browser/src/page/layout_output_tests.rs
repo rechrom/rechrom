@@ -58,7 +58,7 @@ fn held(state: &PageState) -> u64 {
 }
 #[test]
 fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_layout() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let state =
             state("<html><body><div id=b style='width:40px;height:20px'></div></body></html>");
         let node = id(&state, "b");
@@ -113,7 +113,7 @@ fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_la
 }
 #[test]
 fn actual_dom_change_flushes_style_before_synchronous_notification_reads_geometry() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let state =
             state("<html><body><div id=b style='width:40px;height:20px'></div></body></html>");
         let node = id(&state, "b");
@@ -139,7 +139,7 @@ fn actual_dom_change_flushes_style_before_synchronous_notification_reads_geometr
 
 #[test]
 fn paint_selector_attribute_mutations_preserve_resident_layout_geometry() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let state = state(
             "<html><body><div id=b class=stable style='width:40px;height:20px'></div></body></html>",
         );
@@ -177,7 +177,7 @@ fn paint_selector_attribute_mutations_preserve_resident_layout_geometry() {
 
 #[test]
 fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let state = state(
             "<html><body><div id=s style='width:80px;height:20px;overflow:hidden'><div id=b style='width:40px;height:100px'></div></div></body></html>",
         );
@@ -215,6 +215,10 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
             page_mutation::FontResourceReady { font },
         ));
         assert!(state.layout_revision.get().is_none());
+        assert!(
+            !state.styles_resolved.get(),
+            "web-font completion must recompute font-relative ch/ex/cap/ic lengths"
+        );
         assert!(state.document.borrow().GetStyleImpact().layout);
         assert!(
             !state
@@ -226,6 +230,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
             "font completion invalidates text geometry without rebuilding the resident tree"
         );
         let _ = geometry(&state, node);
+        assert!(state.styles_resolved.get());
         state.ApplyResourceMutation(ResourceMutation::ImageResourceReady(
             page_mutation::ImageResourceReady {
                 source: "fixture.png".into(),
@@ -253,7 +258,7 @@ impl url_loader::URLLoader for NoNetwork {
 }
 #[test]
 fn completed_frame_retains_layout_output_without_a_second_measurement_layout() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let mut page = Page::Create(
             Rc::new(RefCell::new(NoNetwork)),
@@ -290,8 +295,8 @@ fn completed_frame_retains_layout_output_without_a_second_measurement_layout() {
     });
 }
 #[test]
-fn style_write_geometry_and_frame_share_native_layout_and_match_fresh_pixels() {
-    crate::native_test_thread::run(|| {
+fn style_write_geometry_and_frame_share_source_layout_and_match_fresh_pixels() {
+    crate::test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let mut page = Page::Create(
             Rc::new(RefCell::new(NoNetwork)),
@@ -363,7 +368,7 @@ fn style_write_geometry_and_frame_share_native_layout_and_match_fresh_pixels() {
 
 #[test]
 fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let mut page = Page::Create(
             Rc::new(RefCell::new(NoNetwork)),

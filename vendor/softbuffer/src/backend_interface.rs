@@ -48,9 +48,14 @@ pub(crate) trait BufferInterface {
     fn age(&self) -> u8;
     fn present_with_damage(self, damage: &[Rect]) -> Result<(), SoftBufferError>;
     fn present(self) -> Result<(), SoftBufferError>;
-    fn present_with_callback(self, callback: crate::PresentCallback,
-        _observer: Option<crate::NativeTransactionObserver>) -> Result<(), SoftBufferError>
-    where Self: Sized {
+    fn present_with_callback(
+        self,
+        callback: crate::PresentCallback,
+        _observer: Option<crate::NativeTransactionObserver>,
+    ) -> Result<(), SoftBufferError>
+    where
+        Self: Sized,
+    {
         let started = std::time::Instant::now();
         self.present()?;
         callback(started, std::time::Instant::now());

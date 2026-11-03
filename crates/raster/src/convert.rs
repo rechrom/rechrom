@@ -206,11 +206,16 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterType {
             Self::kContrast => target::PaintFilterType::kContrast,
             Self::kGrayscale => target::PaintFilterType::kGrayscale,
             Self::kHueRotate => target::PaintFilterType::kHueRotate,
+            Self::kLuminanceToAlpha => target::PaintFilterType::kLuminanceToAlpha,
+            Self::kColorMatrix => target::PaintFilterType::kColorMatrix,
             Self::kInvert => target::PaintFilterType::kInvert,
             Self::kOpacity => target::PaintFilterType::kOpacity,
             Self::kSaturate => target::PaintFilterType::kSaturate,
             Self::kSepia => target::PaintFilterType::kSepia,
             Self::kDropShadow => target::PaintFilterType::kDropShadow,
+            Self::kConvolveMatrix => target::PaintFilterType::kConvolveMatrix,
+            Self::kComponentTransfer => target::PaintFilterType::kComponentTransfer,
+            Self::kTurbulence => target::PaintFilterType::kTurbulence,
             Self::kBoxReflect => target::PaintFilterType::kBoxReflect,
         }
     }
@@ -222,6 +227,11 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
         target::PaintFilterOperation {
             r#type: self.r#type.to_skia(),
             amount: self.amount.to_skia(),
+            color_matrix: self.color_matrix.clone(),
+            canvas_filter: self
+                .canvas_filter
+                .as_ref()
+                .map(crate::svg_filter_graph::translate_canvas_filter),
             offset: self.offset.to_skia(),
             blur_radius: self.blur_radius.to_skia(),
             color: self.color.to_skia(),
@@ -242,16 +252,17 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
             reflection_offset: self.reflection_offset,
             reflection_has_mask: self.reflection_has_mask,
             reflection_mask: self.reflection_has_mask.then(|| {
+                let (layers, error) = match crate::reflection_mask::CompileReflectionMaskLayers(
+                    &self.reflection_mask_layers,
+                ) {
+                    Ok(layers) => (layers, None),
+                    Err(error) => (Vec::new(), Some(error.to_string())),
+                };
                 raster_commands::filter_graph::RenderReflectionMask {
                     // A specified but pending/empty mask is transparent. It
                     // must not degrade into an unmasked reflected branch.
-                    layers: crate::reflection_mask::CompileReflectionMaskLayers(
-                        &self.reflection_mask_layers,
-                    )
-                    .unwrap_or_default(),
-                    // Flat replay samples the actual CTM when SaveLayerFilter
-                    // opens and replaces this identity below.
-                    local_to_device: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                    layers,
+                    error,
                 }
             }),
         }
@@ -663,9 +674,11 @@ impl ToSkia for paint::paint_engine::DisplayMaskLayer {
         target::MaskLayer {
             resource_id: self.resource_id.to_skia(),
             image_interpolation_quality: self.image_interpolation_quality.to_skia(),
+            image_orientation: self.image_orientation.to_skia(),
             paint_shader: self.paint_shader.to_skia(),
             clip_rect: self.clip_rect.to_skia(),
             clip_radii: self.clip_radii.to_skia(),
+            has_clip: self.has_clip.to_skia(),
             source_rect: self.source_rect.to_skia(),
             tile_rect: self.tile_rect.to_skia(),
             repeat_x: self.repeat_x.to_skia(),
@@ -693,6 +706,7 @@ impl ToSkia for paint::paint_engine::DisplayItem {
             line_style: self.line_style.to_skia(),
             decoration_style: self.decoration_style.to_skia(),
             stroke_width: self.stroke_width.to_skia(),
+            corner_radius: self.corner_radius.to_skia(),
             corner_radii: self.corner_radii.to_skia(),
             inner_corner_radii: self.inner_corner_radii.to_skia(),
             dash_intervals: self.dash_intervals.to_skia(),
@@ -708,7 +722,9 @@ impl ToSkia for paint::paint_engine::DisplayItem {
             non_scaling_stroke: self.non_scaling_stroke.to_skia(),
             paint_shader: self.paint_shader.to_skia(),
             blend_mode: self.blend_mode.to_skia(),
-            filters: self.filters.to_skia(),
+            // Paint DisplayItems carry PrePaint's canonical filter value and
+            // paint playback consumes it before command projection.
+            filters: Vec::new(),
             mask_layers: self.mask_layers.to_skia(),
             round_cap: self.round_cap.to_skia(),
             resource_id: self.resource_id.to_skia(),
@@ -750,7 +766,7 @@ pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceC
                 .iter()
                 .map(|f| target::FontFace {
                     family: &f.family,
-                    native_family: &f.native_family,
+                    resolved_family: &f.resolved_family,
                     weight: f.weight,
                     italic: f.italic,
                     bytes: &f.bytes,
@@ -763,8 +779,19 @@ pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceC
                 .images
                 .iter()
                 .filter_map(|i| {
-                    i.BitmapPixels()
-                        .map(|pixels| target::Image::shared(i.id, i.width, i.height, pixels))
+                    i.BitmapPixels().map(|pixels| {
+                        let alpha_type = match i.alpha_type {
+                            image_resource::PaintImageAlphaType::Unpremultiplied => {
+                                target::ImageAlphaType::Unpremultiplied
+                            }
+                            image_resource::PaintImageAlphaType::Premultiplied => {
+                                target::ImageAlphaType::Premultiplied
+                            }
+                        };
+                        target::Image::shared_with_alpha_type(
+                            i.id, i.width, i.height, alpha_type, pixels,
+                        )
+                    })
                 })
                 .collect(),
         }),
@@ -783,7 +810,7 @@ mod font_identity_tests {
     fn paint_to_skia_preserves_exact_face_and_glyph_identity() {
         let font = FontFace {
             family: "CSS alias".into(),
-            native_family: "metadata must not select a face".into(),
+            resolved_family: "metadata must not select a face".into(),
             bytes: Vec::from(b"selected immutable font data".as_slice()).into(),
             face_index: 0x20003,
             variations: vec![FontVariation {
@@ -901,7 +928,7 @@ mod font_identity_tests {
             resources: Some(Arc::new(PaintResources {
                 fonts: vec![FontFace {
                     family: "CSS alias".into(),
-                    native_family: "a nonexistent platform font family 314159".into(),
+                    resolved_family: "a nonexistent platform font family 314159".into(),
                     bytes,
                     face_index,
                     ..Default::default()
@@ -931,8 +958,8 @@ mod font_identity_tests {
             .any(|pixel| pixel != [255, 255, 255, 255]));
         let mut without_metadata = artifact.clone();
         let face = &mut Arc::make_mut(without_metadata.resources.as_mut().unwrap()).fonts[0];
+        face.resolved_family.clear();
         face.family.clear();
-        face.native_family.clear();
         assert_eq!(mislabeled, render(&without_metadata));
         mislabeled
     }

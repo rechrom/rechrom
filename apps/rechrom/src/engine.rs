@@ -1,6 +1,6 @@
 //! Public host protocol. Every document is executed by its own Page runtime;
 //! the window host only connects Page handles to the display service.
-use crate::begin_frame_source::NativeBeginFrame;
+use crate::begin_frame_source::BeginFrame;
 use browser::page::{Page, PageClient};
 #[cfg(test)]
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -185,7 +185,7 @@ pub enum Command {
     VSyncDisplayChanged(u32),
     Redraw,
     Input(InputEvent),
-    NativeWheel(crate::input::NativeWheelSample),
+    Wheel(crate::input::WheelSample),
     QueuedInput {
         input: InputEvent,
         queued_at: Instant,
@@ -205,7 +205,7 @@ pub enum Command {
     Forward,
     Stop,
     Wake(EngineWakeToken),
-    BeginFrame(NativeBeginFrame),
+    BeginFrame(BeginFrame),
 }
 #[cfg(test)]
 impl Command {
@@ -215,7 +215,7 @@ impl Command {
             Self::Resize(_) => "Host.Resize",
             Self::VSyncDisplayChanged(_) => "Host.VSyncDisplayChanged",
             Self::Redraw => "Host.Redraw",
-            Self::Input(_) | Self::QueuedInput { .. } | Self::NativeWheel(_) => "Host.Input",
+            Self::Input(_) | Self::QueuedInput { .. } | Self::Wheel(_) => "Host.Input",
             Self::FocusAddress => "Host.FocusAddress",
             Self::SetActive(_) => "Host.SetActive",
             Self::Reload => "Host.Reload",
@@ -401,7 +401,7 @@ pub(crate) fn create_document(
         Some(browser::page::ScriptEnvironment {
             // This embedding owns a 16 MiB thread. The unoptimized translated
             // VM uses about 87 KiB per call; retain 8 MiB for host/layout frames.
-            runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(8 * 1024 * 1024)),
+            runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(8 * 1024 * 1024)),
             xhr: xhr_transport::CreateHTTPXMLHttpRequestTransport(&options)?,
             user_agent: options.user_agent,
         })

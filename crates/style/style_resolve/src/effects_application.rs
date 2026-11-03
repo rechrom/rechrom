@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Chromium visual-effect application against real native style owners.
+//! Chromium visual-effect application against real computed style style owners.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{ECursor, LengthPoint, LengthSize, MakeGarbageCollected, Member};
@@ -97,22 +97,23 @@ fn LengthValue(
     if unit == UnitType::kPercentage {
         return Ok(Length::Percent(number));
     }
-    if b.EffectiveZoom() != 1.0 {
-        return Err(LonghandApplicationError::Unsupported(id));
-    }
+    // CSS basic-shape lengths use CssToLengthConversionData and therefore
+    // apply effective zoom once. The specified font size is unzoomed; relative
+    // and absolute units share the final zoom multiplication.
+    let pixels = Pixels(
+        id,
+        number,
+        unit,
+        b.GetFontDescription().SpecifiedSize(),
+        root,
+        media,
+    )? * f64::from(b.EffectiveZoom());
     Ok(Length::Fixed(
-        crate::css_value_clamping_utils::CSSValueClampingUtils::ClampLength(Pixels(
-            id,
-            number,
-            unit,
-            b.GetFontDescription().ComputedSize(),
-            root,
-            media,
-        )?) as f32,
+        crate::css_value_clamping_utils::CSSValueClampingUtils::ClampLength(pixels) as f32,
     ))
 }
 // cpp: filter_operation_resolver.cc:47-73,128-170,174-190,192-273. Missing SVG URL/
-// reference ownership stays a typed error. These are the genuine native classes.
+// reference ownership stays a typed error. These are the genuine computed style classes.
 fn Filter(
     id: CSSPropertyID,
     v: &Value,
@@ -224,7 +225,8 @@ fn Filter(
     }
     Ok(operations)
 }
-// cpp: basic_shape_functions.cc:636-653. No lowering to a different shape kind.
+// cpp: basic_shape_functions.cc:636-721. Rect and xywh lower to their
+// computed inset equivalents; other supported shapes retain their kind.
 pub(super) fn Shape(
     id: CSSPropertyID,
     v: &Value,
@@ -370,6 +372,34 @@ pub(super) fn Shape(
             }
             Ok(MakeGarbageCollected(shape))
         }
+        CSSValuePayload::kBasicShapeXYWHClass(value) => {
+            let mut shape = BasicShapeInset::default();
+            let left = LengthValue(id, &value.x, b, root, media)?;
+            let top = LengthValue(id, &value.y, b, root, media)?;
+            let width = LengthValue(id, &value.width, b, root, media)?;
+            let height = LengthValue(id, &value.height, b, root, media)?;
+            shape.SetLeft(&left);
+            shape.SetRight(&left.Add(&width).SubtractFromOneHundredPercent());
+            shape.SetTop(&top);
+            shape.SetBottom(&top.Add(&height).SubtractFromOneHundredPercent());
+            if let Some(radii) = &value.radii {
+                let resolved = radii
+                    .each_ref()
+                    .map(|pair| {
+                        Ok::<_, LonghandApplicationError>(LengthSize::new(
+                            &LengthValue(id, &pair[0], b, root, media)?,
+                            &LengthValue(id, &pair[1], b, root, media)?,
+                        ))
+                    })
+                    .into_iter()
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                shape.SetTopLeftRadius(&resolved[0]);
+                shape.SetTopRightRadius(&resolved[1]);
+                shape.SetBottomRightRadius(&resolved[2]);
+                shape.SetBottomLeftRadius(&resolved[3]);
+            }
+            Ok(MakeGarbageCollected(shape))
+        }
         CSSValuePayload::kBasicShapePathClass(value) => Ok(MakeGarbageCollected(StylePath::new(
             value.byte_stream.clone(),
             value.wind_rule,
@@ -478,7 +508,7 @@ fn CursorKeyword(
 }
 // cpp: generated longhands Filter/BackdropFilter/ClipPath/ShapeOutside/Threshold
 // Apply*; longhands_custom.cc:3490-3526 Cursor Apply*; converter.cc:352-396,
-// 2750-2782. Resource-bearing branches require their actual native adapter.
+// 2750-2782. Resource-bearing branches require their actual computed style adapter.
 pub(super) fn Apply(
     id: CSSPropertyID,
     b: &mut ComputedStyleBuilder,

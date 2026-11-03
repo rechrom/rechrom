@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native color slots and currentColor inheritance. Color providers stay typed
+//! Canonical color slots and currentColor inheritance. Color providers stay typed
 //! conversion dependencies; no document or renderer belongs in this module.
 #![allow(non_snake_case)]
 use super::*;
@@ -50,7 +50,7 @@ pub(super) fn Apply(
     let p = parent.filter(|_| inherit && !initial);
     if matches!(id, kWebkitTapHighlightColor | kWebkitTextFillColor) {
         // generated longhands.cc:19105-19113,19192-19201. Tap highlight
-        // uses the native platform-default provider; text fill starts currentColor.
+        // uses the computed style platform-default provider; text fill starts currentColor.
         if initial {
             if id == kWebkitTapHighlightColor {
                 b.SetTapHighlightColor(&ComputedStyleInitialValues::InitialTapHighlightColor());
@@ -266,7 +266,7 @@ mod tests {
         assert!(child.InternalVisitedColorIsCurrentColor());
     }
     #[test]
-    fn visited_slots_inherit_ordinary_colors_and_failure_preserves_native_value() {
+    fn visited_slots_inherit_ordinary_colors_and_failure_preserves_computed_style_value() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut parent = ComputedStyleBuilder::from_style(initial);

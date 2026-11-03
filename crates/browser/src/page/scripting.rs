@@ -128,7 +128,7 @@ impl PageScripts {
                     state: scoped_state.clone(),
                     runtime,
                 });
-                scoped_state.ApplyDOMMutation(
+                scoped_state.TryApplyDOMMutation(
                     mutation,
                     &mut || {
                         DOMJavaScriptBindings::DeliverMutationNotification(
@@ -151,7 +151,7 @@ impl PageScripts {
                             .expect("cached image has Page resources")
                             .DispatchImageEvent(id, loaded, &mut *client.borrow_mut());
                     },
-                );
+                )
             }));
         {
             let c = state.constraints.borrow();
@@ -245,13 +245,12 @@ impl PageScripts {
         if let Some(interaction) = &self.interaction {
             interaction.DidPaint();
         }
-        // Chromium recomputes intersection observations from the committed
-        // post-layout geometry, not only when a scroll event is dispatched.
-        // The JS helper only queues observer delivery, so callbacks remain a
-        // later task and cannot re-enter the lifecycle that just painted.
+        // Chromium gathers intersection and resize observations from committed
+        // post-layout geometry.  The JS helpers only queue observer delivery,
+        // so callbacks remain a later task and cannot re-enter this paint.
         let result = self.script.borrow_mut().EvaluateRaw(
-            "globalThis.__browserUpdateIntersectionObservations?.()",
-            "browser:intersection-observer-update",
+            "globalThis.__browserUpdateIntersectionObservations?.();globalThis.__browserUpdateResizeObservations?.()",
+            "browser:observer-update",
         );
         if let Some(error) = result.exception {
             self.state.client.borrow_mut().DidReportScriptError(&error);
@@ -313,6 +312,9 @@ impl PageScripts {
     pub(super) fn DispatchImageEvent(&mut self, id: u64, loaded: bool) {
         self.state.QueueImageEvent(id, loaded);
     }
+    pub(super) fn DispatchStyleSheetEvent(&mut self, id: u64, signature: String, loaded: bool) {
+        self.state.QueueStyleSheetEvent(id, signature, loaded);
+    }
     pub(super) fn OpenServices(&self) -> OpenScriptServices {
         OpenScriptServices {
             bindings: self.web_api.DOMBindings().clone(),
@@ -357,6 +359,7 @@ impl PageScripts {
                     (weak_state.upgrade(), weak_bindings.upgrade())
                 {
                     EnqueueImageEventTasks(&state, &window, &bindings, &engine);
+                    EnqueueStyleSheetEventTasks(&state, &window, &bindings, &engine);
                 }
             }
         }));
@@ -375,6 +378,12 @@ impl PageScripts {
     }
     pub(super) fn FlushTasks(&self) {
         EnqueueImageEventTasks(
+            &self.state,
+            self.web_api.WindowBindings(),
+            self.web_api.DOMBindings(),
+            &self.engine,
+        );
+        EnqueueStyleSheetEventTasks(
             &self.state,
             self.web_api.WindowBindings(),
             self.web_api.DOMBindings(),
@@ -472,6 +481,15 @@ impl PageScripts {
         executor.WithRuntimeAndRealm(&mut |runtime, realm| {
             progressed = scheduler.PumpModules(runtime, realm, limit);
         });
+        if progressed != 0 {
+            // A completed module-fetch/compile step is a JavaScript task. Its
+            // microtask checkpoint resumes host-deferred import() promises;
+            // postponing that checkpoint until an unrelated Window task can
+            // leave a fully prepared graph permanently pending when no other
+            // transport wake remains. This is the Page-owned equivalent of
+            // Chromium's task-end MicrotasksScope checkpoint.
+            self.Checkpoint();
+        }
         Ok(progressed)
     }
 
@@ -546,7 +564,7 @@ impl PageScripts {
     pub(super) fn Dispatch(
         &mut self,
         input: &interaction::input_event::InputEvent,
-        fragments: NativePaintFragmentCursor<'_>,
+        fragments: PaintFragmentCursor<'_>,
     ) -> io::Result<interaction::interaction_engine::InteractionResult> {
         let engine = self.engine.clone();
         let bindings = self.web_api.DOMBindings().clone();

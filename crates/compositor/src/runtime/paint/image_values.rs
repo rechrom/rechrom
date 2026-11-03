@@ -1,4 +1,4 @@
-//! Actual immutable Paint image catalog lease. Native stable identity and facts
+//! Actual immutable Paint image catalog lease. Stable identity and facts
 //! are read from the same allocation used by playback; no identity registry or
 //! animation/completion metadata projection is constructed.
 use super::{CpuPaintImage, CpuPaintImageValue, CpuPaintRecordImage, CpuWorkletInput, PaintRecord};
@@ -19,7 +19,7 @@ impl std::fmt::Display for CpuPaintImageInputError {
         match self {
             Self::AnimationFramesNotPublished(id) => write!(
                 f,
-                "Paint image {id} has animation facts but no native frame timeline owner"
+                "Paint image {id} has animation facts but no frame timeline owner"
             ),
             Self::MissingResource(id) => write!(
                 f,
@@ -28,22 +28,22 @@ impl std::fmt::Display for CpuPaintImageInputError {
             Self::Metadata { resource, blocker } => {
                 write!(f, "Paint image resource {resource}: {blocker}")
             }
-            Self::DocumentColorSpaceNotPublished(id) => write!(
-                f,
-                "Paint document image {id} lacks native content color usage"
-            ),
+            Self::DocumentColorSpaceNotPublished(id) => {
+                write!(f, "Paint document image {id} lacks content color usage")
+            }
         }
     }
 }
 impl std::error::Error for CpuPaintImageInputError {}
-struct NativeImageLease {
+struct ImageLease {
     record: PaintRecord,
     catalog_index: usize,
     document_record: Option<CpuPaintRecordImage>,
-    software_image: std::sync::OnceLock<Arc<Vec<u8>>>,
+    software_images: Vec<std::sync::OnceLock<Arc<Vec<u8>>>>,
+    animation_metadata: Option<crate::adapter::image_animation::AnimatedImageMetadata>,
 }
-impl NativeImageLease {
-    fn image(&self) -> &paint::paint_engine::NativePaintImage {
+impl ImageLease {
+    fn image(&self) -> &paint::paint_engine::LayoutPaintImage {
         &self
             .record
             .artifact()
@@ -54,6 +54,14 @@ impl NativeImageLease {
     }
 }
 impl CpuPaintImage {
+    pub fn WithDecodingMode(
+        mut self,
+        mode: crate::adapter::layer_tree_host_impl::HostImageDecodingMode,
+    ) -> Self {
+        self.1 = mode;
+        self
+    }
+
     /// Image resources are immutable for the life of this original record.
     /// Facts are validated here once, before the infallible cc value interface
     /// can be acquired. Unknown animation/document facts remain typed errors.
@@ -88,13 +96,63 @@ impl CpuPaintImage {
                 resource,
                 blocker: e.clone(),
             };
-        if image.ShouldAnimate().map_err(metadata)? {
-            return Err(CpuPaintImageInputError::AnimationFramesNotPublished(
-                resource,
-            ));
-        }
-        image.IsComplete().map_err(metadata)?;
+        let should_animate = image.ShouldAnimate().map_err(metadata)?;
+        let is_complete = image.IsComplete().map_err(metadata)?;
         image.IsMultipart().map_err(metadata)?;
+        let animation_metadata = if should_animate {
+            let frames = image
+                .BitmapAnimationFrames()
+                .filter(|frames| {
+                    image
+                        .CompositorMetadata()
+                        .ok()
+                        .and_then(|metadata| match &metadata.animation {
+                            paint::paint_engine::PaintImageAnimationMetadata::Known(info) => {
+                                Some(info.frame_count == frames.len())
+                            }
+                            paint::paint_engine::PaintImageAnimationMetadata::Unavailable(_) => {
+                                None
+                            }
+                        })
+                        .unwrap_or(false)
+                })
+                .ok_or(CpuPaintImageInputError::AnimationFramesNotPublished(
+                    resource,
+                ))?;
+            let repetition_count = match &image
+                .CompositorMetadata()
+                .expect("animation facts validated above")
+                .animation
+            {
+                paint::paint_engine::PaintImageAnimationMetadata::Known(info) => {
+                    info.repetition_count
+                }
+                paint::paint_engine::PaintImageAnimationMetadata::Unavailable(_) => unreachable!(),
+            };
+            Some(crate::adapter::image_animation::AnimatedImageMetadata {
+                paint_image_id: image.paint_image_id,
+                sync_animation_target_id: crate::adapter::image_animation::kInvalidId,
+                sync_animation_sequence_id: 0,
+                completion_state: if is_complete {
+                    crate::adapter::image_animation::CompletionState::kDone
+                } else {
+                    crate::adapter::image_animation::CompletionState::kPartiallyDone
+                },
+                frames: frames
+                    .iter()
+                    .map(|frame| crate::adapter::image_animation::FrameMetadata {
+                        complete: true,
+                        duration: crate::adapter::time::TimeDelta::Microseconds(
+                            frame.duration.as_micros().min(i64::MAX as u128) as i64,
+                        ),
+                    })
+                    .collect(),
+                repetition_count,
+                reset_animation_sequence_id: 0,
+            })
+        } else {
+            None
+        };
         let document_record = match &image.content {
             paint::paint_engine::PaintImageContent::Bitmap(_) => None,
             paint::paint_engine::PaintImageContent::Document(content) => {
@@ -123,24 +181,38 @@ impl CpuPaintImage {
                 })
             }
         };
-        Ok(Self(Arc::new(NativeImageLease {
-            record: record.clone(),
-            catalog_index,
-            document_record,
-            software_image: std::sync::OnceLock::new(),
-        })))
+        Ok(Self(
+            Arc::new(ImageLease {
+                record: record.clone(),
+                catalog_index,
+                document_record,
+                software_images: (0..image
+                    .BitmapAnimationFrames()
+                    .map_or(1, |frames| frames.len()))
+                    .map(|_| std::sync::OnceLock::new())
+                    .collect(),
+                animation_metadata,
+            }),
+            crate::adapter::layer_tree_host_impl::HostImageDecodingMode::kUnspecified,
+        ))
     }
 }
-impl CpuPaintImageValue for NativeImageLease {
+impl CpuPaintImageValue for ImageLease {
     // Source boundary: cc/paint/paint_image.cc GetSwSkImage. The immutable
     // producer owns straight RGBA. Skia performs the actual upload conversion;
     // OnceLock retains that one resulting SkImage-equivalent allocation.
-    fn GetSwSkImage(&self) -> std::io::Result<Arc<Vec<u8>>> {
-        if let Some(image) = self.software_image.get() {
+    fn GetSwSkImage(&self, frame_index: usize) -> std::io::Result<Arc<Vec<u8>>> {
+        let software_image = self.software_images.get(frame_index).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "software image frame index is outside the producer frame set",
+            )
+        })?;
+        if let Some(image) = software_image.get() {
             return Ok(image.clone());
         }
         let input = self.image();
-        let pixels = input.BitmapPixels().ok_or_else(|| {
+        let pixels = input.BitmapFramePixels(frame_index).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "software image requires an actual bitmap allocation",
@@ -149,9 +221,8 @@ impl CpuPaintImageValue for NativeImageLease {
         let converted =
             skia::raster_target::premultiply_rgba8888(input.width, input.height, pixels)
                 .ok_or_else(|| std::io::Error::other("invalid software image bitmap allocation"))?;
-        let _ = self.software_image.set(Arc::new(converted));
-        Ok(self
-            .software_image
+        let _ = software_image.set(Arc::new(converted));
+        Ok(software_image
             .get()
             .expect("same immutable image backing")
             .clone())
@@ -167,15 +238,15 @@ impl CpuPaintImageValue for NativeImageLease {
     fn animation_metadata(
         &self,
     ) -> Option<&crate::adapter::image_animation::AnimatedImageMetadata> {
-        None
-    } // The constructor proves the actual producer is static.
+        self.animation_metadata.as_ref()
+    }
     fn stable_id(&self) -> PaintImageId {
         self.image().paint_image_id
     }
     fn ShouldAnimate(&self) -> bool {
         self.image()
             .ShouldAnimate()
-            .expect("validated immutable native animation facts")
+            .expect("validated immutable animation facts")
     }
     fn IsLazyGenerated(&self) -> bool {
         self.image().IsLazyGenerated()
@@ -183,12 +254,12 @@ impl CpuPaintImageValue for NativeImageLease {
     fn IsComplete(&self) -> bool {
         self.image()
             .IsComplete()
-            .expect("validated immutable native completion facts")
+            .expect("validated immutable completion facts")
     }
     fn IsMultipart(&self) -> bool {
         self.image()
             .IsMultipart()
-            .expect("validated immutable native multipart facts")
+            .expect("validated immutable multipart facts")
     }
     fn ContentColorUsage(&self) -> ContentColorUsage {
         ContentColorUsage::kSRGB

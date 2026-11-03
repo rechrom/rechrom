@@ -1,4 +1,4 @@
-//! StylePath's native byte-stream and wind-rule payload from
+//! StylePath's source byte-stream and wind-rule payload from
 //! core/style/style_path.h:19-50 and style_path.cc:49-52.
 use super::basic_shapes::{BasicShape, ShapeType};
 use super::svg_path_byte_stream::SVGPathByteStream;
@@ -38,7 +38,7 @@ impl BasicShape for StylePath {
     }
     fn GetPath(&self, _rect: &gfx::RectF, _zoom: f32, _path_scale: f32) -> Path {
         // The owning Path package has not been linked: foundation::Path is
-        // deliberately uninhabited. Native layout only needs the real shape
+        // deliberately uninhabited. Chromium layout only needs the real shape
         // payload and HasClipPath here; it does not call this path builder.
         unimplemented!("StylePath::GetPath requires the owning vector Path package")
     }

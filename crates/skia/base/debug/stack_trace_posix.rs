@@ -1,6 +1,6 @@
 // Source: base/debug/stack_trace_posix.cc
 use super::stack_trace::{kMaxTraces, StackTrace};
-use crate::base::strings::native_ostream::{NativeOStream, StdStringStorage};
+use crate::base::strings::ostream::{OStream, StdStringStorage};
 use core::{
     ffi::{c_int, c_void, CStr},
     marker::PhantomPinned,
@@ -116,7 +116,7 @@ impl BacktraceOutputHandler for PrintBacktraceOutputHandler {
     }
 }
 struct StreamBacktraceOutputHandler<'a, 'b> {
-    os_: &'a mut NativeOStream<'b>,
+    os_: &'a mut OStream<'b>,
     _pin: PhantomPinned,
 }
 impl BacktraceOutputHandler for StreamBacktraceOutputHandler<'_, '_> {
@@ -201,7 +201,7 @@ pub(super) unsafe fn PrintWithPrefixImpl<S: StdStringStorage>(
 // Source: base/debug/stack_trace_posix.cc:1079
 pub(super) unsafe fn OutputToStreamWithPrefixImpl<S: StdStringStorage>(
     addresses: &[*const c_void],
-    os: &mut NativeOStream<'_>,
+    os: &mut OStream<'_>,
     prefix: &CStr,
 ) {
     let mut handler = core::pin::pin!(StreamBacktraceOutputHandler {
@@ -578,10 +578,10 @@ unsafe fn PrintContextRegisters(context: *mut c_void, buf: &mut [u8]) {
     )
 ))]
 // Source: base/debug/stack_trace_posix.cc:121
-unsafe fn DemangleSymbols<S: crate::base::strings::native_ostream::StdStringStorage>(
-    mut text: core::pin::Pin<&mut crate::base::strings::native_ostream::NativeStdString<S>>,
+unsafe fn DemangleSymbols<S: crate::base::strings::ostream::StdStringStorage>(
+    mut text: core::pin::Pin<&mut crate::base::strings::ostream::StdString<S>>,
 ) {
-    use crate::base::strings::native_ostream::NativeStdString;
+    use crate::base::strings::ostream::StdString;
     use core::{mem::MaybeUninit, pin::Pin};
     unsafe extern "C" {
         fn __cxa_demangle(
@@ -613,7 +613,7 @@ unsafe fn DemangleSymbols<S: crate::base::strings::native_ostream::StdStringStor
                 mangled_start,
             )
             .unwrap_or_else(|| text.as_ref().size());
-        let mut mangled_symbol = MaybeUninit::<NativeStdString<S>>::uninit();
+        let mut mangled_symbol = MaybeUninit::<StdString<S>>::uninit();
         unsafe {
             text.as_ref().substr_count_at_assuming_native_abi(
                 mangled_start,
@@ -661,12 +661,12 @@ unsafe fn DemangleSymbols<S: crate::base::strings::native_ostream::StdStringStor
     )
 ))]
 // Source: base/debug/stack_trace_posix.cc:198
-unsafe fn ProcessBacktrace<S: crate::base::strings::native_ostream::StdStringStorage>(
+unsafe fn ProcessBacktrace<S: crate::base::strings::ostream::StdStringStorage>(
     traces: &[*const c_void],
     prefix: &CStr,
     mut handler: Pin<&mut dyn BacktraceOutputHandler>,
 ) {
-    use crate::base::strings::native_ostream::NativeStdString;
+    use crate::base::strings::ostream::StdString;
     use core::{mem::MaybeUninit, pin::Pin};
     unsafe extern "C" {
         fn backtrace_symbols(
@@ -697,12 +697,9 @@ unsafe fn ProcessBacktrace<S: crate::base::strings::native_ostream::StdStringSto
         if !traces.is_empty() {
             for i in 0..traces.len() {
                 let s = unsafe { *trace_symbols.0.add(i) };
-                let mut trace_symbol = MaybeUninit::<NativeStdString<S>>::uninit();
+                let mut trace_symbol = MaybeUninit::<StdString<S>>::uninit();
                 unsafe {
-                    NativeStdString::initialize_cstr_at_assuming_native_abi(
-                        trace_symbol.as_mut_ptr(),
-                        s,
-                    );
+                    StdString::initialize_cstr_at_assuming_native_abi(trace_symbol.as_mut_ptr(), s);
                 }
                 let mut symbol = unsafe { Pin::new_unchecked(trace_symbol.assume_init_mut()) };
                 unsafe {
@@ -741,9 +738,7 @@ unsafe fn ProcessBacktrace<S: crate::base::strings::native_ostream::StdStringSto
     )
 ))]
 // Source: base/debug/stack_trace_posix.cc:1069
-pub(super) unsafe fn PrintWithPrefixImpl<
-    S: crate::base::strings::native_ostream::StdStringStorage,
->(
+pub(super) unsafe fn PrintWithPrefixImpl<S: crate::base::strings::ostream::StdStringStorage>(
     addresses: &[*const c_void],
     prefix: &CStr,
 ) {
@@ -764,10 +759,10 @@ pub(super) unsafe fn PrintWithPrefixImpl<
 ))]
 // Source: base/debug/stack_trace_posix.cc:1079
 pub(super) unsafe fn OutputToStreamWithPrefixImpl<
-    S: crate::base::strings::native_ostream::StdStringStorage,
+    S: crate::base::strings::ostream::StdStringStorage,
 >(
     addresses: &[*const c_void],
-    os: &mut NativeOStream<'_>,
+    os: &mut OStream<'_>,
     prefix: &CStr,
 ) {
     let mut handler = core::pin::pin!(StreamBacktraceOutputHandler {
@@ -902,7 +897,7 @@ pub(super) unsafe fn PrintWithPrefixImpl<S: StdStringStorage>(
 // Source: base/debug/stack_trace_posix.cc:1079
 pub(super) unsafe fn OutputToStreamWithPrefixImpl<S: StdStringStorage>(
     addresses: &[*const c_void],
-    os: &mut NativeOStream<'_>,
+    os: &mut OStream<'_>,
     prefix: &CStr,
 ) {
     let mut handler = core::pin::pin!(StreamBacktraceOutputHandler {

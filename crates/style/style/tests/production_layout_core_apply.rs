@@ -75,12 +75,12 @@ fn lengths(s: &ComputedStyle) -> Vec<&foundation::Length> {
         s.Left(),
     ]
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 #[test]
 fn physical_box_lengths_inherit_computed_units_and_reset_all_eighteen_fields() {
@@ -131,7 +131,7 @@ fn physical_box_lengths_inherit_computed_units_and_reset_all_eighteen_fields() {
 }
 
 #[test]
-fn gaps_clip_margin_grid_positions_and_simple_enums_use_native_storage() {
+fn gaps_clip_margin_grid_positions_and_simple_enums_use_computed_style_storage() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut b = ComputedStyleBuilder::from_style(initial());
     apply(&mut b, None, "column-gap:calc(3px + 4%);row-gap:7%;overflow-clip-margin:content-box -2.25px;grid-column:calc(0) / span calc(0);grid-row:-999999999 / span 999999999;scroll-behavior:smooth;resize:inline;unicode-bidi:isolate-override");
@@ -258,7 +258,7 @@ fn style_engine_production_logical_mapping_and_css_wide_cascade_reach_real_field
         "{:?}",
         engine.Diagnostics()
     );
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert_eq!(c.Width().Pixels(), 21.);
     assert_eq!(c.Height().Pixels(), 22.);
     assert_eq!(c.MinWidth().Pixels(), 23.);
@@ -277,7 +277,7 @@ fn style_engine_production_logical_mapping_and_css_wide_cascade_reach_real_field
     assert_eq!(c.GetScrollBehavior(), ScrollBehavior::kSmooth);
     assert_eq!(c.Resize(), EResize::kBoth);
     assert_eq!(c.GetUnicodeBidi(), UnicodeBidi::kEmbed);
-    let u = native(&owner, "u");
+    let u = computed_style(&owner, "u");
     assert!(u.Width().IsAuto());
     assert!(u.ColumnGap().is_none());
     assert!(u.GridColumnStart().IsAuto());

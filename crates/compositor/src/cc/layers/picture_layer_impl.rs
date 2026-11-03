@@ -801,12 +801,12 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
         c: &LayerImplContext<'_, B>,
     ) -> f32 {
         debug_assert!(self.AffectedByWillChangeTransformHint(c));
-        let native = self.state_.ideal_device_scale_ * self.state_.ideal_page_scale_;
+        let combined_scale = self.state_.ideal_device_scale_ * self.state_.ideal_page_scale_;
         let ideal = self.GetIdealContentsScaleKey();
-        if ideal < native * kMinScaleRatioForWillChangeTransform {
+        if ideal < combined_scale * kMinScaleRatioForWillChangeTransform {
             return ideal * kMinScaleRatioForWillChangeTransform;
         }
-        native
+        combined_scale
     }
     // Source: cc/layers/picture_layer_impl.cc:1234-1363.
     // Source: cc/layers/picture_layer_impl.h:233-233.

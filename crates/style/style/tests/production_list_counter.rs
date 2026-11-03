@@ -11,7 +11,7 @@ use style::{
     resolver::production_style_builder,
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let document = owner.GetDocument();
     let index = (0..document.NodeCount())
         .find(|&index| {
@@ -21,7 +21,13 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*document.ResolvedStyleFor(index).unwrap().native_style.Get() }
+    unsafe {
+        &*document
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn update(owner: &mut dom::DOM) {
     let mut engine = StyleEngine::new(owner);
@@ -39,8 +45,8 @@ fn counters_merge_duplicate_names_preserve_lists_and_inherit_each_directive() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='counter-increment:n 2 n 3 extra;counter-reset:n 7 n 9;counter-set:n 4 n calc(5 + 1)'><div id=c style='counter-increment:inherit;counter-reset:inherit;counter-set:inherit'></div><div id=i style='counter-increment:initial;counter-reset:initial;counter-set:initial'></div><div id=clear style='counter-increment:none;counter-reset:none;counter-set:none'></div><div id=keep style='counter-increment:inherit;counter-reset:none;counter-set:inherit'></div><div id=sat style='counter-increment:n 2147483647 n 1 negative -9999999999;counter-reset:n 9999999999;counter-set:n -9999999999'></div></div>");
     update(&mut owner);
-    let p = native(&owner, "p");
-    let c = native(&owner, "c");
+    let p = computed_style(&owner, "p");
+    let c = computed_style(&owner, "c");
     for style in [p, c] {
         let n = style.GetCounterDirectivesForIdentifier(&AtomicString::from_str("n"));
         assert_eq!(n.IncrementValue(), 5);
@@ -66,7 +72,7 @@ fn counters_merge_duplicate_names_preserve_lists_and_inherit_each_directive() {
         assert_eq!(unsafe { &*style.CounterSetList() }[1].value, Some(6));
     }
     assert_ne!(p.CounterIncrementList(), c.CounterIncrementList());
-    for style in [native(&owner, "i"), native(&owner, "clear")] {
+    for style in [computed_style(&owner, "i"), computed_style(&owner, "clear")] {
         assert!(!style
             .GetCounterDirectivesForIdentifier(&AtomicString::from_str("n"))
             .IsDefined());
@@ -76,11 +82,11 @@ fn counters_merge_duplicate_names_preserve_lists_and_inherit_each_directive() {
                 && style.CounterSetList().is_null()
         );
     }
-    let keep =
-        native(&owner, "keep").GetCounterDirectivesForIdentifier(&AtomicString::from_str("n"));
+    let keep = computed_style(&owner, "keep")
+        .GetCounterDirectivesForIdentifier(&AtomicString::from_str("n"));
     assert_eq!((keep.IncrementValue(), keep.SetValue()), (5, 6));
     assert!(!keep.IsReset());
-    let sat = native(&owner, "sat");
+    let sat = computed_style(&owner, "sat");
     let n = sat.GetCounterDirectivesForIdentifier(&AtomicString::from_str("n"));
     assert_eq!(n.IncrementValue(), i32::MAX);
     assert_eq!(n.ResetValueInt64(), Some(9999999999));
@@ -94,31 +100,37 @@ fn counters_merge_duplicate_names_preserve_lists_and_inherit_each_directive() {
     assert!(c.HasExplicitInheritance() && p.ChildHasExplicitInheritance());
 }
 #[test]
-fn quotes_native_pairs_none_auto_initial_and_inheritance() {
+fn quotes_computed_style_pairs_none_auto_initial_and_inheritance() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='quotes:&quot;\\ab &quot; &quot;\\bb &quot; &quot;\\2039 &quot; &quot;\\203a &quot;'><div id=c style='quotes:inherit'></div><div id=n style='quotes:none'></div><div id=a style='quotes:auto'></div><div id=i style='quotes:initial'></div></div>");
     update(&mut owner);
-    let p = native(&owner, "p");
-    let c = native(&owner, "c");
+    let p = computed_style(&owner, "p");
+    let c = computed_style(&owner, "c");
     assert_eq!(p.Quotes().size(), 2);
     assert!(p.Quotes() == c.Quotes());
     assert_eq!(p.Quotes().GetOpenQuote(0).Utf8(), "«");
     assert_eq!(p.Quotes().GetCloseQuote(1).Utf8(), "›");
     assert_eq!(p.Quotes().GetOpenQuote(10).Utf8(), "‹");
     assert_eq!(p.Quotes().GetCloseQuote(-1).Utf8(), "");
-    assert_eq!(native(&owner, "n").Quotes().size(), 0);
-    assert!(!native(&owner, "n").Quotes().GetOpenQuote(0).IsNull());
+    assert_eq!(computed_style(&owner, "n").Quotes().size(), 0);
+    assert!(!computed_style(&owner, "n")
+        .Quotes()
+        .GetOpenQuote(0)
+        .IsNull());
     assert!(!p.Quotes().GetCloseQuote(-1).IsNull());
-    assert!(!native(&owner, "n").Quotes().IsNull());
-    assert!(native(&owner, "a").Quotes().IsNull() && native(&owner, "i").Quotes().IsNull());
+    assert!(!computed_style(&owner, "n").Quotes().IsNull());
+    assert!(
+        computed_style(&owner, "a").Quotes().IsNull()
+            && computed_style(&owner, "i").Quotes().IsNull()
+    );
 }
 #[test]
-fn list_shorthand_resets_omitted_fields_and_inherits_native_values() {
+fn list_shorthand_resets_omitted_fields_and_inherits_computed_style_values() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='list-style:inside &quot;\\2192 &quot;'><div id=c style='list-style:inherit'></div><div id=i style='list-style:initial'></div><div id=reset style='list-style-position:inside;list-style-type:&quot;old&quot;;list-style-image:linear-gradient(red,blue);list-style:decimal'></div><div id=n style='list-style:none none inside'></div><div id=g style='list-style-image:linear-gradient(red,blue)'></div></div>");
     update(&mut owner);
-    let p = native(&owner, "p");
-    let c = native(&owner, "c");
+    let p = computed_style(&owner, "p");
+    let c = computed_style(&owner, "c");
     assert_eq!(p.ListStylePosition(), EListStylePosition::kInside);
     assert!(unsafe { &*p.ListStyleType().Get() }.IsString());
     assert_eq!(
@@ -128,27 +140,27 @@ fn list_shorthand_resets_omitted_fields_and_inherits_native_values() {
     assert_eq!(p.ListStyleType().Get(), c.ListStyleType().Get());
     assert_eq!(c.ListStylePosition(), EListStylePosition::kInside);
     assert!(c.ListStylePositionIsInherited());
-    for style in [native(&owner, "i"), native(&owner, "reset")] {
+    for style in [computed_style(&owner, "i"), computed_style(&owner, "reset")] {
         assert_eq!(style.ListStylePosition(), EListStylePosition::kOutside);
         assert!(style.ListStyleImage().Get().is_null());
         assert!(!style.ListStylePositionIsInherited());
     }
     assert_eq!(
-        unsafe { &*native(&owner, "i").ListStyleType().Get() }
+        unsafe { &*computed_style(&owner, "i").ListStyleType().Get() }
             .GetCounterStyleName()
             .Utf8(),
         "disc"
     );
     assert_eq!(
-        unsafe { &*native(&owner, "reset").ListStyleType().Get() }
+        unsafe { &*computed_style(&owner, "reset").ListStyleType().Get() }
             .GetCounterStyleName()
             .Utf8(),
         "decimal"
     );
-    let g = native(&owner, "g");
+    let g = computed_style(&owner, "g");
     assert!(unsafe { &*g.ListStyleImage().Get() }.IsGeneratedImage());
     assert!(g.BackgroundLayers().GetImage().is_null());
-    let n = native(&owner, "n");
+    let n = computed_style(&owner, "n");
     assert!(n.ListStyleType().Get().is_null() && n.ListStyleImage().Get().is_null());
     assert_eq!(n.ListStylePosition(), EListStylePosition::kInside);
 }

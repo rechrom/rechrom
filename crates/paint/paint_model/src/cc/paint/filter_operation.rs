@@ -67,8 +67,12 @@ pub enum PaintFilterReplay<'a> {
     Reference {
         operation: &'a layoutng_assembly::internal::paint_input::PaintFilterOperation,
         reference_box: crate::PaintRect,
+        reference_viewport: Option<crate::PaintRect>,
+        reference_origin: layoutng_assembly::internal::layout_input::Offset,
         reference_scale: f64,
+        input_origin_tainted: bool,
     },
+    Canvas(&'a layoutng_assembly::internal::paint_input::PaintFilterOperation),
     Reflection(&'a layoutng_assembly::internal::paint_input::PaintFilterOperation),
 }
 // Source: cc/paint/filter_operation.h:272-283; cc/paint/filter_operation.cc:48-144.

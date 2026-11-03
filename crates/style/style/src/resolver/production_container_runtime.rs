@@ -63,6 +63,19 @@ pub(crate) struct ProductionContainerSelector {
 }
 
 impl ProductionContainerSelector {
+    // cpp: css_to_length_conversion_data.cc:49-61
+    // Container-relative units select independently for each physical axis.
+    fn ForPhysicalAxis(horizontal: bool) -> Self {
+        Self {
+            name: AtomicString::default(),
+            flags: if horizontal {
+                FEATURE_WIDTH
+            } else {
+                FEATURE_HEIGHT
+            },
+        }
+    }
+
     pub(crate) fn FromQuery(query: &ProductionContainerQuery) -> Self {
         struct FeatureCollector(u16);
         impl ConditionalExpNodeVisitor<Value, CSSUnparsedDeclarationValue> for FeatureCollector {
@@ -260,7 +273,7 @@ impl ProductionContainerRuntime<'_> {
             .or_else(|| {
                 self.document
                     .ResolvedStyleFor(node)
-                    .and_then(|style| unsafe { style.native_style.Get().as_ref() })
+                    .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
             })
     }
     fn custom(&self, node: usize) -> Option<&CustomProperties> {
@@ -273,7 +286,7 @@ impl ProductionContainerRuntime<'_> {
     /// rendered flat tree: a distributed light child belongs to its assigned
     /// slot, a shadow-root child belongs to the host, and fallback slot
     /// children disappear while that slot has assigned nodes.
-    fn flat_tree_parent_element(&self, node: usize) -> Option<usize> {
+    pub(crate) fn FlatTreeParentElement(&self, node: usize) -> Option<usize> {
         let parent = self.document.Node(node).Parent()?;
         if self.document.Node(parent).Type() == DOMNodeType::kElement {
             if self.document.ShadowRoot(parent).is_some() {
@@ -312,7 +325,7 @@ impl ProductionContainerRuntime<'_> {
         pseudo: PseudoId,
     ) -> Option<usize> {
         let mut candidate = if pseudo == PseudoId::kPseudoIdNone {
-            self.flat_tree_parent_element(subject)
+            self.FlatTreeParentElement(subject)
         } else {
             Some(subject)
         };
@@ -322,7 +335,7 @@ impl ProductionContainerRuntime<'_> {
             }) {
                 return Some(node);
             }
-            candidate = self.flat_tree_parent_element(node);
+            candidate = self.FlatTreeParentElement(node);
         }
         None
     }
@@ -342,7 +355,7 @@ impl ProductionContainerRuntime<'_> {
         if pseudo != PseudoId::kPseudoIdNone {
             Some(subject)
         } else {
-            self.flat_tree_parent_element(subject)
+            self.FlatTreeParentElement(subject)
         }
     }
     pub(crate) fn FindContainer(
@@ -359,13 +372,42 @@ impl ProductionContainerRuntime<'_> {
                     return Some(node);
                 }
             }
-            starting = self.flat_tree_parent_element(node);
+            starting = self.FlatTreeParentElement(node);
         }
         None
     }
+    // cpp: css_to_length_conversion_data.cc:49-83
+    // Width and height may come from different eligible ancestors. A size
+    // container whose evaluator has no completed observation is skipped for
+    // this axis; the caller performs Chromium's small-viewport fallback.
+    fn ContainerUnitSizeForAxis(&self, context: usize, horizontal: bool) -> Option<f64> {
+        let selector = ProductionContainerSelector::ForPhysicalAxis(horizontal);
+        let mut starting = Some(context);
+        while let Some(container) = self.FindContainer(starting, &selector) {
+            let size = self.states.get(&container).and_then(|state| {
+                if horizontal {
+                    state.width
+                } else {
+                    state.height
+                }
+            });
+            if size.is_some() {
+                return size;
+            }
+            starting = self.FlatTreeParentElement(container);
+        }
+        None
+    }
+
+    pub(crate) fn ContainerUnitSizes(&self, context: usize) -> (Option<f64>, Option<f64>) {
+        (
+            self.ContainerUnitSizeForAxis(context, true),
+            self.ContainerUnitSizeForAxis(context, false),
+        )
+    }
     fn root_style(&self, mut node: usize) -> Option<&ComputedStyle> {
         let mut root = node;
-        while let Some(parent) = self.flat_tree_parent_element(node) {
+        while let Some(parent) = self.FlatTreeParentElement(node) {
             root = parent;
             node = parent;
         }
@@ -397,7 +439,7 @@ impl ProductionContainerRuntime<'_> {
         let empty = CustomProperties::default();
         let custom = self.custom(container).unwrap_or(&empty);
         let parent_custom = self
-            .flat_tree_parent_element(container)
+            .FlatTreeParentElement(container)
             .and_then(|parent| self.custom(parent));
         let source = PersistentAttributeSource::new(
             self.document,
@@ -746,8 +788,8 @@ mod tests {
         };
 
         assert_eq!(document.AssignedSlot(light), Some(slot));
-        assert_eq!(runtime.flat_tree_parent_element(light), Some(slot));
-        assert_eq!(runtime.flat_tree_parent_element(slot), Some(container));
+        assert_eq!(runtime.FlatTreeParentElement(light), Some(slot));
+        assert_eq!(runtime.FlatTreeParentElement(slot), Some(container));
         assert_eq!(runtime.NearestSizeContainer(light), Some(container));
         let query = width_query();
         let selector = ProductionContainerSelector::FromQuery(&query);
@@ -763,12 +805,12 @@ mod tests {
             runtime.Evaluate(selected.unwrap(), &query).unwrap().value,
             KleeneValue::kTrue
         );
-        assert_eq!(runtime.flat_tree_parent_element(shadow_child), Some(host));
+        assert_eq!(runtime.FlatTreeParentElement(shadow_child), Some(host));
         assert_eq!(runtime.NearestSizeContainer(shadow_child), Some(host));
 
         assert_eq!(document.AssignedSlot(unslotted), None);
-        assert_eq!(runtime.flat_tree_parent_element(unslotted), None);
+        assert_eq!(runtime.FlatTreeParentElement(unslotted), None);
         assert_eq!(runtime.NearestSizeContainer(unslotted), None);
-        assert_eq!(runtime.flat_tree_parent_element(fallback), None);
+        assert_eq!(runtime.FlatTreeParentElement(fallback), None);
     }
 }

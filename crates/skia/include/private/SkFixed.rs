@@ -1,6 +1,6 @@
 use crate::include::private::SkTFitsIn::SkCastFrom;
 use crate::src::core::SkMathPriv::{SkCppAdd, SkCppDiv, SkCppMul, SkCppShr, SkCppSub};
-macro_rules! native_const_assert {
+macro_rules! const_assert {
  ($condition:expr,$line:expr,$text:expr)=>{{
   #[cfg(sk_debug)] {
    const fn at_const(value:bool){assert!(value);}
@@ -46,7 +46,7 @@ where
 pub const fn SkFloatToFixed_Check(x: f32) -> SkFixed {
     let n64 = (x * SK_Fixed1 as f32) as i64;
     let n32 = n64 as i32;
-    native_const_assert!(n64 == n32 as i64, 48, b"n64 == n32\0".as_ptr());
+    const_assert!(n64 == n32 as i64, 48, b"n64 == n32\0".as_ptr());
     n32
 }
 
@@ -83,7 +83,7 @@ where
 #[cfg(sk_debug)]
 #[inline]
 pub const fn SkIntToFixed(n: i32) -> SkFixed {
-    native_const_assert!(
+    const_assert!(
         n >= -32768 && n <= 32767,
         64,
         b"n >= -32768 && n <= 32767\0".as_ptr()
@@ -398,9 +398,9 @@ macro_rules! SkScalarToFixed3232{($($tokens:tt)*)=>{$crate::SkFloatToFixed3232!(
 
 // Genuine native long-double operations use the compiler-owned stack slots from
 // text6's bridge. No Rust long-double layout/value ABI or constexpr is asserted.
-#[cfg(sk_native_long_double_ffi)]
+#[cfg(sk_long_double_ffi)]
 pub mod long_double {
-    use crate::interop::native_long_double as ld;
+    use crate::interop::long_double as ld;
     use crate::src::core::SkFloatingPoint::{sk_float_saturate2int, sk_float_saturate2int64};
     // Source: include/private/SkFixed.h:41.
     /// Safety: continuation does not unwind through the native frame or let its temporary lease escape.

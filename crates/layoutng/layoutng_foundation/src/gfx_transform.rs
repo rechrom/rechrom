@@ -399,6 +399,24 @@ mod tests {
     }
 
     #[test]
+    fn two_dimensional_transform_is_flat_and_has_no_perspective() {
+        assert!(Transform::default().Is2dTransform());
+
+        let rotation_2d = Transform::ColMajor(&[
+            0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]);
+        assert!(rotation_2d.Is2dTransform());
+
+        let mut translation_3d = Transform::default();
+        translation_3d.Translate3d(0.0, 0.0, 1.0);
+        assert!(!translation_3d.Is2dTransform());
+
+        let mut perspective = Transform::default();
+        perspective.ApplyPerspectiveDepth(100.0);
+        assert!(!perspective.Is2dTransform());
+    }
+
+    #[test]
     fn rotated_rectangle_uses_all_four_mapped_corners() {
         use crate::gfx_ext::RectF;
         use foundation_base::gfx_geometry::{PointF, SizeF};
@@ -411,6 +429,45 @@ mod tests {
             rotation.MapRect(rect),
             RectF::new(PointF::new(-8.0, 2.0), SizeF::new(5.0, 4.0))
         );
+    }
+
+    #[test]
+    fn project_point_intersects_the_transformed_z_zero_plane() {
+        use foundation_base::gfx_geometry::PointF;
+
+        let angle = 60.0_f64.to_radians();
+        let (sin, cos) = angle.sin_cos();
+        let rotation_y = Transform::ColMajor(&[
+            cos, 0.0, -sin, 0.0, 0.0, 1.0, 0.0, 0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]);
+        let projected = rotation_y.ProjectPoint(PointF::new(3.0, 4.0));
+        assert!((projected.x() - 6.0).abs() < 0.0001);
+        assert!((projected.y() - 4.0).abs() < 0.0001);
+
+        let parallel_plane = Transform::ColMajor(&[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]);
+        let mut clamped = false;
+        assert_eq!(
+            parallel_plane.ProjectPointWithClamped(PointF::new(3.0, 4.0), Some(&mut clamped)),
+            PointF::default()
+        );
+        assert!(clamped);
+
+        let behind_camera = Transform::ColMajor(&[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
+        ]);
+        let projected =
+            behind_camera.ProjectPointWithClamped(PointF::new(-3.0, 4.0), Some(&mut clamped));
+        assert_eq!(projected, PointF::new(-8_388_608.0, 8_388_608.0));
+        assert!(clamped);
+
+        let identity = Transform::default();
+        assert_eq!(
+            identity.ProjectPointWithClamped(PointF::new(3.0, 4.0), Some(&mut clamped)),
+            PointF::new(3.0, 4.0)
+        );
+        assert!(!clamped);
     }
 }
 

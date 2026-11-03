@@ -1,6 +1,6 @@
 //! Named grid minmax tracks through the production Style and Layout owners.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::{
@@ -59,7 +59,7 @@ fn fixture(css: &str, children: &str) -> Page {
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -127,7 +127,10 @@ fn native(
                 .is_some_and(|a| a.value == name)
         })
         .unwrap();
-    doc.ResolvedStyleFor(index).unwrap().native_style.clone()
+    doc.ResolvedStyleFor(index)
+        .unwrap()
+        .computed_style_owner
+        .clone()
 }
 
 const NAMED: &str = "[extended-full-start] 16px [full-start] 1fr [content-start] minmax(0,48rem) [content-end] 1fr [full-end] 16px [extended-full-end]";
@@ -135,7 +138,7 @@ const CHILDREN: &str = "<div class=item id=content style='grid-column:content'><
 
 #[test]
 fn minmax_is_retained_in_canonical_computed_grid_tracks() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture(&format!("grid-template-columns:{NAMED}"), CHILDREN);
         let style = native(&page, "grid");
         let style = unsafe { &*style.Get() };
@@ -162,7 +165,7 @@ fn minmax_is_retained_in_canonical_computed_grid_tracks() {
 
 #[test]
 fn named_minmax_tracks_publish_centered_and_extended_fragments() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture(&format!("grid-template-columns:{NAMED}"), CHILDREN);
         let (offset, size) = item(&page, "content");
         assert_eq!(offset.x, 206.0);
@@ -175,7 +178,7 @@ fn named_minmax_tracks_publish_centered_and_extended_fragments() {
 
 #[test]
 fn custom_property_minmax_and_math_tracks_reach_geometry() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture("--pad:max(1rem,calc(50vw - 720px + 1rem));--content:48rem;--layout:[extended-full-start] var(--pad) [full-start] 1fr [content-start] minmax(0,var(--content)) [content-end] 1fr [full-end] var(--pad) [extended-full-end];grid-template-columns:var(--layout)", CHILDREN);
         let (offset, size) = item(&page, "content");
         assert_eq!(offset.x, 206.0);
@@ -188,7 +191,7 @@ fn custom_property_minmax_and_math_tracks_reach_geometry() {
 
 #[test]
 fn minmax_shrinks_to_the_available_named_grid_space() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture(
             &format!("grid-template-columns:{NAMED};width:600px"),
             CHILDREN,
@@ -204,7 +207,7 @@ fn minmax_shrinks_to_the_available_named_grid_space() {
 
 #[test]
 fn minmax_custom_property_mutation_relayouts_without_changing_retained_frame() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             &format!(
                 "--content:48rem;grid-template-columns:{}",

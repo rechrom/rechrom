@@ -57,7 +57,7 @@ mod tests {
                     call.arguments
                 {
                     if member == "__domCreateGetter" {
-                        return Some(dom_bindings::DOMJavaScriptBindings::PrepareNativeGetter(
+                        return Some(dom_bindings::DOMJavaScriptBindings::PrepareGetter(
                             arguments,
                         ));
                     }
@@ -72,6 +72,7 @@ mod tests {
                 "__domInstall".into(),
                 "__domWrap".into(),
                 "__request".into(),
+                "__requestSync".into(),
                 "__cancelRequest".into(),
                 "__queueScrollCompletion".into(),
                 "__randomHex".into(),

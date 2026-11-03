@@ -1,5 +1,5 @@
 //! Payload storage from core/svg/svg_path_byte_stream.h:31-74.
-//! Its serialized commands use u16 segment types and native-endian f32
+//! Its serialized commands use u16 segment types and source-endian f32
 //! coordinates (svg_path_byte_stream_builder.cc:43-112).
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct SVGPathByteStream {

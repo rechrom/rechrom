@@ -9,7 +9,7 @@ use crate::{
     window_surface::{DisplayTarget, PreparedDisplayTarget},
 };
 use browser::page::PageReturnedResource;
-use renderer_skia::{PixelFormat, RendererSkiaBackend};
+use renderer_skia::RendererSkiaBackend;
 use std::{collections::BTreeMap, io, sync::Arc, time::Instant};
 
 pub(crate) enum Message {
@@ -18,7 +18,7 @@ pub(crate) enum Message {
         submitted: SubmittedFrame,
     },
     Submit {
-        frame: crate::begin_frame_source::NativeBeginFrame,
+        frame: crate::begin_frame_source::BeginFrame,
     },
     SwapAck(u64),
     Stop,
@@ -29,7 +29,7 @@ pub(crate) enum Effect {
 }
 
 struct PageSurface {
-    surface: viz::native::SurfaceId,
+    surface: viz::adapter::SurfaceId,
     local_surface_id: compositor::runtime::types::LocalSurfaceId,
     viewport: Viewport,
     provenance: FrameProvenance,
@@ -47,7 +47,7 @@ struct PreparedDisplayFrame {
 
 pub(crate) struct Display {
     target: DisplayTarget,
-    viz: viz::native::VizEngine,
+    viz: viz::adapter::VizEngine,
     renderer: renderer::Renderer<RendererSkiaBackend>,
     pages: BTreeMap<Document, PageSurface>,
     scene: Option<Scene>,
@@ -55,18 +55,17 @@ pub(crate) struct Display {
     prepared: Option<PreparedDisplayFrame>,
     sequence: u64,
     next_surface: u64,
-    rendered_pixels: Vec<u32>,
-    rendered_viewport: Option<Viewport>,
     notify: Arc<dyn Fn(UserEvent) + Send + Sync>,
     diagnostic_output: Option<Output>,
     pending_swap: Option<u64>,
+    last_rendered_placements: Vec<viz::adapter::SurfacePlacement>,
 }
 
 impl Display {
     pub(crate) fn New(target: DisplayTarget, output: Output, capture_frames: bool) -> Self {
         Self {
             target,
-            viz: viz::native::VizEngine::New(),
+            viz: viz::adapter::VizEngine::New(),
             renderer: renderer::Renderer::new(RendererSkiaBackend::default()),
             pages: BTreeMap::new(),
             scene: None,
@@ -74,11 +73,10 @@ impl Display {
             prepared: None,
             sequence: 0,
             next_surface: 1,
-            rendered_pixels: Vec::new(),
-            rendered_viewport: None,
             notify: output.notify.clone(),
             diagnostic_output: capture_frames.then_some(output),
             pending_swap: None,
+            last_rendered_placements: Vec::new(),
         }
     }
 
@@ -90,6 +88,18 @@ impl Display {
         let effects = match message {
             Message::Stop => return Ok(Vec::new()),
             Message::Scene(scene) => {
+                // A prepared target is an aggregate of the exact root scene
+                // that existed when it was rendered.  It may be waiting
+                // behind the preceding native swap when a tab switch changes
+                // the embedded Surface.  Never submit that old aggregate
+                // after accepting the new scene: if the new toolbar frame is
+                // not ready yet, DrawPending must leave the last *presented*
+                // frame on screen rather than publish an already-rendered
+                // frame for the previous tab.
+                if self.scene.as_ref() != Some(&scene) {
+                    self.target.invalidate_pending_presentations();
+                    self.prepared = None;
+                }
                 self.scene = Some(scene);
                 self.PrunePages();
                 self.pending = Some(());
@@ -245,13 +255,13 @@ impl Display {
         let surface = if generation_changed {
             let previous = self.pages.remove(&document).expect("Page surface exists");
             self.DestroyPageSurface(previous);
-            let surface = viz::native::SurfaceId(self.next_surface);
+            let surface = viz::adapter::SurfaceId(self.next_surface);
             self.next_surface = self.next_surface.wrapping_add(1).max(1);
             surface
         } else if let Some(current) = self.pages.get(&document) {
             current.surface
         } else {
-            let surface = viz::native::SurfaceId(self.next_surface);
+            let surface = viz::adapter::SurfaceId(self.next_surface);
             self.next_surface = self.next_surface.wrapping_add(1).max(1);
             surface
         };
@@ -281,15 +291,32 @@ impl Display {
                 reclaim,
             },
         );
+        let affects_current_scene = self.scene.as_ref().is_some_and(|scene| {
+            scene
+                .placements
+                .iter()
+                .any(|placement| self.Selected(placement.document) == Some(document))
+        });
+        if affects_current_scene {
+            // Native presentation is handed to AppKit asynchronously. A
+            // newer Surface can arrive after an older root was queued but
+            // before that IOSurface entered its Core Animation transaction.
+            // Invalidate the queued root here so it cannot land after the
+            // content update that replaced it.
+            self.target.invalidate_pending_presentations();
+
+            // Only damage reachable from the current root can replace a
+            // prepared aggregate or request another display draw. Background
+            // tabs still submit into Viz so their latest Surface is ready for
+            // activation, but their frames are not part of this root scene.
+            self.prepared = None;
+            self.pending = Some(());
+        }
         self.PrunePages();
-        self.pending = Some(());
         Ok(vec![])
     }
 
-    fn DrawPending(
-        &mut self,
-        frame: crate::begin_frame_source::NativeBeginFrame,
-    ) -> io::Result<()> {
+    fn DrawPending(&mut self, frame: crate::begin_frame_source::BeginFrame) -> io::Result<()> {
         if self.pending.is_none() {
             return Ok(());
         }
@@ -300,6 +327,7 @@ impl Display {
         let mut placements = vec![];
         let mut is_handling_interaction = false;
         let mut stale_surfaces = 0usize;
+        let mut missing_surfaces = 0usize;
         let mut provenance = FrameProvenance {
             document: scene
                 .placements
@@ -310,13 +338,31 @@ impl Display {
         };
         for placement in &scene.placements {
             let Some(document) = self.Selected(placement.document) else {
-                // SurfaceAggregator keeps the previous complete aggregate
-                // until every embedded surface required by the new scene has
-                // a frame.  Presenting only the ready children would clear
-                // the missing Page's pixels in the newly acquired buffer.
-                return Ok(());
+                // A newly selected WebContents can have no CompositorFrame yet.
+                // Chromium still commits the browser root and exposes the
+                // view's background; it does not keep pixels from the previous
+                // tab in that child view. Omit only this unavailable child. A
+                // root-scene change below makes the host target unretained, so
+                // the uncovered destination is cleared before ready roots are
+                // published. Same-tab navigation continues to use Selected's
+                // previous-generation Surface fallback.
+                missing_surfaces += 1;
+                continue;
             };
             let page = &self.pages[&document];
+            if placement.document.0 == 0
+                && page
+                    .provenance
+                    .content
+                    .map_or(0, |content| content.embedder_revision)
+                    != scene.toolbar_revision
+            {
+                // Browser UI and the selected child Surface form one root
+                // commit. Exact matching rejects both directions of the race:
+                // an old toolbar under a new tab and a new toolbar that reaches
+                // Display before its matching Scene.
+                return Ok(());
+            }
             is_handling_interaction |= page.is_handling_interaction;
             let local = page.viewport;
             // Desktop Chromium gives top-level resizes a zero-frame surface
@@ -332,9 +378,9 @@ impl Display {
             {
                 stale_surfaces += 1;
             }
-            placements.push(viz::native::SurfacePlacement {
+            placements.push(viz::adapter::SurfacePlacement {
                 surface_id: page.surface,
-                destination: viz::native::DeviceRect::new(
+                destination: viz::adapter::DeviceRect::new(
                     placement.destination.x,
                     placement.destination.y,
                     local.width as i32,
@@ -367,39 +413,89 @@ impl Display {
         prepare_trace.set("height", viewport.height as f64);
         prepare_trace.set("device_scale", viewport.scale);
         prepare_trace.set("stale_surfaces", stale_surfaces as f64);
+        prepare_trace.set("missing_surfaces", missing_surfaces as f64);
         let output_rect =
-            viz::native::DeviceRect::new(0, 0, viewport.width as i32, viewport.height as i32);
+            viz::adapter::DeviceRect::new(0, 0, viewport.width as i32, viewport.height as i32);
         let mut aggregate = self
             .viz
             .Aggregate(output_rect, &placements)
             .map_err(|error| io::Error::other(error.to_string()))?;
         let damage_pixels = aggregate.DamagePixels();
-        let retained = self.rendered_viewport == Some(viewport);
-        let pixel_count = viewport.width as usize * viewport.height as usize;
-        self.rendered_pixels.resize(pixel_count, 0);
-        let target = std::mem::take(&mut self.rendered_pixels);
+        // Compare the resolved Viz roots that will actually be drawn. A new
+        // document can initially select the previous generation's Surface;
+        // when its first frame arrives the Scene document is unchanged but
+        // the selected SurfaceId changes. That root replacement must clear
+        // the retained host target before a transparent Page root is drawn.
+        let full_redraw = stale_surfaces != 0 || self.last_rendered_placements != placements;
+        if std::env::var_os("RECHROM_DIAG_ROOTS").is_some() {
+            let roots = aggregate
+                .Frame()
+                .RenderPasses()
+                .iter()
+                .filter_map(|pass| {
+                    aggregate.RootDestination(pass.RenderPassId()).map(|destination| {
+                        format!(
+                            "pass={} destination={destination:?} output={:?} damage={:?} transparent={}",
+                            pass.RenderPassId().0,
+                            pass.OutputRect(),
+                            pass.DamageRect(),
+                            pass.has_transparent_background,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            eprintln!(
+                "display-roots sequence={sequence} placements={placements:?} previous={:?} full_redraw={full_redraw} stale={stale_surfaces} roots=[{roots}]",
+                self.last_rendered_placements,
+            );
+        }
+        let output_damage = if full_redraw {
+            vec![compositor::adapter::geometry::Rect::new(
+                0,
+                0,
+                viewport.width as i32,
+                viewport.height as i32,
+            )]
+        } else {
+            aggregate.OutputDamageRects().to_vec()
+        };
+        let output = self
+            .target
+            .prepare_render_target(viewport, sequence, &output_damage)?;
+        let row_stride = output.row_stride();
+        let format = output.format();
+        // The native target retains pixels outside Viz damage. A different
+        // root scene cannot inherit those pixels: the incoming Page may be
+        // smaller while its LocalSurfaceId catches up, and the uncovered
+        // region must show the output background rather than the previous
+        // tab. Chromium expresses this through full root damage when the
+        // embedded surface changes. Preserve partial damage for ordinary
+        // frames and scrolling.
+        let retained = output.retained() && !full_redraw;
         let (update, target) = self.renderer.Render(
             &mut aggregate,
             renderer_skia::RenderTarget {
                 width: viewport.width,
                 height: viewport.height,
-                pixels: target,
-                format: PixelFormat::Bgra8888,
-                row_stride: viewport.width as usize,
+                pixels: renderer_skia::PixelStorage::host(output),
+                format,
+                row_stride,
+                // Native buffers rotate behind WindowServer ownership. Until
+                // their accumulated-damage owner is translated, only the
+                // single retained offscreen allocation may use partial damage.
                 retained,
             },
         )?;
-        self.rendered_pixels = target.pixels;
-        self.rendered_viewport = Some(viewport);
+        let mut output = *target
+            .pixels
+            .into_host::<PreparedDisplayTarget>()
+            .map_err(|_| io::Error::other("Renderer returned a foreign host target"))?;
+        output.finish_render(viewport, sequence);
         self.viz.DidDraw(aggregate);
+        self.last_rendered_placements = placements;
         prepare_trace.set("direct_root_target", update.direct_root_target as u8 as f64);
         prepare_trace.set("damage_pixels", damage_pixels as f64);
-        let output = self.target.prepare_rendered_pixels(
-            &self.rendered_pixels,
-            viewport,
-            sequence,
-            damage_pixels,
-        )?;
         self.prepared = Some(PreparedDisplayFrame {
             output,
             provenance,
@@ -454,7 +550,7 @@ impl Display {
 
     fn Submit(
         &mut self,
-        frame: crate::begin_frame_source::NativeBeginFrame,
+        frame: crate::begin_frame_source::BeginFrame,
         post_swap_ack: &Arc<dyn Fn(u64) + Send + Sync>,
     ) -> io::Result<Vec<Effect>> {
         let _frame = browser_tracing::scope(browser_tracing::Context {
@@ -507,6 +603,17 @@ impl Display {
             return Ok(vec![Effect::RequestBeginFrame]);
         }
         self.DrawPending(frame)?;
+        if self.pending.is_some() {
+            // DrawPending deliberately keeps the dirty state when the exact
+            // browser-root candidate is incomplete (for example, the toolbar
+            // has not reached the Scene's revision yet).  In that state an
+            // older prepared target is not a legal fallback: it was rendered
+            // from a different root scene.  Keep the last frame that actually
+            // reached the native presenter and try again on the next pulse.
+            frame_trace.set("submitted", 0.0);
+            frame_trace.set("root_candidate_incomplete", 1.0);
+            return Ok(vec![Effect::RequestBeginFrame]);
+        }
         let Some(prepared) = self.prepared.take() else {
             frame_trace.set("submitted", 0.0);
             return Ok(Vec::new());
@@ -543,7 +650,7 @@ impl Display {
             diagnostic.publish(readback);
         }
         let notify = self.notify.clone();
-        let native_presentation = self.target.is_native();
+        let presentation = self.target.is_window();
         let post_swap_ack = post_swap_ack.clone();
         // Chromium Display::DrawAndSwap registers DidSwapBuffers before
         // invoking SwapBuffers: software/native completion can be synchronous.
@@ -565,11 +672,11 @@ impl Display {
                             ("height", viewport.height as f64),
                             ("device_scale", viewport.scale),
                             ("present_sequence", sequence as f64),
-                            ("native", native_presentation as u8 as f64),
+                            ("native", presentation as u8 as f64),
                         ],
                     );
                 }
-                if native_presentation {
+                if presentation {
                     (notify)(UserEvent::FrameSwapCompleted(viewport));
                 }
                 (post_swap_ack)(sequence);
@@ -615,7 +722,7 @@ impl Display {
                 ),
             ],
         );
-        if !native_presentation && self.diagnostic_output.is_some() {
+        if !presentation && self.diagnostic_output.is_some() {
             if crate::engine::memory_diagnostics_enabled() {
                 eprintln!("pipeline-offscreen-published time_ns={} present={} tab={} generation={} sequence={} revision={}", crate::engine::diagnostic_time_ns(), sequence,
                     provenance.document.0, provenance.document.1,
@@ -643,10 +750,10 @@ impl Display {
                 ],
             );
         }
-        if native_presentation {
+        if presentation {
             browser_tracing::instant(
                 "frame",
-                "FrameSubmittedToNative",
+                "FrameSubmittedToCompositor",
                 &[("present_sequence", sequence as f64), ("compositor", 1.0)],
             );
         }

@@ -4,7 +4,7 @@
 use std::ptr::NonNull;
 
 use font_engine::fonts::shaping::shape_result::OffsetWithSpacing;
-use font_engine::text::native::character::Character;
+use font_engine::text::implementation::character::Character;
 use font_engine::FontOrientation;
 use foundation::{
     ETextAutospace, EastAsianSpacingType, IsLtr, Member, RuntimeEnabledFeatures, String,

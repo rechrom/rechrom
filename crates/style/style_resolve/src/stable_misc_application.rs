@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native FontDescription synthesis and math/legacy ordinal application.
+//! Canonical FontDescription synthesis and math/legacy ordinal application.
 #![allow(non_snake_case)]
 use super::*;
 use font_engine::fonts::font_description::{

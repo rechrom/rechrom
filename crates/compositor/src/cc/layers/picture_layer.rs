@@ -214,7 +214,7 @@ impl<B: PictureLayerTypes> LayerObject<B> for PictureLayer<B> {
     fn AsPictureLayer(&self) -> Option<&dyn PictureLayerObject<B>> {
         Some(self)
     }
-    fn NativeShutdown(&self, c: &mut LayerContext<'_, B>) {
+    fn ShutdownLayer(&self, c: &mut LayerContext<'_, B>) {
         self.DestroyMembers(c);
         self.base_.Shutdown(c);
     }

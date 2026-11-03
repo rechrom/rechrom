@@ -13,7 +13,7 @@ use layoutng_assembly::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     internal::{
-        algorithm_entry::NativeAlgorithm,
+        algorithm_entry::LayoutAlgorithmImplementation,
         fragmentation_utils::IsBreakInside,
         layout_algorithm::{
             LayoutAlgorithm, LayoutAlgorithmParams, RelayoutAlgorithm, RelayoutType,
@@ -400,7 +400,7 @@ impl TableLayoutAlgorithm {
         }
     }
 }
-impl NativeAlgorithm for TableLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for TableLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_table.Layout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_table.Measure";
 

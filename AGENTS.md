@@ -56,7 +56,7 @@ lifecycle, raster, compositing, or presentation cause, improve the tracing and
 report generation first and iterate on it as needed so that the performance
 tool can diagnose and verify the optimization.
 
-Use `apps/rechrom/fixtures/native_trackpad_scroll.jsonl` to replay a recorded real macOS trackpad event stream when reproducing and diagnosing scroll-experience problems.
+Use `apps/rechrom/fixtures/trackpad_scroll.jsonl` to replay a recorded real macOS trackpad event stream when reproducing and diagnosing scroll-experience problems.
 
 For strict input-to-first-visible-frame measurements, replay that fixture as
 native macOS scroll events through the normal AppKit/winit entry path, drive a
@@ -115,6 +115,14 @@ specific uncertainty, and defer broad or repeated test suites until the change
 has reached a stable integration point. Tests should validate a completed
 slice of work rather than interrupt each small edit, because excessive test
 runs reduce iteration speed.
+
+Do not over-validate. Choose the smallest check that can catch the real risk in
+the change. Once that check passes and there is no concrete unresolved risk,
+stop testing and continue the work. Do not rerun the same coverage through
+several commands, run broad suites for a narrow change, or add tests that only
+repeat what the compiler or an existing test already proves. Documentation-only
+changes need only a focused text or diff check unless they change executable
+examples or generated files.
 
 When disk usage is high, stale `target/` build caches may be evicted, but do not remove artifacts used by active builds.
 
@@ -184,6 +192,34 @@ When disk usage is high, stale `target/` build caches may be evicted, but do not
    preserving its public input/output contract; if a boundary lacks required
    information, extend that contract only with the smallest platform-neutral
    value needed to express Chromium's semantics.
+6. Keep interfaces between engines small so the engines stay independent. An
+   engine may depend on shared input and output types, but not on another
+   engine's internal objects, storage, caches, or crate. Once input has crossed
+   the interface, the receiving engine should work from its own state. Do not
+   give it broad `&mut` access to the sending engine, a large trait that copies
+   the sender's object model, or callbacks and getters that let it reach back
+   into the sender. Either engine should remain testable and replaceable on its
+   own as long as the interface keeps the same meaning.
+
+   The interface only separates packages. It must not replace Chromium's data
+   flow with a new one. Keep the same owner, object identity, update order,
+   lifetime, invalidation, caches, and commit points. If the interface cannot
+   carry that flow, change the interface instead of changing the algorithm.
+   Page may route the values, but must not make an engine's decisions.
+
+   Borrow the live data and pass the existing shared owner where identity
+   matters. Do not copy whole trees or engine objects, build a second general
+   model, reparse values, delay results, repeat work, or add another full walk.
+   Follow Chromium's style ownership and lifecycle. Element and LayoutObject
+   should retain and read the same `ComputedStyle` owner. Do not add a
+   Rechrom-only flattened Layout style or copy the full style at the package
+   boundary. Keep Chromium's own copy-on-write, anonymous-style adjustment,
+   used-value calculation, and derived layout data at the corresponding
+   lifecycle points. Keep only small sidecars for document resource facts that
+   Chromium does not store in `ComputedStyle`.
+   Keep Chromium's element-by-element work element-by-element unless there is
+   evidence that a batch has the same order, result, and cost. A small interface
+   must preserve both Chromium's behavior and its hot-path performance.
 
 ## Core package contracts
 
@@ -247,15 +283,17 @@ URL/input
   (`DOMMutation`, `InteractionStateMutation`, or an interaction effect). It
   performs hit testing and default actions without directly invoking Style,
   Layout, Paint, Compositor, or Renderer.
-- `style`: input is DOM/CSSOM state, stylesheet changes, and an immutable host
-  environment such as viewport/media/DPR/preferences; output is Chromium
-  `ComputedStyle` ownership plus the projected typed style mutation/impact used
-  at the Layout boundary. It does not perform geometry, paint recording,
-  raster, or presentation. The native `ComputedStyle` remains the canonical
-  result; projections must not replace or reinterpret it. Shared immutable UA
-  stylesheet owners cross the input boundary intact and are retained directly;
-  borrowed stylesheet values remain observable by value. Thread placement must
-  not erase this ownership or require recalc to deep-compare shared UA rules.
+- `style`: keep Chromium's style data flow even though Rechrom uses a small
+  package interface. Its input borrows the live DOM/CSSOM facts, pending
+  changes, page environment, stylesheet owners, and the small font or container
+  inputs it needs. Do not pass `&mut DOM`, a Layout engine, or general callbacks.
+
+  During element recalc, compare the old `ComputedStyle`, build the new one,
+  store that same owner on the element, compute the Chromium diff and reattach
+  result, then give Layout the same owner in the same order. Keep unchanged
+  style identity. Do not add a Style-owned result store, a delayed document-wide
+  publish step, or a second general layout-style model. Extra boundary values
+  are only for facts that are not in `ComputedStyle`.
 - `font_engine`: input is immutable decoded faces, typed font-rule/loading and
   versioned system-query mutations; output is retained ShapeResult/metrics or
   explicit host requests. It owns selection, lazy face admission, fallback and
@@ -281,6 +319,14 @@ URL/input
   `PaintArtifact` containing display items, paint chunks, property state, and
   resource-dependency indices. It does not own network, DOM/Layout mutation,
   tiles, raster resources, or a render target.
+  PrePaint reads and updates the canonical fragment-local Paint sidecars owned
+  by that Layout result. Keep their addresses and client identities stable
+  across targeted updates. Pass references plus an opaque lifetime owner; do
+  not clone `FragmentPaintData`, publish a second Paint-input snapshot, or run
+  an extra whole-fragment validation walk. Retained PrePaint data is limited to
+  Chromium's derived FragmentData, ObjectPaintProperties, PaintLayer,
+  invalidation and cache state. It must never become another copy of Layout's
+  geometry or source fragment payload.
   Paint's frame execution flows from `prepaint` into a `paint_walk` that invokes
   `paint_reuse`, `paint_record`, and `paint_chunk`, then into `paint_commit`,
   with `paint` as the compatibility facade and lifecycle orchestrator.
@@ -289,8 +335,8 @@ URL/input
   that root; `paint_record` consumes their typed outputs; `paint_walk` drives
   `paint_record`; and `paint_commit` consumes completed record/chunk values.
   `paint_model` owns shared property-tree, coordinate, path, low-level paint
-  values, and the layer
-  classification needed while PrePaint builds its retained tree;
+  values, and the layer classification needed while PrePaint updates the
+  canonical resident Paint state;
   `prepaint` owns property/coordinate/invalidation preparation; `paint_walk`
   owns traversal-order execution plus phase and culling decisions;
   `paint_reuse` owns cache and retained-state proofs; `paint_record` produces
@@ -361,7 +407,9 @@ URL/input
   their execution placement, lifetime, input routing, and surface embedding.
   Everything before `CompositorFrame` stays in that Page's runtime: its own
   document task scheduler and executor (DOM/JS/Style/Layout/Paint), compositor
-  executor, and raster executor/pools. The browser host owns only typed handles
+  sequence, and raster state. The embedding may inject shared finite worker
+  pools, matching Chromium's process worker pools, but Page state, sequencing,
+  cancellation, and outputs remain independent. The browser host owns only typed handles
   and policy values; it must not synchronously call a Page or wait for its JS.
   Shared physical BeginFrame delivery is an enqueue-only clock fanout. Each
   visible Page receives and schedules frames independently; a blocked Page

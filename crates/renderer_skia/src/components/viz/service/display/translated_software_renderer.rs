@@ -8,7 +8,7 @@
 //! Skia after mutating a pass.
 #![allow(non_snake_case)]
 
-use crate::{native::RenderTarget, translated_adapter::*};
+use crate::{render_target::RenderTarget, translated_adapter::*};
 use compositor_core::{
     adapter::{
         geometry::{PointF, Rect, RectF, Size},
@@ -42,8 +42,8 @@ use skia::{
 };
 use std::{collections::BTreeMap, io, sync::Arc};
 use viz::{
-    common::quads::aggregated_render_pass::{NativeDrawQuad, NativeSharedQuadState},
-    native::{AggregatedRenderPass, VizOutput},
+    adapter::{AggregatedRenderPass, VizOutput},
+    common::quads::aggregated_render_pass::{DrawQuad, SharedQuadState},
 };
 
 struct PendingDraw {
@@ -133,7 +133,7 @@ impl TranslatedSoftwareRenderer {
         });
         let direct = roots.next().and_then(|(pass, destination)| {
             if roots.next().is_some()
-                || target.format != crate::native::PixelFormat::Bgra8888
+                || target.format != crate::render_target::PixelFormat::Bgra8888
                 || target.row_stride != target.width as usize
                 || destination != full_bounds
                 || pass.OutputRect() != full_bounds
@@ -299,7 +299,7 @@ impl TranslatedSoftwareRenderer {
                     true,
                 );
             }
-            let transform = matrix(shared.quad_to_target_transform.native(), current_rect)?;
+            let transform = matrix(shared.quad_to_target_transform.as_source(), current_rect)?;
             target.set_matrix(&transform);
             let antialias =
                 if settings.force_antialiasing || !is_scale_and_integer_translate(&transform) {
@@ -394,8 +394,8 @@ impl TranslatedSoftwareRenderer {
 
     fn DrawSolidColorQuad(
         target: &mut RasterTarget<'_>,
-        quad: &NativeDrawQuad,
-        shared: &NativeSharedQuadState,
+        quad: &DrawQuad,
+        shared: &SharedQuadState,
         blend: SkBlendMode,
         antialias: bool,
     ) -> io::Result<()> {
@@ -412,8 +412,8 @@ impl TranslatedSoftwareRenderer {
 
     fn DrawDebugBorderQuad(
         target: &mut RasterTarget<'_>,
-        quad: &NativeDrawQuad,
-        shared: &NativeSharedQuadState,
+        quad: &DrawQuad,
+        shared: &SharedQuadState,
         blend: SkBlendMode,
     ) -> io::Result<()> {
         let QuadMaterial::DebugBorder {
@@ -437,8 +437,8 @@ impl TranslatedSoftwareRenderer {
         &mut self,
         target: &mut RasterTarget<'_>,
         input: &VizOutput,
-        quad: &NativeDrawQuad,
-        shared: &NativeSharedQuadState,
+        quad: &DrawQuad,
+        shared: &SharedQuadState,
         blend: SkBlendMode,
         antialias: bool,
         has_rectangular_clip: bool,
@@ -462,7 +462,7 @@ impl TranslatedSoftwareRenderer {
         // identical, while the latter lets raster Skia use its copy/blend fast
         // path. Keep Chromium's requested filter for every scaled, rotated,
         // skewed or fractional mapping.
-        let transform = shared.quad_to_target_transform.native();
+        let transform = shared.quad_to_target_transform.as_source();
         let nearly = |a: f64, b: f64| (a - b).abs() <= 1. / 4096.;
         let integral = |value: f64| (value - value.round()).abs() <= 1. / 4096.;
         // Sprite eligibility depends on the complete source-to-device matrix,
@@ -541,7 +541,7 @@ impl TranslatedSoftwareRenderer {
             && matches!(blend, SkBlendMode::kSrc | SkBlendMode::kSrcOver);
         if blit_eligible {
             self.update.tile_blit_eligible_quads += 1;
-            let mapping = raster::native::MapResourceForRead(lease.as_ref())?;
+            let mapping = raster::execution::MapResourceForRead(lease.as_ref())?;
             let format = mapping.format();
             if format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
                 || format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRX_8888
@@ -766,8 +766,8 @@ impl TranslatedSoftwareRenderer {
     // target. No tile allocation or RasterEngine resource is introduced here.
     fn DrawPictureQuad(
         target: &mut RasterTarget<'_>,
-        quad: &NativeDrawQuad,
-        shared: &NativeSharedQuadState,
+        quad: &DrawQuad,
+        shared: &SharedQuadState,
     ) -> io::Result<()> {
         let QuadMaterial::Picture {
             content_rect,
@@ -810,7 +810,7 @@ impl TranslatedSoftwareRenderer {
             target.translate(-content_rect.x as f32, -content_rect.y as f32);
             target.clip_rect(&rect(*content_rect), SkClipOp::kIntersect, false);
             target.scale(*contents_scale, *contents_scale);
-            raster::native::ReplayDisplayItemListIntoTranslatedTarget(
+            raster::execution::ReplayDisplayItemListIntoTranslatedTarget(
                 display_item_list
                     .as_deref()
                     .ok_or_else(|| io::Error::other("Picture quad lacks display list"))?,
@@ -830,8 +830,8 @@ impl TranslatedSoftwareRenderer {
         &mut self,
         target: &mut RasterTarget<'_>,
         input: &VizOutput,
-        quad: &NativeDrawQuad,
-        shared: &NativeSharedQuadState,
+        quad: &DrawQuad,
+        shared: &SharedQuadState,
         blend: SkBlendMode,
         antialias: bool,
     ) -> io::Result<()> {
@@ -955,7 +955,7 @@ impl TranslatedSoftwareRenderer {
         // SkCanvas::drawImageRect, whose raster sprite path selects the same
         // original N32 row blitter used by the tile fast path above. Preserve
         // that terminal operation without rebuilding an image shader.
-        let transform = shared.quad_to_target_transform.native();
+        let transform = shared.quad_to_target_transform.as_source();
         let nearly = |a: f64, b: f64| (a - b).abs() <= 1. / 4096.;
         let integral = |value: f64| (value - value.round()).abs() <= 1. / 4096.;
         let direct_pass_blit = child.Filters().IsEmpty()
@@ -1139,8 +1139,10 @@ impl TranslatedSoftwareRenderer {
         let offset = SkMatrix::Translate(-bounds.x as f32, -bounds.y as f32);
         let mut filter_matrix = offset.clone();
         filter_matrix.preConcat(local);
-        let filter =
-            raster::native::BuildTranslatedFilterOperations(filters, &SkM44::from(&filter_matrix))?;
+        let filter = raster::execution::BuildTranslatedFilterOperations(
+            filters,
+            &SkM44::from(&filter_matrix),
+        )?;
         let mut paint = SkPaint::default();
         paint.setImageFilter(filter);
         paint.setBlendMode(SkBlendMode::kSrcOver);
@@ -1264,8 +1266,10 @@ impl TranslatedSoftwareRenderer {
         let mut filter_matrix = offset.clone();
         filter_matrix.preConcat(local);
         let build_started = std::time::Instant::now();
-        let filter =
-            raster::native::BuildTranslatedFilterOperations(filters, &SkM44::from(&filter_matrix))?;
+        let filter = raster::execution::BuildTranslatedFilterOperations(
+            filters,
+            &SkM44::from(&filter_matrix),
+        )?;
         update.backdrop_filter_build_ns = update
             .backdrop_filter_build_ns
             .saturating_add(build_started.elapsed().as_nanos().min(u64::MAX as u128) as u64);

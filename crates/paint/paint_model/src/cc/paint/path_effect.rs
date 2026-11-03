@@ -1,4 +1,4 @@
-//! cc PathEffect values. Native Skia creation remains a typed pure-value
+//! cc PathEffect values. Chromium Skia creation remains a typed pure-value
 //! operation and cannot replace the source Dash/Corner ownership or codec.
 #![allow(non_snake_case, non_camel_case_types)]
 use std::sync::Arc;
@@ -16,9 +16,9 @@ pub enum PathEffect {
     Corner { radius: f32 },
 }
 pub trait PathEffectBackend {
-    type NativeEffect;
-    fn MakeDash(&self, intervals: &[f32], phase: f32) -> Option<Self::NativeEffect>;
-    fn MakeCorner(&self, radius: f32) -> Option<Self::NativeEffect>;
+    type Effect;
+    fn MakeDash(&self, intervals: &[f32], phase: f32) -> Option<Self::Effect>;
+    fn MakeCorner(&self, radius: f32) -> Option<Self::Effect>;
 }
 pub trait PathEffectWriter {
     fn SerializedSizeScalar() -> usize;
@@ -34,7 +34,7 @@ pub trait PathEffectReader {
 impl PathEffect {
     // Source: cc/paint/path_effect.cc:91-104.
     pub fn MakeDash(intervals: &[f32], count: i32, phase: f32) -> Arc<Self> {
-        let count = usize::try_from(count).expect("native nonnegative interval count");
+        let count = usize::try_from(count).expect("source nonnegative interval count");
         Arc::new(Self::Dash {
             intervals: intervals[..count].to_vec(),
             phase,
@@ -50,7 +50,7 @@ impl PathEffect {
         }
     }
     // Source: cc/paint/path_effect.cc:55-59,80-86,106-108.
-    pub fn GetSkPathEffect<B: PathEffectBackend>(&self, backend: &B) -> Option<B::NativeEffect> {
+    pub fn GetSkPathEffect<B: PathEffectBackend>(&self, backend: &B) -> Option<B::Effect> {
         match self {
             Self::Dash { intervals, phase } => backend.MakeDash(intervals, *phase),
             Self::Corner { radius } => backend.MakeCorner(*radius),

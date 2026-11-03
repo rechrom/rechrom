@@ -8,7 +8,7 @@ use layoutng_assembly::internal::layout_input::{
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_style::style::appearance::AppearanceValue;
 
-use crate::border_shape_utils::UniformCornerRadii;
+use crate::contoured_border_geometry::UniformCornerRadii;
 use crate::geometry_mapper::MapRectToRoot;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
@@ -276,7 +276,6 @@ impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
     }
 
     // cpp: paint/theme_painter.h:16
-    // cpp: paint/theme_painter.cc:183-455
     pub fn Paint(&self, paint_info: &PaintInfo<'c, 'o>) -> bool {
         let fragment = self
             .node

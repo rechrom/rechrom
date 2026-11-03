@@ -10,7 +10,6 @@ use layoutng_assembly::internal::layout_block_flow::LayoutBlockFlow;
 use layoutng_assembly::internal::layout_box::LayoutBox;
 use layoutng_assembly::internal::layout_node_metadata::Element;
 use layoutng_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layoutng_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope;
 use layoutng_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layoutng_geometry::geometry::logical_size::LogicalSize;
 use layoutng_style::style::computed_style::ComputedStyle;
@@ -33,7 +32,7 @@ impl LayoutSVGText {
         }
     }
 
-    // Chromium layout_svg_text.cc:288-312. Read the completed native fragment
+    // Chromium layout_svg_text.cc:288-312. Read the completed source fragment
     // positions without the integer rounding in RectInContainerFragment.
     pub fn ObjectBoundingBox(&self) -> gfx::RectF {
         let mut bounds = gfx::RectF::default();
@@ -124,7 +123,7 @@ impl LayoutSVGText {
             let this = (self as *mut Self).cast::<LayoutObject>();
             while !child.is_null() {
                 if unsafe { &*child }.IsSVGInlineText() {
-                    let objects = LayoutObjectFactoryScope::Objects();
+                    let objects = self.FactorySet();
                     let update = unsafe { objects.as_ref() }
                         .and_then(|objects| objects.svg_inline_text_update_scaled_font)
                         .expect("SVG inline text font update is not installed");

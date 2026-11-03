@@ -57,7 +57,7 @@ pub trait JavaScriptFunctionStorage: Any {
     fn Downgrade(&self) -> WeakJavaScriptFunction;
 }
 
-/// A non-owning callback identity. Its native owner must publish the actual
+/// A non-owning callback identity. Its host owner must publish the actual
 /// function edge through HostObjectTraceSource before releasing a strong handle.
 #[derive(Clone, Default)]
 pub struct WeakJavaScriptFunction {
@@ -179,7 +179,7 @@ pub struct HostMethodRef {
     pub name: String,
 }
 
-/// An ordinary native function. The callback receives the actual JavaScript
+/// An ordinary host function. The callback receives the actual JavaScript
 /// `this`, followed by captured data and call arguments. Captured values must
 /// be owned and traced by the JavaScript engine, just like closure captures.
 /// A bound callback receiver is retained through the same engine-owned graph.
@@ -297,15 +297,15 @@ impl HostResult {
 
 pub type HostContinuation = Box<dyn FnOnce(&mut dyn JavaScriptHostRuntime) -> HostResult>;
 
-/// Immutable native ownership facts consumed on the realm's owner thread.
-/// Slots name native fields, not JS properties; roots name actual host activity.
+/// Immutable host ownership facts consumed on the realm's owner thread.
+/// Slots name host fields, not JS properties; roots name actual host activity.
 /// The host publishes changes before reentering JS. GC never calls the source.
 #[derive(Clone, Debug)]
 pub enum HostObjectTraceChange {
     Object {
         id: HostObjectId,
     },
-    /// Replace an owner's native reference vector (for example a static list).
+    /// Replace an owner's host reference vector (for example a static list).
     ReferenceList {
         owner: HostObjectId,
         targets: std::rc::Rc<[HostObjectId]>,
@@ -315,7 +315,7 @@ pub enum HostObjectTraceChange {
         slot: u64,
         target: Option<HostObjectId>,
     },
-    /// Transfer a callback edge to an existing native owner. This temporary
+    /// Transfer a callback edge to an existing host owner. This temporary
     /// strong handle is released after the engine commits the traced edge.
     FunctionReference {
         owner: HostObjectId,
@@ -327,8 +327,8 @@ pub enum HostObjectTraceChange {
         reason: u64,
         rooted: bool,
     },
-    /// Native storage was retired after Released. IDs must not be reused;
-    /// owners remove incoming native references before publishing this fact.
+    /// Host storage was retired after Released. IDs must not be reused;
+    /// owners remove incoming host references before publishing this fact.
     Retire {
         id: HostObjectId,
     },
@@ -336,12 +336,12 @@ pub enum HostObjectTraceChange {
 pub trait HostObjectTraceSource {
     fn TakeChanges(&self) -> Vec<HostObjectTraceChange>;
     /// Owner-thread notification, never a GC callback. Owners may retire
-    /// ephemeral host records; native DOM storage remains with its own owner.
+    /// ephemeral host records; host DOM storage remains with its own owner.
     fn Released(&self, _ids: &[HostObjectId]) {}
 }
 
 pub trait JavaScriptHostBindings {
-    /// None preserves ownership for hosts which have not supplied native
+    /// None preserves ownership for hosts which have not supplied ownership
     /// lifetime facts. The JavaScript backend never invents a DOM graph.
     fn ObjectTraceSource(&self) -> Option<std::rc::Rc<dyn HostObjectTraceSource>> {
         None
@@ -383,7 +383,7 @@ pub trait JavaScriptHostRuntime {
     /// Report an author exception through the realm's existing error channel,
     /// without throwing it from a host algorithm that invokes callbacks.
     fn ReportException(&mut self, value: &HostValue) -> HostResult;
-    /// Native object classification used by Web IDL sequence conversion.
+    /// Host object classification used by Web IDL sequence conversion.
     fn IsProxy(&mut self, value: &HostValue) -> bool;
     // The current context is already executing a host continuation. Source
     // Page::Checkpoint must drain/report without borrowing its realm again.

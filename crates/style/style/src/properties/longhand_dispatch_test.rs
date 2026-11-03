@@ -27,7 +27,7 @@ fn apply_declarations(
 }
 
 #[test]
-fn typed_alignment_values_set_native_content_self_and_legacy_data() {
+fn typed_alignment_values_set_computed_style_content_self_and_legacy_data() {
     use layoutng_style::style::computed_style_constants::*;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
@@ -92,7 +92,7 @@ fn typed_alignment_values_set_native_content_self_and_legacy_data() {
 }
 
 #[test]
-fn place_shorthands_preserve_baseline_and_overflow_native_semantics() {
+fn place_shorthands_preserve_baseline_and_overflow_computed_style_semantics() {
     use layoutng_style::style::computed_style_constants::*;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
@@ -147,7 +147,7 @@ fn place_shorthands_preserve_baseline_and_overflow_native_semantics() {
 }
 
 #[test]
-fn wrapping_and_flex_flow_shorthands_apply_native_values_and_reset_omitted_longhands() {
+fn wrapping_and_flex_flow_shorthands_apply_computed_style_values_and_reset_omitted_longhands() {
     use foundation::{TextWrapMode, TextWrapStyle};
     use layoutng_style::css::white_space::WhiteSpaceCollapse;
     use layoutng_style::style::computed_style_constants::*;
@@ -209,7 +209,7 @@ fn wrapping_and_flex_flow_shorthands_apply_native_values_and_reset_omitted_longh
 }
 
 #[test]
-fn invalid_typed_alignment_and_flex_values_leave_native_style_unchanged() {
+fn invalid_typed_alignment_and_flex_values_leave_computed_style_style_unchanged() {
     use crate::production_css_value as values;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
@@ -237,7 +237,7 @@ fn invalid_typed_alignment_and_flex_values_leave_native_style_unchanged() {
 }
 
 #[test]
-fn flex_basis_inherits_native_length_and_requires_cross_zoom_capability() {
+fn flex_basis_inherits_computed_style_length_and_requires_cross_zoom_capability() {
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut parent = ComputedStyleBuilder::from_style(initial);
@@ -272,13 +272,13 @@ fn flex_basis_inherits_native_length_and_requires_cross_zoom_capability() {
 }
 
 #[test]
-fn animation_and_transition_lists_have_native_storage_and_copy_on_write() {
+fn animation_and_transition_lists_have_computed_style_storage_and_copy_on_write() {
     use layoutng_style::style::computed_style_constants::EAnimPlayState;
     use layoutng_style::style::css_timing_data::*;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut parent = ComputedStyleBuilder::from_style(initial);
-    // Initial/unset on a style with no data must preserve nullable native storage.
+    // Initial/unset on a style with no data must preserve nullable computed style storage.
     apply_declarations(
         &mut parent,
         None,
@@ -396,7 +396,7 @@ fn animation_and_transition_lists_have_native_storage_and_copy_on_write() {
 }
 
 #[test]
-fn invalid_timing_list_conversion_does_not_allocate_or_mutate_native_storage() {
+fn invalid_timing_list_conversion_does_not_allocate_or_mutate_computed_style_storage() {
     use crate::production_css_value as values;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };

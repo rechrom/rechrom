@@ -173,9 +173,9 @@ pub unsafe trait SkStreamMemory: SkStreamAsset {
     fn onDuplicate(&self) -> Option<Pin<Box<dyn SkStreamMemory>>>;
     fn onFork(&self) -> Option<Pin<Box<dyn SkStreamMemory>>>;
 }
-// Rust-only ownership proof at native cross-thread font/cache boundaries.
+// Rust-only ownership proof at cross-thread font/cache boundaries.
 // No additional source algorithm or line credit: the sole stored value remains
-// the same native unique stream owner. Ordinary SkStreamAsset is not made Send.
+// the same unique stream owner. Ordinary SkStreamAsset is not made Send.
 #[repr(transparent)]
 pub struct TransferableStreamAsset {
     stream: Pin<Box<dyn SkStreamAsset>>,
@@ -187,7 +187,7 @@ impl TransferableStreamAsset {
     /// must support the independently owned streams' concurrent access. No
     /// thread-bound callbacks, borrowed thread-local data, or conflicting aliases
     /// may remain. This obligation lasts until the last descendant is destroyed.
-    pub unsafe fn from_native_transferable(stream: Pin<Box<dyn SkStreamAsset>>) -> Self {
+    pub unsafe fn from_transferable_stream(stream: Pin<Box<dyn SkStreamAsset>>) -> Self {
         Self { stream }
     }
     pub fn as_asset(&self) -> &dyn SkStreamAsset {
@@ -207,7 +207,7 @@ impl TransferableStreamAsset {
     }
 }
 // Justified solely by the unsafe constructor's complete, recursive owner
-// contract. This does not provide Sync: shared native access still needs a lock.
+// contract. This does not provide Sync: shared access still needs a lock.
 unsafe impl Send for TransferableStreamAsset {}
 // Source: include/core/SkStream.h:436-437
 // The actual canonical Data owner retains bytes; each stream has its own offset.

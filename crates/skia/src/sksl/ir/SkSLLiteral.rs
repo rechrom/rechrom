@@ -82,7 +82,7 @@ impl Literal {
             return Self::MakeFloat(pos, value as f32, ty);
         }
         if ty.isInteger() {
-            return Self::MakeInt(pos, native_int(value), ty);
+            return Self::MakeInt(pos, int(value), ty);
         }
         debug_assert!(ty.isBoolean());
         Self::MakeBool(pos, value != 0.0, ty)
@@ -95,7 +95,7 @@ impl Literal {
     // Source: src/sksl/ir/SkSLLiteral.h:97-100
     pub fn intValue(&self) -> SKSL_INT {
         crate::SkASSERT!(@source b"src/sksl/ir/SkSLLiteral.h\0".as_ptr(),98; @condition b"this->type().isInteger()\0".as_ptr(); self.expression_type().isInteger());
-        native_int(self.fValue)
+        int(self.fValue)
     }
     // Source: src/sksl/ir/SkSLLiteral.h:102-105
     pub fn boolValue(&self) -> SKSL_INT {
@@ -177,7 +177,7 @@ unsafe impl Expression for Literal {
 }
 // Explicit native valid-domain adapter: Rust saturating casts must never invent
 // results for native undefined nonfinite/out-of-int64 floating conversions.
-fn native_int(v: f64) -> i64 {
+fn int(v: f64) -> i64 {
     if !v.is_finite() || v < -9223372036854775808.0 || v >= 9223372036854775808.0 {
         std::process::abort();
     }

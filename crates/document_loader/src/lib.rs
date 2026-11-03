@@ -20,6 +20,7 @@ pub use document_loader::{
 pub use module_resources::{ModuleLoadError, ModuleResources};
 pub use resource_fetcher::{
     ResourceFetcher, ResourceFetcherClient, ResponsiveImageInput, ResponsiveImageSourceInput,
+    StyleSheetImportFailure, StyleSheetImportLoad, StyleSheetImportPoll,
 };
 pub use resource_loader::{
     AwaitResource, LoadResponse, RequireResponse, ResourceLoadResult, ResourceLoadStatus,

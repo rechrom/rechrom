@@ -1,5 +1,5 @@
 //! Chromium PaintOpBuffer cursors and playback folding. Storage owns the ops;
-//! these cursors borrow resident values. Offsets are native storage offsets and
+//! these cursors borrow resident values. Offsets are source storage offsets and
 //! the injected view supplies the equivalent of AlignedSize, never a copied list.
 #![allow(non_snake_case, non_camel_case_types)]
 
@@ -304,7 +304,7 @@ fn GetNestedSingleDrawingOp<'a, B: PaintOpBufferView + ?Sized>(
     }
     Some(op)
 }
-/// `OwnedDrawColor` maps the iterator's native folded_draw_color_ storage.
+/// `OwnedDrawColor` maps the iterator's source folded_draw_color_ storage.
 /// It owns only this small generated op, never an existing record or snapshot.
 #[derive(Clone, Copy)]
 pub enum FoldedOp<O> {

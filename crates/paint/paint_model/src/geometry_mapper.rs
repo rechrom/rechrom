@@ -5,6 +5,9 @@ use layoutng_assembly::internal::paint_input::{
     PaintTransform, PaintTransformOperationKind, PaintTransformOrigin, PaintTransformReferenceBox,
 };
 
+use crate::paint_property_tree::{
+    ClipPaintPropertyNode, PropertyTreeState, TransformPaintPropertyNode,
+};
 use crate::PaintRect;
 
 // cpp: paint/geometry_mapper.h:15-29
@@ -84,6 +87,207 @@ pub fn InvertTransform(transform: &TransformMatrix) -> Option<TransformMatrix> {
         }
     }
     Some(inverse)
+}
+
+#[inline]
+fn SameTransform(a: &TransformPaintPropertyNode, b: &TransformPaintPropertyNode) -> bool {
+    a.lifecycle.same_node(&b.lifecycle)
+}
+
+#[inline]
+fn SameClip(a: &ClipPaintPropertyNode, b: &ClipPaintPropertyNode) -> bool {
+    a.lifecycle.same_node(&b.lifecycle)
+}
+
+fn TransformToRoot(node: &TransformPaintPropertyNode) -> TransformMatrix {
+    let mut path: Vec<&TransformPaintPropertyNode> = Vec::new();
+    let mut current = Some(node);
+    while let Some(value) = current {
+        path.push(value);
+        current = value.parent.as_deref();
+    }
+    let mut result = TransformMatrix::default();
+    for value in path.into_iter().rev() {
+        if value.flattens_inherited_transform {
+            FlattenTransform(&mut result);
+        }
+        result = MultiplyTransforms(&result, &value.matrix);
+    }
+    result
+}
+
+/// Source: `gfx::Transform::Flatten()`, used by GeometryMapper's screen
+/// projection path. Flattening projects the inherited transform onto z=0
+/// before the local transform is concatenated.
+fn FlattenTransform(transform: &mut TransformMatrix) {
+    transform.values[2] = 0.0;
+    transform.values[6] = 0.0;
+    transform.values[8] = 0.0;
+    transform.values[9] = 0.0;
+    transform.values[10] = 1.0;
+    transform.values[11] = 0.0;
+    transform.values[14] = 0.0;
+}
+
+fn TransformToAncestor(
+    descendant: &TransformPaintPropertyNode,
+    ancestor: &TransformPaintPropertyNode,
+) -> Option<TransformMatrix> {
+    if SameTransform(descendant, ancestor) {
+        return Some(TransformMatrix::default());
+    }
+    let mut path: Vec<&TransformPaintPropertyNode> = Vec::new();
+    let mut current = Some(descendant);
+    while let Some(value) = current {
+        if SameTransform(value, ancestor) {
+            let mut result = TransformMatrix::default();
+            for node in path.into_iter().rev() {
+                if node.flattens_inherited_transform {
+                    FlattenTransform(&mut result);
+                }
+                result = MultiplyTransforms(&result, &node.matrix);
+            }
+            return Some(result);
+        }
+        path.push(value);
+        current = value.parent.as_deref();
+    }
+    None
+}
+
+#[inline]
+fn IsIdentityOr2dTranslation(transform: &TransformMatrix) -> bool {
+    let mut expected = TransformMatrix::default();
+    expected.values[12] = transform.values[12];
+    expected.values[13] = transform.values[13];
+    *transform == expected
+}
+
+/// Source: `geometry_mapper.cc:49-195` for Paint's immutable property nodes.
+/// Transform origin is already folded into each producer matrix.
+pub fn SourceToDestinationProjection(
+    source: &TransformPaintPropertyNode,
+    destination: &TransformPaintPropertyNode,
+) -> Option<TransformMatrix> {
+    if SameTransform(source, destination) {
+        return Some(TransformMatrix::default());
+    }
+    // Source: geometry_mapper.cc:119-136. These parent/child paths avoid
+    // consulting an unrelated singular ancestor and preserve the exact local
+    // matrix for the overwhelmingly common property-tree mapping.
+    if source
+        .parent
+        .as_deref()
+        .is_some_and(|parent| SameTransform(parent, destination))
+        && IsIdentityOr2dTranslation(&source.matrix)
+        && source.origin == [0.0; 3]
+    {
+        return Some(source.matrix);
+    }
+    if destination
+        .parent
+        .as_deref()
+        .is_some_and(|parent| SameTransform(parent, source))
+        && IsIdentityOr2dTranslation(&destination.matrix)
+    {
+        return InvertTransform(&destination.matrix);
+    }
+
+    // Source: geometry_mapper.cc:144-170. An ancestor/descendant pair is
+    // coplanar by construction of this path, so compute in that plane rather
+    // than through the screen. This also works when an ancestor above the
+    // shared plane has a singular transform.
+    if let Some(source_to_destination) = TransformToAncestor(source, destination) {
+        return Some(source_to_destination);
+    }
+    if let Some(destination_to_source) = TransformToAncestor(destination, source) {
+        return InvertTransform(&destination_to_source);
+    }
+
+    // Source: geometry_mapper.cc:172-194. For unrelated branches use the
+    // canonical flattened screen projection.
+    let source_to_root = TransformToRoot(source);
+    let destination_to_root = TransformToRoot(destination);
+    Some(MultiplyTransforms(
+        &InvertTransform(&destination_to_root)?,
+        &source_to_root,
+    ))
+}
+
+pub fn SourceToDestinationRect(
+    source: &TransformPaintPropertyNode,
+    destination: &TransformPaintPropertyNode,
+    rect: PaintRect,
+) -> Option<PaintRect> {
+    let transform = SourceToDestinationProjection(source, destination)?;
+    MapRectWithTransforms(rect, std::slice::from_ref(&transform), false)
+}
+
+/// Source: `geometry_mapper.cc:197-213`.
+pub fn SourceToDestinationApproximateMinimumScale(
+    source: &TransformPaintPropertyNode,
+    destination: &TransformPaintPropertyNode,
+) -> f64 {
+    if SameTransform(source, destination) {
+        return 1.0;
+    }
+    let Some(projection) = SourceToDestinationProjection(source, destination) else {
+        return 1.0;
+    };
+    if IsIdentityOr2dTranslation(&projection) {
+        return 1.0;
+    }
+    MapRectWithTransforms(
+        PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+        std::slice::from_ref(&projection),
+        false,
+    )
+    .map_or(1.0, |rect| rect.width.min(rect.height))
+}
+
+/// Source: `geometry_mapper.cc:371-519`. `None` is Chromium's infinite clip:
+/// it is returned both when no descendant clip exists and for an abnormal clip
+/// hierarchy. A singular clip transform produces an empty finite clip.
+pub fn LocalToAncestorClipRect(
+    local: &PropertyTreeState,
+    ancestor: &PropertyTreeState,
+) -> Option<PaintRect> {
+    if SameClip(&local.clip, &ancestor.clip) {
+        return None;
+    }
+
+    let mut intermediate = Vec::with_capacity(16);
+    let mut current = Some(local.clip.as_ref());
+    while let Some(clip) = current {
+        if SameClip(clip, &ancestor.clip) {
+            break;
+        }
+        intermediate.push(clip);
+        current = clip.parent.as_deref();
+    }
+    // Chromium deliberately declines to clip abnormal hierarchies.
+    current?;
+
+    let mut result: Option<PaintRect> = None;
+    for clip in intermediate.into_iter().rev() {
+        if let Some(rect) = clip.layout_clip_rects.expanded.rect.or(clip.rect) {
+            let Some(mapped) =
+                SourceToDestinationRect(&clip.local_transform_space, &ancestor.transform, rect)
+            else {
+                return Some(PaintRect::default());
+            };
+            result = Some(result.map_or(mapped, |old| old.intersection(mapped)));
+            if result.is_some_and(|rect| rect.is_empty()) {
+                return result;
+            }
+        }
+    }
+    result
 }
 
 // Map a point through one paint-property transform. Hit testing uses the
@@ -214,6 +418,14 @@ pub fn ResolvePaintTransform(transform: &PaintTransform, fragment_size: Size) ->
                     operation.z,
                 )
             }
+            PaintTransformOperationKind::kRotate | PaintTransformOperationKind::kScale => {
+                if operation.vector.iter().any(|value| !value.is_finite())
+                    || !operation.angle.is_finite()
+                {
+                    panic!("independent transform payload must be finite");
+                }
+                operation.matrix
+            }
         };
         for value in resolved.values {
             if !value.is_finite() {
@@ -231,7 +443,7 @@ pub struct TransformReferenceRect {
     pub size: Size,
 }
 
-// cpp: layoutng/internal/transform_utils.cc:17-34
+// Source: core/layout/transform_utils.cc:17-34.
 // ComputeReferenceBoxInternal. The immutable fragment transport owns border
 // and padding, so Paint reconstructs the same per-fragment reference rect
 // without reaching back through the mutable Layout object graph.

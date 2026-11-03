@@ -42,7 +42,9 @@ use crate::{
     style_rule::*,
     style_sheet_contents::*,
 };
-use foundation::{AtomicString, CSSPropertyID, CSSValueID, Member, String, StringView};
+use foundation::{
+    AtomicString, CSSPropertyID, CSSValueID, Member, String, StringView, TrustedIdentityHashMap,
+};
 use layoutng_style::style::computed_style_constants::PseudoId;
 use std::{
     cell::RefCell,
@@ -126,10 +128,18 @@ impl Default for ProductionMediaQueryEvaluator {
     }
 }
 
-pub struct ProductionRuleBucketTable(HashMap<AtomicString, Extent>);
+// Source: core/css/robin_hood_map.h and rule_set.h:214-287. AtomicString
+// equality is interned storage identity and its cached hash is already the
+// source's content hash, so a second keyed SipHash pass only adds work to the
+// hottest RuleMap lookup path. Keep ordinary content-keyed maps randomized;
+// this table is restricted to resident AtomicString identities.
+pub struct ProductionRuleBucketTable(TrustedIdentityHashMap<AtomicString, Extent>);
 impl RuleBucketTable for ProductionRuleBucketTable {
     fn New(initial_capacity: usize) -> Self {
-        Self(HashMap::with_capacity(initial_capacity))
+        Self(TrustedIdentityHashMap::with_capacity_and_hasher(
+            initial_capacity,
+            Default::default(),
+        ))
     }
     fn Find(&self, key: &AtomicString) -> Option<&Extent> {
         self.0.get(key)
@@ -903,7 +913,7 @@ struct ProjectedRuleDeclaration {
 
 /// Result of looking up the declaration vector for one projected CSSOM rule.
 /// Unsupported declarations remain diagnostics on the typed sheet while the
-/// declarations accepted in the same rule continue through the native cascade.
+/// declarations accepted in the same rule continue through the computed style cascade.
 #[derive(Clone)]
 pub enum ProjectedRuleDeclarations {
     Typed(Rc<Vec<PropertyValue>>),
@@ -1196,6 +1206,12 @@ pub struct ConcreteImport {
     pub metadata: ImportMetadata,
     parent: RefCell<Option<std::rc::Weak<StyleSheetContents<Backend>>>>,
     request: std::cell::Cell<bool>,
+    imported_contents: RefCell<Option<Rc<StyleSheetContents<Backend>>>>,
+}
+impl ConcreteImport {
+    pub(crate) fn AttachImportedContents(&self, contents: Rc<StyleSheetContents<Backend>>) {
+        *self.imported_contents.borrow_mut() = Some(contents);
+    }
 }
 pub struct ProductionImportRule {
     pub rule: Rc<ConcreteImport>,
@@ -1780,7 +1796,7 @@ fn Flatten(
             }
         }
         StyleRuleBase::FontFeatureValues(_) | StyleRuleBase::FontFeature(_) => {
-            // The native parser-owned rules are ingested by RuleSet and the
+            // The computed style parser-owned rules are ingested by RuleSet and the
             // document font-feature registry. They have no independent flat
             // style-rule projection; do not classify retained rules as missing.
         }
@@ -2272,7 +2288,27 @@ fn ParseFontFaceDescriptor(
             }
             values::list(variants, values::ListSeparator::Comma)
         }
-        D::FontFeatureSettings | D::FontVariationSettings => {
+        D::FontFeatureSettings => {
+            let parsed = crate::parser::production_property_parser::ParseProperty(
+                CSSPropertyID::kFontFeatureSettings,
+                text,
+                false,
+                CSSParserMode::kCSSFontFaceRuleMode,
+            )
+            .map_err(|error| match error.kind {
+                crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => {
+                    DiagnosticKind::Unsupported
+                }
+                _ => DiagnosticKind::Invalid,
+            })?;
+            let value = parsed.first().ok_or(DiagnosticKind::Invalid)?;
+            if value.IsImportant() || value.Value().IsCSSWideKeyword() {
+                return Err(DiagnosticKind::Invalid);
+            }
+            stream.SkipUntilPeekedTypeIs(&[]);
+            value.ValueRef()
+        }
+        D::FontVariationSettings => {
             return Err(DiagnosticKind::Unsupported);
         }
         _ => return Err(DiagnosticKind::Invalid),
@@ -2902,6 +2938,7 @@ impl CSSParserImplRuleBackend for Backend {
             ),
             parent: RefCell::new(None),
             request: std::cell::Cell::new(false),
+            imported_contents: RefCell::new(None),
         })
     }
     fn NewNamespaceRule(
@@ -3458,7 +3495,7 @@ impl StyleSheetContentsBackend for Backend {
         Some(rule.metadata.MediaQueries())
     }
     fn ImportStyleSheet(rule: &Self::StyleRuleImport) -> Option<Rc<StyleSheetContents<Self>>> {
-        None
+        rule.imported_contents.borrow().clone()
     }
     fn ImportParentStyleSheet(
         rule: &Self::StyleRuleImport,
@@ -3836,11 +3873,12 @@ impl RuleSetIngestionBackend for Backend {
         rule.metadata.scope.clone()
     }
     fn IngestionImportStyleSheet(
-        _rule: &Self::StyleRuleImport,
+        rule: &Self::StyleRuleImport,
     ) -> Option<Rc<dyn RuleSetSheetView<Self>>> {
-        // Detached parser output publishes an ImportLoad.  Once its loader
-        // supplies child contents this hook can return that retained sheet.
-        None
+        rule.imported_contents
+            .borrow()
+            .clone()
+            .map(|sheet| sheet as Rc<dyn RuleSetSheetView<Self>>)
     }
     fn CopyNavigationState(_state: &Self::NavigationState) -> Rc<Self::NavigationState> {
         Rc::new(())
@@ -4175,7 +4213,7 @@ mod tests {
     }
 
     #[test]
-    fn font_feature_values_native_ingestion_respects_layers_media_and_supports() {
+    fn font_feature_values_computed_style_ingestion_respects_layers_media_and_supports() {
         let sheet = parse(
             "@layer typography { @media screen and (min-width:600px) {
                 @font-feature-values Face { @styleset { wide:2 } }
@@ -4260,7 +4298,7 @@ mod tests {
     }
 
     #[test]
-    fn native_rule_selector_and_value_allocations_preserve_original_ranges() {
+    fn rule_selector_and_value_allocations_preserve_original_ranges() {
         let sheet = parse(
             "/*leading*/ a\\+b[data-v='a}b']/**/ { color : red ; width: 12px; --x:var(--y, 2px); } /*tail*/",
         );
@@ -4386,7 +4424,7 @@ mod tests {
         );
     }
     #[test]
-    fn nesting_and_native_context_pseudos_recover_without_panics() {
+    fn nesting_and_computed_style_context_pseudos_recover_without_panics() {
         let sheet = parse(
             "@media screen{!bad{} :playing{width:98px} :open{width:99px} good{width:7px}} outer{width:3px;& child{height:99px} @media screen{width:88px}} tail{height:5px}",
         );
@@ -4413,7 +4451,7 @@ mod tests {
     }
     #[test]
     fn font_face_descriptors_are_typed_and_keep_exact_body_source() {
-        let body = " /* } */ font-family: 'Demo'; src: local(Demo Face), bogus(x), url('a}b.woff2') format(woff2) tech(variations); unicode-range: U+0-7F, U+4??; font-weight: 900 100; font-stretch: 75% 125%; font-display: swap; ascent-override: 90%; size-adjust: 110%; ";
+        let body = " /* } */ font-family: 'Demo'; src: local(Demo Face), bogus(x), url('a}b.woff2') format(woff2) tech(variations); unicode-range: U+0-7F, U+4??; font-weight: 900 100; font-stretch: 75% 125%; font-display: swap; font-feature-settings: 'liga' 0, 'kern' on; ascent-override: 90%; size-adjust: 110%; ";
         let sheet = parse(&format!(
             "@media screen{{@layer fonts{{@font-face{{{body}}}}}}}"
         ));
@@ -4475,6 +4513,13 @@ mod tests {
                 .CssText()
                 .Utf8(),
             "swap"
+        );
+        assert_eq!(
+            property(properties, CSSPropertyID::kFontFeatureSettings)
+                .unwrap()
+                .CssText()
+                .Utf8(),
+            "\"liga\" 0, \"kern\""
         );
         assert!(sheet
             .diagnostics
@@ -4853,7 +4898,7 @@ mod tests {
         );
     }
     #[test]
-    fn scopes_keep_native_boundaries_and_nested_scope_chains() {
+    fn scopes_keep_computed_style_boundaries_and_nested_scope_chains() {
         let sheet = parse(
             "@scope (.root, #other) to (.stop){.item{width:1px}@scope to (.limit){.deep{height:2px}}}@scope{.implicit{color:red}}@scope (a::before){bad{}}tail{width:3px}",
         );

@@ -107,7 +107,7 @@ impl<T> DeviceSpace<T> {
 // exists until callers write it. No blanket Rust Default or zero fill is used.
 // Unknown T has no default_construct method; it must supply an actual translated
 // constructor rather than inherit a guessed generic policy.
-macro_rules! native_trivial_space_default {
+macro_rules! trivial_space_default {
     ($($ty:ty),* $(,)?) => {$(
         impl ParameterSpace<$ty> {
             pub const fn default_construct() -> core::mem::MaybeUninit<Self> {
@@ -121,13 +121,13 @@ macro_rules! native_trivial_space_default {
         }
     )*};
 }
-native_trivial_space_default!(IVector, Vector, SkIPoint, SkPoint, SkISize, SkSize, SkIRect, SkRect);
+trivial_space_default!(IVector, Vector, SkIPoint, SkPoint, SkISize, SkSize, SkIRect, SkRect);
 
 // Source: src/core/SkImageFilterTypes.h:110,129
 // These actual canonical geometry constructors perform native initialization:
 // Matrix identity; RRect empty via native member initializers; Path default fill.
 // Each field is constructed exactly once, without a new owner or provider.
-macro_rules! native_constructed_space_default {
+macro_rules! constructed_space_default {
     ($($ty:ty),* $(,)?) => {$(
         impl ParameterSpace<$ty> {
             pub fn default_construct() -> Self {
@@ -141,7 +141,7 @@ macro_rules! native_constructed_space_default {
         }
     )*};
 }
-native_constructed_space_default!(
+constructed_space_default!(
     SkMatrix,
     crate::src::core::SkRRect::SkRRect,
     crate::src::core::SkPath::SkPath

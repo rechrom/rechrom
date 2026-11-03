@@ -203,7 +203,7 @@ fn official_c_all_gc_type_and_class_mark_traces_match() {
             (*ctx).eval_obj = fixture_mark_value(&pool, t + 3);
             (*ctx).array_proto_values = fixture_mark_value(&pool, t + 4);
             for j in 0..JS_NATIVE_ERROR_COUNT {
-                (*ctx).native_error_proto[j] = fixture_mark_value(&pool, t + j);
+                (*ctx).error_proto[j] = fixture_mark_value(&pool, t + j);
             }
             for j in 0..(*rt).class_count as usize {
                 *(*ctx).class_proto.add(j) = fixture_mark_value(&pool, t + j);

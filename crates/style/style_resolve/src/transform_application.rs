@@ -563,7 +563,7 @@ mod tests {
         matrix.GetColMajor()
     }
     #[test]
-    fn production_transform_functions_preserve_native_operation_types_and_math() {
+    fn production_transform_functions_preserve_computed_style_operation_types_and_math() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(b.Perspective(), 5.0);
     }
     #[test]
-    fn production_independent_transform_and_origins_write_native_fields() {
+    fn production_independent_transform_and_origins_write_computed_style_fields() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(

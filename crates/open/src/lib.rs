@@ -35,6 +35,10 @@ pub struct OpenDocumentServices {
     pub document: Rc<RefCell<DOM>>,
     pub resources: Rc<ResourceFetcher>,
     pub scripts: Option<OpenScriptServices>,
+    /// The embedding document owns the current media environment.  The HTML
+    /// loader uses the same evaluator as style resolution when deciding
+    /// whether a parser-created sheet blocks first paint.
+    pub render_blocking_media_matches: Rc<dyn Fn(&str) -> bool>,
 }
 
 pub struct OpenScriptServices {
@@ -577,6 +581,7 @@ impl OpenEngine {
             return Ok(());
         }
         let services = adapter.PrepareDocumentServices();
+        let render_blocking_media_matches = services.render_blocking_media_matches.clone();
         if self.script_executor.is_some() {
             let script_services = services.scripts.ok_or_else(|| {
                 io::Error::other("script-enabled OpenEngine requires script services")
@@ -588,6 +593,7 @@ impl OpenEngine {
                 self.resources.clone(),
                 script_services.pending_host_errors,
             );
+            scheduler.SetRenderBlockingMediaEvaluator(render_blocking_media_matches);
             scheduler.InstallResourceFetcher(services.resources)?;
             let executor = self
                 .script_executor
@@ -612,6 +618,7 @@ impl OpenEngine {
                 self.resources.clone(),
                 services.resources,
             );
+            parser.SetRenderBlockingMediaEvaluator(render_blocking_media_matches);
             parser.SetDocumentURL(url.to_owned());
             self.pipeline = Some(OpenDocumentPipeline::Resource(parser));
         }
@@ -779,16 +786,6 @@ impl OpenEngine {
             return Ok(false);
         }
         Ok(true)
-    }
-
-    pub fn TraceLoadingState(&self) {
-        if let Some(scheduler) = self
-            .pipeline
-            .as_ref()
-            .and_then(OpenDocumentPipeline::Scheduler)
-        {
-            scheduler.TraceLoadingState();
-        }
     }
 
     /// Adopt a document constructed by an embedding path instead of the

@@ -8,12 +8,12 @@ use style::{
     parser::{css_parser_mode::CSSParserMode, production_property_parser::ParseProperty},
     production_css_value as values, StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -104,13 +104,13 @@ fn internal_visited_svg_paint_keeps_slots_separate_and_inherits_parent_ordinary_
     }
 }
 #[test]
-fn reflection_direction_offset_mask_and_css_wide_reach_native_reflection() {
+fn reflection_direction_offset_mask_and_css_wide_reach_computed_style_reflection() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='-webkit-box-reflect:below 8px linear-gradient(to bottom,red,blue) 20 fill / 2 / 3px round space'><div id=c style='-webkit-box-reflect:inherit'></div><div id=i style='-webkit-box-reflect:initial'></div><div id=u style='-webkit-box-reflect:unset'></div></div><div id=a style='-webkit-box-reflect:above'></div><div id=l style='-webkit-box-reflect:left -2px'></div><div id=r style='-webkit-box-reflect:right 15%'></div><div id=m style='border-top:7px solid;-webkit-box-reflect:above 0 none 20 fill / 40px'></div>",
     );
     update(&mut owner);
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     let reflection = unsafe { &*p.BoxReflect() };
     assert_eq!(reflection.Direction(), D::kReflectionBelow);
     assert_eq!(reflection.Offset().Pixels(), 8.0);
@@ -122,40 +122,40 @@ fn reflection_direction_offset_mask_and_css_wide_reach_native_reflection() {
     assert_eq!(reflection.Mask().Outset().Top().length().Pixels(), 3.0);
     assert!(reflection.Mask().HorizontalRule() == R::kRoundImageRule);
     assert!(reflection.Mask().VerticalRule() == R::kSpaceImageRule);
-    assert_eq!(native(&owner, "c").BoxReflect(), p.BoxReflect());
-    assert!(native(&owner, "i").BoxReflect().is_null());
-    assert!(native(&owner, "u").BoxReflect().is_null());
+    assert_eq!(computed_style(&owner, "c").BoxReflect(), p.BoxReflect());
+    assert!(computed_style(&owner, "i").BoxReflect().is_null());
+    assert!(computed_style(&owner, "u").BoxReflect().is_null());
     for (id, direction) in [
         ("a", D::kReflectionAbove),
         ("l", D::kReflectionLeft),
         ("r", D::kReflectionRight),
     ] {
         assert_eq!(
-            unsafe { &*native(&owner, id).BoxReflect() }.Direction(),
+            unsafe { &*computed_style(&owner, id).BoxReflect() }.Direction(),
             direction
         );
     }
     assert_eq!(
-        unsafe { &*native(&owner, "a").BoxReflect() }
+        unsafe { &*computed_style(&owner, "a").BoxReflect() }
             .Offset()
             .Pixels(),
         0.0
     );
     assert_eq!(
-        unsafe { &*native(&owner, "l").BoxReflect() }
+        unsafe { &*computed_style(&owner, "l").BoxReflect() }
             .Offset()
             .Pixels(),
         -2.0
     );
     assert_eq!(
-        unsafe { &*native(&owner, "r").BoxReflect() }
+        unsafe { &*computed_style(&owner, "r").BoxReflect() }
             .Offset()
             .PercentValue(),
         15.0
     );
-    assert_eq!(native(&owner, "m").BorderTopWidth(), 7);
+    assert_eq!(computed_style(&owner, "m").BorderTopWidth(), 7);
     assert_eq!(
-        unsafe { &*native(&owner, "m").BoxReflect() }
+        unsafe { &*computed_style(&owner, "m").BoxReflect() }
             .Mask()
             .BorderSlices()
             .Top()

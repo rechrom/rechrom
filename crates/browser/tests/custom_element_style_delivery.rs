@@ -1,8 +1,8 @@
 //! Generic registration-time metadata finalization delivered to production Page style/layout.
 //! Native HTML style/button nodes keep fragment-parser namespace behavior out of this test.
 //! https://html.spec.whatwg.org/multipage/custom-elements.html#dom-customelementregistry-define
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -74,7 +74,7 @@ fn fixture() -> Page {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         Some(ScriptEnvironment {
-            runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+            runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                 4 * 1024 * 1024,
             )),
             xhr: Box::new(XHR),
@@ -119,7 +119,7 @@ fn find(root: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
 
 #[test]
 fn registration_finalizes_inherited_styles_before_connected_shadow_rendering() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -205,21 +205,21 @@ fn registration_finalizes_inherited_styles_before_connected_shadow_rendering() {
 // must post a fresh backup job after InvokeBackupQueue clears the previous queue.
 // https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.cc#86
 #[test]
-fn native_attribute_mutations_schedule_and_rearm_backup_reactions_at_microtask_checkpoints() {
-    native_test_thread::run(|| {
+fn attribute_mutations_schedule_and_rearm_backup_reactions_at_microtask_checkpoints() {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
             r#"
             function check(value, message) { if (!value) throw new Error(message); }
             var changes = [], checkpoints = [];
-            class NativeObserved extends HTMLElement {
+            class Observed extends HTMLElement {
                 static get observedAttributes() { return ['data-state']; }
                 attributeChangedCallback(name, oldValue, value, namespace) {
                     changes.push([name, oldValue, value, namespace]);
                 }
             }
-            customElements.define('x-finalized-styles', NativeObserved);
+            customElements.define('x-finalized-styles', Observed);
             check(changes.length === 1 && changes[0][2] === 'ready', 'initial attribute callback');
             changes.length = 0;
         "#,

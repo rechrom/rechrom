@@ -7,7 +7,7 @@ use super::glyph_offset_iterator::GlyphOffsetIterator;
 use super::shape_result_types::{AdjustMidCluster, BreakGlyphsOption};
 use crate::fonts::canvas_rotation_in_vertical::CanvasRotationInVertical;
 use crate::fonts::simple_font_data::SimpleFontData;
-use crate::text::native::harfbuzz::HbGlyphInfo;
+use crate::text::implementation::harfbuzz::HbGlyphInfo;
 use foundation::blink_geometry::geometry::InlineLayoutUnit;
 use foundation::{GCedHeapVector, HeapVector, MakeGarbageCollected, Member, Traceable, Visitor};
 use std::ops::{Index, IndexMut};

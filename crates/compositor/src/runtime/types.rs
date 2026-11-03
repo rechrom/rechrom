@@ -34,6 +34,29 @@ pub trait SkiaValueBackend {
         width: f32,
         resolution_scale: f32,
     ) -> Option<crate::adapter::geometry::RectF>;
+    /// Path::StrokePath is a Skia geometry operation.  Paint retains the
+    /// backend-neutral path and stroke inputs; the selected value backend
+    /// materializes the filled outline only at the compositor boundary.
+    fn StrokePath(
+        path: &paint::paint_clip_path::PaintPath,
+        width: f32,
+        cap: paint::cc::paint::paint_flags::Cap,
+        join: paint::cc::paint::paint_flags::Join,
+        miter_limit: f32,
+        dash_intervals: &[f32],
+        dash_phase: f32,
+        resolution_scale: f32,
+    ) -> Option<Self::Path>;
+    fn StrokeBackendPath(
+        path: &Self::Path,
+        width: f32,
+        cap: paint::cc::paint::paint_flags::Cap,
+        join: paint::cc::paint::paint_flags::Join,
+        miter_limit: f32,
+        dash_intervals: &[f32],
+        dash_phase: f32,
+        resolution_scale: f32,
+    ) -> Option<Self::Path>;
 }
 pub trait CpuSkiaBackend:
     SkRegionBackend
@@ -76,18 +99,18 @@ pub trait ResultTaskRunner: Send + Sync {
 pub type TaskRunner = Arc<dyn ResultTaskRunner>;
 /// Native Viz request ownership and abort-on-drop behavior are implemented by
 /// the external Viz request owner. This wrapper forwards only native fields.
-pub trait NativeCopyOutputRequest:
+pub trait CopyOutputRequestBackend:
     PropertyTreeCopyOutputRequest + MainLayerCopyOutputRequest<TaskRunner = TaskRunner> + Send + Sync
 {
 }
-impl<T> NativeCopyOutputRequest for T where
+impl<T> CopyOutputRequestBackend for T where
     T: PropertyTreeCopyOutputRequest
         + MainLayerCopyOutputRequest<TaskRunner = TaskRunner>
         + Send
         + Sync
 {
 }
-pub struct CopyOutputRequest(pub Box<dyn NativeCopyOutputRequest>);
+pub struct CopyOutputRequest(pub Box<dyn CopyOutputRequestBackend>);
 impl PropertyTreeCopyOutputRequest for CopyOutputRequest {
     fn has_area(&self) -> bool {
         PropertyTreeCopyOutputRequest::has_area(self.0.as_ref())
@@ -203,13 +226,13 @@ impl<R: CpuSkiaBackend> frame::ViewTransitionGeometry for CpuCompositorTypes<R> 
     ) -> Transform<R> {
         let mut transform = Transform::<R>::default();
         transform
-            .native_mut()
+            .transform_mut()
             .Translate(shared.x as f32, shared.y as f32);
-        transform.native_mut().Scale(
+        transform.transform_mut().Scale(
             shared.width as f32 / output.width as f32,
             shared.height as f32 / output.height as f32,
         );
-        transform.native_mut().Translate(
+        transform.transform_mut().Translate(
             output.x.wrapping_neg() as f32,
             output.y.wrapping_neg() as f32,
         );

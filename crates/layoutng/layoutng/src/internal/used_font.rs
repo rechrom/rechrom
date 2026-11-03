@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_algo_inline/src/native_used_font.rs"]
-mod layout_algo_inline_native_used_font;
+#[path = "../../../layout_algo_inline/src/used_font_interface.rs"]
+mod layout_algo_inline_used_font_interface;
 
-pub use layout_algo_inline_native_used_font::*;
+pub use layout_algo_inline_used_font_interface::*;

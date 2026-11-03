@@ -131,8 +131,8 @@ impl<R: CpuSkiaBackend> RecordingSourceServices<paint::CpuRecordingTypes<R>>
     fn CreateRasterSource(
         &self,
         recording: &RecordingSource<paint::CpuRecordingTypes<R>>,
-    ) -> Arc<paint::NativeRasterSource<R>> {
-        Arc::new(paint::NativeRasterSource::from_recording(recording))
+    ) -> Arc<paint::RasterSourceStorage<R>> {
+        Arc::new(paint::RasterSourceStorage::from_recording(recording))
     }
     fn TraceScope(&self, category: &str, name: &str, count: Option<usize>) {
         self.platform.TraceScope(category, name, count)
@@ -351,12 +351,12 @@ impl<R: CpuSkiaBackend>
 impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksServices<Root<R>>
     for CpuPaintServices<R>
 {
-    fn NativePaintRecord(
+    fn PaintRecord(
         &self,
         a: &Arc<paint::PaintArtifact>,
         item: &paint::DisplayItem,
     ) -> paint::CpuPaintRecord<R> {
-        paint::CpuPaintRecord::from_native(
+        paint::CpuPaintRecord::from_source(
             paint::PaintRecord::from_item(a, item).expect("validated native record range"),
             self.values.clone(),
         )
@@ -781,13 +781,12 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
     pub(crate) fn UpdateCompositor(
         &self,
         pac:&mut crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<Root<R>>,
-        artifact: Arc<paint::PaintArtifact>,
+        input: paint::PaintInput,
         previous_artifact: Option<&Arc<paint::PaintArtifact>>,
         requests: Vec<Box<super::host_owners::ViewTransitionRequest>>,
         c: &mut LayerContext<'_, Root<R>>,
         sequence: &mut i32,
     ) -> Result<(), paint::PaintInputError> {
-        let input = self.PrepareInput(artifact)?;
         let viewport = input.ViewportProperties::<R>();
         let mut pending = CpuPendingLayerServices(std::marker::PhantomData);
         let mut context =

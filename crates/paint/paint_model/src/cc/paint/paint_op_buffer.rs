@@ -21,7 +21,7 @@ pub trait MetadataOp<C> {
     fn HasDiscardableImagesFromFlags(&self, usage: &mut C) -> bool;
 }
 // Source: cc/paint/paint_op_buffer.h:379-400. data_ is owned by the storage
-// adapter; its used/capacity sizes are supplied to the native getter formulas.
+// adapter; its used/capacity sizes are supplied to the source getter formulas.
 #[derive(Clone)]
 pub struct PaintOpBufferMetadata<C> {
     used_: usize,

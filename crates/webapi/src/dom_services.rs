@@ -814,8 +814,8 @@ impl DOMJavaScriptBindings {
                 .borrow()
                 .GetDocument()
                 .ResolvedStyleFor(node)
-                .and_then(|r| r.style.extended.as_ref())
-                .map_or(1.0, |e| e.effective_zoom as f64);
+                .and_then(|resolved| resolved.ComputedStyle())
+                .map_or(1.0, |style| style.EffectiveZoom() as f64);
             if let Some(HostValue::Number(value)) = arguments.get(1) {
                 let mut value = if value.is_finite() { *value } else { 0.0 };
                 if let Some(read) = self.services.host.read_metric.as_mut() {
@@ -908,15 +908,17 @@ impl DOMJavaScriptBindings {
                 // CSSOM resolved width/height use computed lengths for
                 // display:none/contents, including SVG hidden layout containers.
                 let has_box = resolved.generates_box
-                    && unsafe { resolved.native_style.Get().as_ref() }.is_none_or(|style| {
-                        !matches!(
-                            style.Display(),
-                            foundation::EDisplay::kNone | foundation::EDisplay::kContents
-                        )
-                    });
+                    && unsafe { resolved.computed_style_owner.Get().as_ref() }.is_none_or(
+                        |style| {
+                            !matches!(
+                                style.Display(),
+                                foundation::EDisplay::kNone | foundation::EDisplay::kContents
+                            )
+                        },
+                    );
                 (
                     has_box,
-                    unsafe { resolved.native_style.Get().as_ref() }.is_some_and(|style| {
+                    unsafe { resolved.computed_style_owner.Get().as_ref() }.is_some_and(|style| {
                         style.BoxSizing() == foundation::EBoxSizing::kBorderBox
                     }),
                 )
@@ -945,14 +947,8 @@ impl DOMJavaScriptBindings {
         let Some(resolved) = resolved else {
             return Some(Self::value(HostValue::String(String::new())));
         };
-        let s = &resolved.style;
-        let initial;
-        let e = match s.extended.as_ref() {
-            Some(extended) => extended,
-            None => {
-                initial = layoutng_assembly::internal::layout_input::ExtendedStyle::default();
-                &initial
-            }
+        let Some(s) = resolved.ComputedStyle() else {
+            return Some(Self::value(HostValue::String(String::new())));
         };
         let number = |n: f64| {
             if n.is_nan() {
@@ -972,108 +968,261 @@ impl DOMJavaScriptBindings {
             }
         };
         let px = |n: f64| format!("{}px", number(n));
+        // Source: core/css/properties/longhands/longhands_custom.cc
+        // Color::CSSValueFromComputedStyleInternal. CSSOM exposes the
+        // resolved current color, not the authored token (which may be an
+        // inherited value, currentColor or a custom-property substitution).
+        let serialize_color = |color: foundation::Color| {
+            use foundation::ColorSpace;
+            if foundation::Color::IsLegacyColorSpace(color.GetColorSpace()) {
+                let (red, green, blue) = color.ToSRGB();
+                let channel = |value: f32| ((value + 1e-7).clamp(0.0, 1.0) * 255.0).round() as i32;
+                let red = channel(red);
+                let green = channel(green);
+                let blue = channel(blue);
+                if color.IsOpaque() {
+                    format!("rgb({red}, {green}, {blue})")
+                } else {
+                    // CSSOM serializes legacy alpha through its 8-bit value,
+                    // choosing the shortest exact two- or three-decimal form.
+                    let alpha = ((color.Alpha() + 1e-7) * 255.0).round().clamp(0.0, 255.0);
+                    let two = (alpha * 100.0 / 255.0).round() / 100.0;
+                    let serialized = if (two * 255.0).round() == alpha {
+                        two
+                    } else {
+                        (alpha * 1000.0 / 255.0).round() / 1000.0
+                    };
+                    format!(
+                        "rgba({red}, {green}, {blue}, {})",
+                        dom_number_string(serialized as f64)
+                    )
+                }
+            } else {
+                let name = match color.GetColorSpace() {
+                    ColorSpace::kSRGB => "srgb",
+                    ColorSpace::kSRGBLinear => "srgb-linear",
+                    ColorSpace::kDisplayP3 => "display-p3",
+                    ColorSpace::kDisplayP3Linear => "display-p3-linear",
+                    ColorSpace::kA98RGB => "a98-rgb",
+                    ColorSpace::kProPhotoRGB => "prophoto-rgb",
+                    ColorSpace::kRec2020 => "rec2020",
+                    ColorSpace::kRec2100Linear => "rec2100-linear",
+                    ColorSpace::kXYZD50 => "xyz-d50",
+                    ColorSpace::kXYZD65 => "xyz-d65",
+                    ColorSpace::kLab => "lab",
+                    ColorSpace::kOklab => "oklab",
+                    ColorSpace::kLch => "lch",
+                    ColorSpace::kOklch => "oklch",
+                    ColorSpace::kNone => "srgb",
+                    _ => unreachable!("legacy colors were handled above"),
+                };
+                let component = |value: f32, is_none: bool| {
+                    is_none
+                        .then(|| "none".into())
+                        .unwrap_or_else(|| dom_number_string(value as f64))
+                };
+                let values = format!(
+                    "{} {} {}",
+                    component(color.Param0(), color.Param0IsNone()),
+                    component(color.Param1(), color.Param1IsNone()),
+                    component(color.Param2(), color.Param2IsNone())
+                );
+                let alpha = if color.IsOpaque() && !color.AlphaIsNone() {
+                    String::new()
+                } else {
+                    format!(" / {}", component(color.Alpha(), color.AlphaIsNone()))
+                };
+                if foundation::Color::IsLightnessFirstComponent(color.GetColorSpace()) {
+                    format!("{name}({values}{alpha})")
+                } else {
+                    format!("color({name} {values}{alpha})")
+                }
+            }
+        };
         let value = match property.as_str() {
-            "display" => {
-                const NAMES: [&str; 26] = [
-                    "block",
-                    "flex",
-                    "inline-flex",
-                    "grid",
-                    "inline-grid",
-                    "inline",
-                    "table",
-                    "inline-table",
-                    "table-row",
-                    "table-cell",
-                    "flow-root",
-                    "inline-block",
-                    "table-row-group",
-                    "table-header-group",
-                    "table-footer-group",
-                    "table-caption",
-                    "table-column-group",
-                    "table-column",
-                    "grid-lanes",
-                    "block",
-                    "list-item",
-                    "math",
-                    "block math",
-                    "ruby",
-                    "block ruby",
-                    "ruby-text",
-                ];
-                if resolved.display_contents {
-                    "contents"
-                } else if !resolved.generates_box {
-                    "none"
-                } else {
-                    NAMES[s.display as usize]
+            "display" => if resolved.display_contents {
+                "contents"
+            } else if !resolved.generates_box {
+                "none"
+            } else {
+                match s.Display() {
+                    foundation::EDisplay::kInline => "inline",
+                    foundation::EDisplay::kBlock => "block",
+                    foundation::EDisplay::kListItem
+                    | foundation::EDisplay::kInlineListItem
+                    | foundation::EDisplay::kFlowRootListItem
+                    | foundation::EDisplay::kInlineFlowRootListItem => "list-item",
+                    foundation::EDisplay::kInlineBlock => "inline-block",
+                    foundation::EDisplay::kTable => "table",
+                    foundation::EDisplay::kInlineTable => "inline-table",
+                    foundation::EDisplay::kTableRowGroup => "table-row-group",
+                    foundation::EDisplay::kTableHeaderGroup => "table-header-group",
+                    foundation::EDisplay::kTableFooterGroup => "table-footer-group",
+                    foundation::EDisplay::kTableRow => "table-row",
+                    foundation::EDisplay::kTableColumnGroup => "table-column-group",
+                    foundation::EDisplay::kTableColumn => "table-column",
+                    foundation::EDisplay::kTableCell => "table-cell",
+                    foundation::EDisplay::kTableCaption => "table-caption",
+                    foundation::EDisplay::kWebkitBox | foundation::EDisplay::kFlex => "flex",
+                    foundation::EDisplay::kWebkitInlineBox | foundation::EDisplay::kInlineFlex => {
+                        "inline-flex"
+                    }
+                    foundation::EDisplay::kGrid => "grid",
+                    foundation::EDisplay::kInlineGrid => "inline-grid",
+                    foundation::EDisplay::kFlowRoot => "flow-root",
+                    foundation::EDisplay::kMath => "math",
+                    foundation::EDisplay::kBlockMath => "block math",
+                    foundation::EDisplay::kRuby => "ruby",
+                    foundation::EDisplay::kBlockRuby => "block ruby",
+                    foundation::EDisplay::kRubyText => "ruby-text",
+                    foundation::EDisplay::kGridLanes => "grid-lanes",
+                    foundation::EDisplay::kInlineGridLanes => "inline grid-lanes",
+                    foundation::EDisplay::kLayoutCustom => "block",
+                    foundation::EDisplay::kInlineLayoutCustom => "inline",
+                    foundation::EDisplay::kContents => "contents",
+                    foundation::EDisplay::kNone => "none",
                 }
-                .into()
             }
-            "position" => {
-                ["static", "absolute", "relative", "fixed", "sticky"][s.position as usize].into()
+            .into(),
+            "position" => match s.GetPosition() {
+                foundation::EPosition::kStatic => "static",
+                foundation::EPosition::kRelative => "relative",
+                foundation::EPosition::kAbsolute => "absolute",
+                foundation::EPosition::kFixed => "fixed",
+                foundation::EPosition::kSticky => "sticky",
             }
-            "direction" => {
-                if s.direction == layoutng_assembly::internal::layout_input::TextDirection::kRtl {
-                    "rtl"
-                } else {
-                    "ltr"
-                }
-                .into()
+            .into(),
+            "direction" => if s.Direction() == foundation::TextDirection::kRtl {
+                "rtl"
+            } else {
+                "ltr"
             }
-            "visibility" => if s.paint.visible { "visible" } else { "hidden" }.into(),
-            "box-sizing" => if unsafe { resolved.native_style.Get().as_ref() }
-                .is_some_and(|style| style.BoxSizing() == foundation::EBoxSizing::kBorderBox)
-            {
+            .into(),
+            "visibility" => match s.Visibility() {
+                foundation::style_constants::EVisibility::kVisible => "visible",
+                foundation::style_constants::EVisibility::kHidden => "hidden",
+                foundation::style_constants::EVisibility::kCollapse => "collapse",
+            }
+            .into(),
+            "box-sizing" => if s.BoxSizing() == foundation::EBoxSizing::kBorderBox {
                 "border-box"
             } else {
                 "content-box"
             }
             .into(),
-            "opacity" => number(s.paint.opacity as f64),
-            "zoom" => number(e.zoom as f64),
-            "font-size" => px(e.font_size),
-            "font-weight" => number(e.font_weight as f64),
-            "font-style" => if e.font_italic { "italic" } else { "normal" }.into(),
-            "line-height" => e
-                .line_height
-                .map(px)
-                .or_else(|| e.line_height_percent.map(|v| px(e.font_size * v / 100.0)))
-                .unwrap_or_else(|| "normal".into()),
+            "opacity" => number(s.Opacity() as f64),
+            "color" => serialize_color(s.GetCurrentColor(None)),
+            "zoom" => number(s.Zoom() as f64),
+            "font-size" => px(s.GetFontDescription().SpecifiedSize() as f64),
+            "font-weight" => number(s.GetFontDescription().Weight().ToFloat() as f64),
+            "font-style" => if s.GetFontDescription().Style().ToFloat() != 0.0 {
+                "italic"
+            } else {
+                "normal"
+            }
+            .into(),
+            "line-height" => {
+                style::production_css_value::Value::Create(s.LineHeight(), s.EffectiveZoom())
+                    .CssText()
+                    .Utf8()
+            }
+            // CSSComputedStyleDeclaration serializes the resolved inherited
+            // alignment.  Hydration libraries use this value when replacing
+            // one text node with block line wrappers; returning the empty
+            // string makes them freeze the wrappers at their `left` fallback
+            // even though Layout used the parent's centered alignment.
+            "text-align" => match s.GetTextAlign() {
+                foundation::ETextAlign::kStart => "start",
+                foundation::ETextAlign::kEnd => "end",
+                foundation::ETextAlign::kLeft => "left",
+                foundation::ETextAlign::kRight => "right",
+                foundation::ETextAlign::kCenter => "center",
+                foundation::ETextAlign::kJustify => "justify",
+                foundation::ETextAlign::kMatchParent => "match-parent",
+                foundation::ETextAlign::kWebkitLeft => "-webkit-left",
+                foundation::ETextAlign::kWebkitRight => "-webkit-right",
+                foundation::ETextAlign::kWebkitCenter => "-webkit-center",
+            }
+            .into(),
+            "text-align-last" => match s.TextAlignLast() {
+                foundation::ETextAlignLast::kAuto => "auto",
+                foundation::ETextAlignLast::kStart => "start",
+                foundation::ETextAlignLast::kEnd => "end",
+                foundation::ETextAlignLast::kLeft => "left",
+                foundation::ETextAlignLast::kRight => "right",
+                foundation::ETextAlignLast::kCenter => "center",
+                foundation::ETextAlignLast::kJustify => "justify",
+                foundation::ETextAlignLast::kMatchParent => "match-parent",
+            }
+            .into(),
             "width" | "height" => metric.map(px).unwrap_or_else(|| {
                 // Width/Height::CSSValueFromComputedStyleInternal uses the
                 // computed Length when no layout object supplies a used size.
-                let Some(native) = (unsafe { resolved.native_style.Get().as_ref() }) else {
-                    return "auto".into();
-                };
                 let length = if property == "width" {
-                    native.Width()
+                    s.Width()
                 } else {
-                    native.Height()
+                    s.Height()
                 };
-                style::production_css_value::Value::Create(length, native.EffectiveZoom())
+                style::production_css_value::Value::Create(length, s.EffectiveZoom())
                     .CssText()
                     .Utf8()
             }),
+            "min-width" | "min-height" | "max-width" | "max-height" => {
+                // Source: MinWidth/MinHeight/MaxWidth/MaxHeight::
+                // CSSValueFromComputedStyleInternal. Unlike width/height these
+                // properties always expose the computed Length; there is no
+                // layout-object used-size substitution.
+                let length = match property.as_str() {
+                    "min-width" => s.MinWidth(),
+                    "min-height" => s.MinHeight(),
+                    "max-width" => s.MaxWidth(),
+                    "max-height" => s.MaxHeight(),
+                    _ => unreachable!(),
+                };
+                if length.IsAuto() && !(s.IsFlexOrGridOrCustomItem() && !s.IsEnsuredInDisplayNone())
+                {
+                    // ComputedStyleUtils::MinWidthOrMinHeightAuto resolves the
+                    // ordinary block-item initial value to a used zero. Flex,
+                    // grid and custom-layout items retain the `auto` keyword.
+                    "0px".into()
+                } else if length.IsNone() {
+                    "none".into()
+                } else {
+                    style::production_css_value::Value::Create(length, s.EffectiveZoom())
+                        .CssText()
+                        .Utf8()
+                }
+            }
             p if p.starts_with("padding-")
                 || p.starts_with("margin-")
                 || p.starts_with("border-") =>
             {
-                let edges = if p.starts_with("padding-") {
-                    &s.padding
-                } else if p.starts_with("margin-") {
-                    &s.margin
-                } else {
-                    &s.border
-                };
                 let side = p.split_once('-').unwrap().1;
-                match side.strip_suffix("-width").unwrap_or(side) {
-                    "top" => px(edges.top),
-                    "right" => px(edges.right),
-                    "bottom" => px(edges.bottom),
-                    "left" => px(edges.left),
-                    _ => String::new(),
+                let side = side.strip_suffix("-width").unwrap_or(side);
+                if p.starts_with("border-") {
+                    let width = match side {
+                        "top" => s.BorderTopWidth(),
+                        "right" => s.BorderRightWidth(),
+                        "bottom" => s.BorderBottomWidth(),
+                        "left" => s.BorderLeftWidth(),
+                        _ => return Some(Self::value(HostValue::String(String::new()))),
+                    };
+                    px(width as f64 / s.EffectiveZoom().max(f32::MIN_POSITIVE) as f64)
+                } else {
+                    let length = match (p.starts_with("padding-"), side) {
+                        (true, "top") => s.PaddingTop(),
+                        (true, "right") => s.PaddingRight(),
+                        (true, "bottom") => s.PaddingBottom(),
+                        (true, "left") => s.PaddingLeft(),
+                        (false, "top") => s.MarginTop(),
+                        (false, "right") => s.MarginRight(),
+                        (false, "bottom") => s.MarginBottom(),
+                        (false, "left") => s.MarginLeft(),
+                        _ => return Some(Self::value(HostValue::String(String::new()))),
+                    };
+                    style::production_css_value::Value::Create(length, s.EffectiveZoom())
+                        .CssText()
+                        .Utf8()
                 }
             }
             p if p.starts_with("--") => resolved
@@ -1253,6 +1402,7 @@ mod tests {
 
     #[test]
     fn computed_style_uses_live_resolved_document_and_measurement_callbacks() {
+        let _heap = foundation::LayoutHeapScope::new();
         let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(
             "<div id=box data-info='one'></div>",
         )));
@@ -1275,6 +1425,12 @@ mod tests {
                 resolved.style.direction = TextDirection::kRtl;
                 resolved.style.paint.visible = false;
                 resolved.style.paint.opacity = 0.25;
+                resolved.style.paint.color = foundation::PaintColor {
+                    red: 18.0 / 255.0,
+                    green: 52.0 / 255.0,
+                    blue: 86.0 / 255.0,
+                    alpha: 128.0 / 255.0,
+                };
                 resolved.style.padding.left = 2.125;
                 resolved.style.border.top = 1.5;
                 resolved.style.extended = Some(
@@ -1283,10 +1439,28 @@ mod tests {
                         font_weight: 700.0,
                         font_italic: true,
                         line_height_percent: Some(150.0),
+                        text_align: layoutng_assembly::internal::layout_input::TextAlign::kCenter,
+                        text_align_last:
+                            layoutng_assembly::internal::layout_input::TextAlignLast::kRight,
                         ..Default::default()
                     }
                     .into(),
                 );
+                let initial = unsafe {
+                    &*layoutng_style::style::computed_style::ComputedStyle::GetInitialStyleSingleton(
+                    )
+                };
+                let mut builder =
+                    layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(
+                        initial,
+                    );
+                builder.SetMinHeightOwned(foundation::Length::MinContent().clone());
+                builder.SetMinWidthOwned(foundation::Length::Fixed(13.5));
+                builder.SetMaxWidthOwned(foundation::Length::Percent(75.0));
+                builder.SetMaxHeightOwned(foundation::Length::None().clone());
+                resolved
+                    .SetComputedStyleOwner(foundation::Persistent::from_ptr(builder.TakeStyle()
+                        as *mut layoutng_style::style::computed_style::ComputedStyle));
                 std::sync::Arc::make_mut(&mut resolved.custom_properties)
                     .insert("--value".into(), Some(" green ".into()));
                 update_document
@@ -1329,7 +1503,15 @@ mod tests {
             var box=document.getElementById('box'),s=getComputedStyle(box);
             check(s.display==='inline-flex' && s.position==='sticky' && s.direction==='rtl' && s.visibility==='hidden','resolved style');
             check(s.opacity==='0.25' && s.fontSize==='20px' && s.fontWeight==='700' && s.fontStyle==='italic' && s.lineHeight==='30px','font/paint values');
-            check(s.width==='121.235px' && s.paddingLeft==='2.125px' && s.borderTopWidth==='1.5px' && s.getPropertyValue('--value')===' green ' && s.color==='','source serialization');
+            check(s.textAlign==='center' && s.textAlignLast==='right','text alignment');
+            check(s.minHeight==='min-content' && s.minWidth==='13.5px' && s.maxWidth==='75%' && s.maxHeight==='none','min/max size serialization');
+            // Text splitters preserve alignment by copying the resolved value
+            // onto the generated block line wrapper.  Keep this hydration path
+            // from silently taking its `left` fallback.
+            var line=document.createElement('span');
+            line.style.textAlign=s.textAlign||'left';
+            check(line.style.textAlign==='center','hydrated line alignment');
+            check(s.width==='121.235px' && s.paddingLeft==='2.125px' && s.borderTopWidth==='1.5px' && s.getPropertyValue('--value')===' green ' && s.color==='rgba(18, 52, 86, 0.5)','source serialization');
             check(box.offsetWidth===128,'metric');
             var attrs=box.attributes;check(attrs.length===2 && attrs[0].name==='id' && attrs[0].value==='box' && attrs[1].name==='data-info' && attrs[1].namespaceURI===null,'attribute snapshot');
             box.setAttribute('data-info','two');check(attrs[1].value==='one' && box.attributes[1].value==='two','new attribute snapshot');

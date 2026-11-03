@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_fragment/src/native_scrollable_overflow_calculator.rs"]
-mod layout_fragment_native_scrollable_overflow_calculator;
+#[path = "../../../layout_fragment/src/scrollable_overflow_calculator.rs"]
+mod layout_fragment_scrollable_overflow_calculator;
 
-pub use layout_fragment_native_scrollable_overflow_calculator::*;
+pub use layout_fragment_scrollable_overflow_calculator::*;

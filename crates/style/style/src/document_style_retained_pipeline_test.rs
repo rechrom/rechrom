@@ -27,17 +27,21 @@ fn node(owner: &dom::DOM, id: &str) -> usize {
 
 fn width(owner: &dom::DOM, index: usize) -> f32 {
     let style = owner.GetDocument().ResolvedStyleFor(index).unwrap();
-    unsafe { &*style.native_style.Get() }.Width().Pixels()
+    unsafe { &*style.computed_style_owner.Get() }
+        .Width()
+        .Pixels()
 }
 
 fn height(owner: &dom::DOM, index: usize) -> f32 {
     let style = owner.GetDocument().ResolvedStyleFor(index).unwrap();
-    unsafe { &*style.native_style.Get() }.Height().Pixels()
+    unsafe { &*style.computed_style_owner.Get() }
+        .Height()
+        .Pixels()
 }
 
 fn display(owner: &dom::DOM, index: usize) -> EDisplay {
     let style = owner.GetDocument().ResolvedStyleFor(index).unwrap();
-    unsafe { &*style.native_style.Get() }.Display()
+    unsafe { &*style.computed_style_owner.Get() }.Display()
 }
 
 #[test]
@@ -63,7 +67,7 @@ fn viewport_resize_retains_unaffected_styles_until_media_result_changes() {
             .GetDocument()
             .ResolvedStyleFor(sized)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .HasViewportUnits());
@@ -86,7 +90,7 @@ fn viewport_resize_retains_unaffected_styles_until_media_result_changes() {
             .GetDocument()
             .ResolvedStyleFor(breakpoint)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -147,7 +151,7 @@ fn shadow_media_breakpoint_does_not_recalc_unrelated_document_scope() {
             .GetDocument()
             .ResolvedStyleFor(host)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -157,7 +161,7 @@ fn shadow_media_breakpoint_does_not_recalc_unrelated_document_scope() {
             .GetDocument()
             .ResolvedStyleFor(inner)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Height()
@@ -198,7 +202,7 @@ fn media_breakpoint_does_not_recalc_unrelated_matches_from_the_same_sheet() {
             .GetDocument()
             .ResolvedStyleFor(breakpoint)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -212,7 +216,7 @@ fn media_breakpoint_does_not_recalc_unrelated_matches_from_the_same_sheet() {
 
 fn direction(owner: &dom::DOM, index: usize) -> TextDirection {
     let style = owner.GetDocument().ResolvedStyleFor(index).unwrap();
-    unsafe { &*style.native_style.Get() }.Direction()
+    unsafe { &*style.computed_style_owner.Get() }.Direction()
 }
 
 #[test]
@@ -421,7 +425,7 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
         .GetDocument()
         .ResolvedStyleFor(unrelated)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
     let translated = engine.TranslatedRuleShadowStats();
     assert!(translated.translated_style_resolver_applied >= 4);
@@ -438,15 +442,15 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
         .as_ref()
         .unwrap();
     assert_eq!(
-        unsafe { &*placeholder.native_style.Get() }
+        unsafe { &*placeholder.computed_style_owner.Get() }
             .GetFontDescription()
             .SpecifiedSize(),
         37.0
     );
     let inner_style = owner.GetDocument().ResolvedStyleFor(inner).unwrap();
-    let inner_native = unsafe { &*inner_style.native_style.Get() };
-    assert_eq!(inner_native.PaddingLeft().Pixels(), 104.0);
-    assert_eq!(inner_native.MarginLeft().Pixels(), 105.0);
+    let inner_computed_style = unsafe { &*inner_style.computed_style_owner.Get() };
+    assert_eq!(inner_computed_style.PaddingLeft().Pixels(), 104.0);
+    assert_eq!(inner_computed_style.MarginLeft().Pixels(), 105.0);
     assert_eq!(owner.GetDocument().TreeScopeRoot(inner), shadow);
     assert_eq!(
         owner
@@ -466,7 +470,7 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
             .into(),
     );
     engine.Update(&mut owner, &media(800.0), &ua).unwrap();
-    assert_eq!(owner.GetDocument().ResolvedStyleFor(unrelated).unwrap().native_style.Get(), unrelated_style.Get(),
+    assert_eq!(owner.GetDocument().ResolvedStyleFor(unrelated).unwrap().computed_style_owner.Get(), unrelated_style.Get(),
         "shadow sheet changes must not recalc an unrelated document-scope UA match with the same selector text");
     assert_eq!(width(&owner, host), 121.0);
     assert_eq!(height(&owner, light), 122.0);
@@ -479,14 +483,14 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
         .as_ref()
         .unwrap();
     assert_eq!(
-        unsafe { &*placeholder.native_style.Get() }
+        unsafe { &*placeholder.computed_style_owner.Get() }
             .GetFontDescription()
             .SpecifiedSize(),
         47.0
     );
     let inner_style = owner.GetDocument().ResolvedStyleFor(inner).unwrap();
     assert_eq!(
-        unsafe { &*inner_style.native_style.Get() }
+        unsafe { &*inner_style.computed_style_owner.Get() }
             .MarginLeft()
             .Pixels(),
         125.0
@@ -558,7 +562,7 @@ fn update_forwards_part_names_through_nested_exportparts_maps() {
     engine.Update(&mut owner, &media(800.0), &[]).unwrap();
 
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let style = unsafe { &*style.native_style.Get() };
+    let style = unsafe { &*style.computed_style_owner.Get() };
     assert_eq!(style.MarginLeft().Pixels(), 101.0);
     assert_eq!(style.Height().Pixels(), 202.0);
     assert_eq!(style.Width().Pixels(), 303.0);
@@ -573,7 +577,7 @@ fn update_forwards_part_names_through_nested_exportparts_maps() {
     );
     engine.Update(&mut owner, &media(800.0), &[]).unwrap();
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let style = unsafe { &*style.native_style.Get() };
+    let style = unsafe { &*style.computed_style_owner.Get() };
     assert_eq!(style.MarginLeft().Pixels(), 101.0);
     assert_eq!(style.Height().Pixels(), 202.0);
     assert!(style.Width().IsAuto());
@@ -620,7 +624,7 @@ fn ua_placeholder_tree_scope_order_prefers_outer_normal_and_inner_important() {
         .placeholder
         .as_ref()
         .unwrap();
-    let placeholder = unsafe { &*placeholder.native_style.Get() };
+    let placeholder = unsafe { &*placeholder.computed_style_owner.Get() };
     assert_eq!(
         placeholder.MarginLeft().Pixels(),
         61.0,
@@ -685,7 +689,7 @@ fn text_control_placeholder_owner_tracks_visibility_and_suggested_value() {
                 .GetDocument()
                 .ResolvedStyleFor(editor)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Opacity(),
@@ -697,7 +701,7 @@ fn text_control_placeholder_owner_tracks_visibility_and_suggested_value() {
                 .GetDocument()
                 .ResolvedStyleFor(placeholder)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .GetFontDescription()
@@ -746,7 +750,7 @@ fn text_control_placeholder_owner_tracks_visibility_and_suggested_value() {
                 .GetDocument()
                 .ResolvedStyleFor(editor)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Opacity(),
@@ -761,7 +765,7 @@ fn text_control_placeholder_owner_tracks_visibility_and_suggested_value() {
                 .GetDocument()
                 .ResolvedStyleFor(editor)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Opacity(),
@@ -797,15 +801,15 @@ fn internal_input_suggested_rules_use_the_retained_ua_shadow_owner() {
         .Update(&mut owner, &media(800.0), &[ua.clone()])
         .unwrap();
 
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(suggested)
             .expect("suggested UA-shadow element must be styled")
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_eq!(native.GetFontDescription().SpecifiedSize(), 47.0);
+    assert_eq!(computed_style.GetFontDescription().SpecifiedSize(), 47.0);
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");
 
@@ -815,15 +819,15 @@ fn internal_input_suggested_rules_use_the_retained_ua_shadow_owner() {
         owner.GetDocument().ShadowPseudoId(suggested),
         Some("-webkit-input-placeholder")
     );
-    let native = unsafe {
+    let computed_style = unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(suggested)
             .expect("placeholder remains in the retained UA-shadow tree")
-            .native_style
+            .computed_style_owner
             .Get()
     };
-    assert_ne!(native.GetFontDescription().SpecifiedSize(), 47.0);
+    assert_ne!(computed_style.GetFontDescription().SpecifiedSize(), 47.0);
 }
 
 #[test]
@@ -875,7 +879,7 @@ fn meter_ua_shadow_tree_routes_custom_pseudo_rules_to_retained_nodes() {
             .GetDocument()
             .ResolvedStyleFor(inner)
             .expect("meter inner style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(inner_style.Display(), EDisplay::kGrid);
@@ -888,7 +892,7 @@ fn meter_ua_shadow_tree_routes_custom_pseudo_rules_to_retained_nodes() {
             .GetDocument()
             .ResolvedStyleFor(bar)
             .expect("meter bar style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert!(bar_style.GridRowStart().IsNamedGridArea());
@@ -900,7 +904,7 @@ fn meter_ua_shadow_tree_routes_custom_pseudo_rules_to_retained_nodes() {
             .GetDocument()
             .ResolvedStyleFor(value)
             .expect("meter value style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(value_style.Opacity(), 0.37);
@@ -925,7 +929,7 @@ fn meter_ua_shadow_tree_routes_custom_pseudo_rules_to_retained_nodes() {
             .GetDocument()
             .ResolvedStyleFor(value)
             .expect("updated meter value style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(value_style.Opacity(), 0.83);
@@ -992,7 +996,7 @@ fn progress_ua_shadow_tree_tracks_indeterminate_value_and_max() {
             .GetDocument()
             .ResolvedStyleFor(progress)
             .expect("indeterminate progress host style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(host_style.Opacity(), 0.23);
@@ -1003,7 +1007,7 @@ fn progress_ua_shadow_tree_tracks_indeterminate_value_and_max() {
             .GetDocument()
             .ResolvedStyleFor(value)
             .expect("progress value style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(value_style.Opacity(), 0.41);
@@ -1048,7 +1052,7 @@ fn progress_ua_shadow_tree_tracks_indeterminate_value_and_max() {
             .GetDocument()
             .ResolvedStyleFor(progress)
             .expect("determinate progress host style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(host_style.Opacity(), 0.77);
@@ -1122,7 +1126,7 @@ fn search_cancel_button_is_a_retained_typed_ua_shadow_owner() {
             .GetDocument()
             .ResolvedStyleFor(cancel)
             .expect("search cancel style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(cancel_style.Opacity(), 0.61);
@@ -1149,7 +1153,7 @@ fn search_cancel_button_is_a_retained_typed_ua_shadow_owner() {
             .GetDocument()
             .ResolvedStyleFor(cancel)
             .expect("empty search cancel style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(cancel_style.Opacity(), 0.0);
@@ -1168,7 +1172,7 @@ fn search_cancel_button_is_a_retained_typed_ua_shadow_owner() {
             .GetDocument()
             .ResolvedStyleFor(cancel)
             .expect("restored search cancel style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(cancel_style.Opacity(), 0.61);
@@ -1225,7 +1229,7 @@ fn color_input_swatch_is_a_retained_value_owned_ua_shadow_tree() {
             .GetDocument()
             .ResolvedStyleFor(swatch)
             .expect("color swatch style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(swatch_style.Opacity(), 0.64);
@@ -1316,7 +1320,7 @@ fn file_input_button_and_status_are_retained_ua_shadow_owners() {
             .GetDocument()
             .ResolvedStyleFor(button)
             .expect("file upload button style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(button_style.Opacity(), 0.58);
@@ -1359,7 +1363,7 @@ fn file_input_button_and_status_are_retained_ua_shadow_owners() {
             .GetDocument()
             .ResolvedStyleFor(button)
             .expect("disabled file upload button style")
-            .native_style
+            .computed_style_owner
             .Get()
     };
     assert_eq!(disabled_button_style.Opacity(), 0.27);
@@ -1447,8 +1451,10 @@ fn update_discovers_constructed_sheet_adopted_by_shadow_scope() {
     engine.Update(&mut owner, &media(800.0), &[]).unwrap();
     let host_style = owner.GetDocument().ResolvedStyleFor(host).unwrap();
     let inner_style = owner.GetDocument().ResolvedStyleFor(inner).unwrap();
-    assert!(unsafe { &*host_style.native_style.Get() }.Width().IsAuto());
-    assert!(unsafe { &*inner_style.native_style.Get() }
+    assert!(unsafe { &*host_style.computed_style_owner.Get() }
+        .Width()
+        .IsAuto());
+    assert!(unsafe { &*inner_style.computed_style_owner.Get() }
         .Height()
         .IsAuto());
     let inline = owner
@@ -1537,7 +1543,7 @@ fn pseudo_container_query_starts_at_its_originating_element() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -1551,7 +1557,7 @@ fn pseudo_container_query_starts_at_its_originating_element() {
         .as_ref()
         .unwrap();
     assert_eq!(
-        unsafe { &*before.native_style.Get() }
+        unsafe { &*before.computed_style_owner.Get() }
             .GetFontDescription()
             .SpecifiedSize(),
         43.0
@@ -1760,10 +1766,13 @@ fn retained_nested_declarations_keep_ua_and_author_cascade_owners() {
     engine.Update(&mut owner, &media(800.0), &[ua]).unwrap();
     let index = node(&owner, "target");
     let resolved = owner.GetDocument().ResolvedStyleFor(index).unwrap();
-    let native = unsafe { &*resolved.native_style.Get() };
-    assert_eq!(native.GetTextAlign(), foundation::ETextAlign::kCenter);
-    assert_eq!(native.Width().Pixels(), 108.0);
-    assert_eq!(native.Height().Pixels(), 44.0);
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    assert_eq!(
+        computed_style.GetTextAlign(),
+        foundation::ETextAlign::kCenter
+    );
+    assert_eq!(computed_style.Width().Pixels(), 108.0);
+    assert_eq!(computed_style.Height().Pixels(), 44.0);
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 3, "{stats:?}");
     assert_eq!(stats.translated_style_resolver_failures, 0, "{stats:?}");

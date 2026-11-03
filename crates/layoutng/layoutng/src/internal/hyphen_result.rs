@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_algo_inline/src/native_hyphen_result.rs"]
-mod layout_algo_inline_native_hyphen_result;
+#[path = "../../../layout_algo_inline/src/hyphen_result_interface.rs"]
+mod layout_algo_inline_hyphen_result_interface;
 
-pub use layout_algo_inline_native_hyphen_result::*;
+pub use layout_algo_inline_hyphen_result_interface::*;

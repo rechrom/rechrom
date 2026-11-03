@@ -67,7 +67,7 @@ pub struct DOMMutation {
     /// Source node for an import into target_node_id (the destination document).
     pub source_node_id: u64,
     pub before_node_id: u64,
-    /// Ordered native identities for atomic HTMLSlotElement.assign().
+    /// Ordered source identities for atomic HTMLSlotElement.assign().
     pub node_ids: Vec<u64>,
 }
 

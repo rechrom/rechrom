@@ -1,6 +1,6 @@
 //! Native event paths through the production Page dispatch and host bindings.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
@@ -67,7 +67,7 @@ fn fixture() -> Page {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         Some(ScriptEnvironment {
-            runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+            runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                 4 * 1024 * 1024,
             )),
             xhr: Box::new(XHR),
@@ -115,7 +115,7 @@ fn fixture() -> Page {
 
 #[test]
 fn generic_event_target_path_has_dispatch_lifetime() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -140,7 +140,7 @@ fn generic_event_target_path_has_dispatch_lifetime() {
 
 #[test]
 fn synthetic_open_shadow_path_retargets_and_survives_tree_mutation() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -168,7 +168,7 @@ fn synthetic_open_shadow_path_retargets_and_survives_tree_mutation() {
 
 #[test]
 fn closed_shadow_slots_filter_paths_without_retargeting_light_dom() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -194,7 +194,7 @@ fn closed_shadow_slots_filter_paths_without_retargeting_light_dom() {
 
 #[test]
 fn noncomposed_internal_event_stays_inside_and_clears_target() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -220,7 +220,7 @@ fn noncomposed_internal_event_stays_inside_and_clears_target() {
 
 #[test]
 fn composed_nonbubbling_event_invokes_shadow_host_at_target() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -241,7 +241,7 @@ fn composed_nonbubbling_event_invokes_shadow_host_at_target() {
 
 #[test]
 fn nested_dispatch_restores_outer_path_and_listener_removal() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -270,7 +270,7 @@ fn nested_dispatch_restores_outer_path_and_listener_removal() {
 
 #[test]
 fn document_window_and_load_paths_match_dispatch_endpoints() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -298,8 +298,8 @@ fn document_window_and_load_paths_match_dispatch_endpoints() {
 }
 
 #[test]
-fn real_mouse_click_traverses_slot_and_keeps_native_event_identity() {
-    native_test_thread::run(|| {
+fn real_mouse_click_traverses_slot_and_keeps_source_event_identity() {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -366,7 +366,7 @@ fn real_mouse_click_traverses_slot_and_keeps_native_event_identity() {
 
 #[test]
 fn path_lifetime_is_private_and_nested_actions_target_their_event() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -399,7 +399,7 @@ fn path_lifetime_is_private_and_nested_actions_target_their_event() {
 
 #[test]
 fn synthetic_path_is_cleared_before_nested_activation_events() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,

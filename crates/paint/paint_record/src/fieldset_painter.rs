@@ -2,26 +2,33 @@
 
 use std::cell::RefCell;
 
+use layoutng_assembly::internal::background_bleed_avoidance::{
+    BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
+};
+use layoutng_assembly::internal::paint_input::{BackgroundBox, PaintBlendMode};
+
+use crate::box_decoration_data::BoxDecorationData;
+use crate::box_fragment_painter::{BackgroundRadii, BoxFragmentPainter};
+use crate::contoured_border_geometry::UniformCornerRadius;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType};
 use crate::paint_info::PaintInfo;
 use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::PaintRect;
 
-// cpp: paint/fieldset_painter.h:10-22
+// Chromium: core/paint/fieldset_painter.h:19-35.
 pub struct FieldsetPainter<'n, 'f, 'c, 'o> {
     node: &'n PaintTreeNode<'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
-    // cpp: paint/fieldset_painter.h:12-13
+    // Chromium: core/paint/fieldset_painter.h:23-24.
     pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
-    // cpp: paint/fieldset_painter.h:15
-    // cpp: paint/fieldset_painter.cc:8-30
+    // Chromium: core/paint/fieldset_painter.cc:25-71,81-84.
     pub fn DecorationRect(node: &PaintTreeNode<'_>) -> PaintRect {
         let fragment = node
             .fragment
@@ -50,8 +57,109 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
         rect
     }
 
-    // cpp: paint/fieldset_painter.h:16
-    // cpp: paint/fieldset_painter.cc:32-64
+    // Chromium: core/paint/fieldset_painter.h:25-27 and
+    // core/paint/fieldset_painter.cc:75-151.
+    //
+    // Fieldset owns the complete decoration sequence because its legend
+    // changes both the decoration box and the border clip. Keeping only the
+    // clip here would leave the shadow/background/bleed ordering owned by the
+    // generic box path, unlike Chromium.
+    pub fn PaintBoxDecorationBackground(
+        &self,
+        fragment_painter: &BoxFragmentPainter<'n, 'f, 'c, 'o>,
+        paint_info: &PaintInfo<'c, 'o>,
+        decoration_data: &BoxDecorationData,
+    ) {
+        debug_assert!(decoration_data.ShouldPaint());
+        let fragment = self
+            .node
+            .fragment
+            .as_deref()
+            .expect("paint tree node has a fragment");
+        let phase = paint_info.phase;
+        let bleed_avoidance = decoration_data.GetBackgroundBleedAvoidance();
+
+        if decoration_data.ShouldPaintShadow() {
+            fragment_painter.PaintBoxShadows(phase, false);
+        }
+
+        let clips_for_bleed = BleedAvoidanceIsClipping(bleed_avoidance);
+        if clips_for_bleed {
+            let border_radii = BackgroundRadii(self.node, BackgroundBox::kBorderBox);
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kSave,
+                    phase,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                self.node,
+            );
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kClipRoundedRect,
+                    phase,
+                    node_id: fragment.node_id,
+                    rect: self.node.PixelSnappedRect(&Self::DecorationRect(self.node)),
+                    corner_radius: UniformCornerRadius(&border_radii),
+                    corner_radii: border_radii,
+                    ..Default::default()
+                },
+                self.node,
+            );
+            if bleed_avoidance == BackgroundBleedAvoidance::kBackgroundBleedClipLayer {
+                self.context.borrow_mut().Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kSaveLayerBlend,
+                        phase,
+                        node_id: fragment.node_id,
+                        blend_mode: PaintBlendMode::kNormal,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+            }
+        }
+
+        if decoration_data.ShouldPaintBackground() {
+            fragment_painter.PaintBackground(phase, bleed_avoidance);
+        }
+        if decoration_data.ShouldPaintShadow() {
+            fragment_painter.PaintBoxShadows(phase, true);
+        }
+        if decoration_data.ShouldPaintBorder() {
+            let clipped = self.BeginBorderClip(paint_info);
+            fragment_painter.PaintBorder(phase, bleed_avoidance);
+            if clipped {
+                self.EndBorderClip(paint_info);
+            }
+        }
+
+        if clips_for_bleed {
+            if bleed_avoidance == BackgroundBleedAvoidance::kBackgroundBleedClipLayer {
+                self.context.borrow_mut().Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kRestore,
+                        phase,
+                        node_id: fragment.node_id,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+            }
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kRestore,
+                    phase,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                self.node,
+            );
+        }
+    }
+
+    // Chromium: core/paint/fieldset_painter.cc:129-147.
     pub fn BeginBorderClip(&self, info: &PaintInfo<'c, 'o>) -> bool {
         let fragment = self
             .node
@@ -101,8 +209,8 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
         true
     }
 
-    // cpp: paint/fieldset_painter.h:17
-    // cpp: paint/fieldset_painter.cc:66-71
+    // Explicit recording counterpart of the scoped clip/layer restoration in
+    // core/paint/fieldset_painter.cc:95-111,149-150.
     pub fn EndBorderClip(&self, info: &PaintInfo<'c, 'o>) {
         self.context.borrow_mut().Append(
             DisplayItem {

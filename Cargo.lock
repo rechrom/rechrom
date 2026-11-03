@@ -1900,6 +1900,7 @@ dependencies = [
  "icu_plurals",
  "icu_provider",
  "quickjs",
+ "unicode-segmentation",
  "writeable",
 ]
 
@@ -2124,6 +2125,7 @@ dependencies = [
  "browser_tracing",
  "layoutng_assembly",
  "layoutng_foundation",
+ "layoutng_geometry",
  "layoutng_style",
 ]
 
@@ -2729,8 +2731,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96c1358452b371bf9f104e21ec536d37a650eb10f7ee379fff67d2e08d537f1f"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.4",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation 0.3.2",
 ]
 
@@ -2928,6 +2932,7 @@ dependencies = [
  "paint_model",
  "paint_reuse",
  "prepaint",
+ "serde_json",
 ]
 
 [[package]]

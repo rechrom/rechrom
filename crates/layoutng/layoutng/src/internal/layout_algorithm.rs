@@ -13,7 +13,7 @@ use layoutng_geometry::geometry::fragment_geometry::FragmentGeometry;
 use layoutng_geometry::geometry::logical_size::LogicalSize;
 use layoutng_style::style::computed_style::ComputedStyle;
 
-use super::algorithm_entry::NativeAlgorithm;
+use super::algorithm_entry::LayoutAlgorithmImplementation;
 use super::block_node::BlockNode;
 use super::break_appeal::BreakAppeal;
 use super::column_spanner_path::ColumnSpannerPath;
@@ -593,7 +593,7 @@ where
 
 // The C++ static_cast from a base subobject to its concrete algorithm is an
 // explicit unsafe contract; a derived owner must prove its base-first layout.
-pub trait RelayoutAlgorithm<Node>: NativeAlgorithm
+pub trait RelayoutAlgorithm<Node>: LayoutAlgorithmImplementation
 where
     Node: LayoutAlgorithmInputNode + LayoutAlgorithmFromBlockNode,
     BoxFragmentBuilder: LayoutAlgorithmBuilder<Node, BlockBreakToken>,

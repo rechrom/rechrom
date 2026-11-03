@@ -10,12 +10,10 @@ use layoutng_assembly::internal::paint_input::{
 
 use paint_model::geometry_mapper::{InvertTransform, MultiplyTransforms, TranslationTransform};
 
-// cpp: paint/paint_shader_resolver.cc:13-15
 fn Finite(point: Offset) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
 
-// cpp: paint/paint_shader_resolver.cc:17-21
 fn ValidateColor(color: Color) {
     if !color.red.is_finite()
         || !color.green.is_finite()
@@ -26,7 +24,6 @@ fn ValidateColor(color: Color) {
     }
 }
 
-// cpp: paint/paint_shader_resolver.cc:23-28
 fn ValidateTransform(transform: &TransformMatrix) {
     for value in transform.values {
         if !value.is_finite() {
@@ -35,7 +32,6 @@ fn ValidateTransform(transform: &TransformMatrix) {
     }
 }
 
-// cpp: paint/paint_shader_resolver.cc:30-40
 fn ResolvePoint(point: &mut Offset, origin: Offset, unit_box: Option<Size>) {
     if let Some(unit_box) = unit_box {
         point.x = origin.x + point.x * unit_box.width;
@@ -861,9 +857,15 @@ fn InterpolateStop(
 }
 
 // css_gradient_value.cc ReplaceColorHintsWithColorStops. The backend has no
-// native hint primitive, so each hint becomes Chromium's nine-stop
+// source hint primitive, so each hint becomes Chromium's nine-stop
 // approximation after its target-size-dependent offset is known.
 fn ReplaceColorHints(shader: &mut PaintShader) {
+    let interpolation_space =
+        if shader.color_interpolation_space == PaintColorInterpolationSpace::kNone {
+            PaintColorInterpolationSpace::kSRGBLegacy
+        } else {
+            shader.color_interpolation_space
+        };
     let mut index = 1;
     while index + 1 < shader.stops.len() {
         if !shader.stops[index].is_hint {
@@ -876,7 +878,16 @@ fn ReplaceColorHints(shader: &mut PaintShader) {
         let left_distance = hint.offset - left.offset;
         let right_distance = right.offset - hint.offset;
         let total = right.offset - left.offset;
-        let near = |a: f64, b: f64| (a - b).abs() <= f32::EPSILON as f64;
+        let near = |a: f64, b: f64| {
+            let finite = |value: f64| {
+                if value.is_finite() {
+                    value as f32
+                } else {
+                    0.0
+                }
+            };
+            (finite(a) - finite(b)).abs() <= 1.0 / 4096.0
+        };
         if near(left_distance, right_distance) {
             shader.stops.remove(index);
             continue;
@@ -912,13 +923,17 @@ fn ReplaceColorHints(shader: &mut PaintShader) {
         let replacements = offsets.into_iter().map(|offset| {
             let point = (offset - left.offset) / total;
             let weight = point.powf(exponent);
-            let mut stop = InterpolateStop(
-                &left,
-                &right,
-                weight,
-                shader.color_interpolation_space,
-                shader.hue_interpolation_method,
-            );
+            let mut stop = if weight.is_finite() {
+                InterpolateStop(
+                    &left,
+                    &right,
+                    weight,
+                    interpolation_space,
+                    shader.hue_interpolation_method,
+                )
+            } else {
+                PaintColorStop::default()
+            };
             stop.offset = offset;
             stop
         });
@@ -940,8 +955,8 @@ fn NormalizeStops(shader: &mut PaintShader) -> Option<(f64, f64)> {
     if !normalize {
         return None;
     }
-    let span = (last - first).max(0.0);
-    if span < f64::EPSILON {
+    let span = (last - first).clamp(0.0, f32::MAX as f64);
+    if span < f32::EPSILON as f64 {
         let offset = first.clamp(0.0, 1.0);
         let first_color = *shader.stops.first().unwrap();
         let last_color = *shader.stops.last().unwrap();
@@ -962,7 +977,8 @@ fn NormalizeStops(shader: &mut PaintShader) -> Option<(f64, f64)> {
         return None;
     }
     for stop in &mut shader.stops {
-        stop.offset = ((stop.offset - first) / span).clamp(0.0, 1.0);
+        let relative = (stop.offset - first).min(f32::MAX as f64);
+        stop.offset = (relative / span).clamp(0.0, 1.0);
     }
     Some((first, last))
 }
@@ -991,8 +1007,6 @@ fn ClampNegativeRadialStops(shader: &mut PaintShader) {
     }
 }
 
-// cpp: paint/paint_shader_resolver.h:10-17
-// cpp: paint/paint_shader_resolver.cc:64-340
 pub fn ResolvePaintShader(
     input: &PaintShader,
     resources: Option<&PaintResources>,

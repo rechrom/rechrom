@@ -87,7 +87,7 @@ pub enum ShaderType {
     PaintRecord,
     Other,
 }
-/// These operations are typed field projections and native Skia/Paint value
+/// These operations are typed field projections and source Skia/Paint value
 /// primitives. All gather/visibility/animation/index decisions remain below.
 pub trait DiscardableImageBackend<B: PaintOpBufferView + ?Sized>: DiscardableImageTypes {
     type Canvas: ImageGatheringCanvas<Self>;
@@ -124,7 +124,7 @@ pub trait DiscardableImageBackend<B: PaintOpBufferView + ?Sized>: DiscardableIma
     fn ImageSourceRect(&self, op: B::Op<'_>) -> Self::FloatRect;
     fn ImageDestinationRect(&self, op: B::Op<'_>) -> Self::FloatRect;
     fn SkottieImages<'a>(&'a self, op: B::Op<'a>) -> Self::SkottieImages<'a>;
-    fn SkottieNativeSize(&self, op: B::Op<'_>) -> Self::FloatRect;
+    fn SkottieSize(&self, op: B::Op<'_>) -> Self::FloatRect;
     fn ScrollingBuffer<'a>(&'a self, op: B::Op<'a>) -> &'a B;
     fn ScrollingOffset(&self, op: B::Op<'_>, offsets: &Self::ScrollOffsets) -> (f32, f32);
     fn ShaderHasDiscardableImages(&self, shader: Self::Shader<'_>) -> bool;
@@ -141,7 +141,7 @@ pub trait DiscardableImageBackend<B: PaintOpBufferView + ?Sized>: DiscardableIma
     fn ShaderSetHasAnimatedImages(&self, shader: Self::Shader<'_>, has_images: bool);
     fn FilterHasDiscardableImages(&self, filter: Self::Filter<'_>) -> bool;
     fn FilterHasNoAnimatedImages(&self, filter: Self::Filter<'_>) -> bool;
-    /// Native PaintFilter::SnapshotWithImages traversal; callback maps the
+    /// Chromium PaintFilter::SnapshotWithImages traversal; callback maps the
     /// provider's GetRasterContent, and returns no decoded raster content.
     fn FilterSnapshotWithImages(
         &self,
@@ -372,7 +372,7 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
                         let src = A::FloatRect::MakeWH(image.width(), image.height());
                         let dst = op_rect;
                         let matrix = ctm.Multiply(&A::Matrix::RectToRect(
-                            backend.SkottieNativeSize(op),
+                            backend.SkottieSize(op),
                             A::FloatRect::FromRect(dst),
                             true,
                         ));

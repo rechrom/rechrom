@@ -123,8 +123,7 @@ impl ConnectedResourceDiscovery {
                 let base = resources.BaseURL();
                 let mut sheet = style::ParseCSSWithBase(&css, &base);
                 sheet.owner_node_id = owner_node_id;
-                resources.AddParsedStyleSheet(sheet, &base)?;
-                style_sheet_changed = true;
+                style_sheet_changed = resources.AddParsedStyleSheetWithImports(sheet, &base)?;
             }
         }
 

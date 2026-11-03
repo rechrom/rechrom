@@ -6,8 +6,8 @@ use font_engine::fonts::shaping::shape_result::ShapeResult;
 use font_engine::fonts::shaping::shape_result_types::AdjustMidCluster;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use font_engine::fonts::simple_font_data::SimpleFontData;
-use font_engine::text::native::bidi_paragraph::BidiParagraph;
-use font_engine::text::native::character::Character;
+use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
+use font_engine::text::implementation::character::Character;
 use font_engine::{FontHeight, HarfBuzzShaper};
 use foundation::{
     DirectionFromLevel, IsLtr, IsRtl, LayoutUnit, Member, RuntimeEnabledFeatures, String,

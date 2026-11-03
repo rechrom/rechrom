@@ -8,9 +8,7 @@ use foundation::{
     DowncastFrom, MakeGarbageCollected, Member, String as BlinkString, Traceable,
     UnsupportedLayout, Visitor, WritingMode,
 };
-use layoutng_assembly::internal::layout_font_resolver::{
-    CurrentNativeFontResolver, NativeFontRequest,
-};
+use layoutng_assembly::internal::layout_font_resolver::{CurrentFontResolver, FontRequest};
 use layoutng_assembly::internal::layout_input::{
     ComputedStyle as InputComputedStyle, ExtendedStyle, WritingMode as InputWritingMode,
 };
@@ -54,20 +52,6 @@ fn PublicWritingMode(mode: WritingMode) -> InputWritingMode {
 }
 
 // cpp: layoutng_svg/svg_layout_objects.cc:41-51
-fn InputStyleForFont(object: &LayoutObject) -> &InputComputedStyle {
-    let node = object.GetNode();
-    assert!(!node.is_null());
-    let mut ancestor = unsafe { &*node }.parentNode().cast::<Node>();
-    while !ancestor.is_null() {
-        let ancestor_ref = unsafe { &*ancestor };
-        if !ancestor_ref.GetLayoutObject().is_null() {
-            return ancestor_ref.InputStyle();
-        }
-        ancestor = ancestor_ref.parentNode().cast::<Node>();
-    }
-    unsafe { &*node }.InputStyle()
-}
-
 // cpp: layoutng_svg/layout_svg_inline_text.h:10-30
 #[repr(C)]
 pub struct LayoutSVGInlineText {
@@ -148,24 +132,29 @@ impl LayoutSVGInlineText {
         if *scaling_factor == 1.0 {
             return MakeGarbageCollected(unsafe { &*style.GetFont() }.clone());
         }
-        let input = InputStyleForFont(object);
-        let defaults = ExtendedStyle::default();
-        let extra = input.extended.as_deref().unwrap_or(&defaults);
         let description = style.GetFontDescription();
         let factor = *scaling_factor as f64;
-        let request = NativeFontRequest::new_auto(
+        let mut families = Vec::new();
+        let mut family: *const font_engine::FontFamily = description.Family();
+        while !family.is_null() && !unsafe { &*family }.FamilyName().IsNull() {
+            let current = unsafe { &*family };
+            families.push(current.FamilyName().Utf8());
+            family = current.Next();
+        }
+        let language = description.LocaleOrDefault().Ascii();
+        let request = FontRequest::new_auto(
             description.ComputedSize() as f64 * factor,
             description.LetterSpacing() as f64 * factor,
             description.WordSpacing() as f64 * factor,
             PublicWritingMode(style.GetWritingMode()),
-            &extra.language,
-            &extra.font_families,
-            extra.font_weight,
-            extra.font_italic,
+            &language,
+            &families,
+            description.Weight().RawValue() as f64 / 4.0,
+            description.Style().RawValue() >= 14 * 4,
             description.Orientation(),
         )
         .WithBaseDescription(description);
-        unsafe { &mut *CurrentNativeFontResolver() }.Resolve(&request) as *const Font
+        unsafe { &mut *CurrentFontResolver() }.Resolve(&request) as *const Font
     }
 
     // cpp: layoutng_svg/svg_layout_objects.cc:199-201

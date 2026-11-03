@@ -175,6 +175,143 @@ fn graph_loading_yields_reuses_shared_requests_and_executes_real_cyclic_records(
     );
     assert_eq!(requests.borrow().len(), 3, "linking must not fetch");
 }
+
+#[test]
+fn self_import_reuses_root_record_and_evaluates() {
+    let (modules, mut runtime, realm, replies, requests, _) = setup();
+    modules.StartExternalScript(1, "https://test/self.js", "https://test/page");
+    respond(
+        &replies,
+        "https://test/self.js",
+        "https://test/self.js",
+        "export const value=7; import * as self from './self.js'; globalThis.selfValue=self.value;",
+    );
+    pump_until(&modules, &mut runtime, &realm, || modules.ScriptReady(1));
+    assert_eq!(
+        requests.borrow().len(),
+        1,
+        "a self edge must reuse the root module-map entry"
+    );
+    let root = modules.ScriptModule(1).unwrap();
+    let result = runtime.EvaluateCompiledModule(
+        &realm,
+        root.module.as_ref().unwrap(),
+        &root.url,
+        Some(modules.clone()),
+    );
+    assert!(result.Succeeded(), "{:?}", result.exception);
+    assert_js(
+        &mut runtime,
+        &realm,
+        "if(selfValue!==7) throw Error('self import');",
+    );
+    assert_eq!(requests.borrow().len(), 1, "linking must not fetch");
+}
+
+#[test]
+fn modulepreload_fetches_single_then_parser_root_activates_descendants() {
+    let (modules, mut runtime, realm, replies, requests, _) = setup();
+    let root_url = "https://test/root.js";
+    let dependency_url = "https://test/dep.js";
+
+    modules.StartModuleLoad(root_url, "https://test/page");
+    respond(
+        &replies,
+        root_url,
+        root_url,
+        "import './dep.js'; globalThis.rootRan=true;",
+    );
+    pump_until(&modules, &mut runtime, &realm, || {
+        modules.ModulePreparedForTesting(root_url)
+    });
+    assert_eq!(requests.borrow().len(), 1);
+
+    modules.StartExternalScript(1, root_url, "https://test/page");
+    assert_eq!(requests.borrow().len(), 2);
+
+    respond(
+        &replies,
+        dependency_url,
+        dependency_url,
+        "globalThis.dependencyLoaded=true;",
+    );
+    pump_until(&modules, &mut runtime, &realm, || modules.ScriptReady(1));
+    let root = modules.ScriptModule(1).unwrap();
+    let result = runtime.EvaluateCompiledModule(
+        &realm,
+        root.module.as_ref().unwrap(),
+        &root.url,
+        Some(modules.clone()),
+    );
+    assert!(result.Succeeded(), "{:?}", result.exception);
+    assert_js(
+        &mut runtime,
+        &realm,
+        "if(!rootRan || !dependencyLoaded) throw Error('module tree');",
+    );
+}
+
+#[test]
+fn modulepreload_in_flight_parser_tree_demand_joins_request() {
+    let (modules, mut runtime, realm, replies, requests, _) = setup();
+    let root_url = "https://test/root.js";
+    let dependency_url = "https://test/dep.js";
+
+    modules.StartModuleLoad(root_url, "https://test/page");
+    modules.StartExternalScript(1, root_url, "https://test/page");
+    assert_eq!(
+        requests
+            .borrow()
+            .iter()
+            .filter(|request| request.url == root_url)
+            .count(),
+        1,
+        "FetchTree must reuse the in-flight FetchSingle module-map entry"
+    );
+    assert_eq!(modules.ModuleEntryCountForTesting(), 1);
+
+    respond(
+        &replies,
+        root_url,
+        root_url,
+        "import './dep.js'; globalThis.joinedRootRan=true;",
+    );
+    pump_until(&modules, &mut runtime, &realm, || {
+        requests.borrow().len() == 2
+    });
+    assert_eq!(modules.ModuleEntryCountForTesting(), 2);
+    assert_eq!(
+        requests
+            .borrow()
+            .iter()
+            .filter(|request| request.url == root_url)
+            .count(),
+        1,
+        "the joined root must not be fetched or compiled as a second entry"
+    );
+
+    respond(
+        &replies,
+        dependency_url,
+        dependency_url,
+        "globalThis.joinedDependencyLoaded=true;",
+    );
+    pump_until(&modules, &mut runtime, &realm, || modules.ScriptReady(1));
+    let root = modules.ScriptModule(1).unwrap();
+    let result = runtime.EvaluateCompiledModule(
+        &realm,
+        root.module.as_ref().unwrap(),
+        &root.url,
+        Some(modules.clone()),
+    );
+    assert!(result.Succeeded(), "{:?}", result.exception);
+    assert_js(
+        &mut runtime,
+        &realm,
+        "if(!joinedRootRan || !joinedDependencyLoaded) throw Error('joined module tree');",
+    );
+}
+
 #[test]
 fn inline_records_are_distinct_and_imports_follow_redirect_and_import_map() {
     let (modules, mut runtime, realm, replies, requests, _) = setup();

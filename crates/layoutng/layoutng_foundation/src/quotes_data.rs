@@ -1,6 +1,6 @@
 use crate::{ScopedRefPtr, String};
 
-// cpp: foundation/text/native/quotes_data.h:34-59
+// cpp: foundation/text/source/quotes_data.h:34-59
 // Definitions: third_party/blink/renderer/platform/text/quotes_data.cc:26-58.
 #[derive(Default)]
 pub struct QuotesData {
@@ -9,12 +9,12 @@ pub struct QuotesData {
 
 #[allow(non_snake_case)]
 impl QuotesData {
-    // cpp: foundation/text/native/quotes_data.h:38-40
+    // cpp: foundation/text/source/quotes_data.h:38-40
     pub fn Create() -> ScopedRefPtr<Self> {
         ScopedRefPtr::new(Self::default())
     }
 
-    // cpp: foundation/text/native/quotes_data.h:41-44
+    // cpp: foundation/text/source/quotes_data.h:41-44
     pub fn CreateWithCharacters(
         open1: u16,
         close1: u16,
@@ -27,7 +27,7 @@ impl QuotesData {
         ScopedRefPtr::new(data)
     }
 
-    // cpp: foundation/text/native/quotes_data.h:49-52
+    // cpp: foundation/text/source/quotes_data.h:49-52
     pub fn AddPair(&mut self, pair: (String, String)) {
         self.quote_pairs_.push(pair);
     }
@@ -52,13 +52,13 @@ impl QuotesData {
             .clone()
     }
 
-    // cpp: foundation/text/native/quotes_data.h:53
+    // cpp: foundation/text/source/quotes_data.h:53
     pub fn size(&self) -> i32 {
         i32::try_from(self.quote_pairs_.len()).expect("quotes data exceeds int size")
     }
 }
 
-// cpp: foundation/text/native/quotes_data.h:46-48
+// cpp: foundation/text/source/quotes_data.h:46-48
 impl PartialEq for QuotesData {
     fn eq(&self, other: &Self) -> bool {
         self.quote_pairs_ == other.quote_pairs_

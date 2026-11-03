@@ -21,7 +21,7 @@ unsafe fn JS_MarkContext(rt: *mut JSRuntime, ctx: *mut JSContext, mark_func: JS_
     JS_MarkValue(rt, (*ctx).eval_obj, mark_func);
     JS_MarkValue(rt, (*ctx).array_proto_values, mark_func);
     for i in 0..JS_NATIVE_ERROR_COUNT {
-        JS_MarkValue(rt, (*ctx).native_error_proto[i], mark_func);
+        JS_MarkValue(rt, (*ctx).error_proto[i], mark_func);
     }
     let mut i = 0;
     while i < (*rt).class_count {
@@ -181,7 +181,7 @@ struct GCTraversalCounts {
     closure_slots: usize,
     array_slots: usize,
     constant_slots: usize,
-    native_function_slots: usize,
+    function_slots: usize,
 }
 unsafe fn gc_decref(rt: *mut JSRuntime) {
     gc_decref_counted::<false>(rt);
@@ -214,7 +214,7 @@ unsafe fn gc_decref_counted<const COUNT: bool>(rt: *mut JSRuntime) -> GCTraversa
                     counts.array_slots += (*object).u.array.count as usize;
                 } else if class == JS_CLASS_C_FUNCTION_DATA {
                     let data = (*object).u.opaque.cast::<JSCFunctionDataRecord>();
-                    if !data.is_null() { counts.native_function_slots += (*data).data_len as usize; }
+                    if !data.is_null() { counts.function_slots += (*data).data_len as usize; }
                 }
             } else if kind == JS_GC_OBJ_TYPE_FUNCTION_BYTECODE as usize {
                 counts.constant_slots += (*p.cast::<JSFunctionBytecode>()).cpool_count as usize;

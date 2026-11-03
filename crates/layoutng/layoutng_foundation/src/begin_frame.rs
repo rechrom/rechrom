@@ -1,4 +1,4 @@
-//! Platform-independent frame time and demand. Native frame production stays
+//! Platform-independent frame time and demand. Chromium frame production stays
 //! with the embedder; Page consumes these values on its existing owner thread.
 //! Corresponding roles: viz::BeginFrameArgs and BeginFrameSource's demand path.
 use std::time::{Duration, Instant};
@@ -17,7 +17,7 @@ pub struct BeginFrameArgs {
 pub trait BeginFrameSource: Send + Sync {
     fn request_begin_frame(&self);
 
-    /// Rebind a native source when its window changes display. Timer and
+    /// Rebind a source source when its window changes display. Timer and
     /// platform-independent sources have no display binding.
     fn set_display(&self, _display_id: u32) {}
 }

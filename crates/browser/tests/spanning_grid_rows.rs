@@ -1,6 +1,6 @@
 //! Spanning named grid rows through the production Style and Layout owners.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::{
@@ -59,7 +59,7 @@ fn fixture(css: &str, children: &str) -> Page {
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -127,12 +127,15 @@ fn native(
                 .is_some_and(|a| a.value == name)
         })
         .unwrap();
-    doc.ResolvedStyleFor(index).unwrap().native_style.clone()
+    doc.ResolvedStyleFor(index)
+        .unwrap()
+        .computed_style_owner
+        .clone()
 }
 
 #[test]
 fn spanning_auto_rows_use_only_the_unmet_item_contribution() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for css in ["grid-template-areas: \"a c\" \"b c\"", ""] {
             let page = fixture(&format!("grid-template-columns:200px 200px;{css}"),
                 "<div id=a style='grid-column:1;grid-row:1'><div style='height:260px'></div></div><div id=b style='grid-column:1;grid-row:2'><div style='height:90px'></div></div><div id=c style='grid-column:2;grid-row:1 / 3;max-height:320px;overflow:hidden'><div style='height:400px'></div></div>");
@@ -152,7 +155,7 @@ fn spanning_auto_rows_use_only_the_unmet_item_contribution() {
 
 #[test]
 fn named_area_spanning_auto_rows_match_explicit_lines() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture("grid-template-columns:200px 200px;grid-template-areas:\"a c\" \"b c\"",
             "<div id=a style='grid-area:a'><div style='height:260px'></div></div><div id=b style='grid-area:b'><div style='height:90px'></div></div><div id=c style='grid-area:c;max-height:320px;overflow:hidden'><div style='height:400px'></div></div>");
         eprintln!(
@@ -170,7 +173,7 @@ fn named_area_spanning_auto_rows_match_explicit_lines() {
 
 #[test]
 fn named_spans_reach_existing_auto_and_intrinsic_row_sizing() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for rows in [
             "auto auto",
             "min-content min-content",
@@ -188,7 +191,7 @@ fn named_spans_reach_existing_auto_and_intrinsic_row_sizing() {
 
 #[test]
 fn axis_shorthands_resolve_both_named_spanning_edges() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture("grid-template-columns:100px 100px 100px;grid-template-areas:\"a c c\" \"b c c\"",
             "<div id=a style='grid-area:a'><div style='height:260px'></div></div><div id=b style='grid-area:b'><div style='height:90px'></div></div><div id=c style='grid-row:c;grid-column:c;max-height:320px;overflow:hidden'><div style='height:400px'></div></div>");
         let style = native(&page, "c");
@@ -205,7 +208,7 @@ fn axis_shorthands_resolve_both_named_spanning_edges() {
 
 #[test]
 fn custom_property_span_mutation_preserves_old_style_and_fragment_snapshots() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture("grid-template-columns:200px 200px;grid-template-areas:\"a c\" \"b c\"",
             "<div id=a style='grid-area:a'><div style='height:260px'></div></div><div id=b style='grid-area:b'><div style='height:90px'></div></div><div id=c style='--area:c;grid-area:var(--area);max-height:320px;overflow:hidden'><div style='height:400px'></div></div>");
         let old = page.CurrentFrame().unwrap().fragments.clone();

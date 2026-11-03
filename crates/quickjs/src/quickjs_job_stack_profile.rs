@@ -165,7 +165,7 @@ unsafe fn js_job_stack_profile_poll(ctx: *mut JSContext, current_pc: *const u8) 
                 } else {
                     let class = js_job_stack_profile_atom(rt,
                         (*(*rt).class_array.add((*object).class_id as usize)).class_name);
-                    let _ = writeln!(stack, "#{depth} native_class={class:?} object={object:p}");
+                    let _ = writeln!(stack, "#{depth} class={class:?} object={object:p}");
                 }
             }
             frame = (*frame).prev_frame;

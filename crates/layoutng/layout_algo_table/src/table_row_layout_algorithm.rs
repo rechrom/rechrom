@@ -9,7 +9,7 @@ use foundation::{
 };
 use layout_algo_block::block_child_iterator::BlockChildIterator;
 use layoutng_assembly::internal::{
-    algorithm_entry::NativeAlgorithm,
+    algorithm_entry::LayoutAlgorithmImplementation,
     block_node::BlockNode,
     constraint_space::{ConstraintSpace, LayoutResultCacheSlot},
     constraint_space_builder::ConstraintSpaceBuilder,
@@ -305,7 +305,7 @@ impl TableRowLayoutAlgorithm {
     }
 }
 // cpp: layoutng_table/table_row_layout_algorithm.h:18-33
-impl NativeAlgorithm for TableRowLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for TableRowLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_table.RowLayout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_table.RowMeasure";
 

@@ -43,11 +43,11 @@ impl PathPositionMapper {
             reverse_direction: path.reverse_direction,
         };
         for point in &path.points {
-            let native = gfx::PointF::new(point.x as f32, point.y as f32);
-            if mapper.points.last() == Some(&native) {
+            let source = gfx::PointF::new(point.x as f32, point.y as f32);
+            if mapper.points.last() == Some(&source) {
                 continue;
             }
-            mapper.points.push(native);
+            mapper.points.push(source);
         }
         if mapper.points.is_empty() {
             return mapper;

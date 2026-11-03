@@ -247,10 +247,13 @@ pub trait LayoutTreeElement {
 }
 
 impl ComputedStyle {
-    // These declarations have no definition in the supplied style sources.
-    // cpp: layoutng_style/style/computed_style.h:728
+    // cpp: core/style/computed_style.cc:2423-2429
     pub fn UsedScrollbarColor(&self) -> *mut StyleScrollbarColor {
-        unsafe { ComputedStyleUsedScrollbarColor(self) }
+        if self.PrefersDefaultScrollbarStyles() {
+            std::ptr::null_mut()
+        } else {
+            self.ScrollbarColor()
+        }
     }
 
     // cpp: layoutng_style/style/computed_style.h:778
@@ -306,11 +309,6 @@ impl ComputedStyle {
     // cpp: layoutng_style/style/computed_style.h:2735
     pub fn HasPropertyDependingOnCurrentColor(&self) -> bool {
         unsafe { ComputedStyleHasPropertyDependingOnCurrentColor(self) }
-    }
-
-    // cpp: layoutng_style/style/computed_style.h:2867
-    pub(crate) fn ScrollbarIsHiddenByCustomStyle(&self, element: *mut Element) -> bool {
-        unsafe { ComputedStyleScrollbarIsHiddenByCustomStyle(self, element) }
     }
 
     // C++ FunctionRef also borrows its callable and permits captures.
@@ -729,11 +727,27 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:928-931
     pub fn ScrollbarThumbColorResolved(&self) -> Option<Color> {
-        unsafe { ComputedStyleScrollbarThumbColorResolved(self) }
+        let scrollbar_color = self.UsedScrollbarColor();
+        if scrollbar_color.is_null() {
+            return None;
+        }
+        Some(unsafe { &*scrollbar_color }.GetThumbColor().Resolve(
+            self.GetCurrentColor(None),
+            self.UsedColorScheme(),
+            None,
+        ))
     }
 
     pub fn ScrollbarTrackColorResolved(&self) -> Option<Color> {
-        unsafe { ComputedStyleScrollbarTrackColorResolved(self) }
+        let scrollbar_color = self.UsedScrollbarColor();
+        if scrollbar_color.is_null() {
+            return None;
+        }
+        Some(unsafe { &*scrollbar_color }.GetTrackColor().Resolve(
+            self.GetCurrentColor(None),
+            self.UsedColorScheme(),
+            None,
+        ))
     }
 
     // cpp: layoutng_style/style/computed_style.h:938
@@ -1912,7 +1926,13 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:1360
     pub fn ImageOutsets(&self, image: &NinePieceImage) -> PhysicalBoxStrut {
-        unsafe { ComputedStyleImageOutsets(self, image) }
+        // Source: core/style/computed_style.cc:2668-2676.
+        PhysicalBoxStrut::new(
+            NinePieceImage::ComputeOutset(image.Outset().Top(), self.BorderTopWidth()),
+            NinePieceImage::ComputeOutset(image.Outset().Right(), self.BorderRightWidth()),
+            NinePieceImage::ComputeOutset(image.Outset().Bottom(), self.BorderBottomWidth()),
+            NinePieceImage::ComputeOutset(image.Outset().Left(), self.BorderLeftWidth()),
+        )
     }
 
     // cpp: layoutng_style/style/computed_style.h:1364-1366
@@ -2755,7 +2775,63 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2362
     pub fn BorderObscuresBackground(&self) -> bool {
-        unsafe { ComputedStyleBorderObscuresBackground(self) }
+        // Source: core/style/computed_style.cc:2678-2701 and
+        // core/style/border_edge.cc:23-29,56-67.  Visited colors deliberately
+        // retain the unvisited alpha (computed_style.cc:2553-2568), so the
+        // unvisited color is sufficient for this opacity-only question.
+        if !self.HasBorder() || self.BorderImage().HasImage() {
+            return false;
+        }
+
+        let obscures = |width: i32, color: &StyleColor, style: EBorderStyle| {
+            let effective_style = if (style == EBorderStyle::kDouble && width < 3)
+                || ((style == EBorderStyle::kRidge || style == EBorderStyle::kGroove) && width <= 1)
+            {
+                EBorderStyle::kSolid
+            } else {
+                style
+            };
+            let color_is_opaque = if self.ShouldForceColor(color) {
+                // Source: core/style/computed_style.cc:2768-2776.
+                let forced = if self.Color().IsSystemColorIncludingDeprecated() {
+                    self.GetCurrentColor(None)
+                } else {
+                    self.InternalForcedColor().Resolve(
+                        Color::default(),
+                        self.UsedColorScheme(),
+                        None,
+                    )
+                };
+                forced.IsOpaque()
+            } else {
+                color
+                    .Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None)
+                    .IsOpaque()
+            };
+            color_is_opaque
+                && effective_style != EBorderStyle::kHidden
+                && effective_style != EBorderStyle::kDotted
+                && effective_style != EBorderStyle::kDashed
+                && effective_style != EBorderStyle::kDouble
+        };
+
+        obscures(
+            self.BorderTopWidth(),
+            self.BorderTopColor(),
+            self.BorderTopStyle(),
+        ) && obscures(
+            self.BorderRightWidth(),
+            self.BorderRightColor(),
+            self.BorderRightStyle(),
+        ) && obscures(
+            self.BorderBottomWidth(),
+            self.BorderBottomColor(),
+            self.BorderBottomStyle(),
+        ) && obscures(
+            self.BorderLeftWidth(),
+            self.BorderLeftColor(),
+            self.BorderLeftStyle(),
+        )
     }
 
     // cpp: layoutng_style/style/computed_style.h:2363-2365
@@ -2771,7 +2847,22 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2382
     pub fn BoxDecorationOutsets(&self) -> PhysicalBoxStrut {
-        unsafe { ComputedStyleBoxDecorationOutsets(self) }
+        // Source: core/style/computed_style.cc:2703-2721.
+        debug_assert!(self.HasVisualOverflowingEffect());
+        let mut outsets = PhysicalBoxStrut::default();
+        let box_shadow = self.BoxShadow();
+        if !box_shadow.is_null() {
+            outsets = PhysicalBoxStrut::Enclosing(
+                &unsafe { &*box_shadow }.RectOutsetsIncludingOriginal(),
+            );
+        }
+        if self.HasBorderImageOutsets() {
+            outsets.Unite(&self.BorderImageOutsets());
+        }
+        if self.HasMaskBoxImageOutsets() {
+            outsets.Unite(&self.MaskBoxImageOutsets());
+        }
+        outsets
     }
 
     // cpp: layoutng_style/style/computed_style.h:2386-2396
@@ -4839,13 +4930,6 @@ unsafe extern "Rust" {
     ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2735
     fn ComputedStyleHasPropertyDependingOnCurrentColor(style: &ComputedStyle) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2867
-    fn ComputedStyleScrollbarIsHiddenByCustomStyle(
-        style: &ComputedStyle,
-        element: *mut Element,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:728
-    fn ComputedStyleUsedScrollbarColor(style: &ComputedStyle) -> *mut StyleScrollbarColor;
     // cpp: layoutng_style/style/computed_style.h:778
     fn ComputedStyleListStyleStringValue(style: &ComputedStyle) -> *const AtomicString;
     // cpp: layoutng_style/style/computed_style.h:787-789
@@ -4898,8 +4982,6 @@ unsafe extern "Rust" {
         style: &ComputedStyle,
     ) -> *mut foundation::Vector<AtomicString>;
     // cpp: layoutng_style/style/computed_style.h:1360
-    fn ComputedStyleImageOutsets(style: &ComputedStyle, image: &NinePieceImage)
-        -> PhysicalBoxStrut;
     // cpp: layoutng_style/style/computed_style.h:2605-2607
     fn ComputedStyleHasAnimationTrigger(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2609
@@ -4914,8 +4996,6 @@ unsafe extern "Rust" {
     // cpp: layoutng_style/style/computed_style.h:924-926
     fn ComputedStyleAccentColorResolved(style: &ComputedStyle) -> Option<Color>;
     // cpp: layoutng_style/style/computed_style.h:928-931
-    fn ComputedStyleScrollbarThumbColorResolved(style: &ComputedStyle) -> Option<Color>;
-    fn ComputedStyleScrollbarTrackColorResolved(style: &ComputedStyle) -> Option<Color>;
     // cpp: layoutng_style/style/computed_style.h:933-936
     // cpp: layoutng_style/style/computed_style.h:938
     // cpp: layoutng_style/style/computed_style.h:939
@@ -4964,16 +5044,12 @@ unsafe extern "Rust" {
         old_style: *const ComputedStyle,
         new_style: *const ComputedStyle,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2362
-    fn ComputedStyleBorderObscuresBackground(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2363-2365
     fn ComputedStyleGetBorderEdgeInfo(
         style: &ComputedStyle,
         edges: &mut BorderEdgeArray,
         sides: PhysicalBoxSides,
     );
-    // cpp: layoutng_style/style/computed_style.h:2382
-    fn ComputedStyleBoxDecorationOutsets(style: &ComputedStyle) -> PhysicalBoxStrut;
     // cpp: layoutng_style/style/computed_style.h:2819
     fn ComputedStyleShadowListHasCurrentColor(shadows: *const ShadowList) -> bool;
     // cpp: layoutng_style/style/computed_style.h:1870
@@ -5231,6 +5307,31 @@ mod difference_tests {
             F::kOpacity.bits()
         );
     }
+
+    #[test]
+    fn resolved_scrollbar_colors_follow_used_style() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let thumb = Color::FromRGB(10, 20, 30);
+        let track = Color::FromRGB(40, 50, 60);
+        let scrollbar_color = MakeGarbageCollected(StyleScrollbarColor::new(
+            StyleColor::from_color(thumb),
+            StyleColor::from_color(track),
+        ));
+        let style = changed(|builder| {
+            builder.SetScrollbarColor(Member::from_ptr(scrollbar_color));
+        });
+        assert_eq!(style.ScrollbarThumbColorResolved(), Some(thumb));
+        assert_eq!(style.ScrollbarTrackColorResolved(), Some(track));
+
+        let preferred_default = changed(|builder| {
+            builder.SetScrollbarColor(Member::from_ptr(scrollbar_color));
+            builder.SetPrefersDefaultScrollbarStyles(true);
+        });
+        assert_eq!(preferred_default.UsedScrollbarColor(), std::ptr::null_mut());
+        assert_eq!(preferred_default.ScrollbarThumbColorResolved(), None);
+        assert_eq!(preferred_default.ScrollbarTrackColorResolved(), None);
+    }
+
     #[test]
     fn first_line_cache_and_public_pseudo_differences() {
         let _heap = foundation::LayoutHeapScope::new();
@@ -5261,7 +5362,7 @@ mod difference_tests {
     }
 
     #[test]
-    fn native_timing_data_is_retained_by_computed_style_gc_edges() {
+    fn timing_data_is_retained_by_computed_style_gc_edges() {
         let heap = foundation::LayoutHeapScope::new();
         let style = changed(|builder| {
             *builder.AccessAnimations().DurationListMut() = vec![Some(0.25), None];

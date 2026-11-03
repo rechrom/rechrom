@@ -1,6 +1,6 @@
 //! Responsive intrinsic grid tracks through the production Style and Layout owners.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::{
@@ -59,7 +59,7 @@ fn fixture(css: &str, children: &str) -> Page {
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -127,13 +127,16 @@ fn native(
                 .is_some_and(|a| a.value == name)
         })
         .unwrap();
-    doc.ResolvedStyleFor(index).unwrap().native_style.clone()
+    doc.ResolvedStyleFor(index)
+        .unwrap()
+        .computed_style_owner
+        .clone()
 }
 
 // The same source-native constructor is used by document and shadow sheets.
 #[test]
-fn fit_content_tracks_reach_canonical_native_grid_sizes() {
-    native_test_thread::run(|| {
+fn fit_content_tracks_reach_canonical_source_grid_sizes() {
+    test_thread::run(|| {
         let page = fixture("grid-template-columns:[start] fit-content(120px) [next] auto", "<div id=first style='height:20px'><div style='width:80px;height:20px'></div></div><div id=second style='height:20px'></div>");
         let style = native(&page, "grid");
         let style = unsafe { &*style.Get() };
@@ -158,7 +161,7 @@ fn fit_content_tracks_reach_canonical_native_grid_sizes() {
 
 #[test]
 fn fit_content_caps_max_content_but_preserves_intrinsic_minimum() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for (minimum, expected) in [("0", 120.0), ("auto", 200.0)] {
             let page = fixture("width:300px;grid-template-columns:fit-content(120px) auto", &format!("<div id=first style='min-width:{minimum}'><div style='width:200px;height:20px'></div></div><div id=second style='height:20px'></div>"));
             assert_eq!(item(&page, "second").0.x, expected, "{minimum}");
@@ -168,7 +171,7 @@ fn fit_content_caps_max_content_but_preserves_intrinsic_minimum() {
 
 #[test]
 fn fit_content_percentage_and_math_limits_use_definite_available_size() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for (limit, expected) in [("25%", 75.0), ("calc(25% + 10px)", 85.0), ("0", 0.0)] {
             let page = fixture(&format!("width:300px;grid-template-columns:fit-content({limit}) auto"), "<div id=first style='min-width:0'><div style='width:200px;height:20px'></div></div><div id=second style='height:20px'></div>");
             assert_eq!(item(&page, "second").0.x, expected, "{limit}");
@@ -177,8 +180,8 @@ fn fit_content_percentage_and_math_limits_use_definite_available_size() {
 }
 
 #[test]
-fn fit_content_rows_and_grid_shorthand_reach_native_sizing() {
-    native_test_thread::run(|| {
+fn fit_content_rows_and_grid_shorthand_reach_source_sizing() {
+    test_thread::run(|| {
         for css in [
             "grid-template-rows:fit-content(30px) auto;grid-template-columns:100px",
             "grid-template:fit-content(30px) auto / 100px",
@@ -194,8 +197,8 @@ fn fit_content_rows_and_grid_shorthand_reach_native_sizing() {
 }
 
 #[test]
-fn shadow_responsive_fit_content_rule_keeps_named_spans_and_native_track_limits() {
-    native_test_thread::run(|| {
+fn shadow_responsive_fit_content_rule_keeps_named_spans_and_source_track_limits() {
+    test_thread::run(|| {
         let mut page = fixture("", "");
         // The unrelated selector list also exercises production RuleSet order.
         let css = ".unused-a,.unused-b,.unused-c{color:green} #shadowgrid{display:grid;width:300px;grid-template-areas:'main action' 'optout note'} @media(width > 769px){#shadowgrid{grid-template-areas:'main action note' 'main action optout';grid-template-columns:fit-content(100%) auto fit-content(100%)}}";
@@ -239,7 +242,7 @@ fn shadow_responsive_fit_content_rule_keeps_named_spans_and_native_track_limits(
 
 #[test]
 fn fit_content_mutation_replaces_limits_without_mutating_published_snapshots() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture("width:300px;grid-template-columns:fit-content(120px) auto", "<div id=first style='min-width:0'><div style='width:200px;height:20px'></div></div><div id=second style='height:20px'></div>");
         let old_style = native(&page, "grid");
         let old_frame = page.CurrentFrame().unwrap().fragments.clone();

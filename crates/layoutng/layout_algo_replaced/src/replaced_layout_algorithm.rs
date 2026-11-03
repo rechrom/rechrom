@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 use layoutng_assembly::block_break_token::BlockBreakToken;
 use layoutng_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layoutng_assembly::internal::algorithm_entry::NativeAlgorithm;
+use layoutng_assembly::internal::algorithm_entry::LayoutAlgorithmImplementation;
 use layoutng_assembly::internal::block_node::BlockNode;
 use layoutng_assembly::internal::layout_algorithm::{LayoutAlgorithm, LayoutAlgorithmParams};
 use layoutng_assembly::internal::layout_input_node::MinMaxSizesFloatInput;
@@ -59,7 +59,7 @@ impl ReplacedLayoutAlgorithm {
 }
 
 // cpp: layoutng_replaced/replaced_layout_algorithm.h:18-28
-impl NativeAlgorithm for ReplacedLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for ReplacedLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_replaced.Layout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_replaced.Measure";
 

@@ -60,7 +60,7 @@ fn ApplyContent(
         } else {
             foundation::AtomicString::from_utf16(value.separator.Span16().unwrap_or_default())
         };
-        // Native null scope represents the production document-root path.
+        // Canonical null scope represents the production document-root path.
         // Shadow TreeScope population remains an explicit CSSValue dependency.
         Ok(CounterData::new(
             &identifier.name,

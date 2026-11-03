@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use font_engine::fonts::shaping::shape_result_types::AdjustMidCluster;
-use font_engine::text::native::character::Character;
+use font_engine::text::implementation::character::Character;
 use foundation::{
     ERubyAlign, ETextAlign, ETextAlignLast, HeapVector, LayoutUnit, Member, String, TextDirection,
     Traceable, Visitor, WtfSizeT,

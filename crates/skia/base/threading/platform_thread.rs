@@ -44,7 +44,7 @@ impl PlatformThreadId {
         self.value_ as i32
     }
     // Native inline ostream body consumes the actual native underlying overload.
-    pub fn WriteToStream(&self, stream: &mut crate::interop::native_ostream::NativeOStream<'_>) {
+    pub fn WriteToStream(&self, stream: &mut crate::interop::ostream::OStream<'_>) {
         unsafe { rechrom_platform_thread_id_ostream(stream.as_native_mut_ptr(), self.as_u64()) }
     }
 }
@@ -256,8 +256,8 @@ impl PlatformThreadBase {
         None
     }
     // Source: base/threading/platform_thread.cc:73-75
-    pub unsafe fn SetNameCommon<S: crate::interop::native_ostream::StdStringStorage>(
-        name: core::pin::Pin<&crate::interop::native_ostream::NativeStdString<S>>,
+    pub unsafe fn SetNameCommon<S: crate::interop::ostream::StdStringStorage>(
+        name: core::pin::Pin<&crate::interop::ostream::StdString<S>>,
     ) {
         unsafe {
             crate::base::threading::thread_id_name_manager::ThreadIdNameManager::GetInstance()

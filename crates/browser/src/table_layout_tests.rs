@@ -3,8 +3,8 @@ use layoutng_assembly::{
     internal::layout_input::{ConstraintSpace, FontFace, Size},
 };
 #[test]
-fn native_table_layout_matches_unchanged_cpp() {
-    crate::native_test_thread::run(body);
+fn table_layout_matches_unchanged_cpp() {
+    crate::test_thread::run(body);
 }
 fn body() {
     let reference =
@@ -115,7 +115,7 @@ fn body() {
         }
         crate::style_services::ResolveLayoutStyles(&mut owner, &space);
         engine.ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::Constraints(&space));
-        let root = crate::native_test_thread::BuildDOMProjection(
+        let root = crate::test_thread::BuildDOMProjection(
             &mut owner,
             &dom::UserInteractionState::default(),
             &mut engine,

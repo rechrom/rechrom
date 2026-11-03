@@ -12,38 +12,46 @@ const MARKED_FOR_VALIDATION: u8 = 1 << 5;
 // The two C++ bitfields share one byte. The C++ virtual interface is
 // dispatched by LayoutObject's Rust owner; this value preserves the mutable
 // invalidation state and object identity used by layout/paint.
-// cpp: foundation/graphics_types/graphics/paint/display_item_client.h:22-31,105-107
+// cpp: platform/graphics/paint/display_item_client.h:22-31,105-107
 #[repr(C)]
 pub struct DisplayItemClient {
+    // Blink uses the address of a GarbageCollected DisplayItemClient as its
+    // identity. Oilpan keeps that address from being recycled while an older
+    // PaintArtifact can still refer to it. LayoutObjects in this Rust port are
+    // reclaimed eagerly, so allocator address reuse can otherwise make a new
+    // client match an unrelated cached drawing from the previous artifact.
+    // Keep the same per-object identity contract with a process-unique token.
+    id_: DisplayItemClientId,
     bits_: Cell<u8>,
 }
 
 impl Default for DisplayItemClient {
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:25-28
+    // cpp: platform/graphics/paint/display_item_client.h:25-28
     fn default() -> Self {
         Self {
+            id_: crate::NewUniqueObjectId() as DisplayItemClientId,
             bits_: Cell::new(PaintInvalidationReason::kJustCreated as u8),
         }
     }
 }
 
 impl DisplayItemClient {
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:33-35
+    // cpp: platform/graphics/paint/display_item_client.h:33-35
     pub fn Id(&self) -> DisplayItemClientId {
-        self as *const Self as DisplayItemClientId
+        self.id_
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:42-44
+    // cpp: platform/graphics/paint/display_item_client.h:42-44
     pub fn OwnerNodeId(&self, _is_internal_content: bool) -> DOMNodeId {
         kInvalidDOMNodeId
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:49-51
+    // cpp: platform/graphics/paint/display_item_client.h:49-51
     pub fn VisualRectOutsetForRasterEffects(&self) -> RasterEffectOutset {
         RasterEffectOutset::kNone
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:58-63
+    // cpp: platform/graphics/paint/display_item_client.h:58-63
     pub fn Invalidate(&self, reason: PaintInvalidationReason) {
         if reason > self.GetPaintInvalidationReason() {
             self.bits_
@@ -51,28 +59,28 @@ impl DisplayItemClient {
         }
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:65-67
+    // cpp: platform/graphics/paint/display_item_client.h:65-67
     pub fn GetPaintInvalidationReason(&self) -> PaintInvalidationReason {
         // Only the enum discriminants in [0, kUncacheable] are ever written.
         unsafe { std::mem::transmute(self.bits_.get() & REASON_MASK) }
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:71-74
+    // cpp: platform/graphics/paint/display_item_client.h:71-74
     pub fn IsJustCreated(&self) -> bool {
         self.GetPaintInvalidationReason() == PaintInvalidationReason::kJustCreated
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:79-82
+    // cpp: platform/graphics/paint/display_item_client.h:79-82
     pub fn IsCacheable(&self) -> bool {
         self.GetPaintInvalidationReason() != PaintInvalidationReason::kUncacheable
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:86-88
+    // cpp: platform/graphics/paint/display_item_client.h:86-88
     pub fn IsValid(&self) -> bool {
         self.GetPaintInvalidationReason() == PaintInvalidationReason::kNone
     }
 
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:99-104
+    // cpp: platform/graphics/paint/display_item_client.h:99-104
     pub(crate) fn MarkForValidation(&self) {
         self.bits_.set(self.bits_.get() | MARKED_FOR_VALIDATION);
     }
@@ -97,7 +105,7 @@ impl DisplayItemClient {
 
     // GarbageCollectedMixin has no fields to trace; concrete layout owners
     // trace their own members after calling this base method.
-    // cpp: foundation/graphics_types/graphics/paint/display_item_client.h:22-23
+    // cpp: platform/graphics/paint/display_item_client.h:22-23
     pub fn Trace(&self, _visitor: &mut Visitor<'_>) {}
 }
 
@@ -122,5 +130,23 @@ mod tests {
             client.GetPaintInvalidationReason(),
             PaintInvalidationReason::kStyle
         );
+    }
+
+    #[test]
+    fn identity_is_not_reused_when_storage_is_recycled() {
+        let mut storage = std::mem::MaybeUninit::<DisplayItemClient>::uninit();
+        let address = storage.as_mut_ptr();
+        let first = unsafe {
+            address.write(DisplayItemClient::default());
+            (&*address).Id()
+        };
+        unsafe { std::ptr::drop_in_place(address) };
+        let second = unsafe {
+            address.write(DisplayItemClient::default());
+            (&*address).Id()
+        };
+        unsafe { std::ptr::drop_in_place(address) };
+
+        assert_ne!(first, second);
     }
 }

@@ -313,7 +313,7 @@ pub(super) fn ParseShorthand<
         return Ok(());
     }
     // shorthands_custom.cc:772-817; source InitialValue payloads, rather than
-    // shorthand implicit flags. Omitted components reset real native fields.
+    // shorthand implicit flags. Omitted components reset real computed style fields.
     let hundred = values::numeric(100.0, UnitType::kPercentage);
     let one = values::numeric(1.0, UnitType::kNumber);
     let zero = values::numeric(0.0, UnitType::kNumber);

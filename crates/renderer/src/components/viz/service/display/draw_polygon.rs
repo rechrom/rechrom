@@ -2,7 +2,7 @@ use compositor_core::adapter::geometry::{
     CrossProduct, DotProduct3, Point3F, PointF, QuadF, RectF, Vector3dF,
 };
 use compositor_core::cc::base::math_util::MathUtil;
-use viz::common::quads::aggregated_render_pass::NativeTransform;
+use viz::common::quads::aggregated_render_pass::Transform;
 
 // Source: components/viz/service/display/draw_polygon.cc:20-34
 const SPLIT_THRESHOLD: f32 = 0.05;
@@ -14,9 +14,9 @@ fn point_interpolate(from: Point3F, to: Point3F, delta: f64) -> Point3F {
         (from.z as f64 + (to.z - from.z) as f64 * delta) as f32,
     )
 }
-fn map_vector(transform: &NativeTransform, vector: Vector3dF) -> Vector3dF {
+fn map_vector(transform: &Transform, vector: Vector3dF) -> Vector3dF {
     let mut v = [vector.x, vector.y, vector.z, 0.0];
-    transform.native().TransformVector4(&mut v);
+    transform.as_source().TransformVector4(&mut v);
     Vector3dF::new(v[0], v[1], v[2])
 }
 // Source: components/viz/service/display/draw_polygon.h:22-76
@@ -47,12 +47,7 @@ impl DrawPolygon {
         }
     }
     // Source: components/viz/service/display/draw_polygon.cc:58-85
-    pub fn new(
-        original_ref: usize,
-        rect: RectF,
-        transform: &NativeTransform,
-        order_index: i32,
-    ) -> Self {
+    pub fn new(original_ref: usize, rect: RectF, transform: &Transform, order_index: i32) -> Self {
         let mut points = [Point3F::default(); 6];
         let mut count = 0;
         MathUtil::MapClippedQuad3d(transform, QuadF::FromRect(rect), &mut points, &mut count);
@@ -104,33 +99,33 @@ impl DrawPolygon {
         DotProduct3(point - self.points[0], self.normal)
     }
     // Source: components/viz/service/display/draw_polygon.cc:140-156
-    pub fn apply_transform_to_normal(&mut self, transform: &NativeTransform) {
-        let inverse = transform.native().GetCheckedInverse();
+    pub fn apply_transform_to_normal(&mut self, transform: &Transform) {
+        let inverse = transform.as_source().GetCheckedInverse();
         // Transpose the canonical inverse matrix, then use its normal vector
         // mapping, retaining Foundation's float-geometry clamping.
         let m = inverse.GetColMajor();
         let transposed = std::array::from_fn(|i| m[(i % 4) * 4 + i / 4]);
-        self.normal = map_vector(&NativeTransform::FromColMajor(&transposed), self.normal);
+        self.normal = map_vector(&Transform::FromColMajor(&transposed), self.normal);
         let magnitude = self.normal.Length();
         if magnitude != 0.0 && magnitude != 1.0 {
             self.normal.InvScale(magnitude);
         }
     }
     // Source: components/viz/service/display/draw_polygon.cc:158-161
-    fn apply_transform(&mut self, transform: &NativeTransform) {
+    fn apply_transform(&mut self, transform: &Transform) {
         for p in &mut self.points {
-            let q = transform.native().MapPoint3d([p.x, p.y, p.z]);
+            let q = transform.as_source().MapPoint3d([p.x, p.y, p.z]);
             *p = Point3F::new(q[0], q[1], q[2]);
         }
     }
     // Source: components/viz/service/display/draw_polygon.cc:163-170
-    pub fn transform_to_screen_space(&mut self, transform: &NativeTransform) {
+    pub fn transform_to_screen_space(&mut self, transform: &Transform) {
         self.apply_transform(transform);
         self.normal = map_vector(transform, self.normal);
         self.construct_normal();
     }
     // Source: components/viz/service/display/draw_polygon.cc:172-180
-    pub fn transform_to_layer_space(&mut self, transform: &NativeTransform) {
+    pub fn transform_to_layer_space(&mut self, transform: &Transform) {
         self.apply_transform(transform);
         self.normal = Vector3dF::new(0.0, 0.0, -1.0);
     }

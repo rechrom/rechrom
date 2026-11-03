@@ -212,7 +212,7 @@ impl BlinkString {
         // SAFETY: preflighting permits a null destination with zero capacity;
         // source is valid for the explicit number of UTF-16 code units.
         let required = unsafe {
-            icu_bidi::native::u_strFoldCase(
+            icu_bidi::ubidi_ffi::u_strFoldCase(
                 std::ptr::null_mut(),
                 0,
                 source.as_ptr(),
@@ -231,7 +231,7 @@ impl BlinkString {
         // SAFETY: output has the capacity returned by preflighting the same
         // source/options. ICU writes at most that many code units.
         let written = unsafe {
-            icu_bidi::native::u_strFoldCase(
+            icu_bidi::ubidi_ffi::u_strFoldCase(
                 output.as_mut_ptr(),
                 required,
                 source.as_ptr(),

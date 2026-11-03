@@ -4,7 +4,7 @@ use dom::dom_mutation::{
 use dom::persistent_document::{DOMNamespace, DOMShadowRootMode, DOMSlotAssignmentMode};
 
 #[test]
-fn slot_mutation_validates_entire_sequence_before_changing_native_owner() {
+fn slot_mutation_validates_entire_sequence_before_changing_source_owner() {
     let mut dom = dom::DOM::new();
     let d = dom.GetDocumentMut();
     let host = d.CreateElementDefault(DOMNamespace::kHTML, "div".into());

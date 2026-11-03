@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! style_builder_converter.cc:1846-1895; genuine native GridLanesDirection.
+//! style_builder_converter.cc:1846-1895; genuine computed style GridLanesDirection.
 //! Public production entry is hidden by the CSSGridLanesLayout stable default.
 #![allow(non_snake_case)]
 use super::*;
@@ -87,7 +87,7 @@ mod tests {
         }
     }
     #[test]
-    fn hidden_grid_lanes_direction_native_flags_and_css_wide_use_real_owner() {
+    fn hidden_grid_lanes_direction_computed_style_flags_and_css_wide_use_real_owner() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         let v = crate::production_css_value::list(
@@ -125,7 +125,7 @@ mod tests {
         assert!(p.GetGridLanesDirection().is_fill_reverse);
     }
     #[test]
-    fn production_grid_lanes_related_stable_rule_keywords_shorthands_and_native_bits() {
+    fn production_grid_lanes_related_stable_rule_keywords_shorthands_and_computed_style_bits() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(

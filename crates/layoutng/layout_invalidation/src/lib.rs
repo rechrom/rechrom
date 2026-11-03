@@ -1,6 +1,6 @@
 //! Layout invalidation vocabulary shared by LayoutNG algorithms and commit.
 //!
-//! Stable reason symbols and tree-agnostic policy compile standalone. Native
+//! Stable reason symbols and tree-agnostic policy compile standalone. Chromium
 //! `LayoutObject` mutation lives in assembly-only modules under this package,
 //! so sampling profiles still attribute structural work to invalidation.
 

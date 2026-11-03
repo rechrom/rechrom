@@ -1,8 +1,8 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native viewport/page fields and explicit FontBuilder/shape owner boundaries.
+//! Canonical viewport/page fields and explicit FontBuilder/shape owner boundaries.
 #![allow(non_snake_case)]
 use super::*;
-use foundation::{AtomicString, LengthBox};
+use foundation::{AtomicString, LengthBox, Member};
 use layoutng_style::style::page_size_type::PageSizeType;
 
 pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
@@ -89,7 +89,7 @@ pub(super) fn Apply(
         // FontBuilder::SetLocale marks the locale dirty; the production font
         // description assembly installs the real Font/FontDescription owner.
         // Full FontBuilder backend font-selector/metric services and the existing
-        // native per-thread-cache/ICU script collaborators stay pending.
+        // computed style per-thread-cache/ICU script collaborators stay pending.
         kWebkitLocale => {
             let mut description = b.GetFontDescription().clone();
             let locale = if initial || Identifier(v) == Some(CSSValueID::kAuto) {
@@ -117,12 +117,10 @@ pub(super) fn Apply(
             if initial || Identifier(v) == Some(CSSValueID::kNone) {
                 b.SetObjectViewBox(None);
             } else if inherit {
-                if b.EffectiveZoom() != parent.unwrap().EffectiveZoom() {
-                    return Err(LonghandApplicationError::Unsupported(id));
-                }
                 b.SetObjectViewBox(parent.unwrap().ObjectViewBox().cloned());
             } else {
-                return Err(LonghandApplicationError::Unsupported(id));
+                let shape = super::effects_application::Shape(id, v, b, root, media)?;
+                b.SetObjectViewBox(Some(Member::from_ptr(shape)));
             }
         }
         // custom:12761-12773, converter:2087-2109, state.cc:325-339.

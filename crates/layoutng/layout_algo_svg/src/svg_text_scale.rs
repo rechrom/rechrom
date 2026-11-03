@@ -24,7 +24,7 @@ fn DeprecatedCalculateTransformToLayer(object: *const LayoutObject) -> AffineTra
     while !object.is_null() {
         let box_model = DynamicTo::<LayoutBoxModelObject>(object);
         if !box_model.is_null() {
-            let layer_transform = unsafe { &*box_model }.TransformForLayout();
+            let layer_transform = unsafe { &*box_model }.Transform();
             if !layer_transform.is_null() {
                 let mut layer = AffineTransform::FromTransform(unsafe { &*layer_transform });
                 layer.PreConcat(transform);

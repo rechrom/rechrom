@@ -1,13 +1,10 @@
 //! Selected CPU renderer utility; other Viz utilities remain outside this package.
 #![allow(non_snake_case)]
 use compositor_core::adapter::geometry::RectF;
-use viz::common::quads::aggregated_render_pass::NativeSharedQuadState;
+use viz::common::quads::aggregated_render_pass::SharedQuadState;
 
 // Source: components/viz/common/viz_utils.cc:136-159.
-pub(crate) fn QuadRoundedCornersBoundsIntersects(
-    shared: &NativeSharedQuadState,
-    target: RectF,
-) -> bool {
+pub(crate) fn QuadRoundedCornersBoundsIntersects(shared: &SharedQuadState, target: RectF) -> bool {
     let info = &shared.mask_filter_info;
     if !info.HasRoundedCorners() {
         return false;

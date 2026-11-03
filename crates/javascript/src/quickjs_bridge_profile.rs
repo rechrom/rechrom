@@ -1,4 +1,4 @@
-//! Opt-in aggregate attribution of the JS/native boundary. No per-call events.
+//! Opt-in aggregate attribution of the JS/host boundary. No per-call events.
 use std::{cell::Cell, marker::PhantomData, rc::Rc, sync::OnceLock, time::Instant};
 
 #[derive(Clone, Copy)]
@@ -25,9 +25,9 @@ fn enabled() -> bool {
         std::env::var_os("BROWSER_PROFILE_HOST_BOUNDARY").is_some_and(|value| value == "1")
     }) && browser_tracing::enabled()
 }
-// Aggregate native tracing work on its owner thread. Values never escape GC;
+// Aggregate host tracing work on its owner thread. Values never escape GC;
 // only scalar call/reference/capacity counts are retained for the entry report.
-pub(super) fn native_gc_work(marking: bool, references: usize, capacity: usize) {
+pub(super) fn gc_work(marking: bool, references: usize, capacity: usize) {
     if !enabled() {
         return;
     }
@@ -94,7 +94,7 @@ impl Measurement {
             return None;
         }
         let totals = TOTALS.with(Cell::get);
-        // A native continuation can reenter JS. Its outer boundary has not
+        // A host continuation can reenter JS. Its outer boundary has not
         // committed its duration yet; report that work on the owner entry,
         // rather than publishing zero/misleading deltas on the nested entry.
         (totals.depth[Phase::Call as usize] == 0).then_some(Self(totals))

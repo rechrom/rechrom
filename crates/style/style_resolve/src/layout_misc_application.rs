@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native AspectRatio, columns, containment and fragmentation Apply* branches.
+//! Canonical AspectRatio, columns, containment and fragmentation Apply* branches.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{EAspectRatioType, StyleAspectRatio};

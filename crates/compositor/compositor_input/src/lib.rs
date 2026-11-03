@@ -10,6 +10,7 @@ pub mod browser_controls_offset_manager;
 pub mod browser_controls_offset_manager_client;
 pub mod browser_controls_params;
 pub mod compositor_commit_data;
+pub mod elastic_overscroll_controller;
 pub mod hit_test_list;
 pub mod hit_test_opaqueness;
 pub mod input_handler_types;

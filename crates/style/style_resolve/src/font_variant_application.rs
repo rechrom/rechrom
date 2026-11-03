@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! FontBuilder converters applied to the existing native FontDescription.
+//! FontBuilder converters applied to the existing computed style FontDescription.
 #![allow(non_snake_case)]
 use super::*;
 use font_engine::fonts::{

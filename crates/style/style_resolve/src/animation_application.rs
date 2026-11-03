@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native animation name/composition and reset-only timeline/range application.
+//! Canonical animation name/composition and reset-only timeline/range application.
 #![allow(non_snake_case)]
 use super::*;
 use crate::production_css_value::ListSeparator;
@@ -17,7 +17,7 @@ pub(super) fn IsAnimationProperty(id: CSSPropertyID) -> bool {
     )
 }
 
-// cpp: css_to_style_map.cc:319-334. The document-root cascade retains native
+// cpp: css_to_style_map.cc:319-334. The document-root cascade retains computed style
 // ScopedCSSName value identity. A shadow owner/TreeScope population and
 // SetHasTreeScopedReference are still missing collaborators of that cascade.
 fn Name(
@@ -88,7 +88,7 @@ pub(super) fn Apply(
                 })
             })?,
         ),
-        // cpp: css_to_style_map.cc:348-386. Native auto/none are real values;
+        // cpp: css_to_style_map.cc:348-386. Canonical auto/none are real values;
         // named/scroll/view timelines retain the typed conversion boundary.
         kAnimationTimeline => ApplyConvertedTimelineList(
             id,
@@ -102,7 +102,7 @@ pub(super) fn Apply(
                 _ => Err(LonghandApplicationError::Unsupported(id)),
             })?,
         ),
-        // cpp: css_to_style_map.cc:403-433. `normal` resets actual native lists.
+        // cpp: css_to_style_map.cc:403-433. `normal` resets actual computed style lists.
         kAnimationRangeStart | kAnimationRangeEnd => {
             let values = MapList(id, value, |item| match item.Payload() {
                 CSSValuePayload::kIdentifierClass(keyword) if keyword.0 == kNormal => Ok(None),
@@ -155,7 +155,7 @@ mod tests {
         unsafe { &*b.Animations().Get() }
     }
     #[test]
-    fn production_animation_native_names_repeated_lists_and_typed_easing() {
+    fn production_animation_computed_style_names_repeated_lists_and_typed_easing() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(

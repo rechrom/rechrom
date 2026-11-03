@@ -274,7 +274,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.viewport(),
                 self.options.address.clone(),
                 self.output.clone(),
-                DisplayTarget::Native(surface),
+                DisplayTarget::Window(surface),
                 self.window
                     .as_ref()
                     .and_then(|window| window.current_monitor())
@@ -282,7 +282,7 @@ impl ApplicationHandler<UserEvent> for App {
                     .map(|rate| Duration::from_secs_f64(1000.0 / f64::from(rate)))
                     .unwrap_or(Duration::from_secs_f64(1.0 / 60.0)),
                 self.current_display_id(),
-                presentation_config(false),
+                presentation_config(std::env::var_os("RECHROM_CAPTURE_FRAMES").is_some()),
             ) {
                 Ok(commands) => {
                     crate::devtools_host::attach_commands(&commands);
@@ -449,12 +449,12 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 browser_tracing::instant(
                     "input",
-                    "NativeWheelReceived",
+                    "WheelReceived",
                     &[
                         ("delta_x", delta_x),
                         ("delta_y", delta_y),
                         (
-                            "native_phase",
+                            "phase",
                             native.as_ref().map_or(0.0, |event| event.phase as f64),
                         ),
                         (
@@ -464,16 +464,16 @@ impl ApplicationHandler<UserEvent> for App {
                                 .map_or(0.0, |event| event.momentum_phase as f64),
                         ),
                         (
-                            "native_timestamp_seconds",
+                            "timestamp_seconds",
                             native.as_ref().map_or(0.0, |event| event.timestamp_seconds),
                         ),
                     ],
                 );
                 let sample =
                     self.input
-                        .native_wheel_sample(*delta, *phase, *native, window.scale_factor());
-                self.send(Command::NativeWheel(sample));
-                browser_tracing::instant("input", "NativeWheelHandled", &[]);
+                        .wheel_sample(*delta, *phase, *native, window.scale_factor());
+                self.send(Command::Wheel(sample));
+                browser_tracing::instant("input", "WheelHandled", &[]);
             }
             _ => {
                 if matches!(&event, WindowEvent::CursorLeft { .. }) {

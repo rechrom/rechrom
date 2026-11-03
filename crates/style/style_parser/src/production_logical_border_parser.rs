@@ -4,7 +4,7 @@
 // remaining 2. Parser/expand 292/282/8/2; generated metadata 96/96/0/0;
 // existing physical mapping 81/79/2/0. Effective lines exclude comments,
 // blank/preprocessor/namespace/using/visibility/brace-only lines. Shared
-// leaf color/style/width consumers, CSSMath, native Apply/length/color service
+// leaf color/style/width consumers, CSSMath, computed style Apply/length/color service
 // bodies and WritingDirectionMode implementation are outside this selected
 // expansion audit and remain partial collaborators in both ledgers. All six
 // properties remain partial overall; complete expansion is not complete CSS.
@@ -18,7 +18,7 @@
 //   1030-1037,2779-2824,3966-3992,4188-4225,4288-4356;
 // css/parser/css_property_parser.cc:419-467 (existing CSS-wide expansion).
 // Remaining shared helper: utils 4335-4336, alternate use_initial_value_function
-// branch. This cluster uses the source default false and native CSSInitialValue.
+// branch. This cluster uses the source default false and computed style CSSInitialValue.
 // Omitted DCHECK/unselected overflow counter: utils 3972-3974,4195,
 //   4212-4214,4296,4351.
 //
@@ -30,7 +30,7 @@
 //   4677-4681,4718-4722,4753-4757,4788-4792,4829-4833,4864-4868;
 // css/properties/css_direction_aware_resolver.cc:
 //   76-81,88-93,131-133,144-146,194-196,336-359;
-// omitted DCHECK 80,91. No second native border application is introduced.
+// omitted DCHECK 80,91. No second computed style border application is introduced.
 #![allow(non_snake_case)]
 use super::*;
 
@@ -61,7 +61,7 @@ pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
     }
     // ConsumeBorderShorthand parses one width/style/color triple. Logical
     // start longhands use exactly its no-quirks width/color paths in this
-    // shorthand context. They share native values and the existing consumers.
+    // shorthand context. They share computed style values and the existing consumers.
     let start = if id == kBorderBlock {
         kBorderBlockStart
     } else {

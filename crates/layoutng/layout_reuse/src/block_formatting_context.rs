@@ -3,7 +3,7 @@ use foundation::{LayoutUnit, MarginStrut};
 /// Algorithm-neutral facts needed to decide whether a cached result can be
 /// repositioned inside the same block formatting context.
 ///
-/// The native adapter extracts these facts from ConstraintSpace and the
+/// The source adapter extracts these facts from ConstraintSpace and the
 /// physical fragment. Keeping the decision tree here makes both sampling
 /// profiles and rejection telemetry resolve to the reuse package.
 #[derive(Clone, Copy, Debug)]
@@ -64,7 +64,7 @@ fn reject(
 
 /// Owns the complete ordering of BFC cache-reuse checks and offset updates.
 /// This is deliberately out of line so sampling profilers attribute the hot
-/// decision path to `layout_reuse` rather than its native LayoutNG adapter.
+/// decision path to `layout_reuse` rather than its source LayoutNG adapter.
 #[inline(never)]
 pub fn calculate_block_formatting_context_reuse(
     input: &BlockFormattingContextReuseInput,

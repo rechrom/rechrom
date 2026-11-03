@@ -192,7 +192,7 @@ fn script_condition(page: &mut Page, source: &str) -> bool {
 }
 #[test]
 fn module_graph_waits_yield_frames_and_async_defer_order_matches_browser_rules() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(true);
         let wakes = compilation_wakes(&mut page);
         body.borrow_mut().extend([response(), URLLoadEvent::Data(br#"<body><p id=early>Early</p>
@@ -244,7 +244,7 @@ fn module_graph_waits_yield_frames_and_async_defer_order_matches_browser_rules()
 }
 #[test]
 fn async_module_can_execute_while_css_and_deferred_scripts_are_waiting() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, _) = create(true);
         let wakes = compilation_wakes(&mut page);
         body.borrow_mut().extend([
@@ -293,7 +293,7 @@ fn async_module_can_execute_while_css_and_deferred_scripts_are_waiting() {
 }
 #[test]
 fn failed_dependency_does_not_execute_root_or_stall_later_deferred_scripts() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(true);
         body.borrow_mut().extend([response(),URLLoadEvent::Data(br#"<body>
             <script>globalThis.order=[]; document.addEventListener('DOMContentLoaded',()=>order.push('dom'));</script>
@@ -325,7 +325,7 @@ fn failed_dependency_does_not_execute_root_or_stall_later_deferred_scripts() {
 }
 #[test]
 fn dynamic_inline_module_after_load_yields_and_uses_captured_base_and_document_url() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, _) = create(true);
         let wakes = compilation_wakes(&mut page);
         body.borrow_mut().extend([
@@ -365,7 +365,7 @@ fn dynamic_inline_module_after_load_yields_and_uses_captured_base_and_document_u
 }
 #[test]
 fn stopping_navigation_cancels_unfinished_module_graph_without_execution() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(true);
         body.borrow_mut().extend([
             response(),
@@ -404,7 +404,7 @@ fn stopping_navigation_cancels_unfinished_module_graph_without_execution() {
 }
 #[test]
 fn page_first_frame_precedes_body_eof_and_resize_keeps_the_live_document() {
-    crate::native_test_thread::run(first_frame);
+    crate::test_thread::run(first_frame);
 }
 fn first_frame() {
     let (mut page, body, _, finished) = create(false);
@@ -455,7 +455,7 @@ fn first_frame() {
 
 #[test]
 fn streamed_dom_batches_request_and_publish_distinct_begin_frames() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         use foundation::begin_frame::{BeginFrameArgs, BeginFrameSource};
         use std::{
             sync::{
@@ -537,7 +537,7 @@ fn streamed_dom_batches_request_and_publish_distinct_begin_frames() {
 }
 #[test]
 fn parser_blocking_script_yields_to_page_and_document_write_resumes_in_order() {
-    crate::native_test_thread::run(blocking_script);
+    crate::test_thread::run(blocking_script);
 }
 fn blocking_script() {
     let (mut page, body, resources, finished) = create(true);
@@ -577,7 +577,7 @@ fn blocking_script() {
 }
 #[test]
 fn stylesheet_completion_unblocks_rendering_without_new_main_body_data() {
-    crate::native_test_thread::run(blocking_style);
+    crate::test_thread::run(blocking_style);
 }
 fn blocking_style() {
     let (mut page, body, resources, finished) = create(false);
@@ -612,7 +612,7 @@ fn blocking_style() {
 
 #[test]
 fn head_stylesheet_before_first_paint_blocks_and_failure_unblocks() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         for scripting in [false, true] {
             let (mut page, body, resources, finished) = create(scripting);
             body.borrow_mut().extend([
@@ -663,7 +663,7 @@ fn head_stylesheet_before_first_paint_blocks_and_failure_unblocks() {
 
 #[test]
 fn post_body_stylesheets_do_not_freeze_typing_or_caret() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         for scripting in [false, true] {
             let (mut page, body, resources, finished) = create(scripting);
             body.borrow_mut().extend([
@@ -734,8 +734,8 @@ fn post_body_stylesheets_do_not_freeze_typing_or_caret() {
 }
 
 #[test]
-fn body_stylesheet_discovered_before_first_paint_is_render_blocking() {
-    crate::native_test_thread::run(|| {
+fn body_stylesheet_discovered_before_first_paint_is_not_render_blocking() {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(false);
         body.borrow_mut().extend([
             response(),
@@ -750,8 +750,11 @@ fn body_stylesheet_discovered_before_first_paint_is_render_blocking() {
             page.RunTask().unwrap();
         }
         assert!(has_id(&page, "content"));
-        assert!(!page.IsRenderingReady());
-        assert!(page.CurrentFrame().is_none());
+        // Chromium's RenderBlockingResourceManager only admits ordinary
+        // parser-created stylesheets before Document::body() exists. A sheet
+        // in body can still block a later parser script, but not first paint.
+        assert!(page.IsRenderingReady());
+        assert!(page.CurrentFrame().is_some());
 
         *resources
             .borrow()
@@ -770,7 +773,7 @@ fn body_stylesheet_discovered_before_first_paint_is_render_blocking() {
 
 #[test]
 fn real_http_first_frame_is_visible_while_server_holds_the_response_open() {
-    crate::native_test_thread::run(real_http);
+    crate::test_thread::run(real_http);
 }
 fn real_http() {
     use std::{
@@ -849,7 +852,7 @@ fn real_http() {
 
 #[test]
 fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         use std::{
             io::{BufRead, BufReader, Write},
             net::TcpListener,
@@ -953,7 +956,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
 
 #[test]
 fn resource_completion_after_load_is_polled_without_another_dom_edit() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(true);
         body.borrow_mut().extend([
             response(),
@@ -988,7 +991,7 @@ fn resource_completion_after_load_is_polled_without_another_dom_edit() {
 
 #[test]
 fn nonblocking_page_turn_returns_between_ready_scripts_and_timer() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(true);
         body.borrow_mut().extend([
             response(),
@@ -1030,7 +1033,7 @@ fn nonblocking_page_turn_returns_between_ready_scripts_and_timer() {
 
 #[test]
 fn resource_turn_budget_is_shared_by_loading_lifecycle_and_no_script_page() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(false);
         body.borrow_mut().extend([
             response(),
@@ -1094,7 +1097,7 @@ fn resource_turn_budget_is_shared_by_loading_lifecycle_and_no_script_page() {
 
 #[test]
 fn image_completion_and_timer_have_separate_turns_with_complete_checkpoints() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(true);
         body.borrow_mut().extend([
             response(),
@@ -1131,7 +1134,7 @@ fn image_completion_and_timer_have_separate_turns_with_complete_checkpoints() {
 // the immutable decoded pixel allocation across ordinary Page lifecycles.
 #[test]
 fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let html = b"<body style='margin:0'><img id=photo src='photo.svg' style='width:40px;height:20px'><p>after</p>";
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11" fill="red"/></svg>"#;
         let (mut page, body, resources, finished) = create(false);
@@ -1239,7 +1242,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
 // turn/checkpoint ordering and cancellation across real cached request changes.
 #[test]
 fn image_dom_tasks_defer_load_error_and_cancel_replaced_requests() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, resources, finished) = create(true);
         body.borrow_mut().extend([
             response(),

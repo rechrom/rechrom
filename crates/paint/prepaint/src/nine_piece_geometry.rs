@@ -210,8 +210,8 @@ impl NinePieceImageGeometry {
                 },
                 effective_zoom,
                 fragment.paint.resources.as_deref(),
-                (!fragment.paint.style.color_scheme_flags_is_normal)
-                    .then_some(u8::from(fragment.paint.style.used_dark_color_scheme)),
+                (!fragment.paint.style.color_scheme_flags_is_normal())
+                    .then_some(u8::from(fragment.paint.style.used_dark_color_scheme())),
             )
         });
         let shader = image.shader.as_ref().map(|shader| {
@@ -272,7 +272,7 @@ impl NinePieceImageGeometry {
                     image: fetched.cloned(),
                     document_image_container_key: document_image_container_key.clone(),
                     paint_shader: shader.clone(),
-                    image_interpolation_quality: fragment.paint.style.image_interpolation_quality,
+                    image_interpolation_quality: fragment.paint.style.image_interpolation_quality(),
                     clip_origin: Offset {
                         x: info.destination.x,
                         y: info.destination.y,

@@ -21,7 +21,7 @@ use layoutng_assembly::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     internal::{
-        algorithm_entry::NativeAlgorithm,
+        algorithm_entry::LayoutAlgorithmImplementation,
         block_node::BlockNode,
         break_appeal::BreakAppeal,
         constraint_space::{ConstraintSpace, LayoutResultCacheSlot},
@@ -98,7 +98,7 @@ enum BaselineCollectionPhase {
     kFinalBaselines,
     kBaselinesForStandaloneAxes,
 }
-impl NativeAlgorithm for GridLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for GridLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_grid.Layout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_grid.Measure";
 

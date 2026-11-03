@@ -59,7 +59,7 @@ impl CSSPropertyName {
         }
     }
 
-    // This is the custom-property arm of ToAtomicString(). Native property
+    // This is the custom-property arm of ToAtomicString(). Canonical property
     // names remain tied to the generated CSSProperty table and are translated
     // together with that table.
     pub fn CustomPropertyName(&self) -> Option<&AtomicString> {
@@ -107,8 +107,8 @@ mod tests {
 
     #[test]
     fn IdStandardAndCustomProperty() {
-        let native = CSSPropertyName::new(CSSPropertyID::kFontSize);
-        assert_eq!(native.Id(), CSSPropertyID::kFontSize);
+        let property_name = CSSPropertyName::new(CSSPropertyID::kFontSize);
+        assert_eq!(property_name.Id(), CSSPropertyID::kFontSize);
 
         let custom = CSSPropertyName::custom(AtomicString::from_str("--x"));
         assert_eq!(custom.Id(), CSSPropertyID::kVariable);

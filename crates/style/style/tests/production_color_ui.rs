@@ -9,7 +9,7 @@ use style::{
     resolver::production_style_builder::ColorSchemeSettings,
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let document = owner.GetDocument();
     let index = (0..document.NodeCount())
         .find(|&n| {
@@ -19,7 +19,13 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*document.ResolvedStyleFor(index).unwrap().native_style.Get() }
+    unsafe {
+        &*document
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn color(r: i32, g: i32, b: i32, a: i32) -> foundation::Color {
     foundation::Color::FromRGBA(r, g, b, a)
@@ -32,7 +38,7 @@ fn schemes(style: &ComputedStyle) -> Vec<std::string::String> {
         .collect()
 }
 #[test]
-fn ordinary_auto_current_and_literal_colors_reach_native_and_css_wide() {
+fn ordinary_auto_current_and_literal_colors_reach_computed_style_and_css_wide() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='accent-color:currentColor;caret-color:rgba(10,20,30,.5)'><div id=c style='accent-color:inherit;caret-color:unset'></div><div id=i style='accent-color:initial;caret-color:initial'></div><div id=v style='accent-color:#1234;caret-color:currentColor'></div><div id=a style='accent-color:auto;caret-color:auto'></div></div>");
     let mut engine = StyleEngine::new(&owner);
@@ -44,7 +50,7 @@ fn ordinary_auto_current_and_literal_colors_reach_native_and_css_wide() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     assert!(p.AccentColor().IsCurrentColor());
     assert_eq!(p.CaretColor().ToStyleColor().GetColor(), {
         let mut rgba = color(10, 20, 30, 255);
@@ -52,23 +58,23 @@ fn ordinary_auto_current_and_literal_colors_reach_native_and_css_wide() {
         rgba
     });
     assert!(p.CaretColor().TextColor().IsAutoColor());
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert!(c.AccentColor() == p.AccentColor());
     assert!(c.CaretColor() == p.CaretColor());
     assert!(c.HasExplicitInheritance());
-    let i = native(&owner, "i");
+    let i = computed_style(&owner, "i");
     assert!(i.AccentColor().IsAutoColor() && i.CaretColor().IsAutoColor());
-    let v = native(&owner, "v");
+    let v = computed_style(&owner, "v");
     assert_eq!(
         v.AccentColor().ToStyleColor().GetColor(),
         color(17, 34, 51, 68)
     );
     assert!(v.CaretColor().IsCurrentColor());
-    let a = native(&owner, "a");
+    let a = computed_style(&owner, "a");
     assert!(a.AccentColor().IsAutoColor() && a.CaretColor().IsAutoColor());
 }
 #[test]
-fn visited_native_slots_are_separate_and_inherit_parent_unvisited_colors() {
+fn visited_computed_style_slots_are_separate_and_inherit_parent_unvisited_colors() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p><div id=c></div><div id=i></div><div id=v></div><div id=l></div></div>",
@@ -87,7 +93,7 @@ fn visited_native_slots_are_separate_and_inherit_parent_unvisited_colors() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     assert_eq!(
         p.CaretColor().ToStyleColor().GetColor(),
         color(255, 0, 0, 255)
@@ -101,30 +107,30 @@ fn visited_native_slots_are_separate_and_inherit_parent_unvisited_colors() {
         p.InternalVisitedOutlineColor().GetColor(),
         color(255, 0, 0, 255)
     );
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert!(c.InternalVisitedCaretColor() == p.CaretColor());
     assert!(c.InternalVisitedOutlineColor() == p.OutlineColor());
     assert!(c.InternalVisitedBorderTopColor() == p.BorderTopColor());
     assert!(c.InternalVisitedBorderRightColor() == p.BorderRightColor());
     assert!(c.InternalVisitedBorderBottomColor() == p.BorderBottomColor());
     assert!(c.InternalVisitedBorderLeftColor() == p.BorderLeftColor());
-    let i = native(&owner, "i");
+    let i = computed_style(&owner, "i");
     assert!(i.InternalVisitedCaretColor().IsAutoColor());
     assert!(i.InternalVisitedOutlineColor().IsCurrentColor());
     assert!(i.InternalVisitedBorderTopColor().IsCurrentColor());
-    let v = native(&owner, "v");
+    let v = computed_style(&owner, "v");
     assert!(v.InternalVisitedCaretColor().IsCurrentColor());
     assert!(v.InternalVisitedOutlineColor().IsCurrentColor());
     assert!(v.InternalVisitedBorderTopColor().IsCurrentColor());
     assert_eq!(
-        native(&owner, "l")
+        computed_style(&owner, "l")
             .InternalVisitedBorderRightColor()
             .GetColor(),
         color(1, 2, 3, 255)
     );
 }
 #[test]
-fn color_scheme_native_flags_follow_preference_only_page_settings_and_force_dark() {
+fn color_scheme_computed_style_flags_follow_preference_only_page_settings_and_force_dark() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='color-scheme:only light'><div id=c style='color-scheme:inherit'></div></div><div id=d style='color-scheme:dark'></div><div id=b style='color-scheme:light dark'></div><div id=n style='color-scheme:normal'></div><div id=i style='color-scheme:initial'></div><div id=u style='color-scheme:MyTheme LIGHT dark light only'></div>");
     let mut media = MediaValuesCachedData::default();
@@ -136,16 +142,22 @@ fn color_scheme_native_flags_follow_preference_only_page_settings_and_force_dark
         "{:?}",
         engine.Diagnostics()
     );
-    assert_eq!(schemes(native(&owner, "p")), vec!["light", "only"]);
-    assert!(!native(&owner, "p").DarkColorScheme());
-    assert!(native(&owner, "d").DarkColorScheme() && native(&owner, "b").DarkColorScheme());
-    assert!(native(&owner, "n").ColorSchemeFlagsIsNormal());
+    assert_eq!(schemes(computed_style(&owner, "p")), vec!["light", "only"]);
+    assert!(!computed_style(&owner, "p").DarkColorScheme());
+    assert!(
+        computed_style(&owner, "d").DarkColorScheme()
+            && computed_style(&owner, "b").DarkColorScheme()
+    );
+    assert!(computed_style(&owner, "n").ColorSchemeFlagsIsNormal());
     assert_eq!(
-        schemes(native(&owner, "u")),
+        schemes(computed_style(&owner, "u")),
         vec!["MyTheme", "light", "dark", "light", "only"]
     );
-    assert!(!native(&owner, "u").ColorSchemeFlagsIsNormal());
-    assert_eq!(schemes(native(&owner, "c")), schemes(native(&owner, "p")));
+    assert!(!computed_style(&owner, "u").ColorSchemeFlagsIsNormal());
+    assert_eq!(
+        schemes(computed_style(&owner, "c")),
+        schemes(computed_style(&owner, "p"))
+    );
     engine
         .SetColorSchemeSettings(
             &mut owner,
@@ -156,30 +168,36 @@ fn color_scheme_native_flags_follow_preference_only_page_settings_and_force_dark
         )
         .unwrap();
     engine.Update(&mut owner, &media, &[]).unwrap();
-    assert!(!native(&owner, "p").DarkColorScheme());
-    assert!(native(&owner, "n").DarkColorScheme() && native(&owner, "i").DarkColorScheme());
-    assert!(!native(&owner, "n").ColorSchemeForced());
-    assert!(!native(&owner, "n").ColorSchemeFlagsIsNormal());
-    assert!(schemes(native(&owner, "n")).is_empty());
+    assert!(!computed_style(&owner, "p").DarkColorScheme());
+    assert!(
+        computed_style(&owner, "n").DarkColorScheme()
+            && computed_style(&owner, "i").DarkColorScheme()
+    );
+    assert!(!computed_style(&owner, "n").ColorSchemeForced());
+    assert!(!computed_style(&owner, "n").ColorSchemeFlagsIsNormal());
+    assert!(schemes(computed_style(&owner, "n")).is_empty());
     media.preferred_color_scheme = PreferredColorScheme::kLight;
     engine.Update(&mut owner, &media, &[]).unwrap();
-    assert!(native(&owner, "p").DarkColorScheme() && native(&owner, "p").ColorSchemeForced());
-    assert!(native(&owner, "d").ColorSchemeForced());
+    assert!(
+        computed_style(&owner, "p").DarkColorScheme()
+            && computed_style(&owner, "p").ColorSchemeForced()
+    );
+    assert!(computed_style(&owner, "d").ColorSchemeForced());
     assert_eq!(
-        native(&owner, "c").DarkColorScheme(),
-        native(&owner, "p").DarkColorScheme()
+        computed_style(&owner, "c").DarkColorScheme(),
+        computed_style(&owner, "p").DarkColorScheme()
     );
     assert_eq!(
-        native(&owner, "c").ColorSchemeForced(),
-        native(&owner, "p").ColorSchemeForced()
+        computed_style(&owner, "c").ColorSchemeForced(),
+        computed_style(&owner, "p").ColorSchemeForced()
     );
     engine
         .SetColorSchemeSettings(&mut owner, ColorSchemeSettings::default())
         .unwrap();
     engine.Update(&mut owner, &media, &[]).unwrap();
-    assert!(!native(&owner, "b").DarkColorScheme());
-    assert!(native(&owner, "d").DarkColorScheme());
-    assert!(!native(&owner, "p").ColorSchemeForced());
+    assert!(!computed_style(&owner, "b").DarkColorScheme());
+    assert!(computed_style(&owner, "d").DarkColorScheme());
+    assert!(!computed_style(&owner, "p").ColorSchemeForced());
     assert!(engine.Diagnostics().is_empty());
 }
 #[test]
@@ -279,28 +297,30 @@ fn document_element_initial_color_follows_final_scheme_and_author_overrides() {
             engine.Diagnostics()
         );
         assert_eq!(
-            native(&owner, "root").GetCurrentColor(None),
+            computed_style(&owner, "root").GetCurrentColor(None),
             expected,
             "{declaration}"
         );
         assert_eq!(
-            native(&owner, "body").GetCurrentColor(None),
+            computed_style(&owner, "body").GetCurrentColor(None),
             expected,
             "{declaration}"
         );
         assert_eq!(
-            native(&owner, "child").GetCurrentColor(None),
+            computed_style(&owner, "child").GetCurrentColor(None),
             expected,
             "{declaration}"
         );
         // A descendant's local scheme does not reset an inherited color.
         assert_eq!(
-            native(&owner, "local").GetCurrentColor(None),
+            computed_style(&owner, "local").GetCurrentColor(None),
             expected,
             "{declaration}"
         );
         assert_eq!(
-            native(&owner, "root").GetFontDescription().ComputedSize(),
+            computed_style(&owner, "root")
+                .GetFontDescription()
+                .ComputedSize(),
             16.0
         );
     }

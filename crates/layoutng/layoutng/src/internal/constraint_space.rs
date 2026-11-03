@@ -991,11 +991,11 @@ impl Clone for ConstraintSpace {
     }
 }
 
-#[path = "../../../layout_algo_fragmentation/src/native_constraint_space_fragmentation.rs"]
-mod layout_algo_fragmentation_native_constraint_space_fragmentation;
+#[path = "../../../layout_algo_fragmentation/src/constraint_space_fragmentation.rs"]
+mod layout_algo_fragmentation_constraint_space_fragmentation;
 
-#[path = "../../../layout_algo_inline/src/native_constraint_space_block_in_inline.rs"]
-mod layout_algo_inline_native_constraint_space_block_in_inline;
+#[path = "../../../layout_algo_inline/src/constraint_space_block_in_inline.rs"]
+mod layout_algo_inline_constraint_space_block_in_inline;
 
 impl ConstraintSpace {
     // cpp: layoutng/internal/constraint_space.h:806-808

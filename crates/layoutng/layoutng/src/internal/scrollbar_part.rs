@@ -1,5 +1,5 @@
 //! Compatibility facade for fragment-owned scrollbar-part identity.
 
-#[path = "../../../layout_fragment/src/native_scrollbar_part.rs"]
-mod layout_fragment_native_scrollbar_part;
-pub use layout_fragment_native_scrollbar_part::*;
+#[path = "../../../layout_fragment/src/scrollbar_part.rs"]
+mod layout_fragment_scrollbar_part;
+pub use layout_fragment_scrollbar_part::*;

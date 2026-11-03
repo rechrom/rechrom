@@ -23,9 +23,9 @@ use layoutng_style::style::anonymous_style::CreateAnonymousStyleBuilderWithDispl
 use layoutng_style::style::computed_style::ComputedStyle;
 use layoutng_style::style::shadow_list::ShadowList;
 
-// The owning layoutng InkOverflow text methods are declared but have no
-// implementation in the supplied package. Keep these typed dependencies
-// unresolved until that owner supplies them; no local paint approximation.
+// These helpers remain owned by layout_fragment's InkOverflow translation.
+// Text-combine calls them across the reciprocal package boundary instead of
+// reimplementing paint geometry in the inline algorithm package.
 unsafe extern "Rust" {
     fn InkOverflowComputeDecorationOverflowForTextCombine(
         cursor: &InlineCursor,

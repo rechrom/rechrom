@@ -283,6 +283,18 @@ pub trait InputHost<B: InputHandlerTypes> {
         snap_to_min: bool,
     );
     fn StretchAmount(&self, helper: &B::Elasticity, id: ElementId) -> Vector2dF;
+    fn ConstrainOverscrollDelta(
+        &self,
+        helper: &B::Elasticity,
+        id: ElementId,
+        delta: &Vector2dF,
+    ) -> Vector2dF;
+    fn IsUserOverscrollable(&self, helper: &B::Elasticity, id: ElementId) -> bool;
+    fn SetStretchAmount(&mut self, helper: &mut B::Elasticity, id: ElementId, amount: &Vector2dF);
+    fn ElasticScrollOffset(&self, helper: &B::Elasticity, id: ElementId) -> PointF;
+    fn ElasticMaxScrollOffset(&self, helper: &B::Elasticity, id: ElementId) -> PointF;
+    fn ElasticScrollBy(&mut self, helper: &mut B::Elasticity, id: ElementId, delta: &Vector2dF);
+    fn ElasticRequestOneBeginFrame(&mut self, helper: &mut B::Elasticity);
     fn ResetStretchAmounts(&mut self, helper: &mut B::Elasticity);
     fn ApplyStretchAmountsToPending(&mut self, helper: &mut B::Elasticity);
     fn ApplyStretchAmountsToActive(&mut self, helper: &mut B::Elasticity);

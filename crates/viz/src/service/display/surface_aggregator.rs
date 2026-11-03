@@ -1,15 +1,15 @@
 #![allow(non_snake_case)]
 
 use crate::{
+    adapter::{
+        DeviceRect, DrawReceipt, RootPresentation, SurfaceId, SurfacePlacement, VizError, VizOutput,
+    },
     common::{
         quads::aggregated_render_pass::AggregatedRenderPass as OwnedAggregatedRenderPass,
         surfaces::{
             frame_sink_id::FrameSinkId, local_surface_id::LocalSurfaceId,
             surface_id::SurfaceId as CoreSurfaceId, surface_range::SurfaceRange,
         },
-    },
-    native::{
-        DeviceRect, DrawReceipt, RootPresentation, SurfaceId, SurfacePlacement, VizError, VizOutput,
     },
     service::{
         display::{
@@ -22,8 +22,9 @@ use crate::{
 };
 use compositor_core::{
     adapter::{geometry::Rect, layer_tree_impl::ResourceId},
+    cc::base::math_util::MathUtil,
     runtime::frame::{QuadMaterial, RenderPassId},
-    NativeCompositorFrame, NativeCompositorRenderPass, NativeRasterResourceLease,
+    CompositorFrame, CompositorRenderPass, RasterResourceLease,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -164,7 +165,7 @@ impl SurfaceAggregator {
         destination: Rect,
         result: &mut PrewalkResult,
         passes: &mut Vec<OwnedAggregatedRenderPass>,
-        resources: &mut BTreeMap<u32, Arc<NativeRasterResourceLease>>,
+        resources: &mut BTreeMap<u32, Arc<RasterResourceLease>>,
         roots: &mut Vec<RootPresentation>,
         receipt: &mut DrawReceipt,
     ) -> Result<(), VizError> {
@@ -206,7 +207,7 @@ impl SurfaceAggregator {
     // Source: components/viz/service/display/surface_aggregator.h:241-340
     fn PrewalkRenderPass(
         &self,
-        frame: &NativeCompositorFrame,
+        frame: &CompositorFrame,
         pass_index: usize,
         pass_damage: &BTreeMap<RenderPassId, Rect>,
         force_full_damage: bool,
@@ -243,10 +244,29 @@ impl SurfaceAggregator {
                 force_full_damage,
                 visiting,
             );
-            // The public CPU frame keeps the producer transform on SharedQuadState.
-            // Conservatively bound contributing damage by the quad's visible area.
+            // Chromium maps contributing render-pass damage through the RPDQ
+            // into its parent target. Keeping child-local damage here makes
+            // the host output claim pixels were repainted outside the region
+            // DirectRenderer actually writes, which breaks rotating-buffer
+            // preservation after a surface switch.
             if !child_damage.IsEmpty() {
+                let child = &frame.render_pass_list[child_index];
+                child_damage =
+                    MapRectToDestination(child.output_rect, quad.geometry.rect, child_damage);
                 child_damage.Intersect(quad.geometry.visible_rect);
+                if let Some(shared) = quad
+                    .geometry
+                    .shared_quad_state
+                    .and_then(|id| pass.TrySharedQuadState(id))
+                {
+                    child_damage = MathUtil::MapEnclosingClippedRect(
+                        &shared.quad_to_target_transform,
+                        child_damage,
+                    );
+                    if let Some(clip) = shared.clip_rect {
+                        child_damage.Intersect(clip);
+                    }
+                }
                 damage.Union(child_damage);
             }
         }
@@ -263,7 +283,7 @@ impl SurfaceAggregator {
         resolved: &ResolvedFrameData<'_>,
         damage: &DisplayDamageTracker,
         passes: &mut Vec<OwnedAggregatedRenderPass>,
-        resources: &mut BTreeMap<u32, Arc<NativeRasterResourceLease>>,
+        resources: &mut BTreeMap<u32, Arc<RasterResourceLease>>,
         roots: &mut Vec<RootPresentation>,
     ) -> Result<(), VizError> {
         let known_ids = self
@@ -528,12 +548,12 @@ fn MapRectToDestination(source: Rect, destination: Rect, mut damage: Rect) -> Re
 }
 
 // Source: components/viz/service/display/surface_aggregator.cc:268-423
-fn RenderPassNeedsFullDamage(pass: &NativeCompositorRenderPass, merge_state_changed: bool) -> bool {
+fn RenderPassNeedsFullDamage(pass: &CompositorRenderPass, merge_state_changed: bool) -> bool {
     pass.cache_render_pass || !pass.copy_requests.is_empty() || merge_state_changed
 }
 
 fn SetRenderPassDamageRect(
-    pass: &NativeCompositorRenderPass,
+    pass: &CompositorRenderPass,
     frame_damage: Rect,
     added_damage: Rect,
     force_full: bool,
@@ -948,6 +968,21 @@ impl SurfaceAggregator {
 
         self.contained_surfaces_ = prewalk.contained_surfaces.clone();
         self.contained_frame_sinks_ = prewalk.contained_frame_sinks.clone();
+        // surface_damage_rect_list_ describes contributing Surface damage for
+        // Viz decisions such as overlay damage. It can be larger than the
+        // pixels DirectRenderer writes into the final target because child
+        // render passes have their own backing stores. Rotating software
+        // output buffers must preserve everything outside the mapped damage of
+        // the root passes that are actually drawn into the host target.
+        let output_damage_rects = roots
+            .iter()
+            .filter_map(|root| {
+                let pass = passes.iter().find(|pass| pass.id == root.pass_id)?;
+                let damage =
+                    MapRectToDestination(pass.output_rect, root.destination, pass.damage_rect);
+                (!damage.IsEmpty()).then_some(damage)
+            })
+            .collect();
         frame.render_pass_list = passes;
         frame.surface_damage_rect_list_ = prewalk.surface_damage_rects;
         Ok(VizOutput {
@@ -956,6 +991,7 @@ impl SurfaceAggregator {
             receipt,
             roots,
             output_rect,
+            output_damage_rects,
         })
     }
 }

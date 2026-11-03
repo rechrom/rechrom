@@ -1,8 +1,8 @@
 //! Exercise the production DecodeEngine/image_decoder boundary, resource load,
 //! and paint independently. PNG pixels are the pinned libyuv oracle, not a
 //! second invocation of the Rust converter under test.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 use browser::page::Page;
 use image_decoder::{
     image_decoder::{DecodedImage, ImageDecodeInput, ImageDecoder},
@@ -136,7 +136,7 @@ fn render(avif: bool, scale: f64, background: &str) -> Vec<u32> {
 }
 #[test]
 fn avif_loads_and_paints_exactly_like_independent_rgb_oracle() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for scale in [1.0, 1.25, 2.0] {
             for background in ["white", "#24384c"] {

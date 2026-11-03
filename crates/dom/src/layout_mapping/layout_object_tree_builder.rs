@@ -3,15 +3,15 @@ use crate::svg_path_parser::ParseSVGPathDefault;
 #[cfg(test)]
 use crate::Child;
 use crate::Element;
-use font_engine::text::native::character_break_iterator::LengthOfGraphemeCluster;
-use font_engine::text::native::unicode_category::Category;
+use font_engine::text::implementation::character_break_iterator::LengthOfGraphemeCluster;
+use font_engine::text::implementation::unicode_category::Category;
 use foundation::{unicode, StringView};
 use layoutng_assembly::internal::form_control_types::FormControlType;
 use layoutng_assembly::internal::layout_input::{
     ComputedStyle, Display, ElementData, ExtendedStyle, FrameDimension, FrameDimensionType,
-    ListMarkerImage, MathTokenKind, NodeKind, Offset, PaintPathCommand, PaintPathVerb,
-    SvgLengthAdjust, SvgShapeData, SvgShapeGeometry, SvgTextPathData, SvgUseData, SvgViewBoxData,
-    SvgViewportData, SvgViewportLength, WhiteSpace,
+    MathTokenKind, NodeKind, Offset, PaintPathCommand, PaintPathVerb, SvgLengthAdjust,
+    SvgShapeData, SvgShapeGeometry, SvgTextPathData, SvgUseData, SvgViewBoxData, SvgViewportData,
+    SvgViewportLength, WhiteSpace,
 };
 use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_engine::LayoutTreeUpdate;
@@ -267,35 +267,6 @@ pub(super) fn list_marker_style(item: &ComputedStyle) -> ComputedStyle {
     marker
 }
 
-/// LayoutListMarker's image child is a LayoutImage with the marker style. The
-/// Style boundary has already applied image-set density to these CSS-pixel
-/// dimensions, so ElementData must not apply HTML `<img>` density correction
-/// a second time.
-pub(super) fn append_list_marker_image(
-    tree: &mut LayoutTreeUpdate<'_>,
-    marker: *mut LayoutObject,
-    id: u64,
-    marker_style: &ComputedStyle,
-    image: &ListMarkerImage,
-    name: String,
-) {
-    let mut image_style = marker_style.clone();
-    image_style.paint.image_resource_id = (image.resource_id != 0).then_some(image.resource_id);
-    image_style.paint.replaced_image_shader = image.shader.clone();
-    tree.AddGeneratedReplaced(
-        unsafe { &mut *marker },
-        id,
-        &image_style,
-        ElementData {
-            natural_width: Some(image.natural_width),
-            natural_height: Some(image.natural_height),
-            natural_aspect_ratio: Some(image.natural_width / image.natural_height),
-            ..Default::default()
-        },
-        name,
-    );
-}
-
 // cpp: dom_to_layout/layout_object_tree_builder.cc:63-75
 pub(super) fn attribute_integer(element: &impl LayoutNodeView, name: &str) -> Option<i32> {
     let value = attribute(element, name)?;
@@ -524,7 +495,7 @@ pub(super) fn apply_control_appearance(element: &ElementData, style: &mut Comput
     let extra = std::sync::Arc::make_mut(style.extended.get_or_insert_with(Default::default));
     let author_box = extra.has_author_background || extra.has_author_border;
     let author_box_or_shadow = author_box || !style.paint.box_shadows.is_empty();
-    let suppress_native = (matches!(
+    let suppress_layout_object = (matches!(
         appearance,
         AppearanceValue::kButton
             | AppearanceValue::kPushButton
@@ -539,7 +510,7 @@ pub(super) fn apply_control_appearance(element: &ElementData, style: &mut Comput
                 | AppearanceValue::kTextArea
                 | AppearanceValue::kTextField
         ) && author_box_or_shadow);
-    if suppress_native {
+    if suppress_layout_object {
         return;
     }
     if extra.effective_appearance == AppearanceValue::kNone {
@@ -812,6 +783,7 @@ pub(super) fn element_kind_html(
     node: &impl LayoutNodeView,
     element: &ElementData,
     style: &ComputedStyle,
+    source: Option<&layoutng_style::style::computed_style::ComputedStyle>,
 ) -> NodeKind {
     match node.node_name() {
         "br" => return NodeKind::kLineBreak,
@@ -830,7 +802,16 @@ pub(super) fn element_kind_html(
         "marquee" => return NodeKind::kMarquee,
         _ => {}
     }
-    if style.display == Display::kListItem {
+    let list_item = source.map_or(style.display == Display::kListItem, |style| {
+        matches!(
+            style.Display(),
+            foundation::EDisplay::kListItem
+                | foundation::EDisplay::kInlineListItem
+                | foundation::EDisplay::kFlowRootListItem
+                | foundation::EDisplay::kInlineFlowRootListItem
+        )
+    });
+    if list_item {
         return NodeKind::kListItem;
     }
     match node.node_name() {
@@ -988,44 +969,45 @@ pub(super) fn is_block_container_display(display: Display) -> bool {
 // These are resource bindings, not CSS inputs. Ordinary elements must not
 // acquire the entire document's resource snapshot (or copy their style) just
 // because some other element refers to an SVG resource. Keep the fixture-only
-// path without a canonical native style conservative.
-pub(super) fn needs_svg_clip_resources(style: &ComputedStyle) -> bool {
-    unsafe { style.native_style.as_ref() }.is_none_or(|native| {
-        native.ClipPath().is_some_and(|clip| {
-            unsafe { &*clip }.GetType()
-                == layoutng_style::style::clip_path_operation::OperationType::kReference
-        }) || native.HasMask()
-    })
+// path without a canonical source style conservative.
+pub(super) fn needs_svg_clip_resources(
+    style: &layoutng_style::style::computed_style::ComputedStyle,
+) -> bool {
+    style.ClipPath().is_some_and(|clip| {
+        unsafe { &*clip }.GetType()
+            == layoutng_style::style::clip_path_operation::OperationType::kReference
+    }) || style.HasMask()
 }
 
-pub(super) fn needs_svg_filter_resources(style: &ComputedStyle) -> bool {
-    if let Some(native) = unsafe { style.native_style.as_ref() } {
-        native.Filter().HasReferenceFilter() || native.BackdropFilter().HasReferenceFilter()
-    } else {
-        use layoutng_assembly::internal::paint_input::PaintFilterType;
-        style
-            .paint
-            .filters
-            .iter()
-            .chain(&style.paint.backdrop_filters)
-            .any(|filter| filter.r#type == PaintFilterType::kReference)
-    }
+pub(super) fn needs_svg_filter_resources(
+    style: &layoutng_style::style::computed_style::ComputedStyle,
+) -> bool {
+    style.Filter().HasReferenceFilter() || style.BackdropFilter().HasReferenceFilter()
 }
 
 pub(super) fn resolve_svg_clip_path(
     style: &mut ComputedStyle,
+    source: &layoutng_style::style::computed_style::ComputedStyle,
     snapshot: &std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>,
     scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
 ) {
+    style.svg_clip_resources = svg_clip_resource_binding(source, snapshot, scope);
+}
+
+pub(super) fn svg_clip_resource_binding(
+    style: &layoutng_style::style::computed_style::ComputedStyle,
+    snapshot: &std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>,
+    scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
+) -> layoutng_assembly::internal::paint_input::SvgClipResourceBinding {
     if !needs_svg_clip_resources(style) {
-        return;
+        return Default::default();
     }
     // This is a resource binding, not a second representation of clip-path.
-    // Native ComputedStyle remains the sole owner of the actual operation.
-    style.svg_clip_resources = layoutng_assembly::internal::paint_input::SvgClipResourceBinding {
+    // Chromium ComputedStyle remains the sole owner of the actual operation.
+    layoutng_assembly::internal::paint_input::SvgClipResourceBinding {
         snapshot: std::sync::Arc::clone(snapshot),
         scope,
-    };
+    }
 }
 
 #[cfg(test)]

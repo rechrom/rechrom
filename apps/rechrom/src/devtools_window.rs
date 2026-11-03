@@ -15,7 +15,7 @@ pub fn show(url: &str) -> std::io::Result<()> {
     {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            format!("Native DevTools window unavailable: {url}"),
+            format!("Platform DevTools window unavailable: {url}"),
         ))
     }
 }

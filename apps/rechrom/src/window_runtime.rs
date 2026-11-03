@@ -1,7 +1,7 @@
 //! Window presentation receives placement and already rendered Page surfaces.
 //! No document, paint artifact, Page compositor, or raster worker lives here.
 use crate::{
-    begin_frame_source::{LogicalBeginFrameSource, NativeBeginFrame},
+    begin_frame_source::{BeginFrame, LogicalBeginFrameSource},
     display::{self, Display},
     engine::{Output, UserEvent},
     presentation_runtime::{Config, DisplayExecutor},
@@ -26,11 +26,24 @@ use std::{
 struct SurfaceReadiness {
     scene: Option<crate::page_presentation::Scene>,
     viewports: BTreeMap<crate::page_presentation::Document, crate::engine::Viewport>,
+    embedder_revisions: BTreeMap<crate::page_presentation::Document, u64>,
     ready_damage: bool,
     interaction_damage: bool,
 }
 
 impl SurfaceReadiness {
+    fn affects_current_scene(&self, document: crate::page_presentation::Document) -> bool {
+        self.scene.as_ref().is_some_and(|scene| {
+            scene
+                .placements
+                .iter()
+                // The document generation may advance during a same-tab
+                // navigation. It still replaces the Surface embedded by this
+                // tab view. A different tab id is unreachable from this root.
+                .any(|placement| placement.document.0 == document.0)
+        })
+    }
+
     fn observe_page(&mut self, interaction: bool) -> bool {
         self.interaction_damage |= interaction;
         let all_ready = self.all_placed_surfaces_match();
@@ -42,14 +55,27 @@ impl SurfaceReadiness {
         match message {
             display::Message::Scene(scene) => {
                 self.scene = Some(scene.clone());
-                self.ready_damage = false;
-                self.interaction_damage = false;
-                None
+                // A tab switch normally selects an already submitted Surface.
+                // Treat that retained surface as ready immediately. A resize or
+                // first navigation still waits because its viewport does not
+                // match (or no submitted surface exists yet).
+                let all_ready = self.all_placed_surfaces_match();
+                self.ready_damage = all_ready;
+                self.interaction_damage = all_ready;
+                Some(all_ready)
             }
             display::Message::Prepare { submitted } => {
                 self.viewports
                     .insert(submitted.provenance.document, submitted.viewport);
-                Some(self.observe_page(submitted.is_handling_interaction))
+                self.embedder_revisions.insert(
+                    submitted.provenance.document,
+                    submitted
+                        .provenance
+                        .content
+                        .map_or(0, |content| content.embedder_revision),
+                );
+                self.affects_current_scene(submitted.provenance.document)
+                    .then(|| self.observe_page(submitted.is_handling_interaction))
             }
             display::Message::Submit { .. }
             | display::Message::SwapAck(_)
@@ -61,12 +87,36 @@ impl SurfaceReadiness {
         self.scene.as_ref().is_some_and(|scene| {
             !scene.placements.is_empty()
                 && scene.placements.iter().all(|placement| {
-                    self.viewports
-                        .get(&placement.document)
-                        .is_some_and(|viewport| {
-                            viewport.width == placement.destination.width
-                                && viewport.height == placement.destination.height
-                        })
+                    let selected = self.viewports.get(&placement.document).or_else(|| {
+                        // DelegatedFrameHost keeps the previous document's
+                        // Surface in the same tab view until the new
+                        // document submits its first frame.
+                        self.viewports
+                            .iter()
+                            .rev()
+                            .find_map(|(document, viewport)| {
+                                (document.0 == placement.document.0).then_some(viewport)
+                            })
+                    });
+                    let geometry_ready = selected.is_some_and(|viewport| {
+                        viewport.width == placement.destination.width
+                            && viewport.height == placement.destination.height
+                    }) || (selected.is_none()
+                            // The browser chrome must itself have a frame before
+                            // a root can be presented. A newly selected content
+                            // view is different: before its first frame Chromium
+                            // draws the root with that child absent, exposing the
+                            // view background instead of retaining the old tab.
+                            && placement.document.0 != 0
+                            && placement.document.0 != u64::MAX);
+                    let revision_ready = placement.document.0 != 0
+                        || self
+                            .embedder_revisions
+                            .get(&placement.document)
+                            .copied()
+                            .unwrap_or(0)
+                            == scene.toolbar_revision;
+                    geometry_ready && revision_ready
                 })
         })
     }
@@ -87,7 +137,7 @@ impl SurfaceReadiness {
 
 pub(crate) enum Command {
     Display(display::Message),
-    Tick(NativeBeginFrame),
+    Tick(BeginFrame),
     Ack(u64),
 }
 pub(crate) fn spawn(
@@ -297,7 +347,9 @@ fn run(
                     scheduler.OnPendingSurfacesChanged(!all_surfaces_ready);
                     scheduler.OnDisplayDamaged(Instant::now());
                 }
-                source.request_begin_frame();
+                if all_surfaces_ready.is_some() {
+                    source.request_begin_frame();
+                }
             }
             Ok(Command::Tick(frame)) => {
                 if let Some(previous) = scheduler.BeginFrame(
@@ -366,6 +418,7 @@ mod tests {
             ],
             live_documents: vec![toolbar, content],
             metadata: Vec::new(),
+            toolbar_revision: 0,
         }));
 
         state.viewports.insert(
@@ -404,5 +457,47 @@ mod tests {
         state.did_schedule_draw();
         assert!(!state.has_ready_damage());
         assert!(!state.has_interaction_damage());
+
+        // A toolbar Page may finish the next browser mutation before the host
+        // Scene message reaches Display. The newer toolbar must wait for its
+        // matching root commit instead of appearing over the previous tab.
+        state.embedder_revisions.insert(toolbar, 1);
+        assert!(!state.observe_page(false));
+        assert!(!state.has_ready_damage());
+        let mut next_toolbar_scene = state.scene.clone().unwrap();
+        next_toolbar_scene.toolbar_revision = 1;
+        assert_eq!(
+            state.observe(&display::Message::Scene(next_toolbar_scene)),
+            Some(true)
+        );
+        state.did_schedule_draw();
+
+        let next_content = (1, 2);
+        assert_eq!(
+            state.observe(&display::Message::Scene(Scene {
+                viewport: Viewport {
+                    width: 1000,
+                    height: 700,
+                    scale: 1.0,
+                },
+                placements: vec![
+                    Placement {
+                        document: toolbar,
+                        destination: DeviceRect::new(0, 0, 1000, 86),
+                    },
+                    Placement {
+                        document: next_content,
+                        destination: DeviceRect::new(0, 86, 1000, 614),
+                    },
+                ],
+                live_documents: vec![toolbar, next_content],
+                metadata: Vec::new(),
+                toolbar_revision: 0,
+            })),
+            Some(true),
+            "the previous document surface keeps a same-tab navigation drawable"
+        );
+        assert!(state.has_ready_damage());
+        assert!(state.has_interaction_damage());
     }
 }

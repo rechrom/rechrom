@@ -153,7 +153,7 @@ pub struct EditingPaintState {
     pub document_selection: Option<DocumentSelection>,
 }
 
-/// Clamp stale/script/native offsets without slicing into a Unicode code point.
+/// Clamp stale/script/source offsets without slicing into a Unicode code point.
 pub fn ByteBoundary(value: &str, offset: usize) -> usize {
     let mut offset = offset.min(value.len());
     while !value.is_char_boundary(offset) {

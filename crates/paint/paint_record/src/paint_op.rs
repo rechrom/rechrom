@@ -1,5 +1,4 @@
 /// Concrete backend-neutral operation emitted by Paint recording.
-// cpp: paint/paint_engine.h:33-68
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PaintOpType {

@@ -32,7 +32,7 @@ pub unsafe fn JS_FreeContext(ctx: *mut JSContext) {
     JS_FreeValue(ctx, (*ctx).eval_obj);
     JS_FreeValue(ctx, (*ctx).array_proto_values);
     for i in 0..JS_NATIVE_ERROR_COUNT {
-        JS_FreeValue(ctx, (*ctx).native_error_proto[i]);
+        JS_FreeValue(ctx, (*ctx).error_proto[i]);
     }
     let mut i = 0;
     while i < (*rt).class_count {

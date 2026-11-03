@@ -87,6 +87,40 @@ pub fn CompositorElementIdFromUniqueObjectId(
     CompositorElementId::new(value)
 }
 
+// cpp: foundation/graphics/compositor_element_id.cc:64-69
+pub fn NamespaceFromCompositorElementId(
+    element_id: CompositorElementId,
+) -> CompositorElementIdNamespace {
+    let namespace = (element_id.GetInternalValue() >> kCompositorReservedBitCount)
+        % CompositorElementIdNamespace::kMaxRepresentable;
+    use CompositorElementIdNamespace::*;
+    match namespace {
+        0 => kPrimary,
+        1 => kUniqueObjectId,
+        2 => kScroll,
+        3 => kStickyTranslation,
+        4 => kAnchorPositionScrollTranslation,
+        5 => kElementCanvasTransform,
+        6 => kPrimaryEffect,
+        7 => kPrimaryTransform,
+        8 => kEffectFilter,
+        9 => kEffectMask,
+        10 => kEffectClipPath,
+        11 => kScaleTransform,
+        12 => kRotateTransform,
+        13 => kTranslateTransform,
+        14 => kVerticalScrollbar,
+        15 => kHorizontalScrollbar,
+        16 => kScrollCorner,
+        17 => kViewTransitionScopeRoot,
+        18 => kViewTransitionElement,
+        19 => kElementCapture,
+        20 => kUnboundedWrapperEffect,
+        21 => kDOMNodeId,
+        _ => unreachable!("unassigned compositor element namespace"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +132,9 @@ mod tests {
             CompositorElementIdNamespace::kStickyTranslation,
         );
         assert_eq!(id.GetInternalValue(), ((7 << 5) + 3) << 1);
+        assert_eq!(
+            NamespaceFromCompositorElementId(id),
+            CompositorElementIdNamespace::kStickyTranslation
+        );
     }
 }

@@ -4,13 +4,13 @@ use crate::{
         layer_tree_impl::Color4f,
         scrollbar::Insets,
     },
-    cc::input::scrollbar::{Scrollbar, ScrollbarOrientation},
+    cc::input::scrollbar::{Scrollbar as ScrollbarContract, ScrollbarOrientation},
 };
 
 /// The retained Blink ScrollbarDisplayItem inputs consumed by cc's native
 /// solid-color scrollbar layer. Geometry remains relative to the layer, as in
 /// Chromium's WebScrollbar adapter.
-pub struct NativeScrollbar {
+pub struct Scrollbar {
     pub element_id: crate::adapter::input_types::ElementId,
     orientation: ScrollbarOrientation,
     left_side_vertical: bool,
@@ -22,7 +22,7 @@ pub struct NativeScrollbar {
     needs_update_display: bool,
 }
 
-impl NativeScrollbar {
+impl Scrollbar {
     pub fn from_paint(value: &paint::paint_engine::ScrollbarDisplayItemData) -> Self {
         let rect = |r: paint::paint_engine::PaintRect| {
             Rect::new(
@@ -57,9 +57,9 @@ impl NativeScrollbar {
     }
 }
 
-impl Scrollbar<()> for NativeScrollbar {
-    fn IsSame(&self, other: &dyn Scrollbar<()>) -> bool {
-        std::ptr::eq(self as &dyn Scrollbar<()>, other)
+impl ScrollbarContract<()> for Scrollbar {
+    fn IsSame(&self, other: &dyn ScrollbarContract<()>) -> bool {
+        std::ptr::eq(self as &dyn ScrollbarContract<()>, other)
     }
     fn Orientation(&self) -> ScrollbarOrientation {
         self.orientation

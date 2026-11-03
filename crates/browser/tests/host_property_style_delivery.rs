@@ -1,8 +1,8 @@
 //! Author properties and native input properties coexist through production Page.
 //! Native HTML construction keeps fragment-parser namespace concerns out of this fixture.
 //! https://webidl.spec.whatwg.org/#es-attributes
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::{Page, PageClient, ScriptEnvironment};
 use javascript::{
@@ -81,7 +81,7 @@ fn fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         Some(ScriptEnvironment {
-            runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+            runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                 4 * 1024 * 1024,
             )),
             xhr: Box::new(XHR),
@@ -141,8 +141,8 @@ fn assert_control_state(page: &Page, control_id: u64, checked: bool, value: &str
 }
 
 #[test]
-fn author_checked_and_value_accessors_deliver_shadow_style_and_native_control_state() {
-    native_test_thread::run(|| {
+fn author_checked_and_value_accessors_deliver_shadow_style_and_source_control_state() {
+    test_thread::run(|| {
         let (mut page, errors) = fixture();
         evaluate(
             &mut page,
@@ -274,8 +274,8 @@ fn author_checked_and_value_accessors_deliver_shadow_style_and_native_control_st
 }
 
 #[test]
-fn author_event_handler_shadow_preserves_real_native_dispatch_until_explicit_removal() {
-    native_test_thread::run(|| {
+fn author_event_handler_shadow_preserves_real_source_dispatch_until_explicit_removal() {
+    test_thread::run(|| {
         let (mut page, errors) = fixture();
         evaluate(
             &mut page,

@@ -7,12 +7,12 @@
 //! Effective excludes copyright/comments, blanks, preprocessing/includes,
 //! namespaces and pure bracket/punctuation lines. Header omissions are
 //! STATIC_ONLY 23 and access label 25. All other declarations and cc:22-132
-//! production map: element-dependent calc and oblique-list rejection, native
+//! production map: element-dependent calc and oblique-list rejection, computed style
 //! conversion-data initialization, source-order size/family/stretch/style/caps/
 //! weight handling and final actual FontBuilder.UpdateFontDescription.
 //! FontDescription/Font/FontBuilder and CSSPropertyValueSet/CSSValue are reused.
 //! CSSToLengthConversionData and StyleBuilderConverterBase belong to other source
-//! classes; their native construction/read/conversion calls are required typed
+//! classes; their computed style construction/read/conversion calls are required typed
 //! operations without defaults. No second font or resolver state is stored.
 #![allow(non_snake_case)]
 use super::font_builder::{FontBuilder, FontBuilderBackend};
@@ -28,7 +28,7 @@ use style_model::css_value::{CSSValue, CSSValueDispatch, CSSValuePayload};
 
 type FontValue<B> = CSSValue<<B as FontStyleResolverBackend>::ValueDispatch>;
 
-/// Native conversion-data constructor, actual CSSValue subclass getters and
+/// Canonical conversion-data constructor, actual CSSValue subclass getters and
 /// StyleBuilderConverterBase methods. No font description/model is supplied.
 pub trait FontStyleResolverBackend: FontBuilderBackend + Sized {
     type ValueDispatch: CSSPropertyValueSetBackend;

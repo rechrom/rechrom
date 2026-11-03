@@ -891,11 +891,11 @@ impl SkTypeface_Mac {
         // Proven concrete producer: sole-owned initialized Data allocation; no external
         // callbacks/borrowed data, immutable shared bytes and independent offsets in
         // every MemoryStream descendant. Cache access remains under this mutex.
-        let native = Box::into_pin(Box::new(SkMemoryStream::from_data(Some(data))));
-        *stream = Some(unsafe { TransferableStreamAsset::from_native_transferable(native) });
+        let memory_stream = Box::into_pin(Box::new(SkMemoryStream::from_data(Some(data))));
+        *stream = Some(unsafe { TransferableStreamAsset::from_transferable_stream(memory_stream) });
         stream
             .as_ref()
-            .expect("native freshly installed stream")
+            .expect("freshly installed memory stream")
             .duplicate()
     }
     // Source: src/ports/SkTypeface_mac_ct.cpp:711-715

@@ -22,7 +22,7 @@ use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
 use layout_fragment::physical_fragment::BoxType;
 use layout_fragment::physical_fragment::PhysicalFragment;
 use layout_fragment::physical_line_box_fragment::PhysicalLineBoxFragment;
-use layoutng::internal::algorithm_entry::NativeAlgorithm;
+use layoutng::internal::algorithm_entry::LayoutAlgorithmImplementation;
 use layoutng::internal::algorithm_forward::{
     BlockLayoutAlgorithm as ForwardBlockLayoutAlgorithm, InlineChildLayoutContext,
     PreviousInflowPosition as ForwardPreviousInflowPosition,
@@ -4161,7 +4161,7 @@ impl BlockLayoutAlgorithm {
 
 // The C++ registration template constructs a fresh block algorithm for each
 // layout or measurement call; this is the Rust entry used by assembly.cc.
-impl NativeAlgorithm for BlockLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for BlockLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_block.Layout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_block.Measure";
     const ROOT_TRACE_NAME: Option<&'static str> = Some("layout_algo_block.RootLayout");

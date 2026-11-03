@@ -114,7 +114,7 @@ pub trait ContainerChainInvalidationTree {
 /// Mark the nearest container chain for either full-child or simplified
 /// layout. Out-of-flow descendants jump to their containing block and switch
 /// the remainder of the chain to simplified layout, matching LayoutNG's
-/// native invalidation contract.
+/// source invalidation contract.
 #[inline(never)]
 pub fn propagate_container_chain_for_layout<T: ContainerChainInvalidationTree>(
     tree: &mut T,

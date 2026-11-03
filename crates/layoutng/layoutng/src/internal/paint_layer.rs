@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_fragment/src/native_paint_layer.rs"]
-mod layout_fragment_native_paint_layer;
+#[path = "../../../layout_fragment/src/paint_layer.rs"]
+mod layout_fragment_paint_layer;
 
-pub use layout_fragment_native_paint_layer::*;
+pub use layout_fragment_paint_layer::*;

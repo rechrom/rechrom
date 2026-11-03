@@ -34,7 +34,7 @@ impl SharedFontBytes {
     ///
     /// # Safety
     /// The caller must ensure the file's content and length cannot change for
-    /// the lifetime of this owner and every clone, including retained native
+    /// the lifetime of this owner and every clone, including retained platform
     /// font/blob handles. A read-only mapping does not protect against another
     /// process modifying or truncating the underlying file. Closing the file
     /// or unlinking it does not invalidate the mapping.
@@ -184,7 +184,7 @@ unsafe impl Sync for ReadOnlyMapping {}
 impl Drop for ReadOnlyMapping {
     fn drop(&mut self) {
         // SAFETY: This is the unique mapping owner, dropped once by the last
-        // Arc. No slice or native font pointer can outlive its retained owner.
+        // Arc. No slice or platform font pointer can outlive its retained owner.
         unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.length) };
         #[cfg(test)]
         if let Some(observer) = &self.drop_observer {

@@ -7,8 +7,8 @@ use super::layout_box_model_object::LayoutBoxModelObject;
 use super::layout_node_metadata::{ContainerNode, Node};
 use super::layout_object::LayoutObject;
 
-#[path = "../../../layout_invalidation/src/native_layout_box_model_tree_mutation.rs"]
-mod layout_invalidation_native_layout_box_model_tree_mutation;
+#[path = "../../../layout_invalidation/src/layout_box_model_tree_mutation.rs"]
+mod layout_invalidation_layout_box_model_tree_mutation;
 
 // The derived owner calls this when constructing its LayoutObject base.
 // Its own fields belong to the pending layout_box_model_object.h record.

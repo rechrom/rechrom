@@ -1,14 +1,14 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
 //! Chromium stable auto-color and color-scheme consumers.
 // Selected-source audit (includes reused entrypoint collaborators; nested
-// functional-color/math/named-table/mode-policy/provider/native-field bodies
+// functional-color/math/named-table/mode-policy/provider/computed style-field bodies
 // are outside these counts, with their missing branches retained in ledgers).
 // Effective lines exclude comments/blanks/preprocessing/namespaces/using,
 // access labels and punctuation-only lines; count multiline statements by line.
 // Scope                         effective mapped omitted remaining
 // Parser entries/shared consumers     242    190       0        52
-// Native Apply/converters             222    136       7        79
-// Scheme native algorithm/assembly     53     53       0         0
+// Canonical Apply/converters             222    136       7        79
+// Scheme computed style algorithm/assembly     53     53       0         0
 // Total selected scope                517    379       7       131
 // Parser: longhands_custom.cc:2090-2123,2456-2503,5563-5569,5870-5876,
 // 7464-7483; generated longhands.cc:1316-1321,1360-1365,1398-1403,
@@ -23,7 +23,7 @@
 // 2902,2911-2914,2917-2918,2921-2922,2927-3009,3058-3068.
 // Omitted: custom:2545-2552 (root use counter),2572-2573 (DCHECK);
 // converter:3089 (DCHECK),3885 (NOTREACHED).
-// Native/assembly: computed_style.cc:3147-3190; style_resolver.cc:2398-2400;
+// Canonical/assembly: computed style.cc:3147-3190; style_resolver.cc:2398-2400;
 // blink/public/mojom/css/preferred_color_scheme.mojom:7-10;
 // generated longhands.cc:1306-1310,1350-1354,1443-1447,1487-1491;
 // css_direction_aware_resolver.cc:326-334. Page settings are real typed host
@@ -34,7 +34,7 @@
 // CSSAccentColorKeyword=true on Mac/Win/Linux/ChromeOS (default experimental).
 // Enabled advanced/system branches remain typed Unsupported until collaborators
 // exist; alternate flags stay in the ledger. Ordinary border/outline reuse the
-// same native color converter rather than adding another application path.
+// same computed style color converter rather than adding another application path.
 #![allow(non_snake_case)]
 use super::*;
 use CSSPropertyID::*;

@@ -914,7 +914,7 @@ pub fn CreateInputType<'a>(id: u64, c: InputTypeContext<'a>) -> Box<dyn InputTyp
 mod numeric_tests {
     use super::*;
     #[test]
-    fn native_number_parsing_and_general_fifteen_digits_match() {
+    fn number_parsing_and_general_fifteen_digits_match() {
         for line in include_str!("../../../artifacts/parallel-zero-parity/shadow-state/interaction-native/numeric-results.tsv").lines(){let mut f=line.split('\t');let kind=f.next().unwrap();let input=f.next().unwrap();let expected=f.next().unwrap();if kind=="P"{let bytes:Vec<_>=(0..input.len()).step_by(2).map(|i|u8::from_str_radix(&input[i..i+2],16).unwrap()).collect();let text=String::from_utf8(bytes).unwrap();let actual=ParseNumber(&text).map_or("none".to_owned(),|v|format!("{:016x}",v.to_bits()));assert_eq!(actual,expected,"strtod input {text:?}")}else{let value=f64::from_bits(u64::from_str_radix(input,16).unwrap());assert_eq!(SerializeNumber(value),expected,"general format bits={input}")}}
     }
 }

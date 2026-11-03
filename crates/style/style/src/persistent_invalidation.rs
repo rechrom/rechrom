@@ -158,7 +158,7 @@ impl InvalidationDom for PersistentInvalidationDom<'_> {
                 style: self
                     .document
                     .ResolvedStyleFor(index)
-                    .map_or(std::ptr::null(), |s| s.native_style.Get()),
+                    .map_or(std::ptr::null(), |s| s.computed_style_owner.Get()),
             }
         });
         self.elements.borrow_mut().insert(index, element.clone());

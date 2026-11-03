@@ -2109,19 +2109,19 @@ impl<B: LayerTreeTypes> compositor_draw::occlusion_walk::OcclusionWalkContext
         if self.iterator.state() == State::kEnd {
             return None;
         }
-        let native = self.iterator.position(&*self.tree);
+        let position = self.iterator.position(&*self.tree);
         Some(compositor_draw::occlusion_walk::OcclusionWalkEntry {
             position: crate::adapter::occlusion::EffectTreeLayerListIteratorPosition {
-                state: match native.state {
+                state: match position.state {
                     State::kLayer => DrawState::kLayer,
                     State::kTargetSurface => DrawState::kTargetSurface,
                     State::kContributingSurface => DrawState::kContributingSurface,
                     State::kEnd => unreachable!(),
                 },
-                target_render_surface: native.target_render_surface.unwrap(),
-                current_layer: native.current_layer,
+                target_render_surface: position.target_render_surface.unwrap(),
+                current_layer: position.current_layer,
             },
-            current_render_surface: native.current_render_surface,
+            current_render_surface: position.current_render_surface,
         })
     }
 

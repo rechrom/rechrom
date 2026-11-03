@@ -21,10 +21,10 @@ fn physical_code(key: PhysicalKey) -> String {
 /// A wheel sample before Chromium's phase handler, rails filter and frame
 /// aligned queue. Native input and deterministic replay meet at this boundary.
 #[derive(Clone, Debug)]
-pub struct NativeWheelSample {
+pub struct WheelSample {
     pub delta: MouseScrollDelta,
     pub phase: TouchPhase,
-    pub native: Option<winit::event::MacOSMouseWheelMetadata>,
+    pub macos_metadata: Option<winit::event::MacOSMouseWheelMetadata>,
     pub position: Offset,
     pub modifiers: EventModifiers,
     pub scale: f64,
@@ -50,13 +50,18 @@ pub struct InputState {
     pointer_inside: bool,
     last_motion: Option<(Offset, EventModifiers, Option<MouseButton>)>,
     pending_wheel_end: Option<(Instant, WheelEvent)>,
+    explicit_wheel_phase_active: bool,
+    phase_less_wheel_active: bool,
+    phase_less_wheel_origin: Offset,
+    phase_less_wheel_modifiers: EventModifiers,
     wheel_rails_delta: Offset,
+    native_wheel_time_anchor: Option<(f64, Instant)>,
 }
 impl InputState {
     #[cfg(target_os = "macos")]
-    fn capture_native_wheel(
+    fn capture_macos_wheel(
         &self,
-        native: &winit::event::MacOSMouseWheelMetadata,
+        metadata: &winit::event::MacOSMouseWheelMetadata,
         delta: &MouseScrollDelta,
         phase: TouchPhase,
         scale: f64,
@@ -106,23 +111,23 @@ impl InputState {
             "version": 1,
             "sequence": capture.sequence,
             "delivery_offset_ns": capture.started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-            "nsevent_timestamp_seconds": native.timestamp_seconds,
+            "nsevent_timestamp_seconds": metadata.timestamp_seconds,
             "phase": phase,
-            "native_phase": native.phase,
-            "momentum_phase": native.momentum_phase,
-            "is_continuous": native.is_continuous,
-            "point_delta_x": native.point_delta_x,
-            "point_delta_y": native.point_delta_y,
-            "cocoa_delta_x": native.cocoa_delta_x,
-            "cocoa_delta_y": native.cocoa_delta_y,
-            "precise": native.precise,
+            "native_phase": metadata.phase,
+            "momentum_phase": metadata.momentum_phase,
+            "is_continuous": metadata.is_continuous,
+            "point_delta_x": metadata.point_delta_x,
+            "point_delta_y": metadata.point_delta_y,
+            "cocoa_delta_x": metadata.cocoa_delta_x,
+            "cocoa_delta_y": metadata.cocoa_delta_y,
+            "precise": metadata.precise,
             "host_delta_kind": delta_kind,
             "host_delta_x": host_delta_x,
             "host_delta_y": host_delta_y,
-            "scale": native.scale_factor,
+            "scale": metadata.scale_factor,
             "consumer_scale": scale,
-            "event_position_x": native.position_x,
-            "event_position_y": native.position_y,
+            "event_position_x": metadata.position_x,
+            "event_position_y": metadata.position_y,
             "cursor_x": self.cursor.x,
             "cursor_y": self.cursor.y,
             "modifiers": {
@@ -147,15 +152,23 @@ impl InputState {
             .pending_wheel_end_deadline()
             .is_some_and(|deadline| now >= deadline)
         {
-            self.take_pending_wheel_end()
+            self.take_pending_wheel_end_at(now)
         } else {
             None
         }
     }
     fn take_pending_wheel_end(&mut self) -> Option<Command> {
-        self.pending_wheel_end
-            .take()
-            .map(|(_, wheel)| Command::Input(InputEvent::Wheel(wheel)))
+        self.take_pending_wheel_end_at(Instant::now())
+    }
+    fn take_pending_wheel_end_at(&mut self, timestamp: Instant) -> Option<Command> {
+        self.pending_wheel_end.take().map(|(_, mut wheel)| {
+            self.phase_less_wheel_active = false;
+            // This end is synthesized when the phase-handler deadline fires,
+            // so its event time is the firing time rather than the original
+            // finger-up sample that armed the timer.
+            wheel.timestamp = Some(timestamp);
+            Command::Input(InputEvent::Wheel(wheel))
+        })
     }
     pub fn pointer_inside(&self) -> bool {
         self.pointer_inside
@@ -171,47 +184,65 @@ impl InputState {
             shift: self.modifiers.shift_key(),
         }
     }
-    pub fn native_wheel_sample(
-        &self,
+    pub fn wheel_sample(
+        &mut self,
         delta: MouseScrollDelta,
         phase: TouchPhase,
-        native: Option<winit::event::MacOSMouseWheelMetadata>,
+        macos_metadata: Option<winit::event::MacOSMouseWheelMetadata>,
         scale: f64,
-    ) -> NativeWheelSample {
+    ) -> WheelSample {
         #[cfg(target_os = "macos")]
-        if let Some(native) = native.as_ref() {
-            self.capture_native_wheel(native, &delta, phase, scale);
+        if let Some(metadata) = macos_metadata.as_ref() {
+            self.capture_macos_wheel(metadata, &delta, phase, scale);
         }
-        let position = native.as_ref().map_or(self.cursor, |event| Offset {
+        let position = macos_metadata.as_ref().map_or(self.cursor, |event| Offset {
             x: event.position_x,
             y: event.position_y,
         });
-        NativeWheelSample {
+        let observed_at = macos_metadata
+            .as_ref()
+            .map_or_else(Instant::now, |metadata| {
+                let (native, local) = *self
+                    .native_wheel_time_anchor
+                    .get_or_insert((metadata.timestamp_seconds, Instant::now()));
+                let delta = metadata.timestamp_seconds - native;
+                if delta >= 0.0 {
+                    local + Duration::from_secs_f64(delta)
+                } else {
+                    local - Duration::from_secs_f64(-delta)
+                }
+            });
+        WheelSample {
             delta,
             phase,
-            native,
+            macos_metadata,
             position,
             modifiers: self.modifiers(),
             scale,
-            observed_at: Instant::now(),
+            observed_at,
         }
     }
 
-    pub fn accept_native_wheel(&mut self, sample: NativeWheelSample, now: Instant) -> Vec<Command> {
+    pub fn accept_wheel_sample(&mut self, sample: WheelSample, now: Instant) -> Vec<Command> {
         let mut result = Vec::new();
         if let Some(end) = self.take_due_wheel_end(now) {
             result.push(end);
         }
-        let NativeWheelSample {
+        let WheelSample {
             delta,
             phase,
-            native,
+            macos_metadata,
             position,
             modifiers,
             scale,
-            ..
+            observed_at,
         } = sample;
-        let event_scale = native.as_ref().map_or(scale, |event| event.scale_factor);
+        let has_platform_phase = macos_metadata
+            .as_ref()
+            .is_some_and(|event| event.phase != 0 || event.momentum_phase != 0);
+        let event_scale = macos_metadata
+            .as_ref()
+            .map_or(scale, |event| event.scale_factor);
         let (delta, delta_units) = match delta {
             MouseScrollDelta::LineDelta(x, y) => (
                 Offset {
@@ -236,36 +267,89 @@ impl InputState {
                 TouchPhase::Ended => WheelPhase::kEnded,
                 TouchPhase::Cancelled => WheelPhase::kCancelled,
             },
-            native: native.as_ref().map(|event| NativeWheelMetadata {
+            native: macos_metadata.as_ref().map(|event| WheelMetadata {
                 timestamp_seconds: event.timestamp_seconds,
                 phase: event.phase,
                 momentum_phase: event.momentum_phase,
             }),
+            timestamp: Some(observed_at),
             position,
             delta,
             modifiers,
             ..Default::default()
         };
+        if !has_platform_phase {
+            match phase {
+                TouchPhase::Started => {
+                    if let Some(end) = self.take_pending_wheel_end() {
+                        result.push(end);
+                    }
+                    self.explicit_wheel_phase_active = true;
+                    self.phase_less_wheel_active = false;
+                }
+                TouchPhase::Moved if self.explicit_wheel_phase_active => {}
+                TouchPhase::Moved => {
+                    // MouseWheelPhaseHandler::AddPhaseIfNeededAndScheduleEndEvent
+                    // gives phase-less wheel devices a 500 ms latching
+                    // transaction. This is upstream of Blink's wheel event and
+                    // synthesized GestureScrollBegin/Update/End sequence; our
+                    // compact host feeds that same phase into the compositor.
+                    let outside_slop = self.phase_less_wheel_active
+                        && ((position.x - self.phase_less_wheel_origin.x).powi(2)
+                            + (position.y - self.phase_less_wheel_origin.y).powi(2)
+                            >= 100.0);
+                    let modifiers_changed = self.phase_less_wheel_active
+                        && modifiers != self.phase_less_wheel_modifiers;
+                    if outside_slop || modifiers_changed {
+                        if let Some(end) = self.take_pending_wheel_end() {
+                            result.push(end);
+                        }
+                    }
+                    if self.phase_less_wheel_active {
+                        wheel.phase = WheelPhase::kChanged;
+                    } else {
+                        wheel.phase = WheelPhase::kBegan;
+                        self.phase_less_wheel_active = true;
+                        self.phase_less_wheel_origin = position;
+                        self.phase_less_wheel_modifiers = modifiers;
+                    }
+                    wheel.has_synthetic_phase = true;
+                    let mut end = wheel.clone();
+                    end.delta = Offset::default();
+                    end.phase = WheelPhase::kEnded;
+                    end.native = None;
+                    self.pending_wheel_end = Some((now + Duration::from_millis(500), end));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.explicit_wheel_phase_active = false;
+                    self.phase_less_wheel_active = false;
+                    self.pending_wheel_end = None;
+                }
+            }
+        } else {
+            self.explicit_wheel_phase_active = false;
+            self.phase_less_wheel_active = false;
+        }
         wheel.rails_mode = self.update_wheel_rails_mode(&wheel);
-        if let Some(native) = native {
+        if let Some(metadata) = macos_metadata {
             // RenderWidgetHostViewMac's MouseWheelPhaseHandler waits 100 ms
             // before ending a finger gesture so OS momentum can continue the
             // same latch. The original Ended delta is never dispatched.
-            if native.phase == 8 {
+            if metadata.phase == 8 {
                 wheel.delta = Offset::default();
                 wheel.phase = WheelPhase::kEnded;
                 wheel.native = None;
                 self.pending_wheel_end = Some((now + Duration::from_millis(100), wheel));
                 return result;
             }
-            if native.phase == 1 {
+            if metadata.phase == 1 {
                 if let Some(end) = self.take_pending_wheel_end() {
                     result.push(end);
                 }
-            } else if native.momentum_phase == 1 && self.pending_wheel_end.take().is_some() {
+            } else if metadata.momentum_phase == 1 && self.pending_wheel_end.take().is_some() {
                 wheel.phase = WheelPhase::kChanged;
             }
-            if native.phase & 16 != 0 || native.momentum_phase & 16 != 0 {
+            if metadata.phase & 16 != 0 || metadata.momentum_phase & 16 != 0 {
                 wheel.phase = WheelPhase::kCancelled;
             }
         }
@@ -369,11 +453,11 @@ impl InputState {
             WindowEvent::MouseWheel {
                 delta,
                 phase,
-                native,
+                native: macos_metadata,
                 ..
             } => {
-                let sample = self.native_wheel_sample(*delta, *phase, *native, scale);
-                result.extend(self.accept_native_wheel(sample, Instant::now()));
+                let sample = self.wheel_sample(*delta, *phase, *macos_metadata, scale);
+                result.extend(self.accept_wheel_sample(sample, Instant::now()));
             }
             WindowEvent::KeyboardInput {
                 event,
@@ -479,6 +563,8 @@ impl InputState {
                 if let Some(end) = self.take_pending_wheel_end() {
                     result.push(end);
                 }
+                self.explicit_wheel_phase_active = false;
+                self.phase_less_wheel_active = false;
                 self.pointer_inside = false;
                 self.last_motion = None;
                 self.modifiers = ModifiersState::empty();
@@ -538,7 +624,7 @@ fn key_name(key: &Key) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn repeated_native_wheel_motion_preserves_coalescing_and_pointer_boundaries() {
+    fn repeated_wheel_motion_preserves_coalescing_and_pointer_boundaries() {
         use interaction::frame_aligned_input_queue::FrameAlignedInputQueue;
         let device_id = winit::event::DeviceId::dummy();
         let motion = |x| WindowEvent::CursorMoved {
@@ -549,7 +635,20 @@ mod tests {
             device_id,
             phase: TouchPhase::Moved,
             delta: MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, -8.0)),
-            native: None,
+            native: Some(winit::event::MacOSMouseWheelMetadata {
+                timestamp_seconds: 1.0,
+                phase: 0,
+                momentum_phase: 0,
+                is_continuous: Some(false),
+                point_delta_x: None,
+                point_delta_y: None,
+                cocoa_delta_x: 0.0,
+                cocoa_delta_y: -4.0,
+                precise: true,
+                position_x: 40.0,
+                position_y: 80.0,
+                scale_factor: 2.0,
+            }),
         };
         let mut state = InputState::default();
         assert_eq!(state.event(&motion(40.0), 2.0).len(), 1);
@@ -564,11 +663,18 @@ mod tests {
                 queue.Push(input, Instant::now(), 1);
             }
         }
-        let merged = queue.PopFront().unwrap();
-        assert!(matches!(merged.input, InputEvent::Wheel(event)
-            if event.phase == WheelPhase::kChanged && event.delta.y == 8.0));
-        assert_eq!(merged.samples, 2);
+        let begin = queue.PopFront().unwrap();
+        assert!(matches!(begin.input, InputEvent::Wheel(event)
+            if event.phase == WheelPhase::kBegan && event.delta.y == 4.0));
+        let update = queue.PopFront().unwrap();
+        assert!(matches!(update.input, InputEvent::Wheel(event)
+            if event.phase == WheelPhase::kChanged && event.delta.y == 4.0));
         assert!(queue.IsEmpty());
+        let deadline = state.pending_wheel_end_deadline().unwrap();
+        assert!(
+            matches!(state.take_due_wheel_end(deadline), Some(Command::Input(InputEvent::Wheel(event)))
+            if event.phase == WheelPhase::kEnded && event.delta == Offset::default())
+        );
         assert_eq!(state.event(&motion(42.0), 2.0).len(), 1);
         assert!(state.event(&motion(42.0), 2.0).is_empty());
 
@@ -600,7 +706,7 @@ mod tests {
         assert_eq!(state.event(&motion(42.0), 2.0).len(), 1);
     }
     #[test]
-    fn wheel_gesture_phases_survive_native_adaptation() {
+    fn wheel_gesture_phases_survive_platform_adaptation() {
         let mut state = InputState::default();
         for (native, expected) in [
             (TouchPhase::Started, WheelPhase::kBegan),
@@ -627,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn native_finger_end_waits_for_momentum_and_never_reapplies_its_delta() {
+    fn finger_end_waits_for_momentum_and_never_reapplies_its_delta() {
         use winit::event::MacOSMouseWheelMetadata;
         let event = |phase, momentum_phase, timestamp_seconds| WindowEvent::MouseWheel {
             device_id: winit::event::DeviceId::dummy(),
@@ -710,7 +816,7 @@ mod tests {
 
         let wheel = |phase, momentum_phase, timestamp_seconds| WheelEvent {
             phase: WheelPhase::kChanged,
-            native: Some(NativeWheelMetadata {
+            native: Some(WheelMetadata {
                 timestamp_seconds,
                 phase,
                 momentum_phase,
@@ -722,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn ime_preedit_preserves_native_byte_selection_and_cancels_on_focus_loss() {
+    fn ime_preedit_preserves_utf8_byte_selection_and_cancels_on_focus_loss() {
         let mut state = InputState::default();
         let commands = state.event(
             &WindowEvent::Ime(Ime::Preedit("你🙂好".into(), Some((3, 7)))),

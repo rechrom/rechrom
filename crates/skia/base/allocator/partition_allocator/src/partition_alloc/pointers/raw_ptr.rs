@@ -236,10 +236,10 @@ impl<T:RawPointee,C:RawPtrConfig<T,P>,const P:u32> raw_ptr<T,C,P>{
 // Source: partition_alloc/pointers/raw_ptr.h:861-866
 // delete/delete[] must use the actual pointee destructor and matching native
 // allocation family, never an assumed Box layout or unknown array cookie.
-pub unsafe trait NativeDelete:RawPointee{
+pub unsafe trait Delete:RawPointee{
  unsafe fn delete(p:*mut Self);unsafe fn delete_array(p:*mut Self);
 }
-impl<T:NativeDelete,C:RawPtrConfig<T,P>,const P:u32> raw_ptr<T,C,P>{
+impl<T:Delete,C:RawPtrConfig<T,P>,const P:u32> raw_ptr<T,C,P>{
  pub unsafe fn ClearAndDelete(&mut self){let p=unsafe{self.extraction_and_reset()};unsafe{T::delete(p)}}
  pub unsafe fn ClearAndDeleteArray(&mut self){let p=unsafe{self.extraction_and_reset()};unsafe{T::delete_array(p)}}
 }
@@ -303,18 +303,18 @@ impl<T:RawPointee,C:RawPtrConfig<T,P>,const P:u32> raw_ptr_const<T,C,P>{
 // Source: partition_alloc/pointers/raw_ptr.h:261-318,340-376
 // Actual native preprocessing generates this input. Its absence is an error,
 // never a host-derived or debug-derived no-op configuration.
-pub(crate) mod native_input{include!(env!("PA_RAW_PTR_NATIVE_CONFIG_RS"));}
+pub(crate) mod input{include!(env!("PA_RAW_PTR_NATIVE_CONFIG_RS"));}
 pub trait SelectBackend<const KIND:u8,const TRAITS:u32>{type Impl:RawPtrBackend;}
 impl<const F:u32> SelectBackend<0,F> for (){type Impl=super::raw_ptr_noop_impl::RawPtrNoOpImpl;}
-// Actual enabled Hookable/Asan selections are emitted into native_input only
+// Actual enabled Hookable/Asan selections are emitted into input only
 // when their corresponding native buildflag is enabled. BRP/counting remain
 // genuinely unimplemented selections rather than successful no-op aliases.
-pub struct NativeConfig;
-unsafe impl<T:RawPointee,const P:u32> RawPtrConfig<T,P> for NativeConfig
-where ():SelectBackend<{backend_tag(resolve_backend(P|T::TYPE_TRAITS,native_input::BUILD))},{P|T::TYPE_TRAITS}>
+pub struct Config;
+unsafe impl<T:RawPointee,const P:u32> RawPtrConfig<T,P> for Config
+where ():SelectBackend<{backend_tag(resolve_backend(P|T::TYPE_TRAITS,input::BUILD))},{P|T::TYPE_TRAITS}>
 {
- type Impl=<() as SelectBackend<{backend_tag(resolve_backend(P|T::TYPE_TRAITS,native_input::BUILD))},{P|T::TYPE_TRAITS}>>::Impl;
- type Tracer=native_input::Tracer;
- const BUILD:Build=native_input::BUILD;
+ type Impl=<() as SelectBackend<{backend_tag(resolve_backend(P|T::TYPE_TRAITS,input::BUILD))},{P|T::TYPE_TRAITS}>>::Impl;
+ type Tracer=input::Tracer;
+ const BUILD:Build=input::BUILD;
 }
-pub type LocationPointerConfig=NativeConfig;
+pub type LocationPointerConfig=Config;

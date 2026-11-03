@@ -88,7 +88,7 @@ use layoutng_style::{
     style::{
         computed_style::{ComputedStyle, ComputedStyleBuilder},
         computed_style_base::IsAtShadowBoundary,
-        computed_style_constants::PseudoId,
+        computed_style_constants::{PseudoId, ScrollbarGutter},
         computed_style_initial_values::ComputedStyleInitialValues,
         default_anchor_data::DefaultAnchorData,
         display_style::DisplayStyle,
@@ -292,6 +292,9 @@ pub(crate) struct ProductionCascadeInputs<'a> {
     pub color_scheme_settings: production_style_builder::ColorSchemeSettings,
     pub system_colors: super::production_style_resolver::ProductionSystemColorContext<'a>,
     pub text_link_text_color: Option<foundation::Color>,
+    pub link_color: Option<foundation::Color>,
+    pub visited_link_color: Option<foundation::Color>,
+    pub active_link_color: Option<foundation::Color>,
     pub is_document_element: bool,
     pub pseudo_id: PseudoId,
     pub originating_style: Option<ComputedStyleHandle>,
@@ -311,7 +314,7 @@ pub(crate) struct ProductionCascadeInputs<'a> {
 /// The two values produced by one source `StyleCascade::Apply` operation.
 /// Chromium stores custom-property data inside `ComputedStyle`; this port
 /// keeps that data in the document-owned side table, so it must cross the
-/// adapter boundary beside the native style without replaying the cascade.
+/// adapter boundary beside the computed style style without replaying the cascade.
 pub(crate) struct ProductionCascadeOutput {
     pub style: ComputedStyleHandle,
     pub custom_properties: Rc<CustomProperties>,
@@ -342,14 +345,47 @@ impl std::ops::Deref for ProductionCascadeOutput {
     }
 }
 
+// Source: core/css/css_to_length_conversion_data.h:157-184,404-411.
+// Keep the production converter's actual viewport-unit environment in the
+// resolver state. StyleCascade mutates this copy after resolving the root
+// scrollbar properties; subsequent longhand conversion must not keep reading
+// the document-wide, unsubtracted media environment.
 #[derive(Default)]
-pub(crate) struct ProductionLengthData;
+pub(crate) struct ProductionLengthData {
+    media: MediaValuesCachedData,
+}
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ProductionContainerSizes {
+    width: Option<f64>,
+    height: Option<f64>,
+}
+fn InstallContainerConversionContext(
+    mut media: MediaValuesCachedData,
+    containers: ProductionContainerSizes,
+    writing_mode: WritingMode,
+) -> MediaValuesCachedData {
+    media.style_container_width = containers.width;
+    media.style_container_height = containers.height;
+    media.style_writing_mode = Some(writing_mode);
+    media
+}
 impl ResolverLengthConversionData<ProductionStyleCascadeBackend<'_>> for ProductionLengthData {
     fn SetFontSizes(&mut self, _: ()) {}
     fn SetZoom(&mut self, _: f32) {}
     fn SetLineHeightSize(&mut self, _: ()) {}
     fn SetAnchorData(&mut self, _: ()) {}
-    fn SubtractScrollbars(&mut self, _: &gfx::Size) {}
+    fn SubtractScrollbars(&mut self, scrollbars: &gfx::Size) {
+        let width = f64::from(scrollbars.width());
+        let height = f64::from(scrollbars.height());
+        self.media.viewport_width -= width;
+        self.media.viewport_height -= height;
+        self.media.large_viewport_width -= width;
+        self.media.large_viewport_height -= height;
+        self.media.small_viewport_width -= width;
+        self.media.small_viewport_height -= height;
+        self.media.dynamic_viewport_width -= width;
+        self.media.dynamic_viewport_height -= height;
+    }
 }
 #[derive(Default)]
 pub(crate) struct ProductionFontBuilder;
@@ -599,16 +635,40 @@ struct ProductionCascadeExpansionBackend<'a> {
 impl CascadeExpansionBackend for ProductionCascadeExpansionBackend<'_> {
     type Dispatch = ProductionCSSValueDispatch;
     type Document = ();
-    fn Properties(&self, set: &dyn MatchedPropertySet) -> Vec<CSSPropertyValue<Self::Dispatch>> {
+    fn PropertyCount(&self, set: &dyn MatchedPropertySet) -> usize {
         let Some(set) = set
             .AsAny()
             .downcast_ref::<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>()
         else {
-            return Vec::new();
+            return 0;
         };
         match set {
-            CSSPropertyValueSetRuleHandle::Immutable(set) => set.Properties().to_vec(),
-            CSSPropertyValueSetRuleHandle::Mutable(set) => set.borrow().Properties().to_vec(),
+            CSSPropertyValueSetRuleHandle::Immutable(set) => set.Properties().len(),
+            CSSPropertyValueSetRuleHandle::Mutable(set) => set.borrow().Properties().len(),
+        }
+    }
+    fn ForEachProperty(
+        &self,
+        set: &dyn MatchedPropertySet,
+        visitor: &mut dyn FnMut(usize, &CSSPropertyValue<Self::Dispatch>),
+    ) {
+        let Some(set) = set
+            .AsAny()
+            .downcast_ref::<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>()
+        else {
+            return;
+        };
+        match set {
+            CSSPropertyValueSetRuleHandle::Immutable(set) => {
+                for (index, property) in set.Properties().iter().enumerate() {
+                    visitor(index, property);
+                }
+            }
+            CSSPropertyValueSetRuleHandle::Mutable(set) => {
+                for (index, property) in set.borrow().Properties().iter().enumerate() {
+                    visitor(index, property);
+                }
+            }
         }
     }
     fn CustomPropertyMetadata(&self, name: &AtomicString, _: &()) -> CSSProperty {
@@ -643,12 +703,16 @@ pub(crate) struct ProductionStyleCascadeBackend<'a> {
     color_scheme_settings: production_style_builder::ColorSchemeSettings,
     system_colors: super::production_style_resolver::ProductionSystemColorContext<'a>,
     text_link_text_color: Option<foundation::Color>,
+    link_color: Option<foundation::Color>,
+    visited_link_color: Option<foundation::Color>,
+    active_link_color: Option<foundation::Color>,
     initial: ComputedStyleHandle,
     language: &'static AtomicString,
     locale: Option<Arc<LayoutLocale>>,
     transparent_image: OnceCell<Rc<ResolverValue<Self>>>,
     document_element: OnceCell<Rc<ProductionElement>>,
     document_element_style: OnceCell<ComputedStyleHandle>,
+    is_document_element: Cell<bool>,
     custom_properties: RefCell<CustomProperties>,
     referenced_custom_properties: RefCell<HashSet<std::string::String>>,
     local_custom_properties: RefCell<HashSet<std::string::String>>,
@@ -669,6 +733,9 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         color_scheme_settings: production_style_builder::ColorSchemeSettings,
         system_colors: super::production_style_resolver::ProductionSystemColorContext<'a>,
         text_link_text_color: Option<foundation::Color>,
+        link_color: Option<foundation::Color>,
+        visited_link_color: Option<foundation::Color>,
+        active_link_color: Option<foundation::Color>,
         custom_properties: Option<&'a CustomProperties>,
         parent_custom_properties: Option<&'a CustomProperties>,
         substitution_context: SubstitutionContext<'a>,
@@ -719,6 +786,9 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             color_scheme_settings,
             system_colors,
             text_link_text_color,
+            link_color,
+            visited_link_color,
+            active_link_color,
             initial: Persistent::from_ptr(
                 ComputedStyle::GetInitialStyleSingleton() as *mut ComputedStyle
             ),
@@ -727,6 +797,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             transparent_image: OnceCell::new(),
             document_element: OnceCell::new(),
             document_element_style: OnceCell::new(),
+            is_document_element: Cell::new(false),
             custom_properties: RefCell::new(custom_properties),
             referenced_custom_properties: RefCell::new(HashSet::new()),
             local_custom_properties: RefCell::new(HashSet::new()),
@@ -739,6 +810,30 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             font_metrics,
             fallback: RefCell::new(Vec::new()),
         }
+    }
+
+    // CSSToLengthConversionData::ViewportSize(LayoutView) observes the root
+    // style's retained unconditional scrollbar size for descendant style
+    // resolution. The root cascade itself starts from the raw viewport and
+    // performs the source-defined subtraction in ApplyViewportUnitAffecting.
+    fn LengthConversionMedia(&self) -> MediaValuesCachedData {
+        let mut media = self.media.clone();
+        if !self.is_document_element.get() {
+            if let Some(root) = self.document_element_style.get() {
+                let scrollbars = Self::style(root).UnconditionalScrollbarSize();
+                let width = f64::from(scrollbars.width());
+                let height = f64::from(scrollbars.height());
+                media.viewport_width -= width;
+                media.viewport_height -= height;
+                media.large_viewport_width -= width;
+                media.large_viewport_height -= height;
+                media.small_viewport_width -= width;
+                media.small_viewport_height -= height;
+                media.dynamic_viewport_width -= width;
+                media.dynamic_viewport_height -= height;
+            }
+        }
+        media
     }
     fn style(handle: &ComputedStyleHandle) -> &ComputedStyle {
         unsafe { &*handle.Get() }
@@ -939,7 +1034,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
     // its PropertyHandle into CSSInterpolationEnvironment. The production
     // adapter retains the same handle beside the parser-owned sampled value,
     // resolves substitutions through this StyleCascade, then writes the
-    // physical property through the canonical native style builder.
+    // physical property through the canonical computed style style builder.
     fn ApplySampledInterpolation(
         &self,
         interpolations: &ProductionActiveInterpolations,
@@ -1011,6 +1106,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
     fn math_length_resolver<'s>(
         &'s self,
         state: &StyleResolverState<'_, Self>,
+        media: &'s MediaValuesCachedData,
     ) -> impl CSSMathLengthResolver + 's {
         let font = state.StyleBuilder().GetFontDescription().ComputedSize();
         // cpp: style_cascade.cc:2701-2702 uses Unzoomed(). The source length
@@ -1021,7 +1117,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             font,
             self.root_font_size,
             1.0,
-            &self.media,
+            media,
             Some(production_style_builder::CurrentComputedLineHeight(
                 &state.StyleBuilder(),
             )),
@@ -1093,6 +1189,30 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         ]) {
             flags |= 1 << 5;
         }
+        if uses_any(&[
+            UnitType::kContainerWidth,
+            UnitType::kContainerHeight,
+            UnitType::kContainerInlineSize,
+            UnitType::kContainerBlockSize,
+            UnitType::kContainerMin,
+            UnitType::kContainerMax,
+        ]) {
+            flags |= 1 << 6;
+        }
+        if uses_any(&[
+            UnitType::kViewportInlineSize,
+            UnitType::kViewportBlockSize,
+            UnitType::kSmallViewportInlineSize,
+            UnitType::kSmallViewportBlockSize,
+            UnitType::kLargeViewportInlineSize,
+            UnitType::kLargeViewportBlockSize,
+            UnitType::kDynamicViewportInlineSize,
+            UnitType::kDynamicViewportBlockSize,
+            UnitType::kContainerInlineSize,
+            UnitType::kContainerBlockSize,
+        ]) {
+            flags |= 1 << 8;
+        }
         flags
     }
 
@@ -1105,7 +1225,8 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         let result = if let Some(value) = Self::primitive_literal(value) {
             Some(value.DoubleValue() * ConversionToCanonicalUnitsScaleFactor(value.GetType()))
         } else if let Some(value) = Self::primitive_math_value(value) {
-            let mut resolver = self.math_length_resolver(state);
+            let media = state.CssToLengthConversionData().media.clone();
+            let mut resolver = self.math_length_resolver(state, &media);
             value.ComputeValue(&mut resolver, None).ok()
         } else {
             None
@@ -1255,7 +1376,7 @@ pub(crate) fn ApplyMatchResult(
     ApplyMatchResultWithFilter(inputs, CascadeFilter::new())
 }
 
-/// StyleResolver's MISU branch uses the same native property application as
+/// StyleResolver's MISU branch uses the same computed style property application as
 /// StyleCascade, without matching/cascading rules again. The caller has already
 /// checked the source eligibility guards and owns the previous style builder.
 pub(crate) fn ApplyInlineProperties(
@@ -1270,6 +1391,9 @@ pub(crate) fn ApplyInlineProperties(
         inputs.color_scheme_settings,
         inputs.system_colors,
         inputs.text_link_text_color,
+        inputs.link_color,
+        inputs.visited_link_color,
+        inputs.active_link_color,
         inputs.custom_properties,
         inputs.parent_custom_properties,
         inputs.substitution_context,
@@ -1282,6 +1406,7 @@ pub(crate) fn ApplyInlineProperties(
     if let Some(root) = inputs.root_style.clone() {
         let _ = backend.document_element_style.set(root);
     }
+    backend.is_document_element.set(inputs.is_document_element);
     let element = Rc::new(ProductionElement {
         node: inputs.subject_node,
         parent: inputs.parent.clone(),
@@ -1365,6 +1490,9 @@ pub(crate) fn ApplyMatchResultWithFilter(
         inputs.color_scheme_settings,
         inputs.system_colors,
         inputs.text_link_text_color,
+        inputs.link_color,
+        inputs.visited_link_color,
+        inputs.active_link_color,
         inputs.custom_properties,
         inputs.parent_custom_properties,
         inputs.substitution_context,
@@ -1378,6 +1506,7 @@ pub(crate) fn ApplyMatchResultWithFilter(
     if let Some(root_style) = inputs.root_style.clone() {
         let _ = backend.document_element_style.set(root_style);
     }
+    backend.is_document_element.set(inputs.is_document_element);
     // cpp: style_resolver.cc:1796-1802. The root element has no DOM parent,
     // but cascade inheritance and relative-value resolution use the translated
     // InitialStyleForElement result as its parent.
@@ -1718,8 +1847,8 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
     type LengthConversionData = ProductionLengthData;
     type FontSizes = ();
     type LineHeightSize = ();
-    type ViewportSize = ();
-    type ContainerSizes = ();
+    type ViewportSize = MediaValuesCachedData;
+    type ContainerSizes = ProductionContainerSizes;
     type AnchorData = ();
     fn DefaultStyleRequest(&self) -> Self::StyleRequest {
         ProductionRequest::default()
@@ -1843,7 +1972,19 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
         false
     }
     fn FlatTreeParentElement(&self, element: &Self::Element) -> Option<Rc<Self::Element>> {
-        None
+        let runtime = self.container_runtime?;
+        let node = element.node?;
+        let context = if element.pseudo_id == PseudoId::kPseudoIdNone {
+            runtime.FlatTreeParentElement(node)?
+        } else {
+            node
+        };
+        Some(Rc::new(ProductionElement {
+            node: Some(context),
+            parent: None,
+            root: element.root.clone(),
+            pseudo_id: PseudoId::kPseudoIdNone,
+        }))
     }
     fn LayoutObjectIsNeeded(&self, element: &Self::Element, display: DisplayStyle<'_>) -> bool {
         true
@@ -1864,10 +2005,10 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
         self.document_element_style.get().cloned()
     }
     fn DocumentViewportSize(&self, document: &Self::Document) -> Self::ViewportSize {
-        ()
+        self.LengthConversionMedia()
     }
     fn ViewportSizeFromDocumentLayoutView(&self, document: &Self::Document) -> Self::ViewportSize {
-        ()
+        self.LengthConversionMedia()
     }
     fn NewAnimationUpdate(&self) -> Self::AnimationUpdate {
         ()
@@ -1926,7 +2067,9 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
         &self,
         element: &Self::Element,
     ) -> Self::LengthConversionData {
-        ProductionLengthData
+        ProductionLengthData {
+            media: self.LengthConversionMedia(),
+        }
     }
     fn NewFontSizes(
         &self,
@@ -1943,7 +2086,14 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
         ()
     }
     fn NewContainerSizes(&self, element: Option<Rc<Self::Element>>) -> Self::ContainerSizes {
-        ()
+        let Some((runtime, node)) = self
+            .container_runtime
+            .zip(element.and_then(|element| element.node))
+        else {
+            return ProductionContainerSizes::default();
+        };
+        let (width, height) = runtime.ContainerUnitSizes(node);
+        ProductionContainerSizes { width, height }
     }
     fn NewAnchorData(
         &self,
@@ -1965,7 +2115,13 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
         flags: Rc<Cell<u32>>,
         element: Rc<Self::Element>,
     ) -> Self::LengthConversionData {
-        ProductionLengthData
+        ProductionLengthData {
+            media: InstallContainerConversionContext(
+                viewport,
+                containers,
+                builder.GetWritingMode(),
+            ),
+        }
     }
     fn NewUnzoomedLengthConversionData(
         &self,
@@ -1979,7 +2135,9 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
         flags: Rc<Cell<u32>>,
         element: Rc<Self::Element>,
     ) -> Self::LengthConversionData {
-        ProductionLengthData
+        ProductionLengthData {
+            media: InstallContainerConversionContext(viewport, containers, writing_mode),
+        }
     }
     fn ComputePositionAreaOffsetsForLayout(
         &self,
@@ -2078,7 +2236,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
     type ActiveInterpolationsMap = ProductionActiveInterpolationsMap;
     type ActiveInterpolations = ProductionActiveInterpolations;
     type PropertyHandle = CSSPropertyName;
-    type ScrollbarGutter = ();
+    type ScrollbarGutter = ScrollbarGutter;
     fn VariableText(&self, data: &Self::VariableData) -> String {
         data.Serialize()
     }
@@ -2341,7 +2499,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
     ) -> bool {
         // cpp: cascade_resolver.cc:20-28. Animation-tainted variables may be
         // composed through other custom properties, but must not feed an
-        // animation-affecting native property. `current` is the production
+        // animation-affecting computed style property. `current` is the production
         // adapter's equivalent of CascadeResolver::CurrentProperty(): the
         // outer longhand lock is restored after a re-entrant custom-property
         // interpolation has populated the retained variable owner.
@@ -3206,7 +3364,8 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         state: &StyleResolverState<'_, Self>,
     ) -> Length {
         state.AddLengthConversionFlags(Self::viewport_length_flags(value));
-        let mut resolver = self.math_length_resolver(state);
+        let media = state.CssToLengthConversionData().media.clone();
+        let mut resolver = self.math_length_resolver(state, &media);
         let result = if let Some(value) = Self::primitive_literal(value) {
             if value.GetType() == UnitType::kPercentage {
                 Some(Length::Percent(CSSValueClampingUtils::ClampLength(
@@ -3492,7 +3651,8 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         properties: &MatchedProperties,
         document: &Self::Document,
         index: usize,
-    ) -> Vec<(CascadePriority, CSSPropertyName)> {
+        visitor: &mut dyn FnMut(CascadePriority, CSSPropertyName),
+    ) {
         if properties
             .properties
             .AsAny()
@@ -3500,25 +3660,17 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
             .is_none()
         {
             self.unsupported("property-value-set-type");
-            return Vec::new();
+            return;
         }
-        {
-            let out = RefCell::new(Vec::new());
-            cascade_expansion::ExpandCascade(
-                properties,
-                document,
-                index,
-                &ProductionCascadeExpansionBackend {
-                    property_registry: self.property_registry,
-                },
-                |priority, name| {
-                    out.borrow_mut()
-                        .push((priority, CSSPropertyName::custom(name.clone())))
-                },
-                |priority, id| out.borrow_mut().push((priority, CSSPropertyName::new(id))),
-            );
-            out.into_inner()
-        }
+        cascade_expansion::ExpandCascade(
+            properties,
+            document,
+            index,
+            &ProductionCascadeExpansionBackend {
+                property_registry: self.property_registry,
+            },
+            visitor,
+        );
     }
     fn PropertyValueAt(
         &self,
@@ -3556,7 +3708,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
     ) -> Vec<(CSSPropertyName, Rc<Self::ActiveInterpolations>)> {
         map.entries.clone()
     }
-    fn NativePropertyHandle(&self, property: &CSSProperty) -> Self::PropertyHandle {
+    fn CSSPropertyHandle(&self, property: &CSSProperty) -> Self::PropertyHandle {
         property.GetCSSPropertyName()
     }
     fn CustomPropertyHandle(&self, name: &AtomicString) -> Self::PropertyHandle {
@@ -3644,7 +3796,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
             let parent = state.ParentStyle();
             let parent = parent.as_ref().map(|p| Self::style(p));
             // cpp: style_resolver_state.cc:451-469 ResolveLightDarkPair.
-            // Production longhand application is the native owner below the
+            // Production longhand application is the computed style owner below the
             // translated cascade, so select the retained pair only after the
             // cascade-affecting color-scheme pass has established this
             // element's UsedColorScheme.
@@ -3691,13 +3843,30 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                         let builder = state.StyleBuilder();
                         builder.UsedColorScheme()
                     };
-                    if let Some(color) =
-                        super::production_style_resolver::ResolveProductionSystemColor(
-                            &unresolved,
-                            used_color_scheme,
-                            self.system_colors,
-                        )
-                    {
+                    // HTMLBodyElement's legacy link attributes override only
+                    // Blink's internal UA keywords. Standard system colors
+                    // such as LinkText continue through LayoutTheme.
+                    let body_color = match identifier.0 {
+                        CSSValueID::kWebkitLink
+                            if property.PropertyID() == CSSPropertyID::kInternalVisitedColor =>
+                        {
+                            self.visited_link_color.as_ref()
+                        }
+                        CSSValueID::kWebkitLink => self.link_color.as_ref(),
+                        CSSValueID::kWebkitActivelink => self.active_link_color.as_ref(),
+                        _ => None,
+                    };
+                    let resolved = body_color
+                        .cloned()
+                        .map(|color| StyleColor::from_color_and_keyword(color, system_keyword))
+                        .or_else(|| {
+                            super::production_style_resolver::ResolveProductionSystemColor(
+                                &unresolved,
+                                used_color_scheme,
+                                self.system_colors,
+                            )
+                        });
+                    if let Some(color) = resolved {
                         let mut builder = state.StyleBuilderMut();
                         if property.PropertyID() == CSSPropertyID::kColor {
                             builder.SetColor(&color);
@@ -3792,6 +3961,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                     });
                 return;
             }
+            let conversion_media = state.CssToLengthConversionData().media.clone();
             let result = if let Some(images) = self.image_resolver {
                 production_style_builder::ApplyWithImageResolverColorSchemeAndRootStyle(
                     property.PropertyID(),
@@ -3799,7 +3969,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                     parent,
                     value,
                     self.root_font_size,
-                    &self.media,
+                    &conversion_media,
                     images,
                     self.color_scheme_settings,
                     self.document_element_style
@@ -3818,7 +3988,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                     parent,
                     value,
                     self.root_font_size,
-                    &self.media,
+                    &conversion_media,
                     self.color_scheme_settings,
                     self.document_element_style
                         .get()
@@ -3891,13 +4061,13 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         false
     }
     fn SmallerViewportUnitsEnabled(&self) -> bool {
-        false
+        foundation::RuntimeEnabledFeatures::SmallerViewportUnitsEnabled()
     }
     fn BuilderScrollbarGutter(
         &self,
         builder: &layoutng_style::style::computed_style::ComputedStyleBuilder,
     ) -> Self::ScrollbarGutter {
-        ()
+        ScrollbarGutter::from_bits(builder.ScrollbarGutter() as i32)
     }
     fn ComputeScrollbarWidthsForViewportUnits(
         &self,
@@ -3908,13 +4078,31 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         width: EScrollbarWidth,
         writing_mode: WritingMode,
     ) -> gfx::Size {
-        // cpp: paint_layer_scrollable_area.cc:1698-1735. Rechrom's current
-        // browser host configures overlay scrollbars, so the source algorithm
-        // returns an empty size before consulting overflow/gutter/thickness.
-        // The style package has no non-overlay viewport input; such a host must
-        // add that typed value at the StyleEngine boundary before this branch
-        // can produce a non-zero subtraction.
-        gfx::Size::default()
+        use layoutng::internal::{
+            layout_input_types::ScrollbarThemeMetrics,
+            layout_scrollable_area::{
+                ComputeScrollbarWidthsForViewportUnitsFromInputs, StyleBasedScrollbarData,
+            },
+        };
+
+        let theme = ScrollbarThemeMetrics {
+            auto_thickness: self.media.scrollbar_theme_auto_thickness,
+            thin_thickness: self.media.scrollbar_theme_thin_thickness,
+            uses_overlay_scrollbars: self.media.scrollbar_theme_uses_overlay_scrollbars,
+            ..Default::default()
+        };
+        ComputeScrollbarWidthsForViewportUnitsFromInputs(
+            StyleBasedScrollbarData {
+                overflow_x,
+                overflow_y,
+                gutter,
+                width,
+                writing_mode,
+            },
+            self.media.visual_viewport_supplies_scrollbars,
+            self.media.hide_scrollbars,
+            &theme,
+        )
     }
     fn BorderImageLonghands(&self) -> &[CSSPropertyID] {
         &[
@@ -4035,6 +4223,9 @@ mod tests {
             system_colors:
                 super::super::production_style_resolver::ProductionSystemColorContext::default(),
             text_link_text_color: None,
+            link_color: None,
+            visited_link_color: None,
+            active_link_color: None,
             is_document_element: false,
             pseudo_id: PseudoId::kPseudoIdNone,
             originating_style: None,
@@ -4095,7 +4286,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_apply_writes_ordinary_properties_to_native_style() {
+    fn translated_apply_writes_ordinary_properties_to_computed_style_style() {
         let _heap = foundation::LayoutHeapScope::new();
         let media = media();
         let initial = super::super::production_style_resolver::InitialStyleForDocument(
@@ -4301,7 +4492,7 @@ mod tests {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         let stats = engine.TranslatedRuleShadowStats();
@@ -4564,7 +4755,7 @@ mod tests {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         let stats = engine.TranslatedRuleShadowStats();
@@ -4658,7 +4849,7 @@ mod tests {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         let stats = engine.TranslatedRuleShadowStats();
@@ -4746,7 +4937,7 @@ mod tests {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
         let stats = engine.TranslatedRuleShadowStats();
@@ -4770,6 +4961,9 @@ mod tests {
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
             super::super::production_style_resolver::ProductionSystemColorContext::default(),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -4850,7 +5044,7 @@ mod tests {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         };
 
@@ -4903,6 +5097,9 @@ mod tests {
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
             super::super::production_style_resolver::ProductionSystemColorContext::default(),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -4980,6 +5177,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
             SubstitutionContext::default(),
             None,
             None,
@@ -5054,6 +5254,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
             SubstitutionContext::default(),
             None,
             None,
@@ -5094,6 +5297,9 @@ mod tests {
             16.0,
             production_style_builder::ColorSchemeSettings::default(),
             super::super::production_style_resolver::ProductionSystemColorContext::default(),
+            None,
+            None,
+            None,
             None,
             None,
             None,

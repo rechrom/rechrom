@@ -91,7 +91,7 @@ pub struct Extent {
 }
 
 // Required dependency on core/css/robin_hood_map.h. No replacement hashing
-// algorithm is supplied here: Insert must retain its fallible native contract.
+// algorithm is supplied here: Insert must retain its fallible computed style contract.
 pub trait RuleBucketTable: Sized {
     fn New(initial_capacity: usize) -> Self;
     fn Find(&self, key: &AtomicString) -> Option<&Extent>;
@@ -3669,7 +3669,7 @@ mod tests {
                         value
                     })
                     .collect();
-                // Native bucket numbers are dense and every bucket is nonempty.
+                // Canonical bucket numbers are dense and every bucket is nonempty.
                 let used: Vec<_> = (0..3).filter(|bucket| numbers.contains(bucket)).collect();
                 for number in &mut numbers {
                     *number = used.iter().position(|bucket| bucket == number).unwrap() as u32;

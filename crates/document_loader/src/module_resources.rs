@@ -62,6 +62,7 @@ pub struct ModuleResources {
     roots: RefCell<HashMap<u64, ModuleKey>>,
     aliases: RefCell<HashMap<String, String>>,
     import_map: RefCell<HashMap<Vec<u8>, Vec<u8>>>,
+    fetch_trees: RefCell<HashSet<ModuleKey>>,
 }
 impl ModuleResources {
     pub fn new(loader: Rc<RefCell<dyn URLLoader>>) -> Self {
@@ -77,6 +78,7 @@ impl ModuleResources {
             roots: RefCell::new(HashMap::new()),
             aliases: RefCell::new(HashMap::new()),
             import_map: RefCell::new(HashMap::new()),
+            fetch_trees: RefCell::new(HashSet::new()),
         }
     }
     fn URLKey(&self, url: &str) -> ModuleKey {
@@ -88,14 +90,38 @@ impl ModuleResources {
                 .unwrap_or_else(|| url.to_owned()),
         )
     }
-    // cpp: browser/browser.cc:790-798
-    /// Also used by modulepreload. Compilation and dependent fetches occur in Pump.
+    // cpp: third_party/blink/renderer/core/loader/preload_helper.cc:771-780
+    /// Modulepreload fetches and compiles one module. It fills the module map,
+    /// but does not become a parser module tree until an actual script asks for it.
     pub fn StartModuleLoad(&self, url: &str, referrer: &str) {
+        self.StartModuleFetch(url, referrer, false);
+    }
+    fn StartModuleTree(&self, url: &str, referrer: &str) {
+        self.StartModuleFetch(url, referrer, true);
+    }
+    fn StartModuleFetch(&self, url: &str, referrer: &str, fetch_tree: bool) {
         if url.is_empty() {
             return;
         }
         let key = self.URLKey(url);
+        let newly_requested_tree = fetch_tree && self.fetch_trees.borrow_mut().insert(key.clone());
+        let prepared = if newly_requested_tree {
+            let entries = self.entries.borrow();
+            match entries.get(&key) {
+                Some(ModuleState::Prepared(module)) => {
+                    Some((module.source.url.clone(), module.dependencies.clone()))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         if self.entries.borrow().contains_key(&key) {
+            if let Some((module_url, dependencies)) = prepared {
+                for dependency in dependencies {
+                    self.StartModuleTree(&dependency, &module_url);
+                }
+            }
             return;
         }
         let pending = self.resources.Start(URLRequest {
@@ -103,6 +129,7 @@ impl ModuleResources {
             referrer: referrer.to_owned(),
             destination: RequestDestination::kScript,
             defer: url_loader::RequestDefer::Lazy,
+            script_type: url_loader::ScriptType::Module,
             ..Default::default()
         });
         self.entries
@@ -114,7 +141,10 @@ impl ModuleResources {
         if self.roots.borrow().contains_key(&id) {
             return;
         }
-        self.StartModuleLoad(url, referrer);
+        // cpp: third_party/blink/renderer/core/script/script_loader.cc:1202
+        // Parser module scripts use FetchTree. If modulepreload already prepared
+        // the root, StartModuleTree activates its recorded descendants in place.
+        self.StartModuleTree(url, referrer);
         self.roots.borrow_mut().insert(id, self.URLKey(url));
     }
     /// Inline roots retain distinct engine records and a captured base URL.
@@ -132,6 +162,7 @@ impl ModuleResources {
             },
         );
         self.work.borrow_mut().push_back(key.clone());
+        self.fetch_trees.borrow_mut().insert(key.clone());
         self.roots.borrow_mut().insert(id, key);
     }
     /// The engine supplies the root's source URL, while inline imports resolve
@@ -172,6 +203,7 @@ impl ModuleResources {
         url: String,
         source: String,
         base_url: String,
+        fetch_tree: bool,
         runtime: &mut dyn JavaScriptRuntime,
         realm: &JavaScriptRealm,
     ) -> ModuleState {
@@ -191,7 +223,7 @@ impl ModuleResources {
             Ok(compilation) => compilation,
             Err(error) => return ModuleState::Failed(ModuleLoadError::Compilation(error)),
         };
-        self.PrepareCompilation(url, source, base_url, &import_map, compilation)
+        self.PrepareCompilation(url, source, base_url, &import_map, compilation, fetch_tree)
     }
     fn PrepareCompilation(
         &self,
@@ -200,6 +232,7 @@ impl ModuleResources {
         base_url: String,
         import_map: &HashMap<Vec<u8>, Vec<u8>>,
         compilation: JavaScriptModuleCompilation,
+        fetch_tree: bool,
     ) -> ModuleState {
         let mut dependencies = Vec::new();
         let mut resolved_imports = HashMap::new();
@@ -216,7 +249,13 @@ impl ModuleResources {
             };
             resolved_imports.insert(request, dependency.clone());
             if !dependencies.contains(&dependency) {
-                self.StartModuleLoad(&dependency, &url);
+                // cpp: third_party/blink/renderer/core/script/module/
+                // module_tree_linker.cc:376-428 FetchDescendants.
+                // Modulepreload's FetchSingle records this edge without
+                // recursively creating network/compile work.
+                if fetch_tree {
+                    self.StartModuleTree(&dependency, &url);
+                }
                 dependencies.push(dependency);
             }
         }
@@ -250,6 +289,7 @@ impl ModuleResources {
             self.entries
                 .borrow_mut()
                 .insert(key.clone(), ModuleState::Compiling);
+            let fetch_tree = self.fetch_trees.borrow().contains(&key);
             let next = match state {
                 ModuleState::Fetching(mut pending) => {
                     if !pending.Poll() {
@@ -294,9 +334,14 @@ impl ModuleResources {
                                     .or_insert(requested.clone());
                             }
                             match DecodeText(&response) {
-                                Ok(source) => {
-                                    self.Compile(url.clone(), source, url, runtime, realm)
-                                }
+                                Ok(source) => self.Compile(
+                                    url.clone(),
+                                    source,
+                                    url,
+                                    fetch_tree,
+                                    runtime,
+                                    realm,
+                                ),
                                 Err(error) => {
                                     ModuleState::Failed(Self::ResourceError(requested, error))
                                 }
@@ -310,7 +355,7 @@ impl ModuleResources {
                     base_url,
                 } => {
                     progressed += 1;
-                    self.Compile(url, source, base_url, runtime, realm)
+                    self.Compile(url, source, base_url, fetch_tree, runtime, realm)
                 }
                 ModuleState::BackgroundCompiling {
                     mut job,
@@ -332,7 +377,14 @@ impl ModuleResources {
                     }
                     JavaScriptModuleCompilationPoll::Ready(Ok(compilation)) => {
                         progressed += 1;
-                        self.PrepareCompilation(url, source, base_url, &import_map, compilation)
+                        self.PrepareCompilation(
+                            url,
+                            source,
+                            base_url,
+                            &import_map,
+                            compilation,
+                            fetch_tree,
+                        )
                     }
                 },
                 terminal => terminal,
@@ -403,6 +455,20 @@ impl ModuleResources {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn ModulePreparedForTesting(&self, url: &str) -> bool {
+        matches!(
+            self.entries.borrow().get(&self.URLKey(url)),
+            Some(ModuleState::Prepared(_))
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ModuleEntryCountForTesting(&self) -> usize {
+        self.entries.borrow().len()
+    }
+
     // cpp: browser/browser.cc:1558-1573
     pub fn ProcessImportMap(&self, source: &str, base_url: &str) -> Result<(), &'static str> {
         let entries = crate::import_map::JSONCursor::new(source.as_bytes()).ParseImportMap()?;
@@ -504,7 +570,9 @@ impl JavaScriptModuleResolver for ModuleResources {
         let Some(url) = self.ResolveSpecifier(specifier, referrer)? else {
             return Ok(None);
         };
-        self.StartModuleLoad(&url, referrer);
+        // cpp: third_party/blink/renderer/core/script/module/
+        // dynamic_module_resolver.cc:347 uses Modulator::FetchTree.
+        self.StartModuleTree(&url, referrer);
         Ok(Some(url))
     }
 

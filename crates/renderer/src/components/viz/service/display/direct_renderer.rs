@@ -20,8 +20,8 @@ use std::{
     io,
 };
 use viz::{
-    common::quads::aggregated_render_pass::{NativeDrawQuad, NativeSharedQuadState},
-    native::{AggregatedRenderPass, VizOutput},
+    adapter::{AggregatedRenderPass, VizOutput},
+    common::quads::aggregated_render_pass::{DrawQuad, SharedQuadState},
 };
 
 // Source: components/viz/service/display/direct_renderer.h:211-223,276-324.
@@ -355,7 +355,7 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         &self,
         input: &VizOutput,
         pass: &AggregatedRenderPass,
-        quad: &NativeDrawQuad,
+        quad: &DrawQuad,
         scissor: Rect,
     ) -> bool {
         if scissor.IsEmpty() {
@@ -373,7 +373,7 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
     pub fn SetScissorStateForQuad(
         &mut self,
         pass: &AggregatedRenderPass,
-        quad: &NativeDrawQuad,
+        quad: &DrawQuad,
         scissor: Rect,
         use_scissor: bool,
     ) {
@@ -805,14 +805,14 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
 }
 // Source: components/viz/service/display/direct_renderer.cc:1279-1285.
 // C++ static geometry helper; no access to the manager or backend storage.
-pub fn ShouldApplyRoundedCorner(quad: &NativeDrawQuad, shared: &NativeSharedQuadState) -> bool {
+pub fn ShouldApplyRoundedCorner(quad: &DrawQuad, shared: &SharedQuadState) -> bool {
     let target = MathUtil::MapClippedRect(
         &shared.quad_to_target_transform,
         RectF::from(quad.geometry.visible_rect),
     );
     crate::components::viz::common::viz_utils::QuadRoundedCornersBoundsIntersects(shared, target)
 }
-fn shared<'a>(pass: &'a AggregatedRenderPass, quad: &NativeDrawQuad) -> &'a NativeSharedQuadState {
+fn shared<'a>(pass: &'a AggregatedRenderPass, quad: &DrawQuad) -> &'a SharedQuadState {
     pass.TrySharedQuadState(
         quad.geometry
             .shared_quad_state
@@ -820,7 +820,7 @@ fn shared<'a>(pass: &'a AggregatedRenderPass, quad: &NativeDrawQuad) -> &'a Nati
     )
     .expect("validated shared state")
 }
-fn expanded_rect(input: &VizOutput, quad: &NativeDrawQuad) -> Rect {
+fn expanded_rect(input: &VizOutput, quad: &DrawQuad) -> Rect {
     let QuadMaterial::CompositorRenderPass {
         render_pass_id,
         filters_scale,
@@ -863,7 +863,7 @@ struct PolygonRenderer<'a, B> {
     result: io::Result<()>,
 }
 impl<B: DirectRendererBackend> PolygonDrawBackend for PolygonRenderer<'_, B> {
-    fn polygon_transform(&self, index: usize) -> &viz::native::NativeTransform {
+    fn polygon_transform(&self, index: usize) -> &viz::adapter::Transform {
         &shared(self.pass, &self.pass.quad_list[index]).quad_to_target_transform
     }
     fn do_draw_polygon(&mut self, item: &DrawPolygon, scissor: Rect, clipped: bool) {

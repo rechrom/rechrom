@@ -24,7 +24,7 @@ impl DOM {
         self.InvalidateLayoutGeometry();
     }
 
-    /// Mark native geometry stale while retaining the resident LayoutObject
+    /// Mark source geometry stale while retaining the resident LayoutObject
     /// tree. ConstraintSpace changes invalidate the root LayoutResult by
     /// themselves; rebuilding every DOM input is unnecessary when topology is
     /// unchanged.
@@ -57,7 +57,7 @@ impl DOM {
     }
 
     /// Return whether the DOM node exists. Updating an offset does not change
-    /// style impact; the Page batches its native scroll synchronization.
+    /// style impact; the Page batches its source scroll synchronization.
     pub fn SetScrollOffset(&mut self, node_id: u64, offset: Offset) -> bool {
         let Some(index) = self.GetDocument().FindNodeById(node_id) else {
             return false;
@@ -87,8 +87,6 @@ impl DOM {
     }
 
     pub fn NeedsStyleSheetParsing(&self, node_id: u64) -> bool {
-        let state = self.GetDocument().StyleState();
-        !state.parsed_style_elements.contains(&node_id)
-            || state.dirty_style_elements.contains(&node_id)
+        self.GetDocument().NeedsStyleSheetParsing(node_id)
     }
 }

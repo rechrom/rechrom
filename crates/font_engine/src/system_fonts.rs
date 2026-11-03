@@ -91,6 +91,10 @@ pub struct FontQueryCollector(std::sync::Arc<std::sync::Mutex<FontQueryState>>);
 #[derive(Default)]
 struct FontQueryState {
     revision: u64,
+    /// Changes only when an existing ComputedStyle font binding must be
+    /// rebuilt. Contextual fallback ranks are read live by ResolvedFontSource
+    /// and therefore invalidate shaping, not every element's primary font.
+    binding_revision: u64,
     web_fonts: crate::web_fonts::WebFontRegistry,
     queries: Vec<SystemFontQuery>,
     matches: Vec<(SystemFontQuery, Vec<SystemFontFaceId>)>,
@@ -109,6 +113,7 @@ impl FontQueryCollector {
         if state.web_fonts.faces != faces {
             state.web_fonts.faces = faces;
             state.revision = state.revision.wrapping_add(1);
+            state.binding_revision = state.binding_revision.wrapping_add(1);
         }
     }
     pub fn RequestWebFonts(
@@ -147,8 +152,10 @@ impl FontQueryCollector {
     pub fn Clear(&self) {
         let mut state = self.0.lock().expect("font query outbox poisoned");
         let revision = state.revision.wrapping_add(1);
+        let binding_revision = state.binding_revision.wrapping_add(1);
         *state = FontQueryState {
             revision,
+            binding_revision,
             ..Default::default()
         };
     }
@@ -156,6 +163,12 @@ impl FontQueryCollector {
     /// pure request outbox is pushed or drained.
     pub fn Revision(&self) -> u64 {
         self.0.lock().expect("font query outbox poisoned").revision
+    }
+    pub fn BindingRevision(&self) -> u64 {
+        self.0
+            .lock()
+            .expect("font query outbox poisoned")
+            .binding_revision
     }
     pub fn RegisterFace(&self, face: &FontFace, id: SystemFontFaceId) {
         let mut state = self.0.lock().expect("font query outbox poisoned");
@@ -171,6 +184,7 @@ impl FontQueryCollector {
                 id,
             ));
             state.revision = state.revision.wrapping_add(1);
+            state.binding_revision = state.binding_revision.wrapping_add(1);
         }
     }
     pub(crate) fn RegisterMatches(&self, query: &SystemFontQuery, faces: &[SystemFontFace]) {
@@ -189,12 +203,19 @@ impl FontQueryCollector {
             .iter()
             .any(|(registered, _)| registered == query)
         {
+            let changes_binding = matches!(
+                query,
+                SystemFontQuery::MatchFamily { .. } | SystemFontQuery::MatchGeneric { .. }
+            );
             state.matches.push((
                 query.clone(),
                 faces.iter().map(|face| face.id.clone()).collect(),
             ));
             if !faces.is_empty() {
                 state.revision = state.revision.wrapping_add(1);
+                if changes_binding {
+                    state.binding_revision = state.binding_revision.wrapping_add(1);
+                }
             }
         }
     }
@@ -203,6 +224,10 @@ impl FontQueryCollector {
         if !state.unavailable_faces.contains(id) {
             state.unavailable_faces.push(id.clone());
             state.revision = state.revision.wrapping_add(1);
+            // The face can belong to a primary family query. Keep this rare
+            // path conservative; fallback matches that reuse an already-open
+            // face avoid this branch entirely.
+            state.binding_revision = state.binding_revision.wrapping_add(1);
         }
     }
     /// Only the opened prefix of the provider's ordered answer is eligible.
@@ -439,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn environment_change_clears_shared_queries_and_native_identities() {
+    fn environment_change_clears_shared_queries_and_platform_identities() {
         let collector = FontQueryCollector::default();
         let face = FontFace {
             bytes: vec![1, 2, 3].into(),

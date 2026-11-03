@@ -12,7 +12,7 @@ use crate::{
     css_property_value_set::{CSSPropertyValueSet, CSSPropertyValueSetRuleHandle},
     production_css_value::ProductionCSSValueDispatch,
     production_style_sheet::{
-        Backend, LayerSegment, ProductionFontFaceRule, ProductionKeyframeRule,
+        Backend, ConcreteImport, LayerSegment, ProductionFontFaceRule, ProductionKeyframeRule,
         ProductionKeyframesRule, ProductionNestedDeclarationsRule, ProductionProjectionRule,
         ProductionStyleRule, ProductionStyleSheet,
     },
@@ -22,6 +22,43 @@ use cssom::{
     CSSDeclaration, CSSFontFaceRule, CSSKeyframeRule, CSSKeyframesRule, CSSStyleRule, CSSStyleSheet,
 };
 use std::rc::Rc;
+
+/// A loader-facing effect for one translated `@import` rule. The handle keeps
+/// the parser's original rule allocation; attaching a child stylesheet fills
+/// that rule's source-owned child pointer rather than flattening or reparsing
+/// either sheet at the browser boundary.
+#[derive(Clone)]
+pub struct CSSStyleSheetImportRequest {
+    href: String,
+    rule: Rc<ConcreteImport>,
+}
+impl CSSStyleSheetImportRequest {
+    pub fn Href(&self) -> &str {
+        &self.href
+    }
+
+    pub fn Attach(&self, imported: &CSSStyleSheet) -> bool {
+        let Some(imported) = imported.ParsedBacking::<ProductionStyleSheet>() else {
+            return false;
+        };
+        self.rule.AttachImportedContents(imported.contents.clone());
+        true
+    }
+}
+
+pub fn CSSStyleSheetImportRequests(sheet: &CSSStyleSheet) -> Vec<CSSStyleSheetImportRequest> {
+    let Some(owner) = sheet.ParsedBacking::<ProductionStyleSheet>() else {
+        return Vec::new();
+    };
+    owner
+        .import_loads
+        .iter()
+        .map(|load| CSSStyleSheetImportRequest {
+            href: load.rule.metadata.Href().Utf8(),
+            rule: load.rule.clone(),
+        })
+        .collect()
+}
 
 /// Parse author CSS through the translated Blink parser and project the
 /// resulting typed rule ownership into the DOM's retained stylesheet storage.
@@ -43,6 +80,153 @@ pub fn ParseCSSWithBase(text: &str, base_url: &str) -> CSSStyleSheet {
         crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
         base_url,
     )
+}
+
+/// CSSOM rule mutation failures surfaced by the Web API adapter.
+///
+/// Chromium mutates `StyleSheetContents` through
+/// `CSSStyleSheet::insertRule/deleteRule`, so the RuleSet owner and the CSSOM
+/// wrapper advance together.  The retained production sheet is immutable;
+/// rebuild that same owner from its exact observer source instead of editing
+/// the projected `CSSStyleSheet::rules` vector and leaving a stale RuleSet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CSSStyleSheetRuleMutationError {
+    IndexSize,
+    Syntax,
+    MissingTypedBacking,
+}
+
+fn ParseCSSLikeOwner(text: &str, owner: &ProductionStyleSheet) -> CSSStyleSheet {
+    let context = owner.contents.ParserContext();
+    match context.BaseURL().AsString() {
+        Some(base_url) => ParseCSSWithModeAndBase(text, context.Mode(), &base_url.Utf8()),
+        None => ParseCSSWithMode(text, context.Mode()),
+    }
+}
+
+fn PreserveStyleSheetOwnerMetadata(source: &CSSStyleSheet, target: &mut CSSStyleSheet) {
+    target.owner_node_id = source.owner_node_id;
+    target.disabled = source.disabled;
+    target.alternate = source.alternate;
+    target.title.clone_from(&source.title);
+    target
+        .owner_media_conditions
+        .clone_from(&source.owner_media_conditions);
+    if let Some(role) = source.UserAgentStyleSheetRole() {
+        target.SetUserAgentStyleSheetRole(role);
+    }
+
+    // SetLinkMetadata projects the owner's outer media query onto every CSSOM
+    // rule. Reapply that view without changing the reparsed typed owner; the
+    // resolver consumes owner media at the sheet boundary.
+    for media in source.owner_media_conditions.iter().rev() {
+        for rule in &mut target.rules {
+            rule.media_conditions.insert(0, media.clone());
+        }
+        for face in &mut target.font_faces {
+            face.media_conditions.insert(0, media.clone());
+        }
+        for keyframes in &mut target.keyframes {
+            keyframes.media_conditions.insert(0, media.clone());
+        }
+        for property in &mut target.property_rules {
+            property.media_conditions.insert(0, media.clone());
+        }
+    }
+}
+
+fn ReparseMutatedStyleSheet(
+    source: &CSSStyleSheet,
+    owner: &ProductionStyleSheet,
+    units: Vec<u16>,
+) -> CSSStyleSheet {
+    let text = String::from_utf16_lossy(&units);
+    let mut replacement = ParseCSSLikeOwner(&text, owner);
+    PreserveStyleSheetOwnerMetadata(source, &mut replacement);
+    replacement
+}
+
+/// Insert one style rule at the CSSOM projection index while preserving a
+/// current typed RuleSet owner. This is the immutable Rust equivalent of
+/// Chromium's `StyleSheetContents::WrapperInsertRule` ownership update.
+pub fn InsertCSSStyleSheetRule(
+    sheet: &CSSStyleSheet,
+    index: usize,
+    rule_text: &str,
+) -> Result<CSSStyleSheet, CSSStyleSheetRuleMutationError> {
+    let owner = sheet
+        .ParsedBacking::<ProductionStyleSheet>()
+        .ok_or(CSSStyleSheetRuleMutationError::MissingTypedBacking)?;
+    let rules = owner.ProjectionRulesInSourceOrder();
+    if index > rules.len() || index > sheet.rules.len() {
+        return Err(CSSStyleSheetRuleMutationError::IndexSize);
+    }
+
+    // CSSOM insertRule requires exactly one rule. The current public CSSOM
+    // projection exposes style rules; reject at-rules here as the previous Web
+    // API boundary did, but validate with the original mode and base URL.
+    let candidate = ParseCSSLikeOwner(rule_text, &owner);
+    if candidate.rules.len() != 1
+        || !candidate.font_faces.is_empty()
+        || !candidate.keyframes.is_empty()
+        || !candidate.scopes.is_empty()
+        || !candidate.property_rules.is_empty()
+    {
+        return Err(CSSStyleSheetRuleMutationError::Syntax);
+    }
+
+    let mut units = owner.source.Span16().unwrap_or_default().to_vec();
+    let offset = if index < rules.len() {
+        match rules[index] {
+            ProductionProjectionRule::Style(rule) => rule.source_range.header_start,
+            ProductionProjectionRule::NestedDeclarations(rule) => rule.source_range.header_start,
+        }
+    } else {
+        units.len() as u32
+    } as usize;
+    if offset > units.len() {
+        return Err(CSSStyleSheetRuleMutationError::MissingTypedBacking);
+    }
+    let mut inserted = rule_text.encode_utf16().collect::<Vec<_>>();
+    inserted.push(b'\n' as u16);
+    units.splice(offset..offset, inserted);
+    let replacement = ReparseMutatedStyleSheet(sheet, &owner, units);
+    if replacement.rules.len() != sheet.rules.len() + 1 {
+        return Err(CSSStyleSheetRuleMutationError::Syntax);
+    }
+    Ok(replacement)
+}
+
+/// Delete one projected style rule and rebuild the typed RuleSet owner from
+/// the observer's UTF-16 source range.
+pub fn DeleteCSSStyleSheetRule(
+    sheet: &CSSStyleSheet,
+    index: usize,
+) -> Result<CSSStyleSheet, CSSStyleSheetRuleMutationError> {
+    let owner = sheet
+        .ParsedBacking::<ProductionStyleSheet>()
+        .ok_or(CSSStyleSheetRuleMutationError::MissingTypedBacking)?;
+    let rules = owner.ProjectionRulesInSourceOrder();
+    if index >= rules.len() || index >= sheet.rules.len() {
+        return Err(CSSStyleSheetRuleMutationError::IndexSize);
+    }
+    let range = match rules[index] {
+        ProductionProjectionRule::Style(rule) => &rule.source_range,
+        ProductionProjectionRule::NestedDeclarations(rule) => &rule.source_range,
+    };
+    let start = range.header_start as usize;
+    // EndRuleBody observes the closing-brace offset; include it in deletion.
+    let end = range.body_end.saturating_add(1) as usize;
+    let mut units = owner.source.Span16().unwrap_or_default().to_vec();
+    if start > end || end > units.len() {
+        return Err(CSSStyleSheetRuleMutationError::MissingTypedBacking);
+    }
+    units.drain(start..end);
+    let replacement = ReparseMutatedStyleSheet(sheet, &owner, units);
+    if replacement.rules.len() + 1 != sheet.rules.len() {
+        return Err(CSSStyleSheetRuleMutationError::Syntax);
+    }
+    Ok(replacement)
 }
 
 /// Parse the browser's built-in sheets with Blink's UA parser mode while
@@ -108,7 +292,7 @@ pub fn ParseCSSDeclarationList(text: &str) -> Vec<CSSDeclaration> {
     ProjectPropertySet(properties.as_ref())
 }
 
-/// Native CSSOM write result. An unchanged/failed parse still enters the
+/// Canonical CSSOM write result. An unchanged/failed parse still enters the
 /// custom-element style mutation scope, unlike an invalid property/priority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CSSDeclarationMutation {
@@ -118,7 +302,7 @@ pub enum CSSDeclarationMutation {
     ChangedIndependent(String),
 }
 
-/// Apply a CSSOM property write through the translated Blink parser and native
+/// Apply a CSSOM property write through the translated Blink parser and computed style
 /// property store. None rejects the property/priority before mutation scope;
 /// Unchanged preserves its custom-element notification without style dirtiness.
 /// cpp: AbstractPropertySetCSSStyleDeclaration::setProperty/SetPropertyInternal;
@@ -246,7 +430,7 @@ pub fn GetInlineCSSDeclaration(
         .map_or_else(String::new, |property| property.Value().CssText().Utf8())
 }
 
-/// Keep the native declaration owner across CSSOM -> DOM -> Style. Parsing
+/// Keep the computed style declaration owner across CSSOM -> DOM -> Style. Parsing
 /// an edited value must not reparse the current declaration or discard its
 /// typed result at the attribute boundary.
 pub fn SetInlineCSSDeclaration(
@@ -709,6 +893,20 @@ mod tests {
     }
 
     #[test]
+    fn absolute_path_import_is_exposed_to_the_loader() {
+        let sheet = ParseCSSWithBase(
+            "/* theme */ @import url(\"/cmake-docs/cmake.org/cmake/help/latest/_static/default.css\"); body { display: flex }",
+            "http://127.0.0.1:9878/cmake-docs/cmake.org/cmake/help/latest/_static/cmake.css",
+        );
+        let requests = CSSStyleSheetImportRequests(&sheet);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].Href(),
+            "/cmake-docs/cmake.org/cmake/help/latest/_static/default.css"
+        );
+    }
+
+    #[test]
     fn exact_observer_source_and_only_accepted_properties_reach_cssom() {
         let css = "/*head*/ é😀[data-v='a}b']/**/ { width: 12px; unknown-property: 8; color:red!important; color:blue; --Payload: [a;{b:'}'}]; }";
         let sheet = project(css);
@@ -763,7 +961,7 @@ mod tests {
             ""
         );
 
-        // CSSOM writes consume the native SetResult, retaining source text on
+        // CSSOM writes consume the computed style SetResult, retaining source text on
         // no change and rejecting values before a DOM mutation is synthesized.
         let source = "width:200px;color:red";
         assert_eq!(
@@ -856,7 +1054,7 @@ mod tests {
 
     #[test]
     fn font_faces_preserve_observer_body_and_project_only_accepted_descriptors() {
-        let body = " /* }😀 */ font-family: 'Demo😀'; src: local(Demo Face), bogus(x), url('a}b.woff2') format(woff2); unicode-range: U+0-7F, U+4??; font-weight: 900 100; font-display:swap!important; unknown-descriptor: [a;{b:'}'}]; ";
+        let body = " /* }😀 */ font-family: 'Demo😀'; src: local(Demo Face), bogus(x), url('a}b.woff2') format(woff2); unicode-range: U+0-7F, U+4??; font-weight: 900 100; font-feature-settings:'liga' 0; font-display:swap!important; unknown-descriptor: [a;{b:'}'}]; ";
         let sheet = project(&format!(
             "@layer outer{{@media screen{{@layer fonts{{@media(min-width:700px){{@font-face{{{body}}}}}}}}}}}"
         ));
@@ -878,6 +1076,9 @@ mod tests {
         }));
         assert!(face.declarations.iter().any(|declaration| {
             declaration.property == "font-weight" && declaration.value == "900 100"
+        }));
+        assert!(face.declarations.iter().any(|declaration| {
+            declaration.property == "font-feature-settings" && declaration.value == "\"liga\" 0"
         }));
         assert!(!face.declarations.iter().any(|declaration| {
             declaration.property == "unknown-descriptor" || declaration.property == "font-display"

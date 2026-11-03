@@ -45,6 +45,9 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+use compositor_input::elastic_overscroll_controller::{
+    ElasticOverscrollContext, ElasticOverscrollController,
+};
 // Evaluate source call arguments before borrowing the live receiver. This is
 // a Rust borrowing adaptation; evaluation order and values remain native.
 macro_rules! delegate {
@@ -170,12 +173,18 @@ pub trait InputHandlerClient {
     // Rust ownership adaptation: Chromium's callback re-enters InputHandler
     // through InputHandlerProxy. Return the same queued values so this owner
     // can apply them in the identical WillBeginImplFrame call stack.
-    fn DeliverInputForBeginFrame(&self, args: &BeginFrameArgs) -> Vec<ScrollStateData>;
+    fn DeliverInputForBeginFrame(&self, args: &BeginFrameArgs) -> Vec<QueuedScrollUpdate>;
     fn DeliverInputForHighLatencyMode(&self);
     fn DeliverInputForDeadline(&self);
     fn DidFinishImplFrame(&self);
     fn HasQueuedInput(&self) -> bool;
     fn SetScrollEventDispatchMode(&self, mode: ScrollEventDispatchMode, ratio: f64);
+}
+
+#[derive(Clone, Debug)]
+pub struct QueuedScrollUpdate {
+    pub data: ScrollStateData,
+    pub event_timestamp: TimeTicks,
 }
 // Source: cc/input/input_handler.h:260-291. Viewport policy owns the result.
 pub use compositor_input::viewport::ViewportScrollResult;
@@ -311,12 +320,47 @@ struct ScrollHitTestResult<N> {
     hit_test_successful: bool,
     main_thread_hit_test_reasons: MainThreadHitTestReasons,
 }
+
+struct ElasticContext<'a, B: InputHandlerTypes, C: InputHost<B> + ?Sized> {
+    host: &'a mut C,
+    helper: &'a mut B::Elasticity,
+}
+
+impl<B: InputHandlerTypes, C: InputHost<B> + ?Sized> ElasticOverscrollContext
+    for ElasticContext<'_, B, C>
+{
+    fn constrain_overscroll_delta(&mut self, id: ElementId, delta: Vector2dF) -> Vector2dF {
+        self.host.ConstrainOverscrollDelta(self.helper, id, &delta)
+    }
+    fn is_user_overscrollable(&mut self, id: ElementId) -> bool {
+        self.host.IsUserOverscrollable(self.helper, id)
+    }
+    fn stretch_amount(&mut self, id: ElementId) -> Vector2dF {
+        self.host.StretchAmount(self.helper, id)
+    }
+    fn set_stretch_amount(&mut self, id: ElementId, amount: Vector2dF) {
+        self.host.SetStretchAmount(self.helper, id, &amount)
+    }
+    fn scroll_offset(&mut self, id: ElementId) -> PointF {
+        self.host.ElasticScrollOffset(self.helper, id)
+    }
+    fn max_scroll_offset(&mut self, id: ElementId) -> PointF {
+        self.host.ElasticMaxScrollOffset(self.helper, id)
+    }
+    fn scroll_by(&mut self, id: ElementId, delta: Vector2dF) {
+        self.host.ElasticScrollBy(self.helper, id, &delta)
+    }
+    fn request_one_begin_frame(&mut self) {
+        self.host.ElasticRequestOneBeginFrame(self.helper)
+    }
+}
 // Source: cc/input/input_handler.h:786-937
 pub struct InputHandler<B: InputHandlerTypes> {
     owner_id_: u64,
     types_: std::marker::PhantomData<fn() -> B>,
     input_handler_client_: Option<Arc<dyn InputHandlerClient>>,
     scroll_elasticity_helper_: Option<B::Elasticity>,
+    elastic_overscroll_controller_: ElasticOverscrollController,
     scrollbar_controller_: ScrollbarController,
     accumulated_root_overscroll_: Vector2dF,
     overscroll_delta_for_main_thread_: Vector2dF,
@@ -701,6 +745,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
             types_: std::marker::PhantomData,
             input_handler_client_: None,
             scroll_elasticity_helper_: None,
+            elastic_overscroll_controller_: ElasticOverscrollController::default(),
             scrollbar_controller_: scrollbar_controller,
             accumulated_root_overscroll_: Vector2dF::default(),
             overscroll_delta_for_main_thread_: Vector2dF::default(),
@@ -780,6 +825,38 @@ impl<B: InputHandlerTypes> InputHandler<B> {
             input,
         })
         .0
+    }
+
+    /// Rust ownership adaptation of Blink InputHandlerProxy's elastic
+    /// overscroll callback immediately after cc::InputHandler::ScrollBegin.
+    pub fn ScrollBeginWithElasticOverscroll<C: InputHost<B> + ?Sized>(
+        &mut self,
+        host: &mut C,
+        state: &mut ScrollState,
+        input: ScrollInputType,
+        synthetic: bool,
+    ) -> ScrollStatus {
+        let enter_momentum = state.is_in_inertial_phase();
+        let leave_momentum = !enter_momentum
+            && state.delta_granularity() == ScrollGranularity::kScrollByPrecisePixel;
+        let status = self.ScrollBegin(host, state, input);
+        // Source: blink ElasticOverscrollController::
+        // ObserveGestureEventAndResult. Synthetic GestureScrollBegin still
+        // establishes cc's scroll latch, but does not alter elastic state.
+        if synthetic {
+            return status;
+        }
+        let id = self.LatchedScrollerElementId(host);
+        if let Some(helper) = self.scroll_elasticity_helper_.as_mut() {
+            let mut context = ElasticContext { host, helper };
+            self.elastic_overscroll_controller_.observe_scroll_begin(
+                &mut context,
+                id,
+                enter_momentum,
+                leave_momentum,
+            );
+        }
+        status
     }
     pub fn RootScrollBegin<C: InputHost<B> + ?Sized>(
         &mut self,
@@ -951,6 +1028,33 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         );
         result
     }
+
+    /// Rust ownership adaptation of Blink InputHandlerProxy's elastic
+    /// overscroll callback immediately after cc::InputHandler::ScrollUpdate.
+    pub fn ScrollUpdateWithElasticOverscroll<C: InputHost<B> + ?Sized>(
+        &mut self,
+        host: &mut C,
+        state: ScrollState,
+        delayed_by: TimeDelta,
+        event_timestamp: TimeTicks,
+    ) -> InputHandlerScrollResult {
+        let event_delta = Vector2dF::new(state.delta_x() as f32, state.delta_y() as f32);
+        let has_momentum = state.is_in_inertial_phase();
+        let result = self.ScrollUpdate(host, state, delayed_by);
+        let id = self.LatchedScrollerElementId(host);
+        if let Some(helper) = self.scroll_elasticity_helper_.as_mut() {
+            let mut context = ElasticContext { host, helper };
+            self.elastic_overscroll_controller_.observe_scroll_update(
+                &mut context,
+                id,
+                event_delta,
+                &result,
+                event_timestamp,
+                has_momentum,
+            );
+        }
+        result
+    }
     // Source: cc/input/input_handler.cc:518-556
     fn AdjustScrollDeltaForScrollbarSnap<C: InputHost<B> + ?Sized>(
         &mut self,
@@ -1036,6 +1140,32 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         compensated: Option<ScrollVector>,
     ) -> InputHandlerScrollEndResult {
         self.ScrollEndForNode(host, None, snap, compensated)
+    }
+
+    /// Rust ownership adaptation of Blink InputHandlerProxy's elastic
+    /// overscroll callback immediately after cc::InputHandler::ScrollEnd.
+    pub fn ScrollEndWithElasticOverscroll<C: InputHost<B> + ?Sized>(
+        &mut self,
+        host: &mut C,
+        snap: bool,
+        compensated: Option<ScrollVector>,
+        event_timestamp: TimeTicks,
+        synthetic: bool,
+    ) -> InputHandlerScrollEndResult {
+        let id = self.LatchedScrollerElementId(host);
+        let result = self.ScrollEnd(host, snap, compensated);
+        // MouseWheelPhaseHandler's timer emits a synthetic GestureScrollEnd
+        // to close latching. Chromium deliberately does not use that event to
+        // launch elastic animation from the last retained wheel velocity.
+        if synthetic {
+            return result;
+        }
+        if let Some(helper) = self.scroll_elasticity_helper_.as_mut() {
+            let mut context = ElasticContext { host, helper };
+            self.elastic_overscroll_controller_
+                .observe_scroll_end(&mut context, id, event_timestamp);
+        }
+        result
     }
     // Source: cc/input/input_handler.cc:592-694
     fn ScrollEndForNode<C: InputHost<B> + ?Sized>(
@@ -1611,7 +1741,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
             return false;
         };
         if !node_read!(host, node, |n| n.snap_container_data.is_some())
-            || self.snap_fling_state_ == SnapFlingState::kNativeFling
+            || self.snap_fling_state_ == SnapFlingState::kFling
         {
             return false;
         }
@@ -1620,7 +1750,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         let mut displacement = scale(natural, 1. / factor);
         let current = self.GetVisualScrollOffset(host, &node);
         let new = current + content_delta;
-        if self.snap_fling_state_ == SnapFlingState::kConstrainedNativeFling {
+        if self.snap_fling_state_ == SnapFlingState::kConstrainedFling {
             if let Some(constrained) = self.ConstrainFling(current, new) {
                 displacement = constrained - current;
             }
@@ -1643,7 +1773,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
                 .FindSnapPositionWithViewportAdjustment(strategy.as_ref(), adjustment)
         });
         if snap.r#type == SnapPositionType::kNone {
-            self.snap_fling_state_ = SnapFlingState::kNativeFling;
+            self.snap_fling_state_ = SnapFlingState::kFling;
             return false;
         }
         if snap.is_extremity && host.feature(InputFeature::SnapFlingNearExtremes) {
@@ -1667,11 +1797,11 @@ impl<B: InputHandlerTypes> InputHandler<B> {
                     snap.covered_range_y
                         .unwrap_or(RangeF::At(snap.position.y())),
                 );
-                self.snap_fling_state_ = SnapFlingState::kConstrainedNativeFling;
+                self.snap_fling_state_ = SnapFlingState::kConstrainedFling;
                 return false;
             }
         } else {
-            if self.snap_fling_state_ == SnapFlingState::kConstrainedNativeFling {
+            if self.snap_fling_state_ == SnapFlingState::kConstrainedFling {
                 if let Some(constrained) = self.ConstrainFling(current, new) {
                     displacement = constrained - current;
                     strategy = <dyn SnapSelectionStrategy>::CreateForDisplacement(
@@ -1694,7 +1824,7 @@ impl<B: InputHandlerTypes> InputHandler<B> {
                 if self.ConstrainFling(current, new).is_none() {
                     self.fling_snap_constrain_x_ = snap.covered_range_x;
                     self.fling_snap_constrain_y_ = snap.covered_range_y;
-                    self.snap_fling_state_ = SnapFlingState::kConstrainedNativeFling;
+                    self.snap_fling_state_ = SnapFlingState::kConstrainedFling;
                     return false;
                 }
             }
@@ -1821,7 +1951,16 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         }
     }
     // Source: cc/input/input_handler.cc:1383-1390
-    pub fn TickAnimations(&self, time: TimeTicks) {
+    pub fn TickAnimations<C: InputHost<B> + ?Sized>(&mut self, host: &mut C, time: TimeTicks) {
+        if let Some(helper) = self.scroll_elasticity_helper_.as_mut() {
+            let mut context = ElasticContext { host, helper };
+            let finished = self
+                .elastic_overscroll_controller_
+                .animate(&mut context, time);
+            for id in finished {
+                self.ElasticOverscrollAnimationFinished(host, id);
+            }
+        }
         if let Some(client) = &self.input_handler_client_ {
             client.Animate(time);
         }
@@ -1836,7 +1975,12 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         }
     }
     // Source: cc/input/input_handler.cc:1401-1404
-    pub fn WillDraw(&self) {
+    pub fn WillDraw<C: InputHost<B> + ?Sized>(&mut self, host: &mut C) {
+        if let Some(helper) = self.scroll_elasticity_helper_.as_mut() {
+            let mut context = ElasticContext { host, helper };
+            self.elastic_overscroll_controller_
+                .reconcile_stretch_and_scroll(&mut context);
+        }
         if let Some(client) = &self.input_handler_client_ {
             client.ReconcileElasticOverscrollAndRootScroll();
         }
@@ -1863,8 +2007,13 @@ impl<B: InputHandlerTypes> InputHandler<B> {
                         .WillBeginImplFrame(scrollbar_host)
                 },
             );
-            for data in client.DeliverInputForBeginFrame(args) {
-                self.ScrollUpdate(host, ScrollState::new(data), TimeDelta::default());
+            for update in client.DeliverInputForBeginFrame(args) {
+                self.ScrollUpdateWithElasticOverscroll(
+                    host,
+                    ScrollState::new(update.data),
+                    TimeDelta::default(),
+                    update.event_timestamp,
+                );
             }
         }
     }
@@ -3414,14 +3563,14 @@ impl<B: InputHandlerTypes> InputDelegateForCompositor<B> for InputHandler<B> {
     ) {
         InputHandler::ProcessCommitDeltas(self, host, data, mutator, next_bmf)
     }
-    fn TickAnimations(&mut self, time: TimeTicks) {
-        InputHandler::TickAnimations(self, time)
+    fn TickAnimations<C: InputHost<B> + ?Sized>(&mut self, host: &mut C, time: TimeTicks) {
+        InputHandler::TickAnimations(self, host, time)
     }
     fn WillShutdown(&mut self) {
         InputHandler::WillShutdown(self)
     }
-    fn WillDraw(&mut self) {
-        InputHandler::WillDraw(self)
+    fn WillDraw<C: InputHost<B> + ?Sized>(&mut self, host: &mut C) {
+        InputHandler::WillDraw(self, host)
     }
     fn WillBeginImplFrame<C: InputHost<B> + ?Sized>(
         &mut self,

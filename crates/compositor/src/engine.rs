@@ -21,7 +21,7 @@ use crate::{
         paint::TileRasterBufferValue,
         resources::{RasterReturnedResource, RasterSharedImage},
     },
-    NativeCompositorFrameSubmission,
+    CompositorFrameSubmission,
 };
 use paint::PaintArtifact;
 use std::{fmt, io, sync::Arc};
@@ -68,7 +68,7 @@ pub struct CompositorExecutors {
     pub raster_provider: Arc<dyn CompositorRasterProvider>,
     /// UI bitmap/surface drawing is an independent capability even when the
     /// embedding supplies the same RasterEngine for both roles.
-    pub ui_raster: Arc<dyn crate::runtime::native_ui::NativeUiRasterServices>,
+    pub ui_raster: Arc<dyn crate::runtime::ui::UiRasterServices>,
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +77,10 @@ pub struct CompositorConfig {
     /// Whether the root render pass preserves alpha instead of filling the
     /// viewport with the default opaque background.
     pub transparent_background: bool,
+    /// Initial widget viewport used by Blink's compositor settings policy.
+    /// The compositor still receives every later viewport through Commit.
+    pub initial_viewport_size: Size,
+    pub initial_device_scale_factor: f32,
     pub raster_task_limit: usize,
     /// Maximum number of independent task-graph drains offered to the
     /// embedding's raster executor. The executor remains authoritative for
@@ -88,6 +92,8 @@ impl Default for CompositorConfig {
         Self {
             thread: false,
             transparent_background: false,
+            initial_viewport_size: Size::default(),
+            initial_device_scale_factor: 1.0,
             raster_task_limit: 32,
             raster_worker_limit: 8,
         }
@@ -138,6 +144,8 @@ pub enum CompositorInput {
         unconstrained_delta: Vector2dF,
         granularity: crate::adapter::input_types::ScrollGranularity,
         is_inertial: bool,
+        has_synthetic_phase: bool,
+        event_timestamp: crate::adapter::time::TimeTicks,
         phase: ScrollPhase,
     },
     PinchBegin {
@@ -170,6 +178,11 @@ pub enum CompositorMainThreadEffect {
         ack: crate::adapter::scheduler_host::BeginFrameAck,
         reason: crate::cc::scheduler::scheduler::FrameSkippedReason,
     },
+    /// Scheduler has entered BeginMainFrameState::SENT and the main thread
+    /// must answer this transaction with a commit or an explicit early-out.
+    BeginMainFrame,
+    /// MainHost asks Page to schedule lifecycle work. Unlike BeginMainFrame,
+    /// this does not prove that Scheduler has dispatched a transaction.
     RequestMainFrame,
     SaveActiveEventMetrics,
     UpdateDeferMainFrameUpdate,
@@ -199,7 +212,7 @@ pub enum CompositorMainThreadEffect {
 
 /// Move-only frame output: no separate raster bundle or resource snapshot.
 pub struct CompositorOutput {
-    pub frame: Option<NativeCompositorFrameSubmission>,
+    pub frame: Option<CompositorFrameSubmission>,
     pub main_thread_effects: Vec<CompositorMainThreadEffect>,
     pub needs_begin_frames: bool,
     /// Typed impl tasks remain queued and require another owner-sequence turn.
@@ -292,9 +305,9 @@ impl From<crate::runtime::paint::PaintInputError> for CompositorError {
         }
     }
 }
-impl From<crate::runtime::native_pac_scroll::NativePacScrollEffect> for CompositorMainThreadEffect {
-    fn from(effect: crate::runtime::native_pac_scroll::NativePacScrollEffect) -> Self {
-        use crate::runtime::native_pac_scroll::NativePacScrollEffect as E;
+impl From<crate::runtime::pac_scroll::PacScrollEffect> for CompositorMainThreadEffect {
+    fn from(effect: crate::runtime::pac_scroll::PacScrollEffect) -> Self {
+        use crate::runtime::pac_scroll::PacScrollEffect as E;
         match effect {
             E::DidCompositorScroll {
                 sequence,
@@ -320,7 +333,7 @@ impl From<crate::runtime::native_pac_scroll::NativePacScrollEffect> for Composit
 /// Construction remains explicit until the real canonical assembly is ready;
 /// no command reports success with a fabricated frame or skipped commit.
 pub struct CompositorEngine {
-    assembly: crate::runtime::engine_assembly::NativeEngineAssembly,
+    assembly: crate::runtime::engine_assembly::EngineAssembly,
 }
 impl CompositorEngine {
     pub fn new(
@@ -336,6 +349,12 @@ impl CompositorEngine {
         viewport: CompositorViewportState,
     ) -> Result<CompositorOutput, CompositorError> {
         self.assembly.Commit(artifact, viewport)
+    }
+    pub fn SetViewport(
+        &mut self,
+        viewport: CompositorViewportState,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.SetViewport(viewport)
     }
     /// Mirrors LayerTreeHost/ProxyMain commit demand before the main-frame
     /// lifecycle has produced its PaintArtifact.
@@ -419,9 +438,9 @@ mod public_boundary_tests {
         let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
             CompositorEngine::Poll;
 
-        fn frame_boundary(output: CompositorOutput) -> Option<NativeCompositorFrameSubmission> {
+        fn frame_boundary(output: CompositorOutput) -> Option<CompositorFrameSubmission> {
             output.frame
         }
-        let _: fn(CompositorOutput) -> Option<NativeCompositorFrameSubmission> = frame_boundary;
+        let _: fn(CompositorOutput) -> Option<CompositorFrameSubmission> = frame_boundary;
     }
 }

@@ -4,11 +4,11 @@
 use super::{
     client_resources::RasterClientResources,
     execution::{EngineTask, EngineTaskQueue},
-    native_services::NativeEventSink,
     resources::{
         RasterResourceSource, RasterSharedImage, RasterSyncToken, RasterSynchronizationType,
         RasterTransferableResource,
     },
+    services::EventSink,
 };
 use crate::{
     adapter::{
@@ -17,7 +17,7 @@ use crate::{
         time::{TimeDelta, TimeTicks},
     },
     engine::CompositorExecutor,
-    NativeCompositorTypes,
+    CompositorTypes,
 };
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -35,7 +35,7 @@ pub(crate) struct RasterPoolServices {
     executor: Arc<dyn CompositorExecutor>,
     commands: EngineTaskQueue,
     config: RasterPoolConfig,
-    events: Arc<dyn NativeEventSink>,
+    events: Arc<dyn EventSink>,
 }
 impl RasterPoolServices {
     pub(crate) fn new(
@@ -44,7 +44,7 @@ impl RasterPoolServices {
         executor: Arc<dyn CompositorExecutor>,
         commands: EngineTaskQueue,
         config: RasterPoolConfig,
-        events: Arc<dyn NativeEventSink>,
+        events: Arc<dyn EventSink>,
     ) -> Self {
         Self {
             identity,
@@ -56,7 +56,7 @@ impl RasterPoolServices {
         }
     }
 }
-impl ResourcePoolPlatform<NativeCompositorTypes> for RasterPoolServices {
+impl ResourcePoolPlatform<CompositorTypes> for RasterPoolServices {
     fn MakeTransferableResource(
         &self,
         image: RasterSharedImage,
@@ -83,7 +83,7 @@ impl ResourcePoolPlatform<NativeCompositorTypes> for RasterPoolServices {
     fn RemoveImportedResource(
         &self,
         id: ResourceId,
-        client: &mut dyn PoolReleaseClient<NativeCompositorTypes>,
+        client: &mut dyn PoolReleaseClient<CompositorTypes>,
     ) {
         self.resources.RemovePoolResource(self.identity, id, client);
     }
@@ -117,7 +117,7 @@ impl ResourcePoolTiming for RasterPoolServices {
 struct RasterPoolTrack;
 impl PoolTracingTrack for RasterPoolTrack {}
 struct RasterPoolScope {
-    events: Arc<dyn NativeEventSink>,
+    events: Arc<dyn EventSink>,
     name: &'static str,
 }
 impl PoolTraceScope for RasterPoolScope {}

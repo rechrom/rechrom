@@ -198,7 +198,7 @@ pub unsafe fn SkTQSortPointers<T: PartialOrd>(array: &mut [*const T]) {
 // arguments/array slots remain initialized, including moved-from sources. An
 // implementation must uphold that Rust invariant even when it panics. Callbacks
 // may record operation effects/state; algorithm ordering stays native.
-pub trait SkTSortNativeOps<T> {
+pub trait SkTSortOps<T> {
     fn copy_construct(&mut self, source: &T) -> T;
     fn copy_assign(&mut self, destination: &mut T, source: &T);
     fn move_construct(&mut self, source: &mut T) -> T;
@@ -207,13 +207,7 @@ pub trait SkTSortNativeOps<T> {
     fn swap(&mut self, array: &mut [T], a: usize, b: usize);
 }
 // Borrow two distinct initialized array entries for native assignment.
-fn native_assign<T, O: SkTSortNativeOps<T>>(
-    array: &mut [T],
-    dst: usize,
-    src: usize,
-    ops: &mut O,
-    moving: bool,
-) {
+fn assign<T, O: SkTSortOps<T>>(array: &mut [T], dst: usize, src: usize, ops: &mut O, moving: bool) {
     assert_ne!(dst, src);
     let (destination, source) = if dst < src {
         let (lo, hi) = array.split_at_mut(src);
@@ -229,7 +223,7 @@ fn native_assign<T, O: SkTSortNativeOps<T>>(
     }
 }
 // Source: src/core/SkTSort.h:33-57
-pub fn SkTHeapSort_SiftUpWithOps<T, O: SkTSortNativeOps<T>>(
+pub fn SkTHeapSort_SiftUpWithOps<T, O: SkTSortOps<T>>(
     array: &mut [T],
     mut root: usize,
     bottom: usize,
@@ -245,7 +239,7 @@ pub fn SkTHeapSort_SiftUpWithOps<T, O: SkTSortNativeOps<T>>(
             j += 1;
         }
         // Distinct parent/child entries retain native copy assignment.
-        native_assign(array, root - 1, j - 1, ops, false);
+        assign(array, root - 1, j - 1, ops, false);
         root = j;
         j = root << 1;
     }
@@ -253,7 +247,7 @@ pub fn SkTHeapSort_SiftUpWithOps<T, O: SkTSortNativeOps<T>>(
     while j >= start {
         if lessThan(&array[j - 1], &x) {
             // Distinct parent/child entries retain native copy assignment.
-            native_assign(array, root - 1, j - 1, ops, false);
+            assign(array, root - 1, j - 1, ops, false);
             root = j;
             j = root >> 1;
         } else {
@@ -263,7 +257,7 @@ pub fn SkTHeapSort_SiftUpWithOps<T, O: SkTSortNativeOps<T>>(
     ops.copy_assign(&mut array[root - 1], &x);
 }
 // Source: src/core/SkTSort.h:67-84
-pub fn SkTHeapSort_SiftDownWithOps<T, O: SkTSortNativeOps<T>>(
+pub fn SkTHeapSort_SiftDownWithOps<T, O: SkTSortOps<T>>(
     array: &mut [T],
     mut root: usize,
     bottom: usize,
@@ -278,7 +272,7 @@ pub fn SkTHeapSort_SiftDownWithOps<T, O: SkTSortNativeOps<T>>(
             child += 1;
         }
         if lessThan(&x, &array[child - 1]) {
-            native_assign(array, root - 1, child - 1, ops, false);
+            assign(array, root - 1, child - 1, ops, false);
             root = child;
             child = root << 1;
         } else {
@@ -288,7 +282,7 @@ pub fn SkTHeapSort_SiftDownWithOps<T, O: SkTSortNativeOps<T>>(
     ops.copy_assign(&mut array[root - 1], &x);
 }
 // Source: src/core/SkTSort.h:93-103
-pub fn SkTHeapSortWithOps<T, O: SkTSortNativeOps<T>>(
+pub fn SkTHeapSortWithOps<T, O: SkTSortOps<T>>(
     array: &mut [T],
     lessThan: &impl Fn(&T, &T) -> bool,
     ops: &mut O,
@@ -305,7 +299,7 @@ pub fn SkTHeapSortWithOps<T, O: SkTSortNativeOps<T>>(
     }
 }
 // Source: src/core/SkTSort.h:113-128
-pub fn SkTInsertionSortWithOps<T, O: SkTSortNativeOps<T>>(
+pub fn SkTInsertionSortWithOps<T, O: SkTSortOps<T>>(
     left: &mut [T],
     lessThan: &impl Fn(&T, &T) -> bool,
     ops: &mut O,
@@ -317,7 +311,7 @@ pub fn SkTInsertionSortWithOps<T, O: SkTSortNativeOps<T>>(
         let mut insert = ops.move_construct(&mut left[next]);
         let mut hole = next;
         loop {
-            native_assign(left, hole, hole - 1, ops, true);
+            assign(left, hole, hole - 1, ops, true);
             hole -= 1;
             if !(0 < hole && lessThan(&insert, &left[hole - 1])) {
                 break;
@@ -328,7 +322,7 @@ pub fn SkTInsertionSortWithOps<T, O: SkTSortNativeOps<T>>(
     }
 }
 // Source: src/core/SkTSort.h:132-148
-pub fn SkTQSort_PartitionWithOps<T, O: SkTSortNativeOps<T>>(
+pub fn SkTQSort_PartitionWithOps<T, O: SkTSortOps<T>>(
     left: &mut [T],
     pivot: usize,
     lessThan: &impl Fn(&T, &T) -> bool,
@@ -348,7 +342,7 @@ pub fn SkTQSort_PartitionWithOps<T, O: SkTSortNativeOps<T>>(
     newPivot
 }
 // Source: src/core/SkTSort.h:162-184
-pub fn SkTIntroSortWithOps<T, O: SkTSortNativeOps<T>>(
+pub fn SkTIntroSortWithOps<T, O: SkTSortOps<T>>(
     mut depth: i32,
     mut left: &mut [T],
     lessThan: &impl Fn(&T, &T) -> bool,
@@ -373,7 +367,7 @@ pub fn SkTIntroSortWithOps<T, O: SkTSortNativeOps<T>>(
     }
 }
 // Source: src/core/SkTSort.h:193-202
-pub fn SkTQSortWithOps<T, O: SkTSortNativeOps<T>>(
+pub fn SkTQSortWithOps<T, O: SkTSortOps<T>>(
     array: &mut [T],
     lessThan: &impl Fn(&T, &T) -> bool,
     ops: &mut O,
@@ -392,7 +386,7 @@ pub fn SkTQSortWithOps<T, O: SkTSortNativeOps<T>>(
 // value assignments. No custom C++ special-member/ADL swap is inferred here.
 // This adapter and wiring carry zero additional native source-line credit.
 pub struct SkTSortCopyOps;
-impl<T: Copy> SkTSortNativeOps<T> for SkTSortCopyOps {
+impl<T: Copy> SkTSortOps<T> for SkTSortCopyOps {
     fn copy_construct(&mut self, source: &T) -> T {
         *source
     }

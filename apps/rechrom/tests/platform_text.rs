@@ -1,12 +1,11 @@
 // These are rendering-path checks, not a Chromium pixel-parity oracle.
 #[test]
-fn default_font_metrics_do_not_require_cpp_skia() {
+fn default_font_metrics_use_the_translated_skia_backend_on_apple() {
     let constraints = browser::CreateBrowserConstraints(320, 200);
-    assert_eq!(
-        constraints.font_backend_factory.is_some(),
-        false,
-        "production font metrics must not inject the C++ Skia backend on any platform"
-    );
+    #[cfg(target_vendor = "apple")]
+    assert!(constraints.font_backend_factory.is_some());
+    #[cfg(not(target_vendor = "apple"))]
+    assert!(constraints.font_backend_factory.is_none());
     assert!(constraints.fonts.iter().any(|font| !font.bytes.is_empty()));
 }
 

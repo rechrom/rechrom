@@ -9,7 +9,7 @@ impl VoidifyStream {
     pub fn from_bool(_: bool) -> Self {
         Self
     }
-    pub fn ignore_stream(&self, _stream: &mut crate::interop::native_ostream::NativeOStream<'_>) {}
+    pub fn ignore_stream(&self, _stream: &mut crate::interop::ostream::OStream<'_>) {}
 }
 // Source: base/check.h:73-73
 // Genuine native incomplete declaration: no fabricated LogMessage object,
@@ -207,7 +207,7 @@ unsafe fn GetCheckSeverity(fatal_milestone: NotFatalUntil) -> i32 {
 // Native function-local pointer initialization has a language initialization
 // guard and no process-exit delete of the returned pointer. Each function below
 // gets its own same-address slot/Once. Even an initial null result is memoized.
-macro_rules! native_crash_key {
+macro_rules! crash_key {
     ($function:ident,$name:literal,$size:ident) => {
         unsafe fn $function() -> *mut CrashKeyString {
             struct Slot(core::cell::UnsafeCell<*mut CrashKeyString>);
@@ -228,21 +228,21 @@ macro_rules! native_crash_key {
     };
 }
 // Source: base/check.cc:85-89
-native_crash_key!(
+crash_key!(
     GetNotReachedCrashKey,
     "Logging-NOTREACHED_MESSAGE",
     Size1024
 );
 // Source: base/check.cc:91-95
-native_crash_key!(GetDCheckCrashKey, "Logging-DCHECK_MESSAGE", Size1024);
+crash_key!(GetDCheckCrashKey, "Logging-DCHECK_MESSAGE", Size1024);
 // Source: base/check.cc:97-102
-native_crash_key!(
+crash_key!(
     GetDumpWillBeCheckCrashKey,
     "Logging-DUMP_WILL_BE_CHECK_MESSAGE",
     Size1024
 );
 // Source: base/check.cc:104-108
-native_crash_key!(GetFatalMilestoneCrashKey, "Logging-FATAL_MILESTONE", Size32);
+crash_key!(GetFatalMilestoneCrashKey, "Logging-FATAL_MILESTONE", Size32);
 
 // Source: base/check.cc:110-117
 unsafe fn MaybeSetFatalMilestoneCrashKey(fatal_milestone: NotFatalUntil) {

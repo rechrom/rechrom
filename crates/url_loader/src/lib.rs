@@ -10,9 +10,10 @@ mod ready;
 mod url_loader;
 
 pub use default_url_loader::{DefaultURLLoader, DefaultURLLoaderOptions};
-pub use http_transport::ReferrerPolicy;
+pub use http_transport::{IsSameOrigin, ReferrerPolicy};
 pub use url_loader::{
-    RequestDefer, RequestDestination, URLLoadOperation, URLLoader, URLRequest, URLResponse,
+    RequestDefer, RequestDestination, ScriptType, URLLoadOperation, URLLoader, URLRequest,
+    URLResponse,
 };
 
 mod stream;

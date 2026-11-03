@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native auto/caret/visited colors and color-scheme application.
+//! Canonical auto/caret/visited colors and color-scheme application.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{AtomicString, MakeGarbageCollected, Vector};

@@ -117,16 +117,16 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
             "cancelled" => winit::event::TouchPhase::Cancelled,
             _ => return Err("Unsupported wheel phase".into()),
         };
-        let scale = wheel.native_scale_factor.unwrap_or(1.0);
-        let native = match (
-            wheel.native_timestamp_seconds,
-            wheel.native_phase,
+        let scale = wheel.scale_factor.unwrap_or(1.0);
+        let platform_metadata = match (
+            wheel.timestamp_seconds,
+            wheel.platform_phase,
             wheel.momentum_phase,
         ) {
-            (Some(timestamp_seconds), Some(native_phase), Some(momentum_phase)) => {
+            (Some(timestamp_seconds), Some(phase), Some(momentum_phase)) => {
                 Some(winit::event::MacOSMouseWheelMetadata {
                     timestamp_seconds,
-                    phase: native_phase,
+                    phase,
                     momentum_phase,
                     is_continuous: Some(wheel.precise),
                     point_delta_x: None,
@@ -142,19 +142,19 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
             (None, None, None) => None,
             _ => {
                 return Err(
-                    "native timestamp, phase and momentum phase must be provided together".into(),
+                    "platform timestamp, phase and momentum phase must be provided together".into(),
                 )
             }
         };
-        // Both synthetic control input and captured native replay enter before
+        // Both synthetic control input and captured platform replay enter before
         // the common phase handler, rails filter and frame-aligned queue.
-        let sample = crate::input::NativeWheelSample {
+        let sample = crate::input::WheelSample {
             delta: winit::event::MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
                 -wheel.delta_x * scale,
                 -wheel.delta_y * scale,
             )),
             phase,
-            native,
+            macos_metadata: platform_metadata,
             position: Offset {
                 x: wheel.x,
                 y: wheel.y,
@@ -164,7 +164,7 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
             observed_at: Instant::now(),
         };
         wheel_commands
-            .send(Command::NativeWheel(sample))
+            .send(Command::Wheel(sample))
             .map_err(|error| error.to_string())
     }));
     let mouse_commands = commands.clone();

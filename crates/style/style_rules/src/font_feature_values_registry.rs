@@ -14,7 +14,7 @@ use style_model::style_rule_font_feature_values::{
     FontFeatureValuesStorage, StyleRuleFontFeatureValues,
 };
 
-/// Document-author font aliases collected from active native RuleSets.
+/// Document-author font aliases collected from active computed style RuleSets.
 /// The owner filters scope and media, supplies the canonical layer map, and
 /// appends rules in stylesheet/source order. This registry performs no parsing
 /// or font selection and retains no DOM, stylesheet, or live resolver owner.

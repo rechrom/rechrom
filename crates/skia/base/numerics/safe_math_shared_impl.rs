@@ -4,7 +4,7 @@
 use super::safe_conversions_impl::{Input, Numeric};
 
 // Source: base/numerics/safe_math_shared_impl.h:15-22
-#[cfg(not(base_numeric_native_inputs_configured))]
+#[cfg(not(base_numeric_inputs_configured))]
 compile_error!("Bind actual compiler __asmjs__/__wasm__/__ARMEL__/__clang__/NDEBUG inputs before selecting native numeric children");
 #[cfg(not(any(base_numeric_asmjs, base_numeric_wasm)))]
 pub use super::safe_math_clang_gcc_impl::*;

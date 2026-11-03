@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_algo_inline/src/native_inline_item_result.rs"]
-mod layout_algo_inline_native_inline_item_result;
+#[path = "../../../layout_algo_inline/src/inline_item_result_interface.rs"]
+mod layout_algo_inline_inline_item_result_interface;
 
-pub use layout_algo_inline_native_inline_item_result::*;
+pub use layout_algo_inline_inline_item_result_interface::*;

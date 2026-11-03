@@ -1,4 +1,4 @@
-//! Native shadow-layer owner and painter-order application.
+//! Chromium shadow-layer owner and painter-order application.
 #![allow(non_snake_case, non_upper_case_globals)]
 use super::{blend_mode::BlendMode, color::Color4f};
 use std::sync::Arc;
@@ -34,7 +34,7 @@ pub trait LooperPaint: Clone {
     fn setColorFilterSRGBBlend(&mut self, color: Color4f, mode: BlendMode);
 }
 impl Layer {
-    // Source: cc/paint/draw_looper.cc:22-42. The native backend performs only
+    // Source: cc/paint/draw_looper.cc:22-42. The source backend performs only
     // SkMaskFilter::MakeBlur and SkColorFilters::Blend pure value operations.
     fn Apply<C: LooperCanvas, P: LooperPaint>(&self, canvas: &mut C, paint: &mut P) {
         if self.flags & kDontModifyPaintFlag == 0 {
@@ -79,7 +79,7 @@ impl DrawLooper {
     pub fn EqualsForTesting(&self, other: &Self) -> bool {
         self.layers_ == other.layers_
     }
-    /// Borrow the actual native modifier list for a field-only Skia value
+    /// Borrow the actual source modifier list for a field-only Skia value
     /// conversion. This never records or traverses layers in the compositor.
     pub fn layers(&self) -> &[Layer] {
         &self.layers_
@@ -137,7 +137,7 @@ impl DrawLooperBuilder {
 // Source scaffolding: cc/paint/draw_looper.h:1-23,115-117; .cc:1-18,75.
 // Translation status: complete
 
-// Native SkAutoCanvasRestore lifetime: restoration also happens during Rust
+// Chromium SkAutoCanvasRestore lifetime: restoration also happens during Rust
 // unwinding, while all drawing accesses reborrow the same actual canvas.
 struct CanvasRestore<'a, C: LooperCanvas> {
     canvas: &'a mut C,

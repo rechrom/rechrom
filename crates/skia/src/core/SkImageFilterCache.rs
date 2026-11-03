@@ -46,7 +46,7 @@ impl PartialEq for SkImageFilterCacheKey {
 use super::SkImageFilter::SkImageFilter;
 use super::SkImageFilterTypes::FilterResult;
 use super::SkTDynamicHash::{DynamicHashTraits, SkTDynamicHash};
-use super::SkTHash::{NativeMove, THashMap};
+use super::SkTHash::{CxxMove, THashMap};
 use super::SkTInternalLList::{Linked, Links, SkTInternalLList};
 use std::sync::{Arc, Mutex};
 // Source: src/core/SkImageFilterCache.h:59-59
@@ -102,7 +102,7 @@ impl SkImageFilterCacheKey {
         bytes
     }
     // Source: src/core/SkImageFilterCache.cpp:49-51
-    fn native_hash(&self) -> u32 {
+    fn hash(&self) -> u32 {
         super::SkChecksum::Hash32(&self.packed_bytes(), 0)
     }
 }
@@ -141,7 +141,7 @@ impl DynamicHashTraits<Value, Key> for Value {
         &value.fKey
     }
     fn Hash(key: &Key) -> u32 {
-        key.native_hash()
+        key.hash()
     }
 }
 unsafe impl Linked for Value {
@@ -152,7 +152,7 @@ unsafe impl Linked for Value {
 // std::vector<Value*> is an actual pointer sequence. Its native move transfers
 // the allocation and leaves an initialized empty vector in the source.
 struct ValuePointers(Vec<*mut Value>);
-impl NativeMove for ValuePointers {
+impl CxxMove for ValuePointers {
     fn move_construct(source: &mut Self) -> Self {
         Self(core::mem::take(&mut source.0))
     }

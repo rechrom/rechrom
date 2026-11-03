@@ -1,4 +1,4 @@
-//! Native Paint property-node geometry queries. This module never stores a
+//! Chromium Paint property-node geometry queries. This module never stores a
 //! second ancestry index; it borrows and retains only the actual node Arcs.
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ pub fn TransformChanged(
         &crate::paint_property_tree::PropertyTreeState::default().transform,
     )
 }
-// Source: clip_paint_property_node.cc:47-69. Native producer nodes are unaliased;
+// Source: clip_paint_property_node.cc:47-69. Chromium producer nodes are unaliased;
 // a cache/value revision still retains exactly the same source node identity.
 pub fn ClipChanged(
     node: &crate::paint_property_tree::ClipPaintPropertyNode,
@@ -68,11 +68,7 @@ pub fn EffectChanged(
             return true;
         }
         let transform = &node.local_transform_space;
-        if node
-            .filters
-            .canonical()
-            .expect("validated PaintInput filters")
-            .HasFilterThatMovesPixels()
+        if node.HasFilterThatMovesPixels()
             && !transform_not_to_check
                 .is_some_and(|other| transform.lifecycle.same_node(&other.lifecycle))
             && TransformChanged(transform, change, &relative.transform)

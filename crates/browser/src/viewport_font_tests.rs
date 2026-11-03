@@ -87,7 +87,7 @@ fn pixels(page: &Page, width: u32, height: u32, scale: f64) -> Vec<u8> {
 }
 #[test]
 fn viewport_geometry_reuses_shape_and_real_font_inputs_match_fresh_layout() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         for html in [
             "<!doctype html><style>body{margin:0}#text{margin:0;font:16px sans-serif}@media(max-width:500px){#text{font-size:24px;font-weight:700;letter-spacing:2px;word-spacing:3px}}</style><p id='text'>Words to wrap while preserving glyphs.</p>",
             "<!doctype html><style>body{margin:0}#text{margin:0;font-family:sans-serif;font-size:4vw}</style><p id='text'>Viewport sized text.</p>",

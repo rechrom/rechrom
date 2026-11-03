@@ -2,8 +2,8 @@
 
 //! Comparison of old and newly resolved canonical styles.
 //!
-//! The native `ComputedStyle` remains the value owner. This package owns the
-//! pipeline comparison operation and returns Chromium's native difference
+//! The computed style `ComputedStyle` remains the value owner. This package owns the
+//! pipeline comparison operation and returns Chromium's computed style difference
 //! category without projecting or copying style state.
 
 use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleDifference};

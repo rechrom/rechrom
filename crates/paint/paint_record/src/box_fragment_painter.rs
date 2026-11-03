@@ -3,33 +3,24 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
-
-use layoutng_assembly::fragment_tree::FragmentKind;
-use layoutng_assembly::internal::layout_input::{
-    BorderLineStyle, Display, Edges, ListStyleType, NodeKind, ObjectFit, Offset, PaintImage,
-    PaintPathCommand, PaintPathVerb, Size, TextDecorationPaint, TextDecorationStyle,
-    TransformMatrix, WritingMode,
-};
-use layoutng_assembly::internal::layout_input_types::Color;
-use layoutng_assembly::internal::paint_input::{
-    BackgroundAttachment, BackgroundBox, BackgroundImageLayer, BackgroundRepeat,
-    BackgroundRepeatRule, PaintBlendMode, PaintCornerRadii, PaintStyleData, SvgPaintComponent,
-};
-use layoutng_style::style::appearance::AppearanceValue;
+use std::sync::Arc;
 
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
-use crate::border_shape_utils::{
-    ConicRoundedRectPath, ExpandCornerRadiiAxes, IncludedBorderEdges, ResolveCornerRadii,
-    RoundedRectPath,
+use crate::box_border_painter::{BoxBorderPainter, RoundedBorderSideClips};
+use crate::box_decoration_data::BoxDecorationData;
+use crate::contoured_border_geometry::{
+    ExpandCornerRadiiAxes, IncludedBorderEdges, ResolveCornerRadii,
 };
+use crate::display_item_cache_skipper::DisplayItemCacheSkipper;
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
 use crate::drawing_recorder::DrawingRecorder;
 use crate::fieldset_painter::FieldsetPainter;
 use crate::frame_set_painter::FrameSetPainter;
 use crate::geometry_mapper::{
-    MapRectToRoot, MapRectWithTransforms, MultiplyTransforms, TranslationTransform,
+    MapRectFromRoot, MapRectToRoot, MapRectWithTransforms, MultiplyTransforms, TranslationTransform,
 };
+use crate::inline_box_fragment_painter::{InlineBoxFragmentPainter, LineBoxFragmentPainter};
+use crate::line_relative_rect::LineRelativeRect;
 use crate::mathml_painter::MathMLPainter;
 use crate::nine_piece_image_painter::NinePieceImagePainter;
 use crate::paint_context::PaintContext;
@@ -46,57 +37,481 @@ use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::scrollable_area_painter::ScrollableAreaPainter;
 use crate::svg_shape_painter::SVGShapePainter;
 use crate::table_painters::TablePainter;
+use crate::text_decoration_painter::{Phase as TextDecorationPhase, TextDecorationPainter};
 use crate::theme_painter::ThemePainter;
 use crate::PaintRect;
+use foundation::{
+    blink_geometry::transforms::affine_transform::AffineTransform, LayoutUnit, PhysicalOffset,
+    PhysicalRect, PhysicalSize, WritingMode as StyleWritingMode,
+};
+use layoutng_assembly::fragment_tree::{
+    FragmentKind, FragmentPaintData, FragmentPaintRect, PaintGlyph,
+};
+use layoutng_assembly::internal::background_bleed_avoidance::{
+    BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
+};
+use layoutng_assembly::internal::caret_rect::CaretShape;
+use layoutng_assembly::internal::layout_input::PaintStyle;
+use layoutng_assembly::internal::layout_input::{
+    BorderLineStyle, Display, Edges, FloatSide, FocusedImageMapArea, ImageMapAreaShape,
+    ListStyleType, NodeKind, Offset, PaintImage, PaintPathCommand, PaintPathVerb, Size,
+    TransformMatrix, WritingMode,
+};
+use layoutng_assembly::internal::layout_input_types::Color;
+use layoutng_assembly::internal::paint_input::{
+    BackgroundAttachment, BackgroundBox, BackgroundImageLayer, PaintBlendMode, PaintCornerRadii,
+    SvgPaintComponent,
+};
 
-fn ProcessFlag(flag: &'static OnceLock<bool>, name: &str) -> bool {
-    *flag.get_or_init(|| std::env::var_os(name).is_some())
-}
-
-static TRACE_STYLE_BACKGROUNDS: OnceLock<bool> = OnceLock::new();
-static TRACE_STYLE_IMAGES: OnceLock<bool> = OnceLock::new();
-static TRACE_TEXT_ORIGIN: OnceLock<bool> = OnceLock::new();
-
-// cpp: paint/box_fragment_painter.h:10-48
+// Chromium entity: core/paint/box_fragment_painter.h:35-344.
 pub struct BoxFragmentPainter<'n, 'f, 'c, 'o> {
     node: &'n PaintTreeNode<'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
+/// The exported subset of ObjectPainter::GetHitTestOpaqueness() used by both
+/// scroll-container metadata and source scrollbar recording.
+pub fn GetHitTestOpaqueness(fragment: &FragmentPaintData) -> PaintHitTestOpaqueness {
+    let style = &fragment.paint.style;
+    if style.pointer_events_none() {
+        PaintHitTestOpaqueness::Transparent
+    } else if style.border_radius > 0.0
+        || style.border_radii.is_some()
+        || matches!(
+            fragment.paint.source_kind,
+            NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
+        )
+    {
+        PaintHitTestOpaqueness::Mixed
+    } else {
+        PaintHitTestOpaqueness::Opaque
+    }
+}
+
+// Chromium: box_fragment_painter.cc:739-750,817-822. Non-overlay controls
+// belong before the scrolling background during a self-background phase;
+// every other control path stays in the post-children position.
+fn PaintsOverflowControlsBeforeContents(phase: PaintPhase, should_paint_as_overlay: bool) -> bool {
+    !should_paint_as_overlay && paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
+}
+
+// Chromium: box_fragment_painter.cc:713-714,795-798. kOutline traverses
+// descendants first; kSelfOutlineOnly is the direct layer-root/self pass.
+fn PaintsSelfOutlineBeforeChildren(phase: PaintPhase) -> bool {
+    phase == PaintPhase::kSelfOutlineOnly
+}
+
+fn PaintsSelfOutlineAfterChildren(phase: PaintPhase) -> bool {
+    phase == PaintPhase::kOutline
+}
+
+// Chromium: box_fragment_painter.cc:100-130.  `hidden` is the exported
+// PhysicalFragment/FragmentItem IsHiddenForPaint result and is deliberately
+// distinct from CSS visibility. Hidden table parts still supply their
+// background to visible cells.
+fn IsVisibleToPaint(fragment: &FragmentPaintData) -> bool {
+    if fragment.paint.hidden {
+        return false;
+    }
+    fragment.paint.style.visible()
+        || matches!(
+            fragment.paint.display,
+            Display::kTableSection
+                | Display::kTableHeaderGroup
+                | Display::kTableFooterGroup
+                | Display::kTableRow
+                | Display::kTableColumn
+                | Display::kTableColumnGroup
+        )
+}
+
+// Chromium: box_fragment_painter.cc:2009-2014.
+fn PaintsTextInPhase(phase: PaintPhase) -> bool {
+    matches!(
+        phase,
+        PaintPhase::kForeground
+            | PaintPhase::kSelectionDragImage
+            | PaintPhase::kTextClip
+            | PaintPhase::kMask
+    )
+}
+
+// Chromium: box_fragment_painter.cc:260-321. FragmentItems are projected as
+// resident line/inline/text PaintTree nodes. Keep the source pre-order walk
+// and split only after two consecutive forced line breaks; atomic inline and
+// self-painting-layer contents are not part of the owning formatting context.
+fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
+    #[derive(Default)]
+    struct Backplates {
+        paragraphs: Vec<PaintRect>,
+        current: Option<PaintRect>,
+        consecutive_line_breaks: u32,
+    }
+
+    impl Backplates {
+        fn AddTextRect(&mut self, rect: PaintRect) {
+            if self.consecutive_line_breaks >= 2 {
+                if let Some(current) = self.current.take() {
+                    self.paragraphs.push(current);
+                }
+            }
+            self.consecutive_line_breaks = 0;
+            if let Some(current) = &mut self.current {
+                current.union(rect);
+            } else {
+                self.current = Some(rect);
+            }
+        }
+
+        fn AddLineBreak(&mut self) {
+            self.consecutive_line_breaks += 1;
+        }
+
+        fn Finish(mut self) -> Vec<PaintRect> {
+            if let Some(current) = self.current.take() {
+                self.paragraphs.push(current);
+            }
+            self.paragraphs
+        }
+    }
+
+    fn Visit(node: &PaintTreeNode<'_>, backplates: &mut Backplates) {
+        let Some(fragment) = node.fragment.as_deref() else {
+            return;
+        };
+        if node.is_paint_layer {
+            return;
+        }
+        if !fragment.paint.hidden
+            && matches!(
+                fragment.kind,
+                FragmentKind::kText | FragmentKind::kGeneratedText
+            )
+        {
+            if fragment.paint.is_line_break {
+                backplates.AddLineBreak();
+            } else {
+                backplates.AddTextRect(PaintRect {
+                    x: node.paint_offset.x,
+                    y: node.paint_offset.y,
+                    width: fragment.size.width,
+                    height: fragment.size.height,
+                });
+            }
+            return;
+        }
+        if fragment.paint.painted_atomically {
+            return;
+        }
+        for child in &node.children {
+            let Some(child_fragment) = child.fragment.as_deref() else {
+                continue;
+            };
+            if matches!(
+                child_fragment.kind,
+                FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
+            ) || child_fragment.paint.box_fragment_is_inline_box
+            {
+                Visit(child, backplates);
+            }
+        }
+    }
+
+    let mut backplates = Backplates::default();
+    for child in &root.children {
+        Visit(child, &mut backplates);
+    }
+    backplates.Finish()
+}
+
+// cpp: core/paint/box_painter.cc:45-57. Printing and drag-image paint omit
+// compositor metadata. Canvas drawElement is the source exception because its
+// captured subtree still needs scroll hit testing even without compositing.
+fn ShouldRecordScrollHitTestDataForPaint(
+    omit_compositing_info: bool,
+    canvas_draw_element_enabled: bool,
+    is_in_canvas_subtree: bool,
+) -> bool {
+    !omit_compositing_info || (canvas_draw_element_enabled && is_in_canvas_subtree)
+}
+
+// Chromium checks the unsnapped content-box dimensions before pixel snapping,
+// then insets the snapped rectangle by half the one-pixel stroke width.
+// cpp: core/paint/image_painter.cc:130-135,184-192
+fn MissingImagePlaceholderRect(
+    is_image: bool,
+    content_box: PaintRect,
+    mut snapped_content_box: PaintRect,
+) -> Option<PaintRect> {
+    if !is_image || content_box.width <= 2.0 || content_box.height <= 2.0 {
+        return None;
+    }
+    snapped_content_box.x += 0.5;
+    snapped_content_box.y += 0.5;
+    snapped_content_box.width -= 1.0;
+    snapped_content_box.height -= 1.0;
+    (snapped_content_box.width > 0.0 && snapped_content_box.height > 0.0)
+        .then_some(snapped_content_box)
+}
+
+// Chromium limits sprite-sheet subrect painting to SVG images. Rechrom's
+// document-backed PaintImage is the typed SVG image boundary; bitmap images
+// deliberately retain the complete visual rect to avoid subrect-decoding
+// bleed. PaintTreeNode stores cull rects in root space, so restore the local
+// paint space before applying ImagePainter's containment test.
+// cpp: core/paint/image_painter.cc:147-166
+fn SvgSpriteVisualRect(
+    image: &PaintImage,
+    visual_rect: PaintRect,
+    root_cull_rect: Option<PaintRect>,
+    transforms: &[TransformMatrix],
+) -> PaintRect {
+    if !image.IsDocumentImage() {
+        return visual_rect;
+    }
+    let Some(cull_rect) =
+        root_cull_rect.and_then(|cull_rect| MapRectFromRoot(cull_rect, transforms))
+    else {
+        return visual_rect;
+    };
+    let enclosing_visual_rect = visual_rect.enclosing();
+    let contains_cull_rect = cull_rect.x >= enclosing_visual_rect.x
+        && cull_rect.y >= enclosing_visual_rect.y
+        && cull_rect.x + cull_rect.width <= enclosing_visual_rect.x + enclosing_visual_rect.width
+        && cull_rect.y + cull_rect.height <= enclosing_visual_rect.y + enclosing_visual_rect.height;
+    if contains_cull_rect {
+        visual_rect.intersection(cull_rect)
+    } else {
+        visual_rect
+    }
+}
+
+// LayoutImage::MutableForPainting::UpdatePaintedRect invalidates the image's
+// DisplayItemClient when this value changes. The retained fragment payload is
+// Rechrom's package-boundary owner for the same LayoutImage paint lifecycle
+// value. Returning `true` lets the caller reject the old drawing before
+// PaintController can move it into the new artifact.
+// cpp: core/layout/layout_image.cc:411-421
+// cpp: core/paint/image_painter.cc:167-173
+fn UpdateImagePaintedRect(node: &PaintTreeNode<'_>, visual_rect: PaintRect) -> bool {
+    let fragment = node
+        .fragment
+        .as_deref()
+        .expect("paint tree node has a fragment");
+    let painted_rect = FragmentPaintRect {
+        offset: Offset {
+            x: visual_rect.x,
+            y: visual_rect.y,
+        },
+        size: Size {
+            width: visual_rect.width,
+            height: visual_rect.height,
+        },
+    };
+    let changed = fragment.paint.image_last_paint_rect.get() != Some(painted_rect);
+    fragment.paint.image_last_paint_rect.set(Some(painted_rect));
+    changed
+}
+
+fn UseCachedImageDrawingIfPossible(
+    context: &RefCell<PaintContext<'_>>,
+    node: &PaintTreeNode<'_>,
+    phase: PaintPhase,
+    painted_rect_changed: bool,
+) -> bool {
+    !painted_rect_changed
+        && DrawingRecorder::UseCachedDrawingIfPossible(
+            context,
+            node,
+            DisplayItemIdType::PaintPhaseToDrawingType(phase),
+        )
+}
+
+// Source: core/html/canvas/image_element_base.cc:232-248 and
+// core/paint/image_painter.cc:255-261.
+fn ImageDecodingModeForPainting(
+    fragment: &FragmentPaintData,
+    image: &PaintImage,
+) -> image_resource::ImageDecodingMode {
+    let previous = fragment
+        .paint
+        .image_last_painted_id
+        .replace(image.paint_image_id);
+    let content_transitioned = previous != image_resource::PaintImageId::INVALID
+        && image.paint_image_id != image_resource::PaintImageId::INVALID
+        && previous != image.paint_image_id;
+    if content_transitioned
+        && fragment.paint.image_decoding_mode == image_resource::ImageDecodingMode::kUnspecified
+    {
+        image_resource::ImageDecodingMode::kSync
+    } else {
+        fragment.paint.image_decoding_mode
+    }
+}
+
+// Chromium: box_fragment_painter.cc:851-856. Table rows/sections paint their
+// descendants but never contribute an ordinary scroll hit-test display item.
+fn ShouldRecordHitTestData(display: Display) -> bool {
+    !matches!(
+        display,
+        Display::kTableRow
+            | Display::kTableSection
+            | Display::kTableHeaderGroup
+            | Display::kTableFooterGroup
+    )
+}
+
+fn PaintsCaretBeforeChildren(shape: Option<CaretShape>, unscaled_text_combine_caret: bool) -> bool {
+    shape == Some(CaretShape::kBlock) || unscaled_text_combine_caret
+}
+
+fn PaintsCaretAfterChildren(shape: Option<CaretShape>, unscaled_text_combine_caret: bool) -> bool {
+    shape.is_some() && shape != Some(CaretShape::kBlock) && !unscaled_text_combine_caret
+}
+
 impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
-    // cpp: paint/box_fragment_painter.h:12-13
+    // Chromium constructors: box_fragment_painter.h:40-46,114-119,346-388.
     pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
-    // cpp: paint/box_fragment_painter.h:18-19
-    // cpp: paint/box_fragment_painter.cc:595-598
-    pub fn PaintFragment(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
-        let _chunk_properties = if paint_info.phase == PaintPhase::kMask {
-            crate::paint_context::ScopedPaintChunkProperties::mask(paint_info.context, node)
-        } else if node.is_paint_layer {
-            crate::paint_context::ScopedPaintChunkProperties::layer(
-                paint_info.context,
-                node,
-                DisplayItemIdType::PaintPhaseToDrawingType(paint_info.phase),
-            )
-        } else if node.applies_transform || node.applies_effect {
-            crate::paint_context::ScopedPaintChunkProperties::new(
-                paint_info.context,
-                node,
-                DisplayItemIdType::PaintPhaseToDrawingType(paint_info.phase),
-            )
-        } else {
-            crate::paint_context::ScopedPaintChunkProperties::properties_only(
-                paint_info.context,
-                node,
-            )
-        };
-        Self::new(node, paint_info.context).Paint(paint_info);
+    // Chromium: box_fragment_painter.h:57-60; box_fragment_painter.cc:615-641.
+    pub fn ShouldPaintFragment(
+        node: &'n PaintTreeNode<'f>,
+        paint_info: &PaintInfo<'c, 'o>,
+    ) -> bool {
+        let paint_state = crate::scoped_paint_state::ScopedPaintState::new(node, paint_info);
+        Self::ShouldPaintWithState(node, &paint_state)
     }
 
-    // cpp: paint/box_fragment_painter.h:22-23
-    // cpp: paint/box_fragment_painter.cc:600-604
+    // Chromium: box_fragment_painter.cc:2016-2022,2059-2064,2106-2119.
+    // FragmentItems are resident PaintTree children in Rechrom. Their source
+    // ink overflow remains fragment-local while `paint_offset` is the source
+    // `paint_offset + item.OffsetInContainerFragment()` value.
+    pub fn ChildIntersectsCullRect(
+        node: &PaintTreeNode<'_>,
+        paint_info: &PaintInfo<'_, '_>,
+    ) -> bool {
+        let Some(fragment) = node.fragment.as_deref() else {
+            return true;
+        };
+        // PaintText performs the source HasSelection exception after resolving
+        // the actual selection range. Admit line breaks to that exact check.
+        if fragment.paint.is_line_break {
+            return true;
+        }
+        // SVGShapePainter/SVGContainerPainter own SVG geometry culling against
+        // their transformed visual bounds. SVG model objects are not
+        // FragmentItems, and their anonymous zero-sized NG boxes must not
+        // suppress those source culls while the parent walks resident
+        // children. Chromium: svg_shape_painter.cc:52-64 and
+        // svg_container_painter.cc:36-90.
+        if fragment.paint.svg_shape.is_some()
+            || matches!(
+                fragment.paint.source_kind,
+                NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
+            )
+        {
+            return true;
+        }
+        let Some(rect) = fragment.paint.ink_overflow else {
+            return true;
+        };
+        // Chromium: box_fragment_painter.cc:1923-1936. Soft wraps and <br>
+        // may paint outside a line item's inline-direction ink overflow, so a
+        // line-box child is culled only in the block direction. Ordinary
+        // FragmentItems keep the full-rectangle admission below.
+        if fragment.kind == FragmentKind::kLine {
+            let cull = paint_info.GetCullRect();
+            return match fragment.paint.writing_mode {
+                layoutng_assembly::internal::layout_input::WritingMode::kHorizontalTb => {
+                    let y = node.paint_offset.y + rect.offset.y;
+                    cull.IntersectsVerticalRange(y, y + rect.size.height)
+                }
+                _ => {
+                    let x = node.paint_offset.x + rect.offset.x;
+                    cull.IntersectsHorizontalRange(x, x + rect.size.width)
+                }
+            };
+        }
+        paint_info.IntersectsCullRect(
+            PaintRect {
+                x: rect.offset.x,
+                y: rect.offset.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            },
+            node.paint_offset,
+        )
+    }
+
+    // Chromium: box_fragment_painter.cc:615-620,643-669,2122-2133.
+    pub fn PaintFragment(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
+        let paint_state = crate::scoped_paint_state::ScopedPaintState::new(node, paint_info);
+        if !Self::ShouldPaintWithState(node, &paint_state) {
+            return;
+        }
+        Self::new(node, paint_info.context).Paint(paint_state.GetPaintInfo());
+    }
+
+    fn ShouldPaintWithState(
+        node: &PaintTreeNode<'_>,
+        paint_state: &crate::scoped_paint_state::ScopedPaintState<'_, '_, '_, '_>,
+    ) -> bool {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("paint tree node has a fragment");
+        if fragment.paint.is_paginated_root {
+            return true;
+        }
+        // SVGShapePainter performs its own transformed visual-bounds cull.
+        // The resident NG box for a shape has no CSS box ink overflow.
+        if fragment.paint.svg_shape.is_some() {
+            return true;
+        }
+        let Some(rect) = fragment.paint.filtered_ink_overflow else {
+            // Standalone synthetic fragments have no source LayoutObject from
+            // which to export filtered overflow. Conservatively admit them;
+            // source paint inputs always carry the exact rectangle.
+            return true;
+        };
+        paint_state.LocalRectIntersectsCullRect(PaintRect {
+            x: rect.offset.x,
+            y: rect.offset.y,
+            width: rect.size.width,
+            height: rect.size.height,
+        })
+    }
+
+    // Chromium: box_fragment_painter.cc:768-781. A block caret overlaps the
+    // following glyph, so it is recorded before descendant text.
+    pub fn PaintFragmentBeforeChildren(
+        node: &'n PaintTreeNode<'f>,
+        paint_info: &PaintInfo<'c, 'o>,
+    ) {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("paint tree node has a fragment");
+        let unscaled_text_combine_caret = node.applies_transform
+            && fragment.paint.text_combine.is_some()
+            && paint_info.context.borrow().caret.is_some();
+        if paint_info.phase == PaintPhase::kForeground
+            && fragment.paint.HasSource()
+            && IsVisibleToPaint(fragment)
+            && PaintsCaretBeforeChildren(
+                paint_info.context.borrow().caret_shape,
+                unscaled_text_combine_caret,
+            )
+        {
+            crate::caret_display_item_client::PaintCaret(node, paint_info.context);
+        }
+    }
+
+    // Rechrom's paint_walk owns Chromium's in-method child traversal. This
+    // hook owns only the corresponding post-children caret, overflow-control,
+    // table and frameset recording work.
     pub fn PaintFragmentAfterChildren(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
         let _properties = if node.applies_transform
             && node
@@ -118,52 +533,69 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         Self::new(node, paint_info.context).PaintAfterChildren(paint_info);
     }
 
-    // cpp: paint/box_fragment_painter.h:26
-    // cpp: paint/box_fragment_painter.cc:606-611
+    // Recording bridge for SVGModelObjectPainter::PaintOutline
+    // (svg_model_object_painter.cc:55-71). The caller has released
+    // ScopedSVGPaintState while retaining the SVG transform.
+    pub fn PaintSVGOutline(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) {
+        Self::new(node, context).PaintOutline(PaintPhase::kSelfOutlineOnly);
+    }
+
+    // Chromium: box_fragment_painter.h:62; box_fragment_painter.cc:643-662.
     fn Paint(&self, paint_info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
+        if fragment.paint.style.border_shape_unsupported() {
+            panic!("unsupported CSS border-shape paint path");
+        }
         let text_combine = fragment.paint.text_combine.is_some();
         if fragment.paint.svg_hidden_container
-            || (!fragment.paint.has_source && !text_combine)
-            || !fragment.paint.style.visible
+            || (!fragment.paint.HasSource() && !text_combine)
+            || fragment.paint.hidden
+            || !fragment.paint.CanPaintFragmentOccurrence()
         {
             return;
         }
+        // cpp: core/layout/layout_image.cc:302-314. LayoutImage performs its
+        // animated reuse check after delegating to ImagePainter::Paint, even
+        // when that painter emits no image drawing. Retain the exact paint
+        // entry fact for the document-owned UseCounter coordinator.
+        if fragment.paint.replaced_is_image {
+            if let Some(image_id) = fragment.paint.style.image_resource_id {
+                self.context.borrow_mut().RecordPaintedLayoutImage(image_id);
+            }
+        }
         if text_combine {
-            if !matches!(
-                paint_info.phase,
-                PaintPhase::kBlockBackground
-                    | PaintPhase::kForcedColorsModeBackplate
-                    | PaintPhase::kFloat
-                    | PaintPhase::kSelfBlockBackgroundOnly
-                    | PaintPhase::kDescendantBlockBackgroundsOnly
-                    | PaintPhase::kSelfOutlineOnly
-            ) {
+            if IsVisibleToPaint(fragment)
+                && !matches!(
+                    paint_info.phase,
+                    PaintPhase::kBlockBackground
+                        | PaintPhase::kForcedColorsModeBackplate
+                        | PaintPhase::kFloat
+                        | PaintPhase::kSelfBlockBackgroundOnly
+                        | PaintPhase::kDescendantBlockBackgroundsOnly
+                        | PaintPhase::kSelfOutlineOnly
+                )
+            {
                 // TextCombinePainter paints parent decorations outside the
                 // compressed glyph CTM, with emphasis between the two
                 // decoration passes.
                 // cpp: core/paint/text_combine_painter.cc:35-48
-                self.PaintTextDecorations(paint_info.phase, false);
+                let mut decoration_painter =
+                    TextDecorationPainter::new(self.node, self.context, paint_info.phase, None);
+                decoration_painter.Begin(TextDecorationPhase::Originating);
+                decoration_painter.PaintExceptLineThrough();
                 self.PaintTextCombineEmphasis(paint_info.phase);
-                self.PaintTextDecorations(paint_info.phase, true);
+                decoration_painter.PaintOnlyLineThrough();
             }
             return;
         }
-        self.PaintInternal(paint_info);
-    }
-
-    // cpp: paint/box_fragment_painter.h:27
-    // cpp: paint/box_fragment_painter.cc:613-618
-    fn PaintInternal(&self, paint_info: &PaintInfo<'c, 'o>) {
         self.PaintObject(paint_info);
     }
 
-    // cpp: paint/box_fragment_painter.h:28
-    // cpp: paint/box_fragment_painter.cc:620-712
+    // Chromium: box_fragment_painter.h:63-66; box_fragment_painter.cc:858-959.
     fn PaintObject(&self, paint_info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
@@ -171,42 +603,99 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let phase = paint_info.phase;
+        let is_visible = IsVisibleToPaint(fragment);
+        if phase == PaintPhase::kForcedColorsModeBackplate {
+            if fragment.paint.is_inline_formatting_context && fragment.paint.InForcedColorsMode() {
+                self.PaintBackplate();
+            }
+            return;
+        }
         if phase == PaintPhase::kMask {
-            self.PaintMask();
+            if is_visible
+                && matches!(
+                    fragment.kind,
+                    FragmentKind::kText | FragmentKind::kGeneratedText
+                )
+            {
+                self.PaintText(paint_info);
+            } else if is_visible {
+                self.PaintMask(DisplayItemIdType::PaintPhaseToDrawingType(
+                    PaintPhase::kMask,
+                ));
+            }
+            return;
+        }
+        if matches!(
+            phase,
+            PaintPhase::kSelectionDragImage | PaintPhase::kTextClip
+        ) && matches!(
+            fragment.kind,
+            FragmentKind::kText | FragmentKind::kGeneratedText
+        ) {
+            if is_visible {
+                self.PaintText(paint_info);
+            }
             return;
         }
         if fragment.paint.source_kind == NodeKind::kFrameSet {
             return;
         }
+        if phase == PaintPhase::kForeground
+            && fragment.kind == FragmentKind::kBox
+            && fragment.paint.box_fragment_is_inline_box
+        {
+            InlineBoxFragmentPainter::new(self.node, self.context).Paint(paint_info, self);
+        }
+        if phase == PaintPhase::kForeground && fragment.kind == FragmentKind::kLine {
+            LineBoxFragmentPainter::new(self.node, self.context).Paint(paint_info, self);
+        }
         // SVGContainerPainter paints content/effects/outline, never CSS box
         // decoration. The LayoutBox fragment storage ABI does not make a
         // nested SVG viewport into a CSS border/background box.
-        if IsBackgroundPhase(phase)
+        if paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
+            && is_visible
             && !matches!(
                 fragment.paint.source_kind,
                 NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
             )
             && fragment.kind == FragmentKind::kBox
+            && !fragment.paint.box_fragment_is_inline_box
             && fragment.paint.establishes_paint_state
         {
-            if self.node.is_root && fragment.paint.background_transfers_to_view {
-                self.PaintCanvasBackground(phase);
+            if self.node.is_root {
+                self.PaintRootGroup(phase);
+                if fragment.paint.background_transfers_to_view {
+                    self.PaintCanvasBackground(phase);
+                }
             }
             let composites_fixed_background = UsesCompositedFixedBackground(self.node);
             if composites_fixed_background {
                 self.PaintCompositedFixedBackground(phase);
             }
-            // BoxFragmentPainter::PaintBoxDecorationBackgroundWithDecorationData
-            // records all decoration commands together (official .cc:1539).
-            // Column rules have a separate recorder (.cc:1623).
-            let has_box_decoration = HasSupportedBoxDecoration(self.node);
+            // Chromium constructs one BoxDecorationData before consulting the
+            // drawing cache. Background, border, shadow and theme decisions
+            // must therefore stay coupled to the same PaintInfo flags.
+            let mut decoration_data = BoxDecorationData::new(self.node, paint_info);
+            if !fragment.paint.background_paint_location.PaintsBorderBox()
+                || composites_fixed_background
+            {
+                decoration_data = decoration_data.WithoutBackground();
+            }
+            let table_checks_column_backgrounds =
+                fragment.paint.table.as_ref().is_some_and(|table| {
+                    table.columns.iter().any(|column| {
+                        column.style.background_color().alpha > 0.0
+                            || column.style.has_background_images()
+                    })
+                });
+            let has_box_decoration =
+                decoration_data.ShouldPaint() || table_checks_column_backgrounds;
             let decoration_visual_rect = DecorationVisualRect(self.node);
             let cached_box_decoration = has_box_decoration
                 && DrawingRecorder::UseCachedDrawingIfPossible(
                     self.context,
                     self.node,
                     DisplayItemIdType::kBoxDecorationBackground,
-                    decoration_visual_rect,
                 );
             let background_recorder = (has_box_decoration && !cached_box_decoration).then(|| {
                 DrawingRecorder::new(
@@ -216,152 +705,102 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     decoration_visual_rect,
                 )
             });
-            // Native theme ownership is a property of the control appearance,
+            // Chromium theme ownership is a property of the control appearance,
             // independent of whether PaintController moved the previous
             // BoxDecorationBackground record into this artifact.
-            let theme_owns_decoration =
-                fragment.paint.form_control.as_ref().is_some_and(|control| {
-                    !matches!(
-                        control.appearance,
-                        AppearanceValue::kNone | AppearanceValue::kAuto
-                    )
-                });
-            if !cached_box_decoration {
+            let theme_owns_decoration = decoration_data.HasAppearance();
+            let is_fieldset = fragment.paint.fieldset.is_some();
+            if !cached_box_decoration
+                && theme_owns_decoration
+                && decoration_data.ShouldPaintShadow()
+            {
                 self.PaintBoxShadows(phase, false);
+            }
+            if !cached_box_decoration && theme_owns_decoration {
                 let painted_by_theme = ThemePainter::new(self.node, self.context).Paint(paint_info);
                 debug_assert_eq!(painted_by_theme, theme_owns_decoration);
             }
             if !cached_box_decoration && !theme_owns_decoration {
-                let style = &*fragment.paint.style;
-                let border_radii = BackgroundRadii(self.node, BackgroundBox::kBorderBox);
-                let has_background = !fragment.paint.background_transfers_to_view
-                    && (style.background_color.alpha > 0.0 || !style.background_images.is_empty());
-                let mut has_border = false;
-                let border = IncludedBorderEdges(&fragment.paint);
-                let widths = [border.top, border.right, border.bottom, border.left];
-                for (edge, width) in widths.into_iter().enumerate() {
-                    has_border |= width > 0.0
-                        && fragment.paint.border_styles[edge] != BorderLineStyle::kNone
-                        && style.border_colors[edge].alpha > 0.0;
-                }
-                let decoration_bleed_layer = border_radii.HasRadius()
-                    && has_background
-                    && has_border
-                    && BackgroundBleedInset(self.node).is_none();
-                if decoration_bleed_layer {
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kSave,
-                            phase,
-                            node_id: fragment.node_id,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kClipRoundedRect,
-                            phase,
-                            node_id: fragment.node_id,
-                            rect: self.node.PixelSnappedRect(&BackgroundBoxRect(
-                                self.node,
-                                BackgroundBox::kBorderBox,
-                            )),
-                            corner_radius: crate::border_shape_utils::UniformCornerRadius(
-                                &border_radii,
-                            ),
-                            corner_radii: border_radii,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kSaveLayerBlend,
-                            phase,
-                            node_id: fragment.node_id,
-                            blend_mode: PaintBlendMode::kNormal,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                }
-                if matches!(
-                    fragment.paint.display,
-                    Display::kTableSection
-                        | Display::kTableHeaderGroup
-                        | Display::kTableFooterGroup
-                        | Display::kTableRow
-                ) {
-                    self.PaintTablePartBackground(phase);
-                } else if fragment.paint.background_paint_location.PaintsBorderBox()
-                    && !composites_fixed_background
-                {
-                    self.PaintBackground(phase, decoration_bleed_layer);
-                }
-                self.PaintBorder(phase, decoration_bleed_layer);
-                if decoration_bleed_layer {
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kRestore,
-                            phase,
-                            node_id: fragment.node_id,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kRestore,
-                            phase,
-                            node_id: fragment.node_id,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
+                if is_fieldset {
+                    if decoration_data.ShouldPaint() {
+                        FieldsetPainter::new(self.node, self.context).PaintBoxDecorationBackground(
+                            self,
+                            paint_info,
+                            &decoration_data,
+                        );
+                    }
+                } else {
+                    self.PaintCssBoxDecoration(paint_info, &decoration_data);
                 }
             }
-            if !cached_box_decoration {
+            if !cached_box_decoration
+                && theme_owns_decoration
+                && decoration_data.ShouldPaintShadow()
+            {
                 self.PaintBoxShadows(phase, true);
             }
             // Official TablePainter::PaintBoxDecorationBackground (.cc:421)
             // paints all column backgrounds inside the table's surrounding
             // BoxDecorationBackground recorder, not a record per column/cell.
-            if !cached_box_decoration && fragment.paint.table.is_some() {
+            if !cached_box_decoration && table_checks_column_backgrounds {
                 TablePainter::new(self.node, self.context).PaintColumnBackgrounds(paint_info);
             }
             drop(background_recorder);
-            if !theme_owns_decoration && fragment.paint.background_paint_location.PaintsContents() {
-                self.PaintContentsBackground(phase);
+            // Chromium paints non-overlay controls before the scrolling
+            // background so that background and contents can share their
+            // scrolling layer (box_fragment_painter.cc:739-750). The
+            // post-children hook derives the same condition and skips the
+            // duplicate late pass.
+            if fragment
+                .paint
+                .scrollbars
+                .as_ref()
+                .is_some_and(|scrollbars| {
+                    PaintsOverflowControlsBeforeContents(
+                        paint_info.phase,
+                        scrollbars.should_paint_as_overlay,
+                    )
+                })
+            {
+                ScrollableAreaPainter::new(self.node, self.context)
+                    .PaintOverflowControls(paint_info);
             }
             if !theme_owns_decoration {
-                self.PaintColumnRules(phase);
+                let paints_contents = fragment.paint.background_paint_location.PaintsContents();
+                if paints_contents || fragment.paint.scrolls_overflow {
+                    let _contents_properties =
+                        crate::scoped_paint_state::ScopedBoxContentsPaintState::new(
+                            paint_info, self.node,
+                        );
+                    if paints_contents {
+                        self.PaintContentsBackground(phase);
+                    }
+                    if fragment.paint.scrolls_overflow {
+                        self.PaintColumnRules(phase);
+                    }
+                } else {
+                    self.PaintColumnRules(phase);
+                }
             }
         }
-        // Source: box_fragment_painter.cc:1447-1451 and box_painter.cc:37-122.
+        // Source: box_fragment_painter.cc:1446-1450 and box_painter.cc:37-122.
         // Record this after the non-scrolling background so background layer
         // squashing is unchanged. The current scoped properties are the local
         // border box; the payload points at the real contents ScrollTranslation.
-        if IsBackgroundPhase(phase)
+        if paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
+            && is_visible
             && fragment.kind == FragmentKind::kBox
+            && ShouldRecordHitTestData(fragment.paint.display)
             && fragment.paint.scroll_container.is_some()
+            && ShouldRecordScrollHitTestDataForPaint(
+                paint_info.ShouldOmitCompositingInfo(),
+                fragment.paint.CanvasDrawElementEnabled(),
+                fragment.paint.IsInCanvasSubtree(),
+            )
         {
             let translation = self.node.contents_properties.nodes.transform.clone();
             if translation.scroll.is_some() {
-                let style = &*fragment.paint.style;
-                let opaqueness = if style.pointer_events_none {
-                    PaintHitTestOpaqueness::Transparent
-                } else if style.border_radius > 0.0
-                    || style.border_radii.is_some()
-                    || matches!(
-                        fragment.paint.source_kind,
-                        NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
-                    )
-                {
-                    PaintHitTestOpaqueness::Mixed
-                } else {
-                    PaintHitTestOpaqueness::Opaque
-                };
+                let opaqueness = GetHitTestOpaqueness(fragment);
                 self.context.borrow_mut().RecordScrollHitTestData(
                     self.node,
                     DecorationVisualRect(self.node),
@@ -369,47 +808,67 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     translation,
                     PaintRect::default(),
                 );
+                if opaqueness != PaintHitTestOpaqueness::Transparent {
+                    ScrollableAreaPainter::new(self.node, self.context)
+                        .RecordResizerScrollHitTestData();
+                }
             }
         }
         let _contents_properties =
             (phase == PaintPhase::kForeground && fragment.kind == FragmentKind::kBox).then(|| {
-                crate::paint_context::ScopedPaintChunkProperties::contents(
-                    self.context,
-                    self.node,
-                    phase,
-                )
+                crate::scoped_paint_state::ScopedBoxContentsPaintState::new(paint_info, self.node)
             });
         if phase == PaintPhase::kForeground
+            && is_visible
             && matches!(
                 fragment.kind,
                 FragmentKind::kText | FragmentKind::kGeneratedText
             )
         {
-            self.PaintText(phase);
+            self.PaintText(paint_info);
         }
-        if phase == PaintPhase::kForeground && fragment.paint.mathml.is_some() {
+        if phase == PaintPhase::kForeground && is_visible && fragment.paint.mathml.is_some() {
             MathMLPainter::new(self.node, self.context).Paint(paint_info);
         }
-        if phase == PaintPhase::kForeground && fragment.paint.svg_shape.is_some() {
+        if phase == PaintPhase::kForeground && is_visible && fragment.paint.svg_shape.is_some() {
             SVGShapePainter::new(self.node, self.context).Paint(paint_info);
         }
         if phase == PaintPhase::kForeground
+            && is_visible
             && fragment.paint.source_kind == NodeKind::kReplaced
             && fragment.paint.establishes_paint_state
         {
-            self.PaintReplaced(phase);
+            // cpp: core/layout/layout_replaced.cc:238-241
+            // Source: image_painter.cc:59-60. ImagePainter delegates the
+            // common box/background/border/outline pass to LayoutReplaced;
+            // this point supplies only its replaced foreground contribution.
+            self.PaintReplaced(paint_info);
         }
-        if IsOutlinePhase(phase)
+        if PaintsSelfOutlineBeforeChildren(phase)
+            && is_visible
+            && !crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(self.node)
             && fragment.kind == FragmentKind::kBox
             && fragment.paint.establishes_paint_state
         {
             self.PaintOutline(phase);
         }
+        // Source: image_painter.cc:62-64. The specialized image-map focus
+        // ring follows LayoutReplaced's ordinary outline contribution.
+        if phase == PaintPhase::kOutline
+            && is_visible
+            && fragment.paint.replaced_is_image
+            && fragment.paint.establishes_paint_state
+        {
+            self.PaintAreaElementFocusRing();
+        }
     }
 
-    // Blink box_fragment_painter.cc:1343-1370: one native client/phase
+    // Blink box_fragment_painter.cc:1343-1370 and
+    // box_painter_base.cc:1777-1795: one source client/phase records the
+    // mask FillLayers and optional mask-box-image after contents.
     // DrawingRecorder paints the actual mask-image source after the contents.
-    fn PaintMask(&self) {
+    // Chromium: box_fragment_painter.h:193; box_fragment_painter.cc:1343-1369.
+    pub(crate) fn PaintMask(&self, item_type: DisplayItemIdType) {
         if !self.node.applies_mask {
             return;
         }
@@ -431,12 +890,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if !IsVisible(self.node, &bounds) {
             return;
         }
-        let _drawing = DrawingRecorder::new(
-            self.context,
-            self.node,
-            DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kMask),
-            bounds,
-        );
+        let _drawing = DrawingRecorder::new(self.context, self.node, item_type, bounds);
         // Chromium records only the mask source in the kMask paint phase. Its
         // EffectPaintPropertyNode supplies kDstIn when PaintArtifactCompositor
         // builds the cc mask layer; applying DstIn inside this source record
@@ -458,19 +912,35 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         NinePieceImagePainter::PaintMaskBox(self.node, self.context, PaintPhase::kMask);
     }
 
-    // cpp: paint/box_fragment_painter.h:29
-    // cpp: paint/box_fragment_painter.cc:813-826
+    // See PaintFragmentAfterChildren for the source ranges owned by this split.
     fn PaintAfterChildren(&self, paint_info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        if !fragment.paint.has_source || !fragment.paint.style.visible {
+        if !fragment.paint.HasSource() || !IsVisibleToPaint(fragment) {
             return;
         }
-        if paint_info.phase == PaintPhase::kForeground {
+        // Chromium: box_fragment_painter.cc:785-793. Bar and underscore
+        // carets are recorded after descendant text.
+        let caret_was_painted_before_text_combine = self.node.applies_transform
+            && fragment.paint.text_combine.is_some()
+            && self.context.borrow().caret.is_some();
+        if paint_info.phase == PaintPhase::kForeground
+            && PaintsCaretAfterChildren(
+                self.context.borrow().caret_shape,
+                caret_was_painted_before_text_combine,
+            )
+        {
             crate::caret_display_item_client::PaintCaret(self.node, self.context);
+        }
+        if PaintsSelfOutlineAfterChildren(paint_info.phase)
+            && !crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(self.node)
+            && fragment.kind == FragmentKind::kBox
+            && fragment.paint.establishes_paint_state
+        {
+            self.PaintOutline(PaintPhase::kSelfOutlineOnly);
         }
         if fragment.paint.source_kind == NodeKind::kFrameSet {
             FrameSetPainter::new(self.node, self.context).PaintBorders(paint_info);
@@ -482,16 +952,72 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             TablePainter::new(self.node, self.context).PaintCollapsedBorders(paint_info);
         }
-        if paint_info.phase == PaintPhase::kOverlayOverflowControls
-            && fragment.paint.establishes_paint_state
+        let overflow_controls_were_painted_before_contents = fragment
+            .paint
+            .scrollbars
+            .as_ref()
+            .is_some_and(|scrollbars| {
+                PaintsOverflowControlsBeforeContents(
+                    paint_info.phase,
+                    scrollbars.should_paint_as_overlay,
+                )
+            });
+        if fragment.paint.establishes_paint_state
             && fragment.paint.scrollbars.is_some()
+            && !overflow_controls_were_painted_before_contents
         {
             ScrollableAreaPainter::new(self.node, self.context).PaintOverflowControls(paint_info);
         }
     }
 
-    // cpp: paint/box_fragment_painter.h:40
-    // cpp: paint/box_fragment_painter.cc:714-735
+    // Chromium: box_fragment_painter.cc:1966-1999. The retained style owns
+    // the used forced-color inputs; Layout owns line-break identity and text
+    // rectangles. Paint only groups paragraphs and records their fills.
+    fn PaintBackplate(&self) {
+        let fragment = self
+            .node
+            .fragment
+            .as_deref()
+            .expect("backplate owner has a fragment");
+        if !fragment.paint.style.forced_color_adjust_auto() || !fragment.paint.style.visible() {
+            return;
+        }
+        let backplates = BuildBackplates(self.node);
+        let Some(mut visual_rect) = backplates.first().copied() else {
+            return;
+        };
+        for rect in backplates.iter().copied().skip(1) {
+            visual_rect.union(rect);
+        }
+        if DrawingRecorder::UseCachedDrawingIfPossible(
+            self.context,
+            self.node,
+            DisplayItemIdType::kForcedColorsModeBackplate,
+        ) {
+            return;
+        }
+        let _drawing = DrawingRecorder::new(
+            self.context,
+            self.node,
+            DisplayItemIdType::kForcedColorsModeBackplate,
+            visual_rect.enclosing(),
+        );
+        for rect in backplates {
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    phase: PaintPhase::kForcedColorsModeBackplate,
+                    node_id: fragment.node_id,
+                    rect,
+                    color: fragment.paint.style.forced_background_color(),
+                    ..Default::default()
+                },
+                self.node,
+            );
+        }
+    }
+
+    // Chromium gap/column decoration recording: box_fragment_painter.cc:1571-1641.
     fn PaintColumnRules(&self, phase: PaintPhase) {
         let fragment = self
             .node
@@ -537,8 +1063,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/box_fragment_painter.h:32
-    // cpp: paint/box_fragment_painter.cc:737-811
     fn PaintTablePartBackground(&self, phase: PaintPhase) {
         fn collect_cells<'n, 'f>(
             parent: &'n PaintTreeNode<'f>,
@@ -567,12 +1091,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let style = &*fragment.paint.style;
-        if style.background_color.alpha <= 0.0 && style.background_images.is_empty() {
+        let style = &fragment.paint.style;
+        if style.background_color().alpha <= 0.0 && !style.has_background_images() {
             return;
         }
         let has_blended_layer = style
-            .background_images
+            .background_images()
             .iter()
             .any(|layer| layer.blend_mode != PaintBlendMode::kNormal);
         for cell in cells {
@@ -580,7 +1104,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 .fragment
                 .as_deref()
                 .expect("paint tree node has a fragment");
-            if !cell_fragment.paint.has_source || !cell_fragment.paint.style.visible {
+            if !cell_fragment.paint.HasSource() || !cell_fragment.paint.style.visible() {
                 continue;
             }
             let clip = PaintRect {
@@ -623,20 +1147,20 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.node,
                 );
             }
-            if style.background_color.alpha > 0.0 {
+            if style.background_color().alpha > 0.0 {
                 self.context.borrow_mut().Append(
                     DisplayItem {
                         r#type: DisplayItemType::kDrawRect,
                         phase,
                         node_id: fragment.node_id,
                         rect: clip,
-                        color: style.background_color,
+                        color: style.background_color(),
                         ..Default::default()
                     },
                     self.node,
                 );
             }
-            for layer in style.background_images.iter().rev() {
+            for layer in style.background_images().iter().rev() {
                 self.PaintBackgroundImage(layer, phase, true, None);
             }
             if has_blended_layer {
@@ -662,15 +1186,118 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/box_fragment_painter.h:36
-    // cpp: paint/box_fragment_painter.cc:828-958
-    fn PaintBoxShadows(&self, phase: PaintPhase, inset: bool) {
+    // Chromium: core/paint/box_fragment_painter.cc:1645-1743.
+    // InlineBoxFragmentPainter delegates the same CSS decoration sequence to
+    // this box painter, while fieldsets retain their specialized owner.
+    pub(crate) fn PaintCssBoxDecoration(
+        &self,
+        paint_info: &PaintInfo<'c, 'o>,
+        decoration_data: &BoxDecorationData,
+    ) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let style = &*fragment.paint.style;
+        let phase = paint_info.phase;
+        let bleed_avoidance = decoration_data.GetBackgroundBleedAvoidance();
+
+        if decoration_data.ShouldPaintShadow() {
+            self.PaintBoxShadows(phase, false);
+        }
+
+        let clips_for_bleed = BleedAvoidanceIsClipping(bleed_avoidance);
+        if clips_for_bleed {
+            let border_radii = BackgroundRadii(self.node, BackgroundBox::kBorderBox);
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kSave,
+                    phase,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                self.node,
+            );
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kClipRoundedRect,
+                    phase,
+                    node_id: fragment.node_id,
+                    rect: self
+                        .node
+                        .PixelSnappedRect(&BackgroundBoxRect(self.node, BackgroundBox::kBorderBox)),
+                    corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
+                        &border_radii,
+                    ),
+                    corner_radii: border_radii,
+                    ..Default::default()
+                },
+                self.node,
+            );
+            if bleed_avoidance == BackgroundBleedAvoidance::kBackgroundBleedClipLayer {
+                self.context.borrow_mut().Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kSaveLayerBlend,
+                        phase,
+                        node_id: fragment.node_id,
+                        blend_mode: PaintBlendMode::kNormal,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+            }
+        }
+
+        if matches!(
+            fragment.paint.display,
+            Display::kTableSection
+                | Display::kTableHeaderGroup
+                | Display::kTableFooterGroup
+                | Display::kTableRow
+        ) {
+            self.PaintTablePartBackground(phase);
+        } else if decoration_data.ShouldPaintBackground() {
+            self.PaintBackground(phase, bleed_avoidance);
+        }
+        if decoration_data.ShouldPaintShadow() {
+            self.PaintBoxShadows(phase, true);
+        }
+        if decoration_data.ShouldPaintBorder() {
+            self.PaintBorder(phase, bleed_avoidance);
+        }
+
+        if clips_for_bleed {
+            if bleed_avoidance == BackgroundBleedAvoidance::kBackgroundBleedClipLayer {
+                self.context.borrow_mut().Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kRestore,
+                        phase,
+                        node_id: fragment.node_id,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+            }
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kRestore,
+                    phase,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                self.node,
+            );
+        }
+    }
+
+    // cpp: paint/box_painter_base.cc:168-568
+    pub(crate) fn PaintBoxShadows(&self, phase: PaintPhase, inset: bool) {
+        let fragment = self
+            .node
+            .fragment
+            .as_deref()
+            .expect("paint tree node has a fragment");
+        let style = &fragment.paint.style;
         let decoration_rect = DecorationRect(self.node);
         let decoration_box = self.node.PixelSnappedRect(&decoration_rect);
         let outer_size = Size {
@@ -682,7 +1309,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // makes the shadow cover the border and leaves the real inner edge
         // unshadowed (most visible for `inset 0 1px 0 ...`).
         let border_inset = inset
-            .then(|| crate::border_shape_utils::IncludedBorderEdges(&fragment.paint))
+            .then(|| crate::contoured_border_geometry::IncludedBorderEdges(&fragment.paint))
             .unwrap_or_default();
         let radii = ResolveCornerRadii(
             style,
@@ -690,7 +1317,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             outer_size,
             border_inset,
         );
-        for shadow in style.box_shadows.iter().rev() {
+        for index in (0..style.box_shadow_count()).rev() {
+            let shadow = style.box_shadow(index);
             if shadow.inset != inset || shadow.color.alpha <= 0.0 {
                 continue;
             }
@@ -804,7 +1432,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let shadow_radii = if inset {
                 radii
             } else {
-                crate::border_shape_utils::ExpandCornerRadiiUniform(
+                crate::contoured_border_geometry::ExpandCornerRadiiUniform(
                     radii,
                     shadow.spread,
                     Size {
@@ -820,7 +1448,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     node_id: fragment.node_id,
                     rect: box_rect,
                     color: shadow.color,
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(&shadow_radii),
+                    corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
+                        &shadow_radii,
+                    ),
                     // Outer shadow spread changes the casting shape's radii,
                     // while the excluded border-box hole retains the original
                     // radii. One shared value makes either the outer corners
@@ -832,7 +1462,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     spread: shadow.spread,
                     inset: shadow.inset,
                     is_shadow: true,
-                    shadow_has_opaque_background: style.background_color.alpha >= 1.0,
+                    shadow_has_opaque_background: style.background_color().alpha >= 1.0,
                     ..Default::default()
                 },
                 self.node,
@@ -851,9 +1481,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/box_fragment_painter.h:30-31
-    // cpp: paint/box_fragment_painter.cc:960-1131
-    fn PaintBackground(&self, phase: PaintPhase, inside_decoration_bleed_layer: bool) {
+    // cpp: paint/box_painter_base.cc:58-84,579-692,1152-1561
+    // Chromium: box_fragment_painter.cc:1771-1803.
+    pub(crate) fn PaintBackground(
+        &self,
+        phase: PaintPhase,
+        bleed_avoidance: BackgroundBleedAvoidance,
+    ) {
         let fragment = self
             .node
             .fragment
@@ -862,29 +1496,23 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.background_transfers_to_view {
             return;
         }
-        let style = &*fragment.paint.style;
-        let has_blended_layer = style
-            .background_images
+        let style = &fragment.paint.style;
+        let background_images = style.background_images();
+        let has_blended_layer = background_images
             .iter()
             .any(|layer| layer.blend_mode != PaintBlendMode::kNormal);
         let border_box = BackgroundBoxRect(self.node, BackgroundBox::kBorderBox);
         let border_radii = BackgroundRadii(self.node, BackgroundBox::kBorderBox);
-        let needs_bleed_layer = border_radii.HasRadius()
-            && BackgroundBleedInset(self.node).is_none()
-            && !style.background_images.is_empty()
-            && (style.background_color.alpha > 0.0 || style.background_images.len() > 1)
-            && !BackgroundLayerOccludesFollowingLayers(&style.background_images[0]);
-        let opens_outer_background_group =
-            has_blended_layer || (needs_bleed_layer && !inside_decoration_bleed_layer);
-        let has_outer_background_group =
-            opens_outer_background_group || inside_decoration_bleed_layer;
+        let clips_for_bleed = BleedAvoidanceIsClipping(bleed_avoidance);
+        let opens_outer_background_group = has_blended_layer;
+        let has_outer_background_group = opens_outer_background_group || clips_for_bleed;
         // Blink paints the color and the bottom FillLayer image in one source
         // layer before applying the text mask.  Keeping them together is
         // observable at antialiased mask edges: masking each separately and
         // then compositing would apply the coverage twice.
-        let special_color_image_layer = IsSpecialBackgroundClip(style.background_clip)
-            && style.background_color.alpha > 0.0
-            && style.background_images.iter().any(|layer| {
+        let special_color_image_layer = IsSpecialBackgroundClip(style.background_clip())
+            && style.background_color().alpha > 0.0
+            && background_images.iter().any(|layer| {
                 layer.paints_background_color && (layer.shader.is_some() || layer.resource_id != 0)
             });
         let mut shares_bottom_layer_clip = false;
@@ -906,7 +1534,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         phase,
                         node_id: fragment.node_id,
                         rect: self.node.PixelSnappedRect(&border_box),
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(
+                        corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                             &border_radii,
                         ),
                         corner_radii: border_radii,
@@ -926,16 +1554,19 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
-        if style.background_color.alpha > 0.0
-            && IsSpecialBackgroundClip(style.background_clip)
+        if style.background_color().alpha > 0.0
+            && IsSpecialBackgroundClip(style.background_clip())
             && !special_color_image_layer
         {
-            self.PaintSpecialClippedColor(style.background_color, style.background_clip, phase);
-        } else if style.background_color.alpha > 0.0 {
-            let bleed_inset = BackgroundBleedInset(self.node);
+            self.PaintSpecialClippedColor(style.background_color(), style.background_clip(), phase);
+        } else if style.background_color().alpha > 0.0 {
+            let bleed_inset = (bleed_avoidance
+                == BackgroundBleedAvoidance::kBackgroundBleedShrinkBackground)
+                .then(|| BackgroundBleedInset(self.node))
+                .flatten();
             let clips_background_stack_for_border =
-                bleed_inset.is_some() && !style.background_images.is_empty();
-            let shrink_for_border = style.background_clip == BackgroundBox::kBorderBox
+                bleed_inset.is_some() && style.has_background_images();
+            let shrink_for_border = style.background_clip() == BackgroundBox::kBorderBox
                 && bleed_inset.is_some()
                 && !clips_background_stack_for_border;
             let radii = if shrink_for_border {
@@ -949,11 +1580,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     bleed_inset.expect("shrink for border requires bleed inset"),
                 )
             } else {
-                BackgroundRadii(self.node, style.background_clip)
+                BackgroundRadii(self.node, style.background_clip())
             };
             let mut unsnapped_rect = self
                 .node
-                .PixelSnappedRect(&BackgroundBoxRect(self.node, style.background_clip));
+                .PixelSnappedRect(&BackgroundBoxRect(self.node, style.background_clip()));
             if shrink_for_border {
                 let inset = bleed_inset.expect("shrink for border requires bleed inset");
                 unsnapped_rect.x += inset.left;
@@ -962,26 +1593,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 unsnapped_rect.height = (unsnapped_rect.height - inset.top - inset.bottom).max(0.0);
             }
             let rect = unsnapped_rect;
-            if ProcessFlag(&TRACE_STYLE_BACKGROUNDS, "BROWSER_TRACE_STYLE_BACKGROUNDS") {
-                eprintln!(
-                    "style-background-paint node={} rect={:.3},{:.3},{:.3},{:.3} color={:.6},{:.6},{:.6},{:.6} images={}",
-                    fragment.node_id,
-                    rect.x,
-                    rect.y,
-                    rect.width,
-                    rect.height,
-                    style.background_color.red,
-                    style.background_color.green,
-                    style.background_color.blue,
-                    style.background_color.alpha,
-                    style.background_images.len(),
-                );
-            }
             if IsVisible(self.node, &rect) {
                 shares_bottom_layer_clip = !has_outer_background_group
                     && radii.HasRadius()
-                    && !style.background_images.is_empty()
-                    && style.background_images.last().unwrap().clip == style.background_clip;
+                    && !background_images.is_empty()
+                    && background_images.last().unwrap().clip == style.background_clip();
                 if shares_bottom_layer_clip {
                     let mut clip_rect = rect;
                     let mut clip_radii = radii;
@@ -1016,7 +1632,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                             phase,
                             node_id: fragment.node_id,
                             rect: clip_rect,
-                            corner_radius: crate::border_shape_utils::UniformCornerRadius(
+                            corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                                 &clip_radii,
                             ),
                             corner_radii: clip_radii,
@@ -1051,8 +1667,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         phase,
                         node_id: fragment.node_id,
                         rect,
-                        color: style.background_color,
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(&radii),
+                        color: style.background_color(),
+                        corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
+                            &radii,
+                        ),
                         corner_radii: radii,
                         ..Default::default()
                     },
@@ -1061,7 +1679,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
         }
         let mut bottom_layer = true;
-        for layer in style.background_images.iter().rev() {
+        for layer in background_images.iter().rev() {
             let outer_group_clips_layer =
                 has_outer_background_group && layer.clip == BackgroundBox::kBorderBox;
             self.PaintBackgroundImage(
@@ -1069,7 +1687,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 phase,
                 outer_group_clips_layer || (shares_bottom_layer_clip && bottom_layer),
                 (special_color_image_layer && layer.paints_background_color)
-                    .then_some(style.background_color),
+                    .then_some(style.background_color()),
             );
             if shares_bottom_layer_clip && bottom_layer {
                 if shared_clip_has_layer {
@@ -1159,9 +1777,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItemIdType::kFixedAttachmentBackground,
             rect,
         );
-        let style = &*fragment.paint.style;
-        let layer = style
-            .background_images
+        let style = &fragment.paint.style;
+        let background_images = style.background_images();
+        let layer = background_images
             .first()
             .expect("composited fixed background image layer");
         let isolates_layer = layer.blend_mode != PaintBlendMode::kNormal;
@@ -1177,14 +1795,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
-        if style.background_color.alpha > 0.0 {
+        if style.background_color().alpha > 0.0 {
             self.context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
                     node_id: fragment.node_id,
                     rect,
-                    color: style.background_color,
+                    color: style.background_color(),
                     ..Default::default()
                 },
                 self.node,
@@ -1213,6 +1831,60 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
     }
 
+    /// ViewPainter::PaintRootGroup. The base backdrop is a drawing owned by
+    /// the LayoutView's scrolling contents state, not a CSS canvas background.
+    /// Keeping it in the paint artifact lets PaintArtifactCompositor upcast
+    /// descendant content (including transformed SVG) into the root group,
+    /// preserving Chromium's device-space raster origin.
+    fn PaintRootGroup(&self, phase: PaintPhase) {
+        let fragment = self
+            .node
+            .fragment
+            .as_deref()
+            .expect("root paint tree node has a fragment");
+        if !fragment.paint.IsLayoutView()
+            || !fragment
+                .paint
+                .resources
+                .as_deref()
+                .is_some_and(|resources| resources.paints_opaque_base_background)
+        {
+            return;
+        }
+        let Some(rect) = ViewBackgroundRect(self.node, true) else {
+            return;
+        };
+        if rect.width <= 0.0 || rect.height <= 0.0 || !IsVisible(self.node, &rect) {
+            return;
+        }
+        let id =
+            CanvasBackgroundDisplayItemId(fragment, DisplayItemIdType::kDocumentRootBackdrop, 0);
+        let client = crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment);
+        let _properties = crate::paint_context::ScopedPaintChunkProperties::with_client(
+            self.context,
+            self.node.contents_properties.nodes.clone(),
+            id,
+            client,
+        );
+        let _drawing = DrawingRecorder::with_client(self.context, self.node, id, client, rect);
+        self.context.borrow_mut().Append(
+            DisplayItem {
+                r#type: DisplayItemType::kDrawRect,
+                phase,
+                node_id: fragment.node_id,
+                rect,
+                color: Color {
+                    red: 1.0,
+                    green: 1.0,
+                    blue: 1.0,
+                    alpha: 1.0,
+                },
+                ..Default::default()
+            },
+            self.node,
+        );
+    }
+
     /// ViewPainter::PaintRootElementGroup. Layout has already selected either
     /// the document element or first body background. CSS background-clip and
     /// border radii do not constrain the canvas; positioning still uses the
@@ -1227,12 +1899,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let Some(canvas) = fragment.paint.canvas_background.as_ref() else {
             return;
         };
-        let style = &*canvas.style;
-        let has_fixed = style.background_images.iter().any(|layer| {
+        let style = &canvas.style;
+        let background_images = style.background_images();
+        let has_fixed = background_images.iter().any(|layer| {
             (layer.shader.is_some() || layer.resource_id != 0)
                 && EffectiveBackgroundAttachment(self.node, layer) == BackgroundAttachment::kFixed
         });
-        let has_scrolling = style.background_images.iter().any(|layer| {
+        let has_scrolling = background_images.iter().any(|layer| {
             (layer.shader.is_some() || layer.resource_id != 0)
                 && EffectiveBackgroundAttachment(self.node, layer) != BackgroundAttachment::kFixed
         });
@@ -1250,8 +1923,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // layers use the LayoutView border-box transform, while scroll/local
         // layers use ContentsProperties and its ScrollTranslation. Keep CSS
         // bottom-to-top order by assigning every layer its own stable record.
-        let isolates_layers = style
-            .background_images
+        let isolates_layers = background_images
             .iter()
             .any(|layer| layer.blend_mode != PaintBlendMode::kNormal);
         let group_effect = isolates_layers.then(|| {
@@ -1282,7 +1954,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
         let scrolling_rect = CanvasBackgroundRect(self.node, true)
             .expect("root canvas background must have a scrolling paint rectangle");
-        if style.background_color.alpha > 0.0 {
+        if style.background_color().alpha > 0.0 {
             let properties = if let Some(group_effect) = &group_effect {
                 let mut state = self.node.contents_properties.nodes.clone();
                 state.effect = group_effect.clone();
@@ -1314,7 +1986,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         phase,
                         node_id: fragment.node_id,
                         rect: scrolling_rect,
-                        color: style.background_color,
+                        color: style.background_color(),
                         ..Default::default()
                     },
                     self.node,
@@ -1324,7 +1996,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             self.context.borrow_mut().EndEscapableGeometry(self.node);
             drop(properties);
         }
-        for (layer_index, layer) in style.background_images.iter().enumerate().rev() {
+        for (layer_index, layer) in background_images.iter().enumerate().rev() {
             if layer.shader.is_none() && layer.resource_id == 0 {
                 continue;
             }
@@ -1464,39 +2136,51 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.background_transfers_to_view {
             return;
         }
-        let style = &*fragment.paint.style;
+        let style = &fragment.paint.style;
+        let background_images = style.background_images();
+        let Some(scroll) = fragment.paint.scroll_container.as_ref() else {
+            return;
+        };
+        let Some(client) =
+            crate::paint_chunker::DisplayItemClientInfo::from_scrolling_background(fragment)
+        else {
+            return;
+        };
         let border_rect = ContentsBackgroundBorderRect(self.node);
+        let visual_rect = ScrollingBackgroundVisualRect(self.node);
         if border_rect.width <= 0.0
             || border_rect.height <= 0.0
-            || !IsVisible(self.node, &border_rect)
+            || !IsVisible(self.node, &visual_rect)
         {
             return;
         }
-        let _properties = crate::paint_context::ScopedPaintChunkProperties::contents(
-            self.context,
-            self.node,
-            phase,
+        self.context.borrow_mut().RegisterAuxiliaryClient(
+            scroll.scrolling_background_client_id,
+            fragment.paint.display_item_client_owner_node_id,
+            std::sync::Arc::from(format!(
+                "{} scrolling background",
+                fragment.paint.display_item_client_debug_name
+            )),
         );
         let _drawing = DrawingRecorder::with_client(
             self.context,
             self.node,
             DisplayItemId {
-                client_id: fragment.paint.display_item_client_id,
+                client_id: scroll.scrolling_background_client_id,
                 r#type: DisplayItemIdType::PaintPhaseToClipType(
                     PaintPhase::kSelfBlockBackgroundOnly,
                 ),
                 fragment: fragment.paint.display_item_fragment,
             },
-            crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
-            border_rect,
+            client,
+            visual_rect,
         );
-        let isolates_layers = style
-            .background_images
+        let isolates_layers = background_images
             .iter()
             .any(|layer| layer.blend_mode != PaintBlendMode::kNormal);
-        let special_color_image_layer = IsSpecialBackgroundClip(style.background_clip)
-            && style.background_color.alpha > 0.0
-            && style.background_images.iter().any(|layer| {
+        let special_color_image_layer = IsSpecialBackgroundClip(style.background_clip())
+            && style.background_color().alpha > 0.0
+            && background_images.iter().any(|layer| {
                 layer.paints_background_color && (layer.shader.is_some() || layer.resource_id != 0)
             });
         if isolates_layers {
@@ -1511,9 +2195,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
-        if style.background_color.alpha > 0.0 && !special_color_image_layer {
-            let rect = BackgroundBoxRectWithin(self.node, style.background_clip, border_rect);
-            if IsSpecialBackgroundClip(style.background_clip) {
+        if style.background_color().alpha > 0.0 && !special_color_image_layer {
+            let rect = BackgroundBoxRectWithin(self.node, style.background_clip(), border_rect);
+            if IsSpecialBackgroundClip(style.background_clip()) {
                 self.BeginSpecialBackgroundClip(phase, PaintBlendMode::kNormal, border_rect);
             }
             self.context.borrow_mut().Append(
@@ -1522,16 +2206,16 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                     node_id: fragment.node_id,
                     rect,
-                    color: style.background_color,
+                    color: style.background_color(),
                     ..Default::default()
                 },
                 self.node,
             );
-            if IsSpecialBackgroundClip(style.background_clip) {
-                self.EndSpecialBackgroundClip(phase, style.background_clip);
+            if IsSpecialBackgroundClip(style.background_clip()) {
+                self.EndSpecialBackgroundClip(phase, style.background_clip());
             }
         }
-        for layer in style.background_images.iter().rev() {
+        for layer in background_images.iter().rev() {
             if layer.shader.is_none() && layer.resource_id == 0 {
                 continue;
             }
@@ -1546,7 +2230,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                             phase,
                             node_id: fragment.node_id,
                             rect: border_rect,
-                            color: style.background_color,
+                            color: style.background_color(),
                             ..Default::default()
                         },
                         self.node,
@@ -1595,7 +2279,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     fn PaintCanvasBackgroundInOnePropertyState(
         &self,
         phase: PaintPhase,
-        style: &PaintStyleData,
+        style: &PaintStyle,
         effective_zoom: f32,
         fixed: bool,
     ) {
@@ -1604,6 +2288,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("root paint tree node has a fragment");
+        let background_images = style.background_images();
         let rect = CanvasBackgroundRect(self.node, !fixed)
             .expect("root canvas background must have a paint rectangle");
         if rect.width <= 0.0 || rect.height <= 0.0 || !IsVisible(self.node, &rect) {
@@ -1628,7 +2313,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         };
         // ViewPainter records a scrolling canvas in ContentsProperties.
         // The layer's self-background is painted before its descendant clip,
-        // so enter the same native overflow clip in the flat record wrapper.
+        // so enter the same source overflow clip in the flat record wrapper.
         // Fixed canvas layers retain border-box properties and their clip.
         if !fixed {
             self.context
@@ -1642,8 +2327,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
             rect,
         );
-        let isolates_layers = style
-            .background_images
+        let isolates_layers = background_images
             .iter()
             .any(|layer| layer.blend_mode != PaintBlendMode::kNormal);
         if isolates_layers {
@@ -1658,20 +2342,20 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
-        if style.background_color.alpha > 0.0 {
+        if style.background_color().alpha > 0.0 {
             self.context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
                     node_id: fragment.node_id,
                     rect,
-                    color: style.background_color,
+                    color: style.background_color(),
                     ..Default::default()
                 },
                 self.node,
             );
         }
-        for layer in style.background_images.iter().rev() {
+        for layer in background_images.iter().rev() {
             if layer.shader.is_none() && layer.resource_id == 0 {
                 continue;
             }
@@ -1742,7 +2426,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                     node_id: fragment.node_id,
                     rect: mask_rect,
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(&radii),
+                    corner_radius: crate::contoured_border_geometry::UniformCornerRadius(&radii),
                     corner_radii: radii,
                     antialias: true,
                     ..Default::default()
@@ -1792,10 +2476,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             BackgroundBox::kBorderArea | BackgroundBox::kBorderAreaText
         ) {
             // BoxBorderPainter::PaintBorderArea ignores border color and
-            // transparency.  PaintBorderContents' alpha-mask mode preserves
-            // the used dotted/dashed/double/rounded border geometry while
-            // forcing the mask source opaque.
-            self.PaintBorderContents(PaintPhase::kTextClip, false, true);
+            // transparency while preserving the used
+            // dotted/dashed/double/rounded border geometry.
+            BoxBorderPainter::new(self.node, self.context, DecorationRect(self.node))
+                .PaintBorderArea(PaintPhase::kTextClip);
         }
         if matches!(clip, BackgroundBox::kText | BackgroundBox::kBorderAreaText) {
             self.PaintTextClipMask();
@@ -1900,20 +2584,28 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.hidden {
             return;
         }
+        // Chromium's kTextClip block-child traversal excludes floating
+        // descendants, including self-painting floating layers
+        // (box_fragment_painter.cc:1160-1180).
+        if fragment.paint.floating != FloatSide::kNone {
+            return;
+        }
         {
             let mut context = self.context.borrow_mut();
             context.BeginGeometry(node);
             context.BeginCssClip(node);
             context.BeginEscapableGeometry(node, None);
         }
-        if fragment.paint.has_source
-            && fragment.paint.style.visible
+        if fragment.paint.HasSource()
+            && fragment.paint.style.visible()
             && matches!(
                 fragment.kind,
                 FragmentKind::kText | FragmentKind::kGeneratedText
             )
         {
-            BoxFragmentPainter::new(node, self.context).PaintText(PaintPhase::kTextClip);
+            let input = PaintInfo::new(self.context, PaintPhase::kTextClip);
+            let paint_state = crate::scoped_paint_state::ScopedPaintState::new(node, &input);
+            BoxFragmentPainter::new(node, self.context).PaintText(paint_state.GetPaintInfo());
         }
         for child in &node.children {
             self.PaintTextClipSubtree(child);
@@ -1926,8 +2618,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/box_fragment_painter.h:33-35
-    // cpp: paint/box_fragment_painter.cc:1133-1285
     fn PaintBackgroundImage(
         &self,
         layer: &BackgroundImageLayer,
@@ -1935,16 +2625,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         already_clipped: bool,
         background_color: Option<Color>,
     ) {
-        if ProcessFlag(&TRACE_STYLE_IMAGES, "BROWSER_TRACE_STYLE_IMAGES")
-            && (layer.shader.is_some() || !layer.source_url.is_empty() || layer.resource_id != 0)
-        {
-            eprintln!(
-                "style-image-paint source={} resource_id={} shader={}",
-                layer.source_url,
-                layer.resource_id,
-                layer.shader.is_some()
-            );
-        }
         if layer.shader.is_none() && layer.resource_id == 0 {
             return;
         }
@@ -1986,7 +2666,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         phase: PaintPhase,
         already_clipped: bool,
         apply_border_bleed_avoidance: bool,
-        paint_style: &PaintStyleData,
+        paint_style: &PaintStyle,
         effective_zoom: f32,
         geometry_override: Option<(PaintRect, PaintRect)>,
         ignore_border_radius: bool,
@@ -2019,8 +2699,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         BackgroundBoxRectWithin(self.node, layer.origin, scrolled_border),
                         BackgroundBoxRectWithin(self.node, layer.clip, scrolled_border),
                         self.node
-                            .local_clip
-                            .map(|rect| (rect, self.node.local_clip_radii)),
+                            .local_inner_border_radius_clip
+                            .map(|rect| (rect, self.node.local_inner_border_radius_radii))
+                            .or_else(|| {
+                                self.node
+                                    .local_clip
+                                    .map(|rect| (rect, self.node.local_clip_radii))
+                            }),
                     )
                 }
             }
@@ -2075,8 +2760,20 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         } else {
             Some(FindImage(self.node, layer.resource_id))
         };
-        let tile_size =
-            ResolveBackgroundTileSize(layer, &positioning, image, f64::from(effective_zoom));
+        let image_orientation = image.map_or(image_resource::ImageOrientation::kDefault, |image| {
+            if paint_style.respect_image_orientation() {
+                image.orientation
+            } else {
+                image_resource::ImageOrientation::kDefault
+            }
+        });
+        let tile_size = ResolveBackgroundTileSize(
+            layer,
+            &positioning,
+            image,
+            image_orientation,
+            f64::from(effective_zoom),
+        );
         if tile_size.width == 0.0 || tile_size.height == 0.0 {
             return;
         }
@@ -2085,9 +2782,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let repeat_x = resolved.repeat_x;
         let repeat_y = resolved.repeat_y;
         let bitmap_tile_scale = if let Some(image) = image {
+            let (width, height) =
+                image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
             Offset {
-                x: tile.width / image.width as f64,
-                y: tile.height / image.height as f64,
+                x: tile.width / width,
+                y: tile.height / height,
             }
         } else {
             resolved.tile_scale
@@ -2101,8 +2800,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 },
                 f64::from(effective_zoom),
                 fragment.paint.resources.as_deref(),
-                (!paint_style.color_scheme_flags_is_normal)
-                    .then_some(u8::from(paint_style.used_dark_color_scheme)),
+                (!paint_style.color_scheme_flags_is_normal())
+                    .then_some(u8::from(paint_style.used_dark_color_scheme())),
             )
         });
         let opens_attachment_clip = !already_clipped || local_outer_clip.is_some();
@@ -2128,7 +2827,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                     node_id: fragment.node_id,
                     rect: outer_clip,
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(&outer_radii),
+                    corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
+                        &outer_radii,
+                    ),
                     corner_radii: outer_radii,
                     antialias: outer_radii.HasRadius(),
                     ..Default::default()
@@ -2152,7 +2853,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                     node_id: fragment.node_id,
                     rect: paint_clip,
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(&radii),
+                    corner_radius: crate::contoured_border_geometry::UniformCornerRadius(&radii),
                     corner_radii: radii,
                     antialias: radii.HasRadius(),
                     ..Default::default()
@@ -2200,6 +2901,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             self.context.borrow_mut().Append(item, self.node);
         } else if repeat_x || repeat_y {
             let image = image.expect("bitmap background requires image");
+            let (source_width, source_height) =
+                image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
             self.context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawTiledImage,
@@ -2209,12 +2912,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     source_rect: PaintRect {
                         x: 0.0,
                         y: 0.0,
-                        width: image.width as f64,
-                        height: image.height as f64,
+                        width: source_width,
+                        height: source_height,
                     },
                     tile_rect: tile,
                     resource_id: image.id,
-                    image_interpolation_quality: paint_style.image_interpolation_quality,
+                    image_interpolation_quality: paint_style.image_interpolation_quality(),
+                    image_orientation,
                     document_image_container_key: document_image_container_key.clone(),
                     repeat_x,
                     repeat_y,
@@ -2229,6 +2933,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             );
         } else {
             let image = image.expect("bitmap background requires image");
+            let (source_width, source_height) =
+                image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
             let image_origin = self.node.PixelSnappedOffset(Offset {
                 x: tile.x,
                 y: tile.y,
@@ -2249,11 +2955,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     source_rect: PaintRect {
                         x: 0.0,
                         y: 0.0,
-                        width: image.width as f64,
-                        height: image.height as f64,
+                        width: source_width,
+                        height: source_height,
                     },
                     resource_id: image.id,
-                    image_interpolation_quality: paint_style.image_interpolation_quality,
+                    image_interpolation_quality: paint_style.image_interpolation_quality(),
+                    image_orientation,
                     document_image_container_key,
                     background_repeat_x: resolved.rule_x,
                     background_repeat_y: resolved.rule_y,
@@ -2278,9 +2985,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/box_fragment_painter.h:37
-    // cpp: paint/box_fragment_painter.cc:1287-1316
-    fn PaintBorder(&self, phase: PaintPhase, inside_decoration_bleed_layer: bool) {
+    // cpp: paint/box_painter_base.cc:1745-1775
+    // Chromium coordination: box_fragment_painter.cc:1721-1737.
+    pub(crate) fn PaintBorder(&self, phase: PaintPhase, bleed_avoidance: BackgroundBleedAvoidance) {
         let paint = &self
             .node
             .fragment
@@ -2308,861 +3015,27 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         for (edge, width) in widths.into_iter().enumerate() {
             has_paintable_border |= width > 0.0
                 && paint.border_styles[edge] != BorderLineStyle::kNone
-                && paint.style.border_colors[edge].alpha > 0.0;
+                && paint.style.border_colors()[edge].alpha > 0.0;
         }
         if !has_paintable_border {
             return;
         }
-        let info = PaintInfo::new(self.context, phase);
-        let fieldset = FieldsetPainter::new(self.node, self.context);
-        let clipped = fieldset.BeginBorderClip(&info);
-        self.PaintBorderContents(phase, inside_decoration_bleed_layer, false);
-        if clipped {
-            fieldset.EndBorderClip(&info);
-        }
+        BoxBorderPainter::new(self.node, self.context, DecorationRect(self.node))
+            .PaintBorder(phase, bleed_avoidance);
     }
 
-    // cpp: paint/box_fragment_painter.h:38-39
-    // cpp: paint/box_fragment_painter.cc:1318-1785
-    fn PaintBorderContents(
-        &self,
-        phase: PaintPhase,
-        inside_decoration_bleed_layer: bool,
-        alpha_mask: bool,
-    ) {
+    fn PaintText(&self, paint_info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let style = &fragment.paint;
-        let opaque_mask_color = Color {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 1.0,
-        };
-        let border_color = |edge: usize| {
-            if alpha_mask {
-                opaque_mask_color
-            } else {
-                style.style.border_colors[edge]
-            }
-        };
-        let border_has_alpha =
-            |edge: usize| alpha_mask || style.style.border_colors[edge].alpha > 0.0;
-        let sides = &style.border_sides;
-        let widths = [
-            if sides.top { style.border.top } else { 0.0 },
-            if sides.right { style.border.right } else { 0.0 },
-            if sides.bottom {
-                style.border.bottom
-            } else {
-                0.0
-            },
-            if sides.left { style.border.left } else { 0.0 },
-        ];
-        let decoration = self.node.PixelSnappedRect(&DecorationRect(self.node));
-        let x = decoration.x;
-        let y = decoration.y;
-        let width = decoration.width;
-        let height = decoration.height;
-        let size = Size { width, height };
-        let outer_radii = ResolveCornerRadii(&style.style, sides, size, Edges::default());
-        let first_style = style.border_styles[0];
-        let same_colors = alpha_mask
-            || (style.style.border_colors[0] == style.style.border_colors[1]
-                && style.style.border_colors[0] == style.style.border_colors[2]
-                && style.style.border_colors[0] == style.style.border_colors[3]);
-        let uniform_rounded_double = sides.HasAllSides()
-            && outer_radii.HasRadius()
-            && widths[0] >= 3.0
-            && first_style == BorderLineStyle::kDouble
-            && widths[1] == widths[0]
-            && widths[2] == widths[0]
-            && widths[3] == widths[0]
-            && style.border_styles[1] == first_style
-            && style.border_styles[2] == first_style
-            && style.border_styles[3] == first_style
-            && same_colors
-            && border_has_alpha(0);
-        if uniform_rounded_double {
-            let band = widths[0] / 3.0;
-            let inset_rect = |inset: f64| PaintRect {
-                x: x + inset,
-                y: y + inset,
-                width: (width - 2.0 * inset).max(0.0),
-                height: (height - 2.0 * inset).max(0.0),
-            };
-            let radii_at = |inset: f64| {
-                ResolveCornerRadii(
-                    &style.style,
-                    sides,
-                    size,
-                    Edges {
-                        top: inset,
-                        right: inset,
-                        bottom: inset,
-                        left: inset,
-                    },
-                )
-            };
-            if IsVisible(
-                self.node,
-                &PaintRect {
-                    x,
-                    y,
-                    width,
-                    height,
-                },
-            ) {
-                for (outer_inset, inner_inset) in [(0.0, band), (2.0 * band, widths[0])] {
-                    let band_outer_radii = radii_at(outer_inset);
-                    let band_inner_radii = radii_at(inner_inset);
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kDrawDoubleRoundedRect,
-                            phase,
-                            node_id: fragment.node_id,
-                            rect: inset_rect(outer_inset),
-                            inner_rect: inset_rect(inner_inset),
-                            color: border_color(0),
-                            line_style: BorderLineStyle::kDouble,
-                            corner_radius: crate::border_shape_utils::UniformCornerRadius(
-                                &band_outer_radii,
-                            ),
-                            inner_corner_radius: crate::border_shape_utils::UniformCornerRadius(
-                                &band_inner_radii,
-                            ),
-                            corner_radii: band_outer_radii,
-                            inner_corner_radii: band_inner_radii,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                }
-            }
+        let phase = paint_info.phase;
+        if !PaintsTextInPhase(phase) {
             return;
         }
-        let uniform_rounded_dash = sides.HasAllSides()
-            && outer_radii.HasRadius()
-            && widths[0] > 0.0
-            && matches!(
-                first_style,
-                BorderLineStyle::kDashed | BorderLineStyle::kDotted
-            )
-            && widths[1] == widths[0]
-            && widths[2] == widths[0]
-            && widths[3] == widths[0]
-            && style.border_styles[1] == first_style
-            && style.border_styles[2] == first_style
-            && style.border_styles[3] == first_style
-            && same_colors
-            && border_has_alpha(0);
-        if uniform_rounded_dash {
-            let half_width = widths[0] * 0.5;
-            let centerline = PaintRect {
-                x: x + half_width,
-                y: y + half_width,
-                width: (width - widths[0]).max(0.0),
-                height: (height - widths[0]).max(0.0),
-            };
-            let center_radii = ResolveCornerRadii(
-                &style.style,
-                sides,
-                size,
-                Edges {
-                    top: half_width,
-                    right: half_width,
-                    bottom: half_width,
-                    left: half_width,
-                },
-            );
-            if IsVisible(
-                self.node,
-                &PaintRect {
-                    x,
-                    y,
-                    width,
-                    height,
-                },
-            ) {
-                let mut item = DisplayItem {
-                    r#type: DisplayItemType::kStrokePath,
-                    phase,
-                    node_id: fragment.node_id,
-                    rect: PaintRect {
-                        x,
-                        y,
-                        width,
-                        height,
-                    },
-                    color: border_color(0),
-                    line_style: first_style,
-                    stroke_width: widths[0],
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(&center_radii),
-                    corner_radii: center_radii,
-                    ..Default::default()
-                };
-                item.path = RoundedRectPath(&centerline, &center_radii);
-                if first_style == BorderLineStyle::kDashed {
-                    item.dash_intervals = vec![3.0 * widths[0], 3.0 * widths[0]];
-                } else {
-                    item.dash_intervals = vec![0.0, 2.0 * widths[0]];
-                    item.round_cap = true;
-                }
-                self.context.borrow_mut().Append(item, self.node);
-            }
-            return;
-        }
-        let solid_rounded_ring = sides.HasAllSides()
-            && outer_radii.HasRadius()
-            && style
-                .border_styles
-                .iter()
-                .all(|line| *line == BorderLineStyle::kSolid)
-            && same_colors
-            && border_has_alpha(0)
-            && widths.iter().any(|width| *width > 0.0);
-        if solid_rounded_ring {
-            let outer = PaintRect {
-                x,
-                y,
-                width,
-                height,
-            };
-            let inner = PaintRect {
-                x: x + widths[3],
-                y: y + widths[0],
-                width: (width - widths[1] - widths[3]).max(0.0),
-                height: (height - widths[0] - widths[2]).max(0.0),
-            };
-            let inner_radii = ResolveCornerRadii(
-                &style.style,
-                sides,
-                size,
-                Edges {
-                    top: widths[0],
-                    right: widths[1],
-                    bottom: widths[2],
-                    left: widths[3],
-                },
-            );
-            if IsVisible(self.node, &outer) {
-                if inside_decoration_bleed_layer {
-                    let mut item = DisplayItem {
-                        r#type: DisplayItemType::kDrawPath,
-                        phase,
-                        node_id: fragment.node_id,
-                        rect: inner,
-                        color: border_color(0),
-                        line_style: BorderLineStyle::kSolid,
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(&inner_radii),
-                        corner_radii: inner_radii,
-                        inverse_winding: true,
-                        ..Default::default()
-                    };
-                    item.path = ConicRoundedRectPath(&inner, &inner_radii);
-                    self.context.borrow_mut().Append(item, self.node);
-                    return;
-                }
-                self.context.borrow_mut().Append(
-                    DisplayItem {
-                        r#type: DisplayItemType::kDrawDoubleRoundedRect,
-                        phase,
-                        node_id: fragment.node_id,
-                        rect: outer,
-                        inner_rect: inner,
-                        color: border_color(0),
-                        line_style: BorderLineStyle::kSolid,
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(&outer_radii),
-                        inner_corner_radius: crate::border_shape_utils::UniformCornerRadius(
-                            &inner_radii,
-                        ),
-                        corner_radii: outer_radii,
-                        inner_corner_radii: inner_radii,
-                        ..Default::default()
-                    },
-                    self.node,
-                );
-            }
-            return;
-        }
-        let mut rounded_solid_edges = outer_radii.HasRadius();
-        for (edge, width) in widths.iter().enumerate() {
-            if *width > 0.0 && style.border_styles[edge] != BorderLineStyle::kSolid {
-                rounded_solid_edges = false;
-            }
-        }
-        if rounded_solid_edges {
-            let outer = PaintRect {
-                x,
-                y,
-                width,
-                height,
-            };
-            let inner = PaintRect {
-                x: x + widths[3],
-                y: y + widths[0],
-                width: (width - widths[1] - widths[3]).max(0.0),
-                height: (height - widths[0] - widths[2]).max(0.0),
-            };
-            let inner_radii = ResolveCornerRadii(
-                &style.style,
-                sides,
-                size,
-                Edges {
-                    top: widths[0],
-                    right: widths[1],
-                    bottom: widths[2],
-                    left: widths[3],
-                },
-            );
-            const ADJACENT_EDGES: [[usize; 2]; 4] = [[3, 1], [0, 2], [1, 3], [2, 0]];
-            if IsVisible(self.node, &outer) {
-                self.context.borrow_mut().Append(
-                    DisplayItem {
-                        r#type: DisplayItemType::kSave,
-                        phase,
-                        node_id: fragment.node_id,
-                        ..Default::default()
-                    },
-                    self.node,
-                );
-                self.context.borrow_mut().Append(
-                    DisplayItem {
-                        r#type: DisplayItemType::kClipRoundedRect,
-                        phase,
-                        node_id: fragment.node_id,
-                        rect: outer,
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(&outer_radii),
-                        corner_radii: outer_radii,
-                        ..Default::default()
-                    },
-                    self.node,
-                );
-                self.context.borrow_mut().Append(
-                    DisplayItem {
-                        r#type: DisplayItemType::kClipOutRoundedRect,
-                        phase,
-                        node_id: fragment.node_id,
-                        rect: inner,
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(&inner_radii),
-                        corner_radii: inner_radii,
-                        ..Default::default()
-                    },
-                    self.node,
-                );
-                for (edge, width) in widths.iter().enumerate() {
-                    if *width <= 0.0 || !border_has_alpha(edge) {
-                        continue;
-                    }
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kSave,
-                            phase,
-                            node_id: fragment.node_id,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                    let corner_clips = BorderEdgeCornerClips(edge, &outer, &inner, &outer_radii);
-                    let adjacent_renders = |adjacent: usize| {
-                        widths[adjacent] > 0.0
-                            && !matches!(
-                                style.border_styles[adjacent],
-                                BorderLineStyle::kNone | BorderLineStyle::kHidden
-                            )
-                            && border_has_alpha(adjacent)
-                    };
-                    let first_adjacent = ADJACENT_EDGES[edge][0];
-                    let second_adjacent = ADJACENT_EDGES[edge][1];
-                    let first_renders = adjacent_renders(first_adjacent);
-                    let second_renders = adjacent_renders(second_adjacent);
-                    let mut first_antialias =
-                        !first_renders || border_color(edge) != border_color(first_adjacent);
-                    let mut second_antialias =
-                        !second_renders || border_color(edge) != border_color(second_adjacent);
-
-                    // Chromium treats a missing adjacent edge as completed:
-                    // there is no visible seam to antialias or miter against.
-                    // Keep the real seam's AA mode here; CombinedBorderEdgeClip
-                    // also extends the missing seam to the inner boundary.
-                    match (first_renders, second_renders) {
-                        (false, true) => first_antialias = second_antialias,
-                        (true, false) => second_antialias = first_antialias,
-                        _ => {}
-                    }
-                    if first_antialias == second_antialias {
-                        self.context.borrow_mut().Append(
-                            BorderEdgeClip(
-                                fragment.node_id,
-                                phase,
-                                &CombinedBorderEdgeClip(
-                                    edge,
-                                    &outer,
-                                    &inner,
-                                    &corner_clips,
-                                    first_renders,
-                                    second_renders,
-                                ),
-                                first_antialias,
-                            ),
-                            self.node,
-                        );
-                    } else {
-                        self.context.borrow_mut().Append(
-                            BorderEdgeClip(
-                                fragment.node_id,
-                                phase,
-                                &corner_clips[0],
-                                first_antialias,
-                            ),
-                            self.node,
-                        );
-                        self.context.borrow_mut().Append(
-                            BorderEdgeClip(
-                                fragment.node_id,
-                                phase,
-                                &corner_clips[1],
-                                second_antialias,
-                            ),
-                            self.node,
-                        );
-                    }
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kDrawRect,
-                            phase,
-                            node_id: fragment.node_id,
-                            rect: outer,
-                            color: border_color(edge),
-                            line_style: BorderLineStyle::kSolid,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kRestore,
-                            phase,
-                            node_id: fragment.node_id,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                }
-                self.context.borrow_mut().Append(
-                    DisplayItem {
-                        r#type: DisplayItemType::kRestore,
-                        phase,
-                        node_id: fragment.node_id,
-                        ..Default::default()
-                    },
-                    self.node,
-                );
-            }
-            return;
-        }
-        if outer_radii.HasRadius() {
-            let outer = PaintRect {
-                x,
-                y,
-                width,
-                height,
-            };
-            let inset_rect = |inset: Edges| PaintRect {
-                x: x + inset.left,
-                y: y + inset.top,
-                width: (width - inset.left - inset.right).max(0.0),
-                height: (height - inset.top - inset.bottom).max(0.0),
-            };
-            let scaled_insets = |scale: f64| Edges {
-                top: widths[0] * scale,
-                right: widths[1] * scale,
-                bottom: widths[2] * scale,
-                left: widths[3] * scale,
-            };
-            let full_insets = scaled_insets(1.0);
-            let inner = inset_rect(full_insets);
-            let edge_polygons = BorderEdgePolygons(&outer, &inner);
-            let half_insets = scaled_insets(0.5);
-            let centerline = inset_rect(half_insets);
-            let center_radii = ResolveCornerRadii(&style.style, sides, size, half_insets);
-            let center_path = RoundedRectPath(&centerline, &center_radii);
-            let append_ring = |outer_inset: Edges,
-                               inner_inset: Edges,
-                               color: Color,
-                               line_style: BorderLineStyle| {
-                let ring_outer_radii = ResolveCornerRadii(&style.style, sides, size, outer_inset);
-                let ring_inner_radii = ResolveCornerRadii(&style.style, sides, size, inner_inset);
-                self.context.borrow_mut().Append(
-                    DisplayItem {
-                        r#type: DisplayItemType::kDrawDoubleRoundedRect,
-                        phase,
-                        node_id: fragment.node_id,
-                        rect: inset_rect(outer_inset),
-                        inner_rect: inset_rect(inner_inset),
-                        color,
-                        line_style,
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(
-                            &ring_outer_radii,
-                        ),
-                        inner_corner_radius: crate::border_shape_utils::UniformCornerRadius(
-                            &ring_inner_radii,
-                        ),
-                        corner_radii: ring_outer_radii,
-                        inner_corner_radii: ring_inner_radii,
-                        ..Default::default()
-                    },
-                    self.node,
-                );
-            };
-            if IsVisible(self.node, &outer) {
-                for (edge, width) in widths.iter().enumerate() {
-                    if *width <= 0.0
-                        || matches!(
-                            style.border_styles[edge],
-                            BorderLineStyle::kNone | BorderLineStyle::kHidden
-                        )
-                        || !border_has_alpha(edge)
-                    {
-                        continue;
-                    }
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kSave,
-                            phase,
-                            node_id: fragment.node_id,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                    self.context.borrow_mut().Append(
-                        BorderEdgeClip(fragment.node_id, phase, &edge_polygons[edge], false),
-                        self.node,
-                    );
-                    let line_style = style.border_styles[edge];
-                    let color = border_color(edge);
-                    if matches!(
-                        line_style,
-                        BorderLineStyle::kDashed | BorderLineStyle::kDotted
-                    ) {
-                        let mut item = DisplayItem {
-                            r#type: DisplayItemType::kStrokePath,
-                            phase,
-                            node_id: fragment.node_id,
-                            rect: outer,
-                            color,
-                            line_style,
-                            stroke_width: *width,
-                            corner_radius: crate::border_shape_utils::UniformCornerRadius(
-                                &center_radii,
-                            ),
-                            corner_radii: center_radii,
-                            ..Default::default()
-                        };
-                        item.path = center_path.clone();
-                        if line_style == BorderLineStyle::kDashed {
-                            item.dash_intervals = vec![3.0 * width, 3.0 * width];
-                        } else {
-                            item.dash_intervals = vec![0.0, 2.0 * width];
-                            item.round_cap = true;
-                        }
-                        self.context.borrow_mut().Append(item, self.node);
-                    } else if line_style == BorderLineStyle::kDouble && *width >= 3.0 {
-                        append_ring(
-                            Edges::default(),
-                            scaled_insets(1.0 / 3.0),
-                            color,
-                            line_style,
-                        );
-                        append_ring(scaled_insets(2.0 / 3.0), full_insets, color, line_style);
-                    } else {
-                        append_ring(
-                            Edges::default(),
-                            full_insets,
-                            color,
-                            BorderLineStyle::kSolid,
-                        );
-                    }
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kRestore,
-                            phase,
-                            node_id: fragment.node_id,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                }
-            }
-            return;
-        }
-        let rects = [
-            PaintRect {
-                x,
-                y,
-                width,
-                height: widths[0],
-            },
-            PaintRect {
-                x: x + width - widths[1],
-                y,
-                width: widths[1],
-                height,
-            },
-            PaintRect {
-                x,
-                y: y + height - widths[2],
-                width,
-                height: widths[2],
-            },
-            PaintRect {
-                x,
-                y,
-                width: widths[3],
-                height,
-            },
-        ];
-        let center_lines = [
-            PaintRect {
-                x,
-                y: y + widths[0] / 2.0,
-                width,
-                height: 0.0,
-            },
-            PaintRect {
-                x: x + width - widths[1] / 2.0,
-                y,
-                width: 0.0,
-                height,
-            },
-            PaintRect {
-                x,
-                y: y + height - widths[2] / 2.0,
-                width,
-                height: 0.0,
-            },
-            PaintRect {
-                x: x + widths[3] / 2.0,
-                y,
-                width: 0.0,
-                height,
-            },
-        ];
-        for (edge, edge_width) in widths.iter().enumerate() {
-            if *edge_width <= 0.0
-                || matches!(
-                    style.border_styles[edge],
-                    BorderLineStyle::kNone | BorderLineStyle::kHidden
-                )
-                || !border_has_alpha(edge)
-            {
-                continue;
-            }
-            if !IsVisible(self.node, &rects[edge]) {
-                continue;
-            }
-            let line_style = style.border_styles[edge];
-            if matches!(
-                line_style,
-                BorderLineStyle::kDashed | BorderLineStyle::kDotted
-            ) {
-                let mut item = DisplayItem {
-                    r#type: DisplayItemType::kStrokeLine,
-                    phase,
-                    node_id: fragment.node_id,
-                    rect: center_lines[edge],
-                    color: border_color(edge),
-                    line_style,
-                    stroke_width: *edge_width,
-                    ..Default::default()
-                };
-                if line_style == BorderLineStyle::kDashed {
-                    item.dash_intervals = vec![3.0 * edge_width, 3.0 * edge_width];
-                } else {
-                    item.dash_intervals = vec![0.0, 2.0 * edge_width];
-                    item.round_cap = true;
-                }
-                self.context.borrow_mut().Append(item, self.node);
-                continue;
-            }
-            if line_style == BorderLineStyle::kDouble && *edge_width >= 3.0 {
-                let band = edge_width / 3.0;
-                let bands = match edge {
-                    0 => [
-                        PaintRect {
-                            x,
-                            y,
-                            width,
-                            height: band,
-                        },
-                        PaintRect {
-                            x,
-                            y: y + 2.0 * band,
-                            width,
-                            height: band,
-                        },
-                    ],
-                    1 => [
-                        PaintRect {
-                            x: x + width - band,
-                            y,
-                            width: band,
-                            height,
-                        },
-                        PaintRect {
-                            x: x + width - 3.0 * band,
-                            y,
-                            width: band,
-                            height,
-                        },
-                    ],
-                    2 => [
-                        PaintRect {
-                            x,
-                            y: y + height - band,
-                            width,
-                            height: band,
-                        },
-                        PaintRect {
-                            x,
-                            y: y + height - 3.0 * band,
-                            width,
-                            height: band,
-                        },
-                    ],
-                    _ => [
-                        PaintRect {
-                            x,
-                            y,
-                            width: band,
-                            height,
-                        },
-                        PaintRect {
-                            x: x + 2.0 * band,
-                            y,
-                            width: band,
-                            height,
-                        },
-                    ],
-                };
-                for band_rect in bands {
-                    self.context.borrow_mut().Append(
-                        DisplayItem {
-                            r#type: DisplayItemType::kDrawRect,
-                            phase,
-                            node_id: fragment.node_id,
-                            rect: band_rect,
-                            color: border_color(edge),
-                            line_style,
-                            ..Default::default()
-                        },
-                        self.node,
-                    );
-                }
-                continue;
-            }
-            self.context.borrow_mut().Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kDrawRect,
-                    phase,
-                    node_id: fragment.node_id,
-                    rect: rects[edge],
-                    color: border_color(edge),
-                    line_style,
-                    stroke_width: *edge_width,
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(&outer_radii),
-                    corner_radii: outer_radii,
-                    ..Default::default()
-                },
-                self.node,
-            );
-        }
-        let one_pixel_solid_border = sides.HasAllSides()
-            && widths.iter().all(|width| *width == 1.0)
-            && style
-                .border_styles
-                .iter()
-                .all(|line| *line == BorderLineStyle::kSolid)
-            && (alpha_mask
-                || style
-                    .style
-                    .border_colors
-                    .iter()
-                    .all(|color| color.alpha >= 1.0));
-        if one_pixel_solid_border {
-            let channel = |first: f32, second: f32| {
-                let first_byte = (first * 255.0).round() as i32;
-                let second_byte = (second * 255.0).round() as i32;
-                ((first_byte + second_byte) / 2) as f32 / 255.0
-            };
-            let average = |a: Color, b: Color| Color {
-                red: channel(a.red, b.red),
-                green: channel(a.green, b.green),
-                blue: channel(a.blue, b.blue),
-                alpha: 1.0,
-            };
-            let corners = [
-                PaintRect {
-                    x,
-                    y,
-                    width: 1.0,
-                    height: 1.0,
-                },
-                PaintRect {
-                    x: x + width - 1.0,
-                    y,
-                    width: 1.0,
-                    height: 1.0,
-                },
-                PaintRect {
-                    x: x + width - 1.0,
-                    y: y + height - 1.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
-                PaintRect {
-                    x,
-                    y: y + height - 1.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
-            ];
-            const ADJACENT: [[usize; 2]; 4] = [[0, 3], [0, 1], [2, 1], [2, 3]];
-            for (corner, corner_rect) in corners.into_iter().enumerate() {
-                let first = border_color(ADJACENT[corner][0]);
-                let second = border_color(ADJACENT[corner][1]);
-                if first == second {
-                    continue;
-                }
-                self.context.borrow_mut().Append(
-                    DisplayItem {
-                        r#type: DisplayItemType::kDrawRect,
-                        phase,
-                        node_id: fragment.node_id,
-                        rect: corner_rect,
-                        color: average(first, second),
-                        line_style: BorderLineStyle::kSolid,
-                        antialias: false,
-                        ..Default::default()
-                    },
-                    self.node,
-                );
-            }
-        }
-    }
-
-    // cpp: paint/box_fragment_painter.h:41
-    // cpp: paint/box_fragment_painter.cc:1787-1969
-    fn PaintText(&self, phase: PaintPhase) {
-        let fragment = self
-            .node
-            .fragment
-            .as_deref()
-            .expect("paint tree node has a fragment");
-        let style = &*fragment.paint.style;
+        let style = &fragment.paint.style;
+        let selection_style = &fragment.paint.selection_style;
         let text_clip = phase == PaintPhase::kTextClip;
         let mask_color = Color {
             red: 0.0,
@@ -3177,20 +3050,20 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if !self
             .context
             .borrow()
-            .HasNativeTextSource(fragment.fragment_instance_id)
+            .HasTextSource(fragment.fragment_instance_id)
             && fragment.paint.list_marker_symbol.is_none()
         {
             return;
         }
         // TextFragmentPainter records this text item, including its shadows,
         // symbol marker and decorations; glyph runs are paint-record ops.
-        // text_fragment_painter.cc:429-444: native SelfInkOverflowRect is
+        // text_fragment_painter.cc:429-444: source SelfInkOverflowRect is
         // moved by the physical fragment offset, then enclosed to pixels.
         let in_drawing = self.context.borrow().InDrawingRecorder();
         let drawing_type = DisplayItemIdType::PaintPhaseToDrawingType(phase);
         let visual_rect = (!in_drawing).then(|| {
             let mut visual_rect = FragmentVisualRect(self.node);
-            // SkGlyphRunPainter's analytic/LCD coverage may touch the native
+            // SkGlyphRunPainter's analytic/LCD coverage may touch the source
             // pixel immediately outside the geometric glyph bounds. Blink's
             // cc raster backing does not clip that coverage at a tight content
             // layer edge. Our retained layers can be content-tight, so carry
@@ -3208,26 +3081,170 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             visual_rect.height += fringe * 2.0;
             visual_rect
         });
-        if visual_rect.is_some_and(|_| {
-            DrawingRecorder::UseCachedDrawingIfPossible(
-                self.context,
+        let editing = (!text_clip)
+            .then(|| self.context.borrow().caret)
+            .flatten()
+            .filter(|state| fragment.paint.text_control_host == Some(state.node_id));
+        let range_rect = |range: (u32, u32), selects_soft_line_break: bool| {
+            self.context
+                .borrow()
+                .TextSource(fragment.fragment_instance_id)
+                .and_then(|cursor| {
+                    cursor.TextSelectionRangeRect(range.0, range.1, selects_soft_line_break)
+                })
+                .map(|local| {
+                    let text_origin = TextPaintOrigin(self.node);
+                    let mut rect = PaintRect {
+                        x: text_origin.x + local.x,
+                        y: self.node.paint_offset.y + local.y,
+                        width: local.width,
+                        height: local.height,
+                    };
+                    let snap_top = self.node.paint_offset.y
+                        + fragment.paint.text_line_top_offset.unwrap_or(0.0);
+                    rect.y += self.node.RoundedPaintY(snap_top) - snap_top;
+                    rect
+                })
+        };
+        let control_selection = editing.and_then(|state| state.selection).and_then(|range| {
+            let selects_soft_line_break = fragment
+                .text_end
+                .is_some_and(|fragment_end| range.1 > fragment_end);
+            range_rect(range, selects_soft_line_break).map(|rect| (range, rect))
+        });
+        let document_selection = (!text_clip
+            && fragment.paint.text_control_host.is_none()
+            && !fragment.paint.style.user_select_none())
+        .then(|| self.context.borrow().document_selection)
+        .flatten()
+        .and_then(|selection| {
+            if selection.Collapsed() {
+                return None;
+            }
+            let (start, end) = selection.Ordered();
+            let order = fragment.paint.logical_tree_order;
+            if order < start.tree_order || order > end.tree_order {
+                return None;
+            }
+            let mut range_start = fragment.text_start?;
+            let mut range_end = fragment.text_end?;
+            if order == start.tree_order {
+                range_start = range_start.max(start.offset);
+            }
+            if order == end.tree_order {
+                range_end = range_end.min(end.offset);
+            }
+            let selects_soft_line_break =
+                order < end.tree_order || order == end.tree_order && end.offset > range_end;
+            (range_start < range_end).then_some(((range_start, range_end), selects_soft_line_break))
+        })
+        .and_then(|(range, selects_soft_line_break)| {
+            range_rect(range, selects_soft_line_break).map(|rect| (range, rect))
+        });
+        let selection = if !text_clip && fragment.paint.list_marker_symbol.is_none() {
+            control_selection.or(document_selection)
+        } else {
+            None
+        };
+        let selection_range = selection.map(|(range, _)| range);
+        let selection_rect = selection.map(|(_, rect)| rect);
+        // Chromium: box_fragment_painter.cc:2016-2022. A selected <br> has no
+        // ink overflow but still owns selection paint; every other text item
+        // is culled by its source fragment visual rect.
+        let item_visual_rect = FragmentVisualRect(self.node);
+        let local_ink_overflow = PaintRect {
+            x: item_visual_rect.x - self.node.paint_offset.x,
+            y: item_visual_rect.y - self.node.paint_offset.y,
+            width: item_visual_rect.width,
+            height: item_visual_rect.height,
+        };
+        if !paint_info.IntersectsCullRect(local_ink_overflow, self.node.paint_offset)
+            && !(fragment.paint.is_line_break && selection.is_some())
+        {
+            return;
+        }
+        let append_selection_background = |rect: PaintRect| {
+            // highlight_painter.cc:63-75,882-900,1006-1028: transparent or
+            // empty highlights do not record a draw, and the physical
+            // background is pixel-snapped before it reaches GraphicsContext.
+            if selection_style.background_color().alpha <= 0.0
+                || rect.width <= 0.0
+                || rect.height <= 0.0
+            {
+                return;
+            }
+            let rect = self.node.PixelSnappedRect(&rect);
+            if rect.width <= 0.0 || rect.height <= 0.0 {
+                return;
+            }
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    phase,
+                    node_id: fragment.node_id,
+                    rect,
+                    color: selection_style.background_color(),
+                    ..Default::default()
+                },
                 self.node,
-                drawing_type,
-                visual_rect.unwrap(),
-            )
-        }) {
+            );
+        };
+        // text_fragment_painter.cc:54-62,480-493: when selection painting is
+        // present, its complete text drawing uses LayoutText's independent
+        // selection DisplayItemClient for cache identity and invalidation.
+        let selection_client = selection_rect.and_then(|_| {
+            crate::paint_chunker::DisplayItemClientInfo::from_selection(fragment).map(|client| {
+                (
+                    DisplayItemId {
+                        client_id: fragment.paint.selection_client_id,
+                        r#type: drawing_type,
+                        fragment: fragment.paint.display_item_fragment,
+                    },
+                    client,
+                )
+            })
+        });
+        let cached = visual_rect.is_some_and(|_| {
+            if let Some((id, client)) = selection_client {
+                self.context.borrow_mut().UseCachedDrawingWithClient(
+                    id,
+                    client,
+                    Some((
+                        fragment.paint.display_item_client_owner_node_id,
+                        Arc::<str>::from(format!(
+                            "{} selection",
+                            fragment.paint.display_item_client_debug_name
+                        )),
+                    )),
+                )
+            } else {
+                DrawingRecorder::UseCachedDrawingIfPossible(self.context, self.node, drawing_type)
+            }
+        });
+        if cached {
             return;
         }
         let glyph_runs = self
             .context
             .borrow_mut()
             .TextGlyphRuns(fragment.fragment_instance_id);
+        let _drawing = visual_rect.map(|visual_rect| {
+            if let Some((id, client)) = selection_client {
+                DrawingRecorder::with_client(self.context, self.node, id, client, visual_rect)
+            } else {
+                DrawingRecorder::new(self.context, self.node, drawing_type, visual_rect)
+            }
+        });
+        // A selected forced line break has no glyph run, but Chromium gives its
+        // background the scaled font's space width (inline_cursor.cc:529-537).
+        // Do not manufacture glyphs or decorations for it; retain the real
+        // selection background before leaving the text-proper path.
         if glyph_runs.is_empty() && fragment.paint.list_marker_symbol.is_none() {
+            if let Some(rect) = selection_rect {
+                append_selection_background(rect);
+            }
             return;
         }
-        let _drawing = visual_rect.map(|visual_rect| {
-            DrawingRecorder::new(self.context, self.node, drawing_type, visual_rect)
-        });
         let apply_svg_transform = svg.is_some_and(|svg| svg.has_transform);
         if apply_svg_transform {
             self.context.borrow_mut().Append(
@@ -3278,7 +3295,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 phase,
                 node_id: fragment.node_id,
                 rect: marker_rect,
-                color: if text_clip { mask_color } else { style.color },
+                color: if text_clip { mask_color } else { style.color() },
                 ..Default::default()
             };
             if symbol == ListStyleType::kCircle {
@@ -3303,80 +3320,27 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        let editing = (!text_clip)
-            .then(|| self.context.borrow().caret)
-            .flatten()
-            .filter(|state| fragment.paint.text_control_host == Some(state.node_id));
-        let range_rect = |range: (u32, u32)| {
-            self.context
-                .borrow()
-                .text_range_rects
-                .iter()
-                .find(|(instance, candidate, _)| {
-                    *instance == fragment.fragment_instance_id && *candidate == range
-                })
-                .map(|(_, _, local)| *local)
-                .map(|local| {
-                    let text_origin = TextPaintOrigin(self.node);
-                    let top = self.node.paint_offset.y
-                        + fragment.paint.text_line_top_offset.unwrap_or(0.0);
-                    PaintRect {
-                        x: text_origin.x + local.offset.x,
-                        y: self.node.paint_offset.y + local.offset.y + self.node.RoundedPaintY(top)
-                            - top,
-                        width: local.size.width,
-                        height: local.size.height,
-                    }
-                })
-        };
-        let control_selection = editing
-            .and_then(|state| state.selection)
-            .and_then(range_rect);
-        let document_selection = (!text_clip
-            && fragment.paint.text_control_host.is_none()
-            && !fragment.paint.style.user_select_none)
-            .then(|| self.context.borrow().document_selection)
-            .flatten()
-            .and_then(|selection| {
-                if selection.Collapsed() {
-                    return None;
-                }
-                let (start, end) = selection.Ordered();
-                let order = fragment.paint.logical_tree_order;
-                if order < start.tree_order || order > end.tree_order {
-                    return None;
-                }
-                let mut range_start = fragment.text_start?;
-                let mut range_end = fragment.text_end?;
-                if order == start.tree_order {
-                    range_start = range_start.max(start.offset);
-                }
-                if order == end.tree_order {
-                    range_end = range_end.min(end.offset);
-                }
-                (range_start < range_end).then_some((range_start, range_end))
-            })
-            .and_then(range_rect);
-        let selection_rect = control_selection.or(document_selection);
-        if let Some(rect) = selection_rect {
-            self.context.borrow_mut().Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kDrawRect,
-                    phase,
-                    node_id: fragment.node_id,
-                    rect,
-                    color: Color {
-                        red: 0.0,
-                        green: 0.4,
-                        blue: 1.0,
-                        alpha: 1.0,
-                    },
-                    ..Default::default()
-                },
+        let apply_text_fit = svg.is_none() && fragment.paint.text_fit_scale != 1.0;
+        let mut text_fit_origin = TextPaintOrigin(self.node);
+        if let Some(run) = glyph_runs.first() {
+            // text_fragment_painter.cc:531-542 constructs text_origin at the
+            // scaled primary-font ascent, i.e. the same baseline retained by
+            // the glyph run, before ApplyTextFitScale uses it as the fixed point.
+            text_fit_origin.y += run.baseline;
+        }
+        if apply_text_fit {
+            AppendTextFitTransform(
+                self.context,
                 self.node,
+                phase,
+                fragment.paint.text_fit_scale,
+                text_fit_origin,
+                true,
             );
         }
         let mut glyph_foregrounds = Vec::new();
+        let mut selection_glyph_shadows = Vec::new();
+        let mut selection_glyph_foregrounds = Vec::new();
         for input_run in glyph_runs.iter() {
             let make_item = |color: Color,
                              shadow_offset: Offset,
@@ -3390,20 +3354,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     let line_top = self.node.paint_offset.y + text_line_top_offset;
                     text_line_top = line_top;
                     let snap_delta = self.node.RoundedPaintY(line_top) - line_top;
-                    if ProcessFlag(&TRACE_TEXT_ORIGIN, "RECHROM_TRACE_TEXT_ORIGIN") {
-                        eprintln!(
-                            "text-origin node={} offset={:.4},{:.4} line_top={:.4} snap={:.4} baseline={:.4} origin={:.4},{:.4} font={:.4}",
-                            fragment.node_id,
-                            self.node.paint_offset.x,
-                            self.node.paint_offset.y,
-                            line_top,
-                            snap_delta,
-                            input_run.baseline,
-                            origin.x,
-                            origin.y + snap_delta + input_run.baseline,
-                            input_run.font_size,
-                        );
-                    }
                     origin.y += snap_delta;
                     physical_box_offset.y += snap_delta;
                 }
@@ -3453,7 +3403,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         item.svg_line_join = style.svg_stroke_line_join;
                         item.miter_limit = style.svg_stroke_miter_limit;
                     } else {
-                        item.stroke_width = style.text_stroke_width;
+                        item.stroke_width = style.text_stroke_width();
                     }
                 }
                 if input_run.writing_mode != WritingMode::kHorizontalTb {
@@ -3466,8 +3416,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 // cc::PaintOp::GetBounds(DrawTextBlobOp) consumes blob ink,
                 // independently of the containing decoration record's bound.
                 // Layout supplied real shaped glyph ink even when decoration
-                // overflow still requires InlinePaintContext. Keep that proof
-                // only for the ordinary untransformed fill path.
+                // overflow still requires the retained-layout bridge into the
+                // Paint-owned InlinePaintContext. Keep that proof only for the
+                // ordinary untransformed fill path.
                 if svg.is_none()
                     && (fragment.paint.text_glyph_ink.is_some()
                         || fragment.paint.self_ink_overflow.is_some())
@@ -3481,7 +3432,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
                 item
             };
-            for shadow in style.text_shadows.iter().rev() {
+            for index in (0..style.text_shadow_count()).rev() {
+                let shadow = style.text_shadow(index);
                 if text_clip || shadow.color.alpha <= 0.0 {
                     continue;
                 }
@@ -3539,7 +3491,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     let stroke_width = if svg.is_some() {
                         style.svg_stroke_width
                     } else {
-                        style.text_stroke_width
+                        style.text_stroke_width()
                     };
                     if stroke_width > 0.0 {
                         glyph_foregrounds.push(make_item(
@@ -3557,21 +3509,21 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     // because the two modes are separate display items here.
                     for component in style.svg_paint_order {
                         if component == SvgPaintComponent::kFill
-                            && style.text_fill_color.alpha > 0.0
+                            && style.text_fill_color().alpha > 0.0
                         {
                             glyph_foregrounds.push(make_item(
-                                style.text_fill_color,
+                                style.text_fill_color(),
                                 Offset::default(),
                                 0.0,
                                 false,
                                 false,
                             ));
                         } else if component == SvgPaintComponent::kStroke
-                            && style.text_stroke_width > 0.0
-                            && style.text_stroke_color.alpha > 0.0
+                            && style.text_stroke_width() > 0.0
+                            && style.text_stroke_color().alpha > 0.0
                         {
                             glyph_foregrounds.push(make_item(
-                                style.text_stroke_color,
+                                style.text_stroke_color(),
                                 Offset::default(),
                                 0.0,
                                 false,
@@ -3638,56 +3590,293 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     }
                 }
             }
+            if let Some(selection_range) = selection_range {
+                let selected_glyphs = SliceGlyphsForSelection(
+                    &input_run.glyphs,
+                    selection_range,
+                    fragment.text_end.unwrap_or(selection_range.1),
+                );
+                if selected_glyphs.is_empty() {
+                    continue;
+                }
+                for index in (0..selection_style.text_shadow_count()).rev() {
+                    let shadow = selection_style.text_shadow(index);
+                    if shadow.color.alpha <= 0.0 {
+                        continue;
+                    }
+                    if shadow.inset
+                        || shadow.spread != 0.0
+                        || !shadow.offset.x.is_finite()
+                        || !shadow.offset.y.is_finite()
+                        || !shadow.blur_radius.is_finite()
+                        || shadow.blur_radius < 0.0
+                    {
+                        panic!("selection text shadow geometry is invalid");
+                    }
+                    let mut item =
+                        make_item(shadow.color, shadow.offset, shadow.blur_radius, true, false);
+                    item.glyphs = Arc::clone(&selected_glyphs);
+                    selection_glyph_shadows.push(item);
+                }
+                for component in selection_style.svg_paint_order {
+                    if component == SvgPaintComponent::kFill
+                        && selection_style.text_fill_color().alpha > 0.0
+                    {
+                        let mut item = make_item(
+                            selection_style.text_fill_color(),
+                            Offset::default(),
+                            0.0,
+                            false,
+                            false,
+                        );
+                        item.glyphs = Arc::clone(&selected_glyphs);
+                        selection_glyph_foregrounds.push(item);
+                    } else if component == SvgPaintComponent::kStroke
+                        && selection_style.text_stroke_width() > 0.0
+                        && selection_style.text_stroke_color().alpha > 0.0
+                    {
+                        let mut item = make_item(
+                            selection_style.text_stroke_color(),
+                            Offset::default(),
+                            0.0,
+                            false,
+                            true,
+                        );
+                        item.stroke_width = selection_style.text_stroke_width();
+                        item.glyphs = Arc::clone(&selected_glyphs);
+                        selection_glyph_foregrounds.push(item);
+                    }
+                }
+            }
         }
-        self.PaintTextDecorations(phase, false);
+        if apply_text_fit {
+            AppendTextFitTransform(
+                self.context,
+                self.node,
+                phase,
+                fragment.paint.text_fit_scale,
+                text_fit_origin,
+                false,
+            );
+        }
+        if let Some(rect) = selection_rect {
+            // HighlightPainter::PaintHighlightOverlays paints the originating
+            // shadow first, then each highlight layer's background and shadow,
+            // before any under/over decoration or text proper.
+            append_selection_background(rect);
+            if apply_text_fit {
+                AppendTextFitTransform(
+                    self.context,
+                    self.node,
+                    phase,
+                    fragment.paint.text_fit_scale,
+                    text_fit_origin,
+                    true,
+                );
+            }
+            if !selection_glyph_shadows.is_empty() {
+                let shadow_clip_rect = AdjustRectForShadow(rect, selection_style);
+                let mut context = self.context.borrow_mut();
+                context.Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kSave,
+                        phase,
+                        node_id: fragment.node_id,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+                context.Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kClipRect,
+                        phase,
+                        node_id: fragment.node_id,
+                        rect: shadow_clip_rect,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+                for item in selection_glyph_shadows {
+                    context.Append(item, self.node);
+                }
+                context.Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kRestore,
+                        phase,
+                        node_id: fragment.node_id,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+            }
+            if apply_text_fit {
+                AppendTextFitTransform(
+                    self.context,
+                    self.node,
+                    phase,
+                    fragment.paint.text_fit_scale,
+                    text_fit_origin,
+                    false,
+                );
+            }
+        }
+        let mut decoration_painter =
+            TextDecorationPainter::new(self.node, self.context, phase, selection_rect);
+        decoration_painter.Begin(TextDecorationPhase::Originating);
+        decoration_painter.PaintExceptLineThrough();
+        if apply_text_fit {
+            AppendTextFitTransform(
+                self.context,
+                self.node,
+                phase,
+                fragment.paint.text_fit_scale,
+                text_fit_origin,
+                true,
+            );
+        }
         for item in &glyph_foregrounds {
             self.context.borrow_mut().Append(item.clone(), self.node);
         }
         // Repaint selected glyphs under the selection clip, preserving ligatures
         // and fallback runs rather than splitting glyph ids at character offsets.
         if let Some(rect) = selection_rect {
-            let mut context = self.context.borrow_mut();
-            context.Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kSave,
+            if apply_text_fit {
+                AppendTextFitTransform(
+                    self.context,
+                    self.node,
                     phase,
-                    node_id: fragment.node_id,
-                    ..Default::default()
-                },
-                self.node,
-            );
-            context.Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kClipRect,
-                    phase,
-                    node_id: fragment.node_id,
-                    rect,
-                    ..Default::default()
-                },
-                self.node,
-            );
-            for mut item in glyph_foregrounds {
-                item.color = Color {
-                    red: 1.0,
-                    green: 1.0,
-                    blue: 1.0,
-                    alpha: 1.0,
-                };
-                context.Append(item, self.node);
+                    fragment.paint.text_fit_scale,
+                    text_fit_origin,
+                    false,
+                );
             }
-            context.Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kRestore,
+            let mut selection_decoration_painter =
+                TextDecorationPainter::new(self.node, self.context, phase, Some(rect));
+            selection_decoration_painter.Begin(TextDecorationPhase::Selection);
+            selection_decoration_painter.PaintExceptLineThrough();
+            if apply_text_fit {
+                AppendTextFitTransform(
+                    self.context,
+                    self.node,
                     phase,
-                    node_id: fragment.node_id,
-                    ..Default::default()
-                },
+                    fragment.paint.text_fit_scale,
+                    text_fit_origin,
+                    true,
+                );
+            }
+            if svg.is_some() {
+                // highlight_painter.cc:961-972 accepts possible partial-
+                // ligature overpaint for SVG because text transforms and
+                // textPath geometry can invalidate a canvas-space clip.
+                for item in selection_glyph_foregrounds {
+                    self.context.borrow_mut().Append(item, self.node);
+                }
+            } else {
+                // highlight_painter.cc:973-986 inflates the text-proper clip by
+                // ceil(stroke_width / 2). Decoration and background clips keep
+                // the uninflated selection range.
+                let source = self
+                    .context
+                    .borrow()
+                    .TextSource(fragment.fragment_instance_id);
+                let item = source.and_then(|cursor| cursor.Cursor().InlineItem());
+                let mut physical_box_offset = self.node.paint_offset;
+                if let Some(text_line_top_offset) = fragment.paint.text_line_top_offset {
+                    let line_top = self.node.paint_offset.y + text_line_top_offset;
+                    physical_box_offset.y += self.node.RoundedPaintY(line_top) - line_top;
+                }
+                let highlight_rect = source
+                    .and_then(|cursor| {
+                        let range = selection_range.expect("selection rect has a logical range");
+                        cursor.TextHighlightRangeRect(range.0, range.1)
+                    })
+                    .map(|local| PaintRect {
+                        x: physical_box_offset.x + local.x,
+                        y: physical_box_offset.y + local.y,
+                        width: local.width,
+                        height: local.height,
+                    });
+                let glyph_clip_rect = SelectionGlyphClipRect(
+                    rect,
+                    highlight_rect,
+                    selection_style.text_stroke_width(),
+                    selection_range.expect("selection rect has a logical range"),
+                    fragment.text_start.zip(fragment.text_end),
+                    fragment.paint.ink_overflow,
+                    item,
+                    physical_box_offset,
+                    fragment.size,
+                );
+                {
+                    let mut context = self.context.borrow_mut();
+                    context.Append(
+                        DisplayItem {
+                            r#type: DisplayItemType::kSave,
+                            phase,
+                            node_id: fragment.node_id,
+                            ..Default::default()
+                        },
+                        self.node,
+                    );
+                    context.Append(
+                        DisplayItem {
+                            r#type: DisplayItemType::kClipRect,
+                            phase,
+                            node_id: fragment.node_id,
+                            rect: glyph_clip_rect,
+                            ..Default::default()
+                        },
+                        self.node,
+                    );
+                }
+                for item in selection_glyph_foregrounds {
+                    self.context.borrow_mut().Append(item, self.node);
+                }
+                self.context.borrow_mut().Append(
+                    DisplayItem {
+                        r#type: DisplayItemType::kRestore,
+                        phase,
+                        node_id: fragment.node_id,
+                        ..Default::default()
+                    },
+                    self.node,
+                );
+            }
+            if apply_text_fit {
+                AppendTextFitTransform(
+                    self.context,
+                    self.node,
+                    phase,
+                    fragment.paint.text_fit_scale,
+                    text_fit_origin,
+                    false,
+                );
+            }
+            selection_decoration_painter.PaintOnlyLineThrough();
+            if apply_text_fit {
+                AppendTextFitTransform(
+                    self.context,
+                    self.node,
+                    phase,
+                    fragment.paint.text_fit_scale,
+                    text_fit_origin,
+                    true,
+                );
+            }
+        }
+        if apply_text_fit {
+            AppendTextFitTransform(
+                self.context,
                 self.node,
+                phase,
+                fragment.paint.text_fit_scale,
+                text_fit_origin,
+                false,
             );
         }
         if let Some(mut rect) = editing
             .and_then(|state| state.composition)
-            .and_then(range_rect)
+            .and_then(|range| range_rect(range, false))
         {
             rect.y += rect.height - 1.0;
             rect.height = 1.0;
@@ -3697,13 +3886,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                     node_id: fragment.node_id,
                     rect,
-                    color: style.color,
+                    color: style.color(),
                     ..Default::default()
                 },
                 self.node,
             );
         }
-        self.PaintTextDecorations(phase, true);
+        decoration_painter.PaintOnlyLineThrough();
         if apply_svg_transform {
             self.context.borrow_mut().Append(
                 DisplayItem {
@@ -3714,278 +3903,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 },
                 self.node,
             );
-        }
-    }
-
-    // cpp: paint/box_fragment_painter.h:42
-    // cpp: paint/box_fragment_painter.cc:1971-2114
-    fn PaintTextDecorations(&self, phase: PaintPhase, line_through: bool) {
-        let fragment = self
-            .node
-            .fragment
-            .as_deref()
-            .expect("paint tree node has a fragment");
-        let style = &*fragment.paint.style;
-        let text_clip = phase == PaintPhase::kTextClip;
-        let mask_color = Color {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 1.0,
-        };
-        let glyph_runs = self
-            .context
-            .borrow_mut()
-            .TextGlyphRuns(fragment.fragment_instance_id);
-        let metrics = glyph_runs
-            .first()
-            .map(|run| (run.font_size, run.ascent, run.baseline, run.writing_mode))
-            .or_else(|| {
-                fragment.paint.text_combine.as_ref().map(|combine| {
-                    (
-                        combine.font_size,
-                        combine.text_top_offset,
-                        combine.text_top_offset,
-                        fragment.paint.writing_mode,
-                    )
-                })
-            });
-        let Some((font_size, ascent, baseline, writing_mode)) = metrics else {
-            return;
-        };
-        let paint_decoration = |decoration: &TextDecorationPaint| {
-            if if line_through {
-                !decoration.line_through
-            } else {
-                !decoration.underline && !decoration.overline
-            } {
-                return;
-            }
-            let color = if text_clip {
-                mask_color
-            } else {
-                decoration.color.unwrap_or(style.color)
-            };
-            // Blink resolves the initial `text-decoration-thickness: auto` to one
-            // tenth of the used font size. Font underline metrics are used only by
-            // the distinct `from-font` value, not by `auto`.
-            let auto_thickness = font_size / 10.0;
-            let used_thickness = |fallback: f64| {
-                let resolved = decoration.thickness.unwrap_or(fallback);
-                if !resolved.is_finite() {
-                    panic!("text decoration geometry is invalid");
-                }
-                resolved.max(if fragment.paint.svg_text.is_some() {
-                    0.0
-                } else {
-                    1.0
-                })
-            };
-            let paint_line = |line: PaintRect, default_thickness: f64, skip_ink: bool| {
-                let thickness = used_thickness(default_thickness);
-                if !decoration.underline_offset.is_finite() {
-                    panic!("text decoration geometry is invalid");
-                }
-                let make_item = |item_color: Color,
-                                 shadow_offset: Offset,
-                                 blur_radius: f64,
-                                 is_shadow: bool| {
-                    let mut item = DisplayItem {
-                        r#type: if decoration.style == TextDecorationStyle::kWavy {
-                            DisplayItemType::kStrokeWavyLine
-                        } else {
-                            DisplayItemType::kStrokeLine
-                        },
-                        phase,
-                        node_id: fragment.node_id,
-                        rect: line,
-                        color: item_color,
-                        decoration_style: decoration.style,
-                        stroke_width: thickness,
-                        shadow_offset,
-                        blur_radius,
-                        is_shadow,
-                        is_text_decoration: true,
-                        skip_ink,
-                        ..Default::default()
-                    };
-                    if matches!(
-                        decoration.style,
-                        TextDecorationStyle::kDashed | TextDecorationStyle::kDotted
-                    ) {
-                        // DecorationLinePainter::DrawLineAsStroke snaps the
-                        // center line and rounds StyledStrokeData thickness
-                        // before creating its dash path effect.
-                        let stroke_thickness = thickness.round().max(1.0);
-                        let snapped_left = line.x.trunc();
-                        let snapped_right = (line.x + line.width).trunc();
-                        item.rect.x = snapped_left;
-                        item.rect.width = (snapped_right - snapped_left).max(0.0);
-                        item.rect.y = (line.y + (stroke_thickness / 2.0).max(0.5)).floor();
-                        if stroke_thickness as i64 % 2 != 0 {
-                            item.rect.y += 0.5;
-                        }
-                        if decoration.style == TextDecorationStyle::kDashed {
-                            let dash_ratio = if stroke_thickness >= 3.0 { 2.0 } else { 3.0 };
-                            let gap_ratio = if stroke_thickness >= 3.0 { 1.0 } else { 2.0 };
-                            item.dash_intervals =
-                                vec![dash_ratio * stroke_thickness, gap_ratio * stroke_thickness];
-                        } else if stroke_thickness <= 3.0 {
-                            item.dash_intervals = vec![stroke_thickness, stroke_thickness];
-                        } else {
-                            item.dash_intervals = vec![0.0, 2.0 * stroke_thickness - 0.01];
-                            item.round_cap = true;
-                            item.rect.x += stroke_thickness / 2.0;
-                            item.rect.width = (item.rect.width - stroke_thickness).max(0.0);
-                        }
-                    }
-                    item
-                };
-                for shadow in style.text_shadows.iter().rev() {
-                    if text_clip || shadow.color.alpha <= 0.0 {
-                        continue;
-                    }
-                    let item = make_item(shadow.color, shadow.offset, shadow.blur_radius, true);
-                    let mut bounds = PaintRect {
-                        x: item.rect.x + shadow.offset.x,
-                        y: item.rect.y + shadow.offset.y,
-                        width: item.rect.width,
-                        height: item.rect.height,
-                    };
-                    let outset = 1.5 * shadow.blur_radius + thickness;
-                    bounds.x -= outset;
-                    bounds.y -= outset;
-                    bounds.width += 2.0 * outset;
-                    bounds.height += 2.0 * outset;
-                    if IsVisible(self.node, &bounds) {
-                        self.context.borrow_mut().Append(item, self.node);
-                    }
-                }
-                let mut bounds = line;
-                bounds.x -= thickness;
-                bounds.y -= thickness;
-                bounds.width += 2.0 * thickness;
-                bounds.height += 2.0 * thickness;
-                if IsVisible(self.node, &bounds) {
-                    self.context
-                        .borrow_mut()
-                        .Append(make_item(color, Offset::default(), 0.0, false), self.node);
-                }
-            };
-            let origin = TextPaintOrigin(self.node);
-            let paint_size = TextPaintSize(self.node);
-            let x = origin.x;
-            let y = origin.y;
-            let horizontal = writing_mode == WritingMode::kHorizontalTb;
-            if line_through {
-                if horizontal {
-                    let thickness = used_thickness(auto_thickness);
-                    paint_line(
-                        PaintRect {
-                            x,
-                            y: y + 2.0 * ascent / 3.0 - thickness / 2.0,
-                            width: paint_size.width,
-                            height: 0.0,
-                        },
-                        thickness,
-                        false,
-                    );
-                } else {
-                    paint_line(
-                        PaintRect {
-                            x: x + paint_size.width / 2.0,
-                            y,
-                            width: 0.0,
-                            height: paint_size.height,
-                        },
-                        auto_thickness,
-                        false,
-                    );
-                }
-                return;
-            }
-            if decoration.overline {
-                if horizontal {
-                    paint_line(
-                        PaintRect {
-                            x,
-                            y: y + auto_thickness / 2.0,
-                            width: paint_size.width,
-                            height: 0.0,
-                        },
-                        auto_thickness,
-                        decoration.skip_ink,
-                    );
-                } else {
-                    let line_x = if writing_mode == WritingMode::kVerticalRl {
-                        x + paint_size.width
-                    } else {
-                        x
-                    };
-                    paint_line(
-                        PaintRect {
-                            x: line_x,
-                            y,
-                            width: 0.0,
-                            height: paint_size.height,
-                        },
-                        auto_thickness,
-                        decoration.skip_ink,
-                    );
-                }
-            }
-            if decoration.underline {
-                if horizontal {
-                    let baseline_offset = if decoration.underline_offset_auto {
-                        (used_thickness(auto_thickness) / 2.0).ceil().max(1.0)
-                    } else {
-                        decoration.underline_offset.round()
-                    };
-                    let wavy_offset = if decoration.style == TextDecorationStyle::kWavy {
-                        used_thickness(auto_thickness) + 1.0
-                    } else {
-                        0.0
-                    };
-                    paint_line(
-                        PaintRect {
-                            x,
-                            y: y + baseline + baseline_offset + wavy_offset,
-                            width: paint_size.width,
-                            height: 0.0,
-                        },
-                        auto_thickness,
-                        decoration.skip_ink,
-                    );
-                } else {
-                    let direction = if writing_mode == WritingMode::kVerticalRl {
-                        -1.0
-                    } else {
-                        1.0
-                    };
-                    let line_x = (if direction < 0.0 {
-                        x
-                    } else {
-                        x + paint_size.width
-                    }) + direction * decoration.underline_offset;
-                    paint_line(
-                        PaintRect {
-                            x: line_x,
-                            y,
-                            width: 0.0,
-                            height: paint_size.height,
-                        },
-                        auto_thickness,
-                        decoration.skip_ink,
-                    );
-                }
-            }
-        };
-        if style.applied_text_decorations.is_empty() {
-            paint_decoration(&style.text_decoration);
-        } else {
-            for decoration in &style.applied_text_decorations {
-                paint_decoration(decoration);
-            }
         }
     }
 
@@ -4055,14 +3972,124 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/box_fragment_painter.h:43
-    // cpp: paint/box_fragment_painter.cc:2116-2245
-    fn PaintReplaced(&self, phase: PaintPhase) {
+    // Source: core/paint/image_painter.cc:66-115 and
+    // core/html/html_area_element.cc:111-191.
+    fn PaintAreaElementFocusRing(&self) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
+        if fragment.paint.IsPrinting() {
+            return;
+        }
+        let Some(area) = fragment.paint.focused_image_map_area.as_ref() else {
+            return;
+        };
+        if !area.has_outline || !area.outline_style_is_auto {
+            return;
+        }
+        let path = ImageMapAreaPath(
+            area,
+            PaintRect {
+                x: self.node.paint_offset.x,
+                y: self.node.paint_offset.y,
+                width: fragment.size.width,
+                height: fragment.size.height,
+            },
+            fragment.paint.effective_zoom as f64,
+        );
+        if path.is_empty() {
+            return;
+        }
+        if DrawingRecorder::UseCachedDrawingIfPossible(
+            self.context,
+            self.node,
+            DisplayItemIdType::kImageAreaFocusRing,
+        ) {
+            return;
+        }
+        let content_box = self.node.PixelSnappedRect(&PaintRect {
+            x: self.node.paint_offset.x + fragment.paint.border.left + fragment.paint.padding.left,
+            y: self.node.paint_offset.y + fragment.paint.border.top + fragment.paint.padding.top,
+            width: fragment.content_size.width,
+            height: fragment.content_size.height,
+        });
+        if content_box.width <= 0.0
+            || content_box.height <= 0.0
+            || !IsVisible(self.node, &content_box)
+        {
+            return;
+        }
+        // BoxDrawingRecorder uses the LayoutImage's source visual overflow.
+        let _drawing = DrawingRecorder::new(
+            self.context,
+            self.node,
+            DisplayItemIdType::kImageAreaFocusRing,
+            DecorationVisualRect(self.node),
+        );
+        let phase = PaintPhase::kOutline;
+        let node_id = fragment.node_id;
+        self.context.borrow_mut().Append(
+            DisplayItem {
+                r#type: DisplayItemType::kSave,
+                phase,
+                node_id,
+                ..Default::default()
+            },
+            self.node,
+        );
+        self.context.borrow_mut().Append(
+            DisplayItem {
+                r#type: DisplayItemType::kClipRect,
+                phase,
+                node_id,
+                rect: content_box,
+                antialias: false,
+                ..Default::default()
+            },
+            self.node,
+        );
+        let stroke_width = FocusRingStrokeWidth(area.effective_zoom);
+        self.context.borrow_mut().Append(
+            DisplayItem {
+                r#type: DisplayItemType::kStrokePath,
+                phase,
+                node_id,
+                rect: content_box,
+                path,
+                even_odd: area.shape == ImageMapAreaShape::kPoly,
+                color: area.outline_color,
+                stroke_width,
+                corner_radius: stroke_width,
+                antialias: true,
+                ..Default::default()
+            },
+            self.node,
+        );
+        self.context.borrow_mut().Append(
+            DisplayItem {
+                r#type: DisplayItemType::kRestore,
+                phase,
+                node_id,
+                ..Default::default()
+            },
+            self.node,
+        );
+    }
+
+    // cpp: core/paint/image_painter.cc:117-120
+    fn PaintReplaced(&self, paint_info: &PaintInfo<'_, '_>) {
+        let phase = paint_info.phase;
+        let fragment = self
+            .node
+            .fragment
+            .as_deref()
+            .expect("paint tree node has a fragment");
+        // cpp: core/layout/layout_image.cc:293-299
+        if fragment.paint.ChildPaintBlockedByDisplayLock() {
+            return;
+        }
         let style = &fragment.paint;
         let content_box = PaintRect {
             x: self.node.paint_offset.x + style.border.left + style.padding.left,
@@ -4070,26 +4097,37 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             width: fragment.content_size.width,
             height: fragment.content_size.height,
         };
-        let clips_to_content_box = style
+        if content_box.width <= 0.0 || content_box.height <= 0.0 {
+            return;
+        }
+        // Source: core/paint/image_painter.cc:138-145. LayoutReplaced owns
+        // object-fit/object-position resolution. Paint consumes its retained
+        // ReplacedContentRect and never recomputes that geometry from style or
+        // resource dimensions.
+        let replaced_content = style
             .replaced_content
             .as_ref()
-            .map_or(true, |content| content.clips_to_content_box);
+            .expect("replaced paint fragment has source replaced-content geometry");
+        let paint_rect = PaintRect {
+            x: self.node.paint_offset.x + replaced_content.offset.x,
+            y: self.node.paint_offset.y + replaced_content.offset.y,
+            width: replaced_content.size.width,
+            height: replaced_content.size.height,
+        };
+        let clips_to_content_box = replaced_content.clips_to_content_box;
+        let base_visual_rect = if clips_to_content_box {
+            content_box
+        } else {
+            paint_rect
+        };
         if let Some(shader) = style.style.replaced_image_shader.as_ref() {
-            let mut destination = content_box;
-            if let Some(replaced_content) = style.replaced_content.as_ref() {
-                destination = PaintRect {
-                    x: self.node.paint_offset.x + replaced_content.offset.x,
-                    y: self.node.paint_offset.y + replaced_content.offset.y,
-                    width: replaced_content.size.width,
-                    height: replaced_content.size.height,
-                };
-            }
-            let destination = self.node.PixelSnappedRect(&destination);
+            let destination = self.node.PixelSnappedRect(&paint_rect);
             let visual_rect = if clips_to_content_box {
                 destination.intersection(self.node.PixelSnappedRect(&content_box))
             } else {
                 destination
             };
+            let painted_rect_changed = UpdateImagePaintedRect(self.node, base_visual_rect);
             if destination.width <= 0.0
                 || destination.height <= 0.0
                 || visual_rect.width <= 0.0
@@ -4098,11 +4136,15 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             {
                 return;
             }
+            if UseCachedImageDrawingIfPossible(self.context, self.node, phase, painted_rect_changed)
+            {
+                return;
+            }
             let _drawing = DrawingRecorder::new(
                 self.context,
                 self.node,
                 DisplayItemIdType::PaintPhaseToDrawingType(phase),
-                visual_rect,
+                self.node.EnclosingRect(base_visual_rect),
             );
             if visual_rect != destination {
                 self.context.borrow_mut().Append(
@@ -4161,18 +4203,88 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        let Some(id) = style.style.image_resource_id else {
+        // Source: image_painter.cc:121-136. HasImage() is a paint-time
+        // resource query, not merely the presence of a retained resource id.
+        // A failed, evicted or malformed frame therefore takes Chromium's
+        // missing-image placeholder branch as well.
+        let Some((id, image)) = style
+            .style
+            .image_resource_id
+            .and_then(|id| FindAvailableReplacedImage(self.node, id).map(|image| (id, image)))
+        else {
+            if !fragment.paint.replaced_is_image {
+                return;
+            }
+            // cpp: core/paint/image_painter.cc:130-132. A selection drag
+            // snapshot must not manufacture the missing-image placeholder;
+            // the dedicated paint phase is already preserved by paint_walk.
+            if phase == PaintPhase::kSelectionDragImage {
+                return;
+            }
+            // Chromium ImagePainter paints a one-pixel placeholder when a
+            // LayoutImage has no decoded image. Layout exports the source
+            // LayoutImage identity because NodeKind::kReplaced also includes
+            // canvas/video/embedded content.
+            // cpp: core/paint/image_painter.cc:121-136,184-195
+            if let Some(outline_rect) = MissingImagePlaceholderRect(
+                fragment.paint.replaced_is_image,
+                content_box,
+                self.node.PixelSnappedRect(&content_box),
+            ) {
+                let painted_rect_changed = UpdateImagePaintedRect(self.node, base_visual_rect);
+                if IsVisible(self.node, &outline_rect) {
+                    if UseCachedImageDrawingIfPossible(
+                        self.context,
+                        self.node,
+                        phase,
+                        painted_rect_changed,
+                    ) {
+                        return;
+                    }
+                    let _drawing = DrawingRecorder::new(
+                        self.context,
+                        self.node,
+                        DisplayItemIdType::PaintPhaseToDrawingType(phase),
+                        self.node.EnclosingRect(base_visual_rect),
+                    );
+                    self.context.borrow_mut().Append(
+                        DisplayItem {
+                            r#type: DisplayItemType::kStrokeRect,
+                            phase,
+                            node_id: fragment.node_id,
+                            rect: outline_rect,
+                            color: Color {
+                                red: 211.0 / 255.0,
+                                green: 211.0 / 255.0,
+                                blue: 211.0 / 255.0,
+                                alpha: 1.0,
+                            },
+                            line_style: BorderLineStyle::kSolid,
+                            stroke_width: 1.0,
+                            ..Default::default()
+                        },
+                        self.node,
+                    );
+                }
+            }
             return;
         };
-        let image = FindImage(self.node, id);
-        let image_orientation = if style.style.respect_image_orientation {
+        // Source: image_painter.cc:126-129. Privacy-preserving subtree paint
+        // must not expose pixels from a tainted cross-origin response.
+        if paint_info.IsPrivacyPreserving() && !image.is_cors_same_origin {
+            return;
+        }
+        // cpp: core/paint/image_painter.cc:203-218. The resource snapshot is
+        // immutable for this paint pass, so the HasImage/GetImage checks above
+        // share one validated value rather than fabricating a second lookup.
+        let image_orientation = if style.style.respect_image_orientation() {
             image.orientation
         } else {
             image_resource::ImageOrientation::kDefault
         };
         let (source_width, source_height) =
             image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
-        let mut destination = content_box;
+        let mut destination = paint_rect;
         let mut source = PaintRect {
             x: 0.0,
             y: 0.0,
@@ -4182,69 +4294,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if destination.width <= 0.0 || destination.height <= 0.0 {
             return;
         }
-        if !style.style.object_position.x.is_finite() || !style.style.object_position.y.is_finite()
-        {
-            panic!("object position must be finite");
-        }
-        // ImagePainter receives a zoomed content box. Match
-        // LayoutReplaced::IntrinsicSize: resource pixels first lose their
-        // image density and then acquire the element's effective zoom. This
-        // fallback is observable while replaced-content geometry is pending,
-        // so omitting zoom makes `object-fit: none/scale-down` jump sizes.
-        let effective_zoom = f64::from(style.effective_zoom);
-        if !effective_zoom.is_finite() || effective_zoom <= 0.0 {
-            panic!("replaced image effective zoom must be finite and positive");
-        }
-        let intrinsic_width = source.width / image.resolution_scale * effective_zoom;
-        let intrinsic_height = source.height / image.resolution_scale * effective_zoom;
-        let mut fit = style.style.object_fit;
-        if let Some(replaced_content) = style.replaced_content.as_ref() {
-            destination = PaintRect {
-                x: self.node.paint_offset.x + replaced_content.offset.x,
-                y: self.node.paint_offset.y + replaced_content.offset.y,
-                width: replaced_content.size.width,
-                height: replaced_content.size.height,
-            };
-        } else if fit == ObjectFit::kScaleDown {
-            let fits_without_scaling =
-                intrinsic_width <= destination.width && intrinsic_height <= destination.height;
-            fit = if fits_without_scaling {
-                ObjectFit::kNone
-            } else {
-                ObjectFit::kContain
-            };
-        }
-        if style.replaced_content.is_none() && matches!(fit, ObjectFit::kContain | ObjectFit::kNone)
-        {
-            let scale = if fit == ObjectFit::kNone {
-                1.0
-            } else {
-                (destination.width / intrinsic_width).min(destination.height / intrinsic_height)
-            };
-            let fitted_width = intrinsic_width * scale;
-            let fitted_height = intrinsic_height * scale;
-            destination.x += (destination.width - fitted_width) * style.style.object_position.x
-                + style.style.object_position_offset.x;
-            destination.y += (destination.height - fitted_height) * style.style.object_position.y
-                + style.style.object_position_offset.y;
-            destination.width = fitted_width;
-            destination.height = fitted_height;
-        } else if style.replaced_content.is_none() && fit == ObjectFit::kCover {
-            let scale =
-                (destination.width / intrinsic_width).max(destination.height / intrinsic_height);
-            // Blink ImagePainter::PaintIntoRect snaps the fitted image rectangle
-            // before mapping the clipped content rectangle back to source pixels.
-            // Cropping the floating source first changes both the sampling scale
-            // and the selected mip level, especially for small object-fit images.
-            let fitted_width = intrinsic_width * scale;
-            let fitted_height = intrinsic_height * scale;
-            destination.x += (destination.width - fitted_width) * style.style.object_position.x
-                + style.style.object_position_offset.x;
-            destination.y += (destination.height - fitted_height) * style.style.object_position.y
-                + style.style.object_position_offset.y;
-            destination.width = fitted_width;
-            destination.height = fitted_height;
-        }
         let document_image_container_key = ResolveDocumentImageContainerKey(
             image,
             Size {
@@ -4253,88 +4302,112 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             },
             f64::from(style.effective_zoom),
             fragment.paint.resources.as_deref(),
-            (!style.style.color_scheme_flags_is_normal)
-                .then_some(u8::from(style.style.used_dark_color_scheme)),
+            (!style.style.color_scheme_flags_is_normal())
+                .then_some(u8::from(style.style.used_dark_color_scheme())),
         );
-        let needs_clipping = clips_to_content_box
-            && (destination.x < content_box.x
-                || destination.y < content_box.y
-                || destination.x + destination.width > content_box.x + content_box.width
-                || destination.y + destination.height > content_box.y + content_box.height);
+        let mut visual_rect = base_visual_rect;
+        visual_rect = SvgSpriteVisualRect(
+            image,
+            visual_rect,
+            self.node.self_cull_rect,
+            &self.node.transforms,
+        );
+        let painted_rect_changed = UpdateImagePaintedRect(self.node, visual_rect);
+        if visual_rect.width <= 0.0
+            || visual_rect.height <= 0.0
+            || !IsVisible(self.node, &visual_rect)
+        {
+            return;
+        }
         destination = self.node.PixelSnappedRect(&destination);
         if destination.width <= 0.0 || destination.height <= 0.0 {
             return;
         }
+        if UseCachedImageDrawingIfPossible(self.context, self.node, phase, painted_rect_changed) {
+            return;
+        }
+        // cpp: core/paint/image_painter.cc:175-183. Animated pixels can change
+        // before invalidation reaches Paint. Under-invalidation diagnostics
+        // therefore repaint them but keep the new display item uncacheable.
+        let skip_animated_image_cache = self
+            .context
+            .borrow()
+            .PaintUnderInvalidationCheckingEnabled()
+            && image.MaybeAnimated();
+        let _cache_skipper =
+            skip_animated_image_cache.then(|| DisplayItemCacheSkipper::new(self.context));
         // ImagePainter::PaintIntoRect records the replaced foreground as one
         // drawing, independently of the image sampling/cropping commands.
-        // Official core/paint/image_painter.cc:198.
+        // Source: core/paint/image_painter.cc:198-200.
         let _drawing = DrawingRecorder::new(
             self.context,
             self.node,
             DisplayItemIdType::PaintPhaseToDrawingType(phase),
-            destination,
+            self.node.EnclosingRect(visual_rect),
         );
-        if !needs_clipping {
-            if !IsVisible(self.node, &destination) {
+        let snapped_visual_rect = self.node.PixelSnappedRect(&visual_rect);
+        let needs_clipping = destination.x < snapped_visual_rect.x
+            || destination.y < snapped_visual_rect.y
+            || destination.x + destination.width
+                > snapped_visual_rect.x + snapped_visual_rect.width
+            || destination.y + destination.height
+                > snapped_visual_rect.y + snapped_visual_rect.height;
+        if needs_clipping {
+            let clipped_left = destination.x.max(snapped_visual_rect.x);
+            let clipped_top = destination.y.max(snapped_visual_rect.y);
+            let clipped_right = (destination.x + destination.width)
+                .min(snapped_visual_rect.x + snapped_visual_rect.width);
+            let clipped_bottom = (destination.y + destination.height)
+                .min(snapped_visual_rect.y + snapped_visual_rect.height);
+            if clipped_right <= clipped_left || clipped_bottom <= clipped_top {
                 return;
             }
-            self.context.borrow_mut().Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kDrawImageRect,
-                    phase,
-                    node_id: fragment.node_id,
-                    rect: destination,
-                    source_rect: source,
-                    resource_id: id,
-                    image_interpolation_quality: style.style.image_interpolation_quality,
-                    image_orientation,
-                    document_image_container_key: document_image_container_key.clone(),
-                    ..Default::default()
-                },
-                self.node,
-            );
-            return;
-        }
-        let snapped_content = self.node.PixelSnappedRect(&content_box);
-        let clipped_left = destination.x.max(snapped_content.x);
-        let clipped_top = destination.y.max(snapped_content.y);
-        let clipped_right =
-            (destination.x + destination.width).min(snapped_content.x + snapped_content.width);
-        let clipped_bottom =
-            (destination.y + destination.height).min(snapped_content.y + snapped_content.height);
-        if clipped_right <= clipped_left || clipped_bottom <= clipped_top {
-            return;
-        }
-        if clipped_left != destination.x
-            || clipped_top != destination.y
-            || clipped_right != destination.x + destination.width
-            || clipped_bottom != destination.y + destination.height
-        {
-            let source_scale_x = source.width / destination.width;
-            let source_scale_y = source.height / destination.height;
-            source.x += (clipped_left - destination.x) * source_scale_x;
-            source.y += (clipped_top - destination.y) * source_scale_y;
-            source.width = (clipped_right - clipped_left) * source_scale_x;
-            source.height = (clipped_bottom - clipped_top) * source_scale_y;
-            destination = PaintRect {
-                x: clipped_left,
-                y: clipped_top,
-                width: clipped_right - clipped_left,
-                height: clipped_bottom - clipped_top,
-            };
+            if clipped_left != destination.x
+                || clipped_top != destination.y
+                || clipped_right != destination.x + destination.width
+                || clipped_bottom != destination.y + destination.height
+            {
+                let source_scale_x = source.width / destination.width;
+                let source_scale_y = source.height / destination.height;
+                source.x += (clipped_left - destination.x) * source_scale_x;
+                source.y += (clipped_top - destination.y) * source_scale_y;
+                source.width = (clipped_right - clipped_left) * source_scale_x;
+                source.height = (clipped_bottom - clipped_top) * source_scale_y;
+                destination = PaintRect {
+                    x: clipped_left,
+                    y: clipped_top,
+                    width: clipped_right - clipped_left,
+                    height: clipped_bottom - clipped_top,
+                };
+            }
         }
         if !IsVisible(self.node, &destination) {
             return;
         }
+        // cpp: core/paint/image_painter.cc:246-249. Keep the DevTools event at
+        // the final DrawImage boundary, after source clipping and orientation
+        // have resolved the exact rectangles submitted to the display list.
+        let mut trace = browser_tracing::span("devtools.timeline", "PaintImage");
+        trace.set("node_id", fragment.node_id as f64);
+        trace.set("src_x", source.x);
+        trace.set("src_y", source.y);
+        trace.set("src_width", source.width);
+        trace.set("src_height", source.height);
+        trace.set("dest_x", destination.x);
+        trace.set("dest_y", destination.y);
+        trace.set("dest_area", destination.width * destination.height);
+        let image_decoding_mode = ImageDecodingModeForPainting(fragment, image);
         self.context.borrow_mut().Append(
             DisplayItem {
                 r#type: DisplayItemType::kDrawImageRect,
                 phase,
                 node_id: fragment.node_id,
+                // cpp: core/paint/image_painter.cc:277-278
                 rect: destination,
                 source_rect: source,
                 resource_id: id,
-                image_interpolation_quality: style.style.image_interpolation_quality,
+                image_interpolation_quality: style.style.image_interpolation_quality(),
+                image_decoding_mode,
                 image_orientation,
                 document_image_container_key,
                 ..Default::default()
@@ -4343,15 +4416,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         );
     }
 
-    // cpp: paint/box_fragment_painter.h:44
-    // cpp: paint/box_fragment_painter.cc:2247-2492
     fn PaintOutline(&self, phase: PaintPhase) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let style = &*fragment.paint.style;
+        let style = &fragment.paint.style;
         let auto_outline = fragment
             .paint
             .form_control
@@ -4359,9 +4430,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .is_some_and(|control| control.auto_focus_ring);
         let has_outline = self.node.paints_outline
             && (auto_outline
-                || (style.outline_width > 0.0
-                    && style.outline_color.alpha > 0.0
-                    && style.outline_style != BorderLineStyle::kNone));
+                || (style.outline_width() > 0.0
+                    && style.outline_color().alpha > 0.0
+                    && style.outline_style() != BorderLineStyle::kNone));
         // OutlinePainter::PaintOutlineRects has a single phase recorder for
         // the united outline, including outlines of multiline inline boxes.
         // Official core/paint/outline_painter.cc:998.
@@ -4414,21 +4485,21 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
         }
         if !self.node.paints_outline
-            || style.outline_width <= 0.0
-            || style.outline_color.alpha <= 0.0
-            || style.outline_style == BorderLineStyle::kNone
+            || style.outline_width() <= 0.0
+            || style.outline_color().alpha <= 0.0
+            || style.outline_style() == BorderLineStyle::kNone
         {
             return;
         }
-        if !style.outline_width.is_finite() || !style.outline_offset.is_finite() {
+        if !style.outline_width().is_finite() || !style.outline_offset().is_finite() {
             panic!("outline geometry is invalid");
         }
         if self.node.outline_rects.len() > 1 {
             let expanded_rects = |additional_outset: f64| {
                 let mut rects = Vec::with_capacity(self.node.outline_rects.len());
                 for source in &self.node.outline_rects {
-                    let horizontal_offset = style.outline_offset.max(-source.width / 2.0);
-                    let vertical_offset = style.outline_offset.max(-source.height / 2.0);
+                    let horizontal_offset = style.outline_offset().max(-source.width / 2.0);
+                    let vertical_offset = style.outline_offset().max(-source.height / 2.0);
                     rects.push(ExpandedOutlineRect(
                         source,
                         horizontal_offset + additional_outset,
@@ -4437,7 +4508,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
                 rects
             };
-            let outer_rects = expanded_rects(style.outline_width);
+            let outer_rects = expanded_rects(style.outline_width());
             let bounds = UnionRects(&outer_rects);
             if !IsVisible(self.node, &bounds) {
                 return;
@@ -4446,35 +4517,36 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 phase,
                 node_id: fragment.node_id,
                 rect: bounds,
-                color: style.outline_color,
-                line_style: style.outline_style,
+                color: style.outline_color(),
+                line_style: style.outline_style(),
                 ..Default::default()
             };
             if matches!(
-                style.outline_style,
+                style.outline_style(),
                 BorderLineStyle::kDashed | BorderLineStyle::kDotted
             ) {
                 outline.r#type = DisplayItemType::kStrokePath;
-                outline.stroke_width = style.outline_width;
+                outline.stroke_width = style.outline_width();
                 AppendUnionBoundary(
-                    &expanded_rects(style.outline_width / 2.0),
+                    &expanded_rects(style.outline_width() / 2.0),
                     &mut outline.path,
                 );
-                if style.outline_style == BorderLineStyle::kDashed {
+                if style.outline_style() == BorderLineStyle::kDashed {
                     outline.dash_intervals =
-                        vec![3.0 * style.outline_width, 3.0 * style.outline_width];
+                        vec![3.0 * style.outline_width(), 3.0 * style.outline_width()];
                 } else {
-                    outline.dash_intervals = vec![0.0, 2.0 * style.outline_width];
+                    outline.dash_intervals = vec![0.0, 2.0 * style.outline_width()];
                     outline.round_cap = true;
                 }
             } else {
                 outline.r#type = DisplayItemType::kDrawPath;
                 outline.even_odd = true;
                 AppendUnionBoundary(&outer_rects, &mut outline.path);
-                if style.outline_style == BorderLineStyle::kDouble && style.outline_width > 2.0 {
-                    let third = (style.outline_width / 3.0).round();
+                if style.outline_style() == BorderLineStyle::kDouble && style.outline_width() > 2.0
+                {
+                    let third = (style.outline_width() / 3.0).round();
                     AppendUnionBoundary(
-                        &expanded_rects(style.outline_width - third),
+                        &expanded_rects(style.outline_width() - third),
                         &mut outline.path,
                     );
                     AppendUnionBoundary(&expanded_rects(third), &mut outline.path);
@@ -4486,10 +4558,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        let horizontal_offset = style.outline_offset.max(-fragment.size.width / 2.0);
-        let vertical_offset = style.outline_offset.max(-fragment.size.height / 2.0);
-        let center_outset_x = horizontal_offset + style.outline_width / 2.0;
-        let center_outset_y = vertical_offset + style.outline_width / 2.0;
+        let horizontal_offset = style.outline_offset().max(-fragment.size.width / 2.0);
+        let vertical_offset = style.outline_offset().max(-fragment.size.height / 2.0);
+        let center_outset_x = horizontal_offset + style.outline_width() / 2.0;
+        let center_outset_y = vertical_offset + style.outline_width() / 2.0;
         let source_box = PaintRect {
             x: self.node.paint_offset.x,
             y: self.node.paint_offset.y,
@@ -4499,8 +4571,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let rect = ExpandedOutlineRect(&source_box, center_outset_x, center_outset_y);
         let outer_bounds = ExpandedOutlineRect(
             &source_box,
-            horizontal_offset + style.outline_width,
-            vertical_offset + style.outline_width,
+            horizontal_offset + style.outline_width(),
+            vertical_offset + style.outline_width(),
         );
         if !IsVisible(self.node, &outer_bounds) {
             return;
@@ -4511,8 +4583,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             fragment.size,
             Edges::default(),
         );
-        if style.outline_style == BorderLineStyle::kDouble && style.outline_width > 2.0 {
-            let third = (style.outline_width / 3.0).round();
+        if style.outline_style() == BorderLineStyle::kDouble && style.outline_width() > 2.0 {
+            let third = (style.outline_width() / 3.0).round();
             let append_ring = |outer_additional: f64, inner_additional: f64| {
                 let outer = ExpandedOutlineRect(
                     &source_box,
@@ -4549,10 +4621,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         node_id: fragment.node_id,
                         rect: outer,
                         inner_rect: inner,
-                        color: style.outline_color,
+                        color: style.outline_color(),
                         line_style: BorderLineStyle::kDouble,
-                        corner_radius: crate::border_shape_utils::UniformCornerRadius(&outer_radii),
-                        inner_corner_radius: crate::border_shape_utils::UniformCornerRadius(
+                        corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
+                            &outer_radii,
+                        ),
+                        inner_corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                             &inner_radii,
                         ),
                         corner_radii: outer_radii,
@@ -4562,7 +4636,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.node,
                 );
             };
-            append_ring(style.outline_width, style.outline_width - third);
+            append_ring(style.outline_width(), style.outline_width() - third);
             append_ring(third, 0.0);
             return;
         }
@@ -4580,27 +4654,27 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             phase,
             node_id: fragment.node_id,
             rect,
-            color: style.outline_color,
-            line_style: style.outline_style,
-            stroke_width: style.outline_width,
-            corner_radius: crate::border_shape_utils::UniformCornerRadius(&outline_radii),
+            color: style.outline_color(),
+            line_style: style.outline_style(),
+            stroke_width: style.outline_width(),
+            corner_radius: crate::contoured_border_geometry::UniformCornerRadius(&outline_radii),
             corner_radii: outline_radii,
             ..Default::default()
         };
-        if style.outline_style == BorderLineStyle::kDashed {
-            outline.dash_intervals = vec![3.0 * style.outline_width, 3.0 * style.outline_width];
-        } else if style.outline_style == BorderLineStyle::kDotted {
-            outline.dash_intervals = vec![0.0, 2.0 * style.outline_width];
+        if style.outline_style() == BorderLineStyle::kDashed {
+            outline.dash_intervals = vec![3.0 * style.outline_width(), 3.0 * style.outline_width()];
+        } else if style.outline_style() == BorderLineStyle::kDotted {
+            outline.dash_intervals = vec![0.0, 2.0 * style.outline_width()];
             outline.round_cap = true;
         }
         if matches!(
-            style.outline_style,
+            style.outline_style(),
             BorderLineStyle::kDashed | BorderLineStyle::kDotted
         ) && border_radii.HasRadius()
         {
-            let outer_outset_x = horizontal_offset + style.outline_width;
-            let outer_outset_y = vertical_offset + style.outline_width;
-            let half_used_width = (style.outline_width * 0.5) as i32;
+            let outer_outset_x = horizontal_offset + style.outline_width();
+            let outer_outset_y = vertical_offset + style.outline_width();
+            let half_used_width = (style.outline_width() * 0.5) as i32;
             let stroked_outset_x = outer_outset_x - half_used_width as f64;
             let stroked_outset_y = outer_outset_y - half_used_width as f64;
             let snapped_border = self.node.PixelSnappedRect(&source_box);
@@ -4628,7 +4702,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 },
             );
             outline.corner_radius =
-                crate::border_shape_utils::UniformCornerRadius(&outline.corner_radii);
+                crate::contoured_border_geometry::UniformCornerRadius(&outline.corner_radii);
             let outer_clip = self.node.PixelSnappedRect(&ExpandedOutlineRect(
                 &source_box,
                 outer_outset_x,
@@ -4657,8 +4731,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     height: inner_clip.height,
                 },
             );
-            outline.dash_fit_thickness = style.outline_width;
-            outline.stroke_width = style.outline_width * 2.2;
+            outline.dash_fit_thickness = style.outline_width();
+            outline.stroke_width = style.outline_width() * 2.2;
             self.context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
@@ -4674,7 +4748,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                     node_id: fragment.node_id,
                     rect: outer_clip,
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(
+                    corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                         &outer_clip_radii,
                     ),
                     corner_radii: outer_clip_radii,
@@ -4688,7 +4762,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                     node_id: fragment.node_id,
                     rect: inner_clip,
-                    corner_radius: crate::border_shape_utils::UniformCornerRadius(
+                    corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                         &inner_clip_radii,
                     ),
                     corner_radii: inner_clip_radii,
@@ -4743,6 +4817,193 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     }
 }
 
+fn ClampImageMapCoordinate(value: f64) -> f64 {
+    LayoutUnit::from_f64(value).ToFloat() as f64
+}
+
+fn RectPath(left: f64, top: f64, right: f64, bottom: f64) -> Vec<PaintPathCommand> {
+    if right <= left || bottom <= top {
+        return Vec::new();
+    }
+    vec![
+        PaintPathCommand {
+            verb: PaintPathVerb::kMoveTo,
+            point: Offset { x: left, y: top },
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kLineTo,
+            point: Offset { x: right, y: top },
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kLineTo,
+            point: Offset {
+                x: right,
+                y: bottom,
+            },
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kLineTo,
+            point: Offset { x: left, y: bottom },
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kClose,
+            ..Default::default()
+        },
+    ]
+}
+
+fn EllipsePath(center_x: f64, center_y: f64, radius: f64) -> Vec<PaintPathCommand> {
+    if radius <= 0.0 {
+        return Vec::new();
+    }
+    const QUARTER_CIRCLE_WEIGHT: f64 = 0.7071067811865475244;
+    vec![
+        PaintPathCommand {
+            verb: PaintPathVerb::kMoveTo,
+            point: Offset {
+                x: center_x + radius,
+                y: center_y,
+            },
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kConicTo,
+            control1: Offset {
+                x: center_x + radius,
+                y: center_y + radius,
+            },
+            point: Offset {
+                x: center_x,
+                y: center_y + radius,
+            },
+            conic_weight: QUARTER_CIRCLE_WEIGHT,
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kConicTo,
+            control1: Offset {
+                x: center_x - radius,
+                y: center_y + radius,
+            },
+            point: Offset {
+                x: center_x - radius,
+                y: center_y,
+            },
+            conic_weight: QUARTER_CIRCLE_WEIGHT,
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kConicTo,
+            control1: Offset {
+                x: center_x - radius,
+                y: center_y - radius,
+            },
+            point: Offset {
+                x: center_x,
+                y: center_y - radius,
+            },
+            conic_weight: QUARTER_CIRCLE_WEIGHT,
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kConicTo,
+            control1: Offset {
+                x: center_x + radius,
+                y: center_y - radius,
+            },
+            point: Offset {
+                x: center_x + radius,
+                y: center_y,
+            },
+            conic_weight: QUARTER_CIRCLE_WEIGHT,
+            ..Default::default()
+        },
+        PaintPathCommand {
+            verb: PaintPathVerb::kClose,
+            ..Default::default()
+        },
+    ]
+}
+
+fn ImageMapAreaPath(
+    area: &FocusedImageMapArea,
+    border_box: PaintRect,
+    image_effective_zoom: f64,
+) -> Vec<PaintPathCommand> {
+    if area.shape == ImageMapAreaShape::kDefault {
+        return RectPath(
+            border_box.x,
+            border_box.y,
+            border_box.x + border_box.width,
+            border_box.y + border_box.height,
+        );
+    }
+    let resolve = |value: f64, horizontal: bool| {
+        ClampImageMapCoordinate(value) * image_effective_zoom
+            + if horizontal {
+                border_box.x
+            } else {
+                border_box.y
+            }
+    };
+    match area.shape {
+        ImageMapAreaShape::kRect if area.coordinates.len() >= 4 => RectPath(
+            resolve(area.coordinates[0], true),
+            resolve(area.coordinates[1], false),
+            resolve(area.coordinates[2], true),
+            resolve(area.coordinates[3], false),
+        ),
+        ImageMapAreaShape::kCircle if area.coordinates.len() >= 3 && area.coordinates[2] > 0.0 => {
+            EllipsePath(
+                resolve(area.coordinates[0], true),
+                resolve(area.coordinates[1], false),
+                ClampImageMapCoordinate(area.coordinates[2]) * image_effective_zoom,
+            )
+        }
+        ImageMapAreaShape::kPoly if area.coordinates.len() >= 6 => {
+            let point_count = area.coordinates.len() / 2;
+            let mut path = Vec::with_capacity(point_count + 2);
+            path.push(PaintPathCommand {
+                verb: PaintPathVerb::kMoveTo,
+                point: Offset {
+                    x: resolve(area.coordinates[0], true),
+                    y: resolve(area.coordinates[1], false),
+                },
+                ..Default::default()
+            });
+            for point in 1..point_count {
+                path.push(PaintPathCommand {
+                    verb: PaintPathVerb::kLineTo,
+                    point: Offset {
+                        x: resolve(area.coordinates[point * 2], true),
+                        y: resolve(area.coordinates[point * 2 + 1], false),
+                    },
+                    ..Default::default()
+                });
+            }
+            path.push(PaintPathCommand {
+                verb: PaintPathVerb::kClose,
+                ..Default::default()
+            });
+            path
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn FocusRingStrokeWidth(effective_zoom: f32) -> f64 {
+    const WIDTH: f32 = 3.0;
+    if effective_zoom >= 1.0 {
+        (WIDTH * effective_zoom).floor().max(1.0) as f64
+    } else {
+        WIDTH as f64
+    }
+}
+
 fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     let fragment = node
         .fragment
@@ -4773,8 +5034,8 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
             height: rect.size.height,
         });
     }
-    // Preserve real glyph overhangs even when a text decoration/marker branch
-    // still needs the untranslated InlinePaintContext overflow calculation.
+    // Preserve real glyph overhangs while the decoration/marker branch still
+    // needs the retained-layout bridge into the Paint-owned InlinePaintContext.
     let mut rect = PaintRect {
         x: paint_offset.x,
         y: paint_offset.y,
@@ -4790,7 +5051,8 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
         });
     }
     let source = rect;
-    for shadow in &fragment.paint.style.text_shadows {
+    for index in 0..fragment.paint.style.text_shadow_count() {
+        let shadow = fragment.paint.style.text_shadow(index);
         // shadow_data.cc:32-42, shadow_list.cc:39-47. Include negative spread;
         // quantize blur extent before adding offsets and fragment coordinates.
         if shadow.inset {
@@ -4807,110 +5069,42 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     node.EnclosingRect(rect)
 }
 
-fn HasSupportedBoxDecoration(node: &PaintTreeNode<'_>) -> bool {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("paint tree node has a fragment");
-    let style = &*fragment.paint.style;
-    if (!fragment.paint.background_transfers_to_view
-        && fragment.paint.background_paint_location.PaintsBorderBox()
-        && !UsesCompositedFixedBackground(node)
-        && (style.background_color.alpha > 0.0 || !style.background_images.is_empty()))
-        || style
-            .box_shadows
-            .iter()
-            .any(|shadow| shadow.color.alpha > 0.0)
-        || fragment.paint.form_control.is_some()
-        || fragment.paint.table.as_ref().is_some_and(|table| {
-            table.columns.iter().any(|column| {
-                column.style.background_color.alpha > 0.0
-                    || !column.style.background_images.is_empty()
-            })
-        })
-        || style.border_image.is_some()
-    {
-        return true;
-    }
-    let border = IncludedBorderEdges(&fragment.paint);
-    [border.top, border.right, border.bottom, border.left]
-        .into_iter()
-        .enumerate()
-        .any(|(edge, width)| {
-            width > 0.0
-                && fragment.paint.border_styles[edge] != BorderLineStyle::kNone
-                && style.border_colors[edge].alpha > 0.0
-        })
-}
-
 fn UsesCompositedFixedBackground(node: &PaintTreeNode<'_>) -> bool {
     let fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
+    let background_images = fragment.paint.style.background_images();
     fragment.paint.can_composite_background_attachment_fixed
         && !fragment.paint.background_transfers_to_view
         && !node.fixed_background_acts_as_scroll
         && node.fixed_background_properties.is_some()
         && fragment.paint.background_paint_location.PaintsBorderBox()
-        && fragment.paint.style.background_images.len() == 1
-        && fragment.paint.style.background_images[0].attachment == BackgroundAttachment::kFixed
-        && (fragment.paint.style.background_images[0].shader.is_some()
-            || fragment.paint.style.background_images[0].resource_id != 0)
+        && background_images.len() == 1
+        && background_images[0].attachment == BackgroundAttachment::kFixed
+        && (background_images[0].shader.is_some() || background_images[0].resource_id != 0)
 }
 
-fn DecorationVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
+pub(crate) fn DecorationVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     let fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
     // BoxPainter::VisualRect:124-129; inline boxes use their item ink overflow.
-    let native_rect = if fragment.paint.box_fragment_is_inline_box {
-        fragment.paint.ink_overflow
-    } else {
-        fragment
-            .paint
-            .box_self_visual_overflow
-            .or(fragment.paint.self_ink_overflow)
-    };
-    if let Some(rect) = native_rect {
-        return node.EnclosingRect(PaintRect {
-            x: node.paint_offset.x + rect.offset.x,
-            y: node.paint_offset.y + rect.offset.y,
-            width: rect.size.width,
-            height: rect.size.height,
-        });
-    }
-    // Full native box/outline overflow recalculation remains untranslated.
-    // This fallback covers the finite supported decoration geometry only.
-    let style = &*fragment.paint.style;
-    let source = FragmentVisualRect(node);
-    let outset = (style.outline_offset + style.outline_width).max(0.0);
-    let mut left = source.x - outset;
-    let mut top = source.y - outset;
-    let mut right = source.x + source.width + outset;
-    let mut bottom = source.y + source.height + outset;
-    for shadow in &style.box_shadows {
-        if shadow.inset {
-            continue;
-        }
-        let extent = shadow.spread + (1.5 * shadow.blur_radius).ceil();
-        left = left.min(source.x + shadow.offset.x - extent);
-        top = top.min(source.y + shadow.offset.y - extent);
-        right = right.max(source.x + source.width + shadow.offset.x + extent);
-        bottom = bottom.max(source.y + source.height + shadow.offset.y + extent);
-    }
+    let rect = fragment
+        .paint
+        .box_self_visual_overflow
+        .or(fragment.paint.ink_overflow)
+        .expect("painted box fragment has source visual overflow");
+    // Source: core/paint/box_fragment_painter.cc:3021-3030 and
+    // core/paint/box_painter.cc:124-129. Layout owns visual overflow; Paint
+    // only applies the fragment paint offset and enclosing-pixel conversion.
     node.EnclosingRect(PaintRect {
-        x: left,
-        y: top,
-        width: right - left,
-        height: bottom - top,
+        x: node.paint_offset.x + rect.offset.x,
+        y: node.paint_offset.y + rect.offset.y,
+        width: rect.size.width,
+        height: rect.size.height,
     })
-}
-
-// cpp: paint/box_fragment_painter.cc:26-29
-fn IsBackgroundPhase(phase: PaintPhase) -> bool {
-    phase == PaintPhase::kBlockBackground || phase == PaintPhase::kSelfBlockBackgroundOnly
 }
 
 /// A canvas background with both fixed and scrolling layers spans more than
@@ -4935,6 +5129,8 @@ fn CanvasBackgroundEffect(
         local_transform_space: local_state.transform.clone(),
         output_clip: Some(output_clip),
         filter_reference_box: None,
+        filter_viewport: None,
+        filter_space_origin: Offset::default(),
         filter_reference_scale: 1.0,
         opacity: 1.0,
         blend_mode,
@@ -4945,7 +5141,7 @@ fn CanvasBackgroundEffect(
         isolates_blending,
         has_mask: false,
         is_mask: false,
-        direct_compositing_reasons: Vec::new(),
+        direct_compositing_reasons: Default::default(),
     }
     .with_filter_presence()
     .with_inherited_view_transition()
@@ -4958,7 +5154,7 @@ fn CanvasBackgroundDisplayItemId(
 ) -> DisplayItemId {
     // LayoutView never fragments. Use ScopedDisplayItemFragment's occurrence
     // field to give each independently transformed canvas layer a stable
-    // semantic record identity while retaining the native LayoutView client.
+    // semantic record identity while retaining the source LayoutView client.
     let occurrence = u32::try_from(layer_ordinal).expect("canvas layer count must fit u32");
     DisplayItemId {
         client_id: fragment.paint.display_item_client_id,
@@ -4974,6 +5170,11 @@ fn CanvasBackgroundDisplayItemId(
 fn CanvasBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<PaintRect> {
     let fragment = node.fragment.as_deref()?;
     fragment.paint.canvas_background.as_ref()?;
+    ViewBackgroundRect(node, scrolling)
+}
+
+fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<PaintRect> {
+    let fragment = node.fragment.as_deref()?;
     let viewport = fragment
         .paint
         .resources
@@ -5010,18 +5211,11 @@ fn CanvasBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<Pai
     }))
 }
 
-// cpp: paint/box_fragment_painter.cc:31-34
-fn IsOutlinePhase(phase: PaintPhase) -> bool {
-    phase == PaintPhase::kOutline || phase == PaintPhase::kSelfOutlineOnly
-}
-
-// cpp: paint/box_fragment_painter.cc:36-39
 fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-// cpp: paint/box_fragment_painter.cc:41-46
-fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
+pub(crate) fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
     let Some(self_cull_rect) = node.self_cull_rect else {
         return true;
     };
@@ -5029,7 +5223,6 @@ fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
     mapped.is_none_or(|mapped| Intersects(&mapped, &self_cull_rect))
 }
 
-// cpp: paint/box_fragment_painter.cc:48-54
 fn ExpandedOutlineRect(
     rect: &PaintRect,
     horizontal_outset: f64,
@@ -5043,157 +5236,6 @@ fn ExpandedOutlineRect(
     }
 }
 
-// cpp: paint/box_fragment_painter.cc:64-76
-fn LineIntersection(a: Offset, b: Offset, c: Offset, d: Offset) -> Offset {
-    let ab_x = a.x - b.x;
-    let ab_y = a.y - b.y;
-    let cd_x = c.x - d.x;
-    let cd_y = c.y - d.y;
-    let denominator = ab_x * cd_y - ab_y * cd_x;
-    if denominator.abs() < 1e-12 {
-        return b;
-    }
-    let determinant_ab = a.x * b.y - a.y * b.x;
-    let determinant_cd = c.x * d.y - c.y * d.x;
-    Offset {
-        x: (determinant_ab * cd_x - ab_x * determinant_cd) / denominator,
-        y: (determinant_ab * cd_y - ab_y * determinant_cd) / denominator,
-    }
-}
-
-// cpp: paint/box_fragment_painter.cc:78-117
-fn RoundedBorderSideClips(
-    outer: &PaintRect,
-    inner: &PaintRect,
-    inner_radii: &PaintCornerRadii,
-) -> [Vec<PaintPathCommand>; 4] {
-    let outer_right = outer.x + outer.width;
-    let outer_bottom = outer.y + outer.height;
-    let inner_right = inner.x + inner.width;
-    let inner_bottom = inner.y + inner.height;
-    let outer_corners = [
-        Offset {
-            x: outer.x,
-            y: outer.y,
-        },
-        Offset {
-            x: outer_right,
-            y: outer.y,
-        },
-        Offset {
-            x: outer_right,
-            y: outer_bottom,
-        },
-        Offset {
-            x: outer.x,
-            y: outer_bottom,
-        },
-    ];
-    let inner_corners = [
-        Offset {
-            x: inner.x,
-            y: inner.y,
-        },
-        Offset {
-            x: inner_right,
-            y: inner.y,
-        },
-        Offset {
-            x: inner_right,
-            y: inner_bottom,
-        },
-        Offset {
-            x: inner.x,
-            y: inner_bottom,
-        },
-    ];
-    let miter = [
-        LineIntersection(
-            outer_corners[0],
-            inner_corners[0],
-            Offset {
-                x: inner.x + inner_radii.top_left.x,
-                y: inner.y,
-            },
-            Offset {
-                x: inner.x,
-                y: inner.y + inner_radii.top_left.y,
-            },
-        ),
-        LineIntersection(
-            outer_corners[1],
-            inner_corners[1],
-            Offset {
-                x: inner_right - inner_radii.top_right.x,
-                y: inner.y,
-            },
-            Offset {
-                x: inner_right,
-                y: inner.y + inner_radii.top_right.y,
-            },
-        ),
-        LineIntersection(
-            outer_corners[2],
-            inner_corners[2],
-            Offset {
-                x: inner_right,
-                y: inner_bottom - inner_radii.bottom_right.y,
-            },
-            Offset {
-                x: inner_right - inner_radii.bottom_right.x,
-                y: inner_bottom,
-            },
-        ),
-        LineIntersection(
-            outer_corners[3],
-            inner_corners[3],
-            Offset {
-                x: inner.x + inner_radii.bottom_left.x,
-                y: inner_bottom,
-            },
-            Offset {
-                x: inner.x,
-                y: inner_bottom - inner_radii.bottom_left.y,
-            },
-        ),
-    ];
-    let path = |points: [Offset; 4]| {
-        vec![
-            PaintPathCommand {
-                verb: PaintPathVerb::kMoveTo,
-                point: points[0],
-                ..Default::default()
-            },
-            PaintPathCommand {
-                verb: PaintPathVerb::kLineTo,
-                point: points[1],
-                ..Default::default()
-            },
-            PaintPathCommand {
-                verb: PaintPathVerb::kLineTo,
-                point: points[2],
-                ..Default::default()
-            },
-            PaintPathCommand {
-                verb: PaintPathVerb::kLineTo,
-                point: points[3],
-                ..Default::default()
-            },
-            PaintPathCommand {
-                verb: PaintPathVerb::kClose,
-                ..Default::default()
-            },
-        ]
-    };
-    [
-        path([outer_corners[0], miter[0], miter[1], outer_corners[1]]),
-        path([outer_corners[1], miter[1], miter[2], outer_corners[2]]),
-        path([outer_corners[2], miter[2], miter[3], outer_corners[3]]),
-        path([outer_corners[3], miter[3], miter[0], outer_corners[0]]),
-    ]
-}
-
-// cpp: paint/box_fragment_painter.cc:119-134
 fn UnionRects(rects: &[PaintRect]) -> PaintRect {
     let mut result = rects[0];
     for rect in rects.iter().skip(1) {
@@ -5211,7 +5253,6 @@ fn UnionRects(rects: &[PaintRect]) -> PaintRect {
     result
 }
 
-// cpp: paint/box_fragment_painter.cc:134
 #[derive(Clone, Copy, Debug)]
 struct BoundaryPoint(f64, f64);
 
@@ -5239,7 +5280,6 @@ impl Ord for BoundaryPoint {
     }
 }
 
-// cpp: paint/box_fragment_painter.cc:136-250
 fn AppendUnionBoundary(input: &[PaintRect], path: &mut Vec<PaintPathCommand>) {
     let mut rects = Vec::new();
     let mut xs = Vec::new();
@@ -5396,12 +5436,19 @@ fn AppendUnionBoundary(input: &[PaintRect], path: &mut Vec<PaintPathCommand>) {
     }
 }
 
-// cpp: paint/box_fragment_painter.cc:252-256
 fn DecorationRect(node: &PaintTreeNode<'_>) -> PaintRect {
     let fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
+    if let Some(rect) = fragment.paint.first_line_decoration_rect {
+        return PaintRect {
+            x: node.paint_offset.x + rect.offset.x,
+            y: node.paint_offset.y + rect.offset.y,
+            width: rect.size.width,
+            height: rect.size.height,
+        };
+    }
     if fragment.paint.table.is_some() {
         return TablePainter::DecorationRect(node);
     }
@@ -5423,13 +5470,16 @@ fn UsedBackgroundGeometryBox(box_type: BackgroundBox) -> BackgroundBox {
         BackgroundBox::kPaddingBox => BackgroundBox::kPaddingBox,
         BackgroundBox::kContentBox => BackgroundBox::kContentBox,
         BackgroundBox::kBorderBox
+        | BackgroundBox::kFillBox
+        | BackgroundBox::kStrokeBox
+        | BackgroundBox::kViewBox
+        | BackgroundBox::kNoClip
         | BackgroundBox::kText
         | BackgroundBox::kBorderArea
         | BackgroundBox::kBorderAreaText => BackgroundBox::kBorderBox,
     }
 }
 
-// cpp: paint/box_fragment_painter.cc:258-277
 fn BackgroundBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> PaintRect {
     let fragment = node
         .fragment
@@ -5502,7 +5552,7 @@ fn EffectiveBackgroundAttachment(
             BackgroundAttachment::kScroll
         }
         // A local attachment only establishes scrolling geometry on an actual
-        // native scroll owner. Without one, Chromium paints it in border-box
+        // source scroll owner. Without one, Chromium paints it in border-box
         // space and it is visually equivalent to scroll attachment.
         BackgroundAttachment::kLocal if fragment.paint.scroll_container.is_none() => {
             BackgroundAttachment::kScroll
@@ -5552,6 +5602,25 @@ fn ContentsBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
     rect
 }
 
+fn ScrollingBackgroundVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
+    let fragment = node
+        .fragment
+        .as_deref()
+        .expect("paint tree node has a fragment");
+    let local = fragment
+        .paint
+        .scroll_container
+        .as_ref()
+        .expect("scrolling background requires a scroll container")
+        .scrolling_background_visual_rect;
+    PaintRect {
+        x: node.paint_offset.x + local.offset.x,
+        y: node.paint_offset.y + local.offset.y,
+        width: local.size.width,
+        height: local.size.height,
+    }
+}
+
 fn LocalBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
     let fragment = node
         .fragment
@@ -5565,7 +5634,6 @@ fn LocalBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
     rect
 }
 
-// cpp: paint/box_fragment_painter.cc:279-304
 fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> PaintRect {
     let paint = &node
         .fragment
@@ -5602,7 +5670,6 @@ fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBo
     }
 }
 
-// cpp: paint/box_fragment_painter.cc:306-318
 fn BackgroundInsets(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Edges {
     let style = &node
         .fragment
@@ -5623,8 +5690,10 @@ fn BackgroundInsets(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Edges 
     inset
 }
 
-// cpp: paint/box_fragment_painter.cc:320-327
-fn BackgroundRadii(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> PaintCornerRadii {
+pub(crate) fn BackgroundRadii(
+    node: &PaintTreeNode<'_>,
+    box_type: BackgroundBox,
+) -> PaintCornerRadii {
     let decoration = DecorationRect(node);
     let fragment = node
         .fragment
@@ -5665,13 +5734,12 @@ fn BackgroundRadiiForRect(
     )
 }
 
-// cpp: paint/box_fragment_painter.cc:329-353
 fn BackgroundBleedInset(node: &PaintTreeNode<'_>) -> Option<Edges> {
     let fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let style = &*fragment.paint.style;
+    let style = &fragment.paint.style;
     if !BackgroundRadii(node, BackgroundBox::kBorderBox).HasRadius()
         || fragment.paint.source_kind == NodeKind::kFieldset
     {
@@ -5683,7 +5751,7 @@ fn BackgroundBleedInset(node: &PaintTreeNode<'_>) -> Option<Edges> {
     for (edge, width) in widths.into_iter().enumerate() {
         let border_style = fragment.paint.border_styles[edge];
         if width <= 0.0
-            || style.border_colors[edge].alpha < 1.0
+            || style.border_colors()[edge].alpha < 1.0
             || border_style == BorderLineStyle::kNone
             || border_style == BorderLineStyle::kDashed
             || border_style == BorderLineStyle::kDotted
@@ -5702,375 +5770,311 @@ fn BackgroundBleedInset(node: &PaintTreeNode<'_>) -> Option<Edges> {
     })
 }
 
-// cpp: paint/box_fragment_painter.cc:355-378
-fn BackgroundLayerOccludesFollowingLayers(layer: &BackgroundImageLayer) -> bool {
-    // A text/border-area mask never proves coverage of the whole background
-    // painting area, even when its generated image is intrinsically opaque.
-    if IsSpecialBackgroundClip(layer.clip) {
-        return false;
-    }
-    let Some(shader) = layer.shader.as_deref() else {
-        return false;
-    };
-    if layer.blend_mode != PaintBlendMode::kNormal || shader.stops.is_empty() {
-        return false;
-    }
-    let repeat_x = layer.repeat_rule_x.unwrap_or(
-        if matches!(
-            layer.repeat,
-            BackgroundRepeat::kRepeat | BackgroundRepeat::kRepeatX
-        ) {
-            BackgroundRepeatRule::kRepeat
-        } else {
-            BackgroundRepeatRule::kNoRepeat
-        },
-    );
-    let repeat_y = layer.repeat_rule_y.unwrap_or(
-        if matches!(
-            layer.repeat,
-            BackgroundRepeat::kRepeat | BackgroundRepeat::kRepeatY
-        ) {
-            BackgroundRepeatRule::kRepeat
-        } else {
-            BackgroundRepeatRule::kNoRepeat
-        },
-    );
-    matches!(
-        repeat_x,
-        BackgroundRepeatRule::kRepeat | BackgroundRepeatRule::kRound
-    ) && matches!(
-        repeat_y,
-        BackgroundRepeatRule::kRepeat | BackgroundRepeatRule::kRound
-    ) && shader.stops.iter().all(|stop| stop.color.alpha >= 1.0)
+pub(crate) fn BackgroundLayerOccludesFollowingLayers(layer: &BackgroundImageLayer) -> bool {
+    layer.image_occludes_next_layers
 }
 
-// cpp: paint/box_fragment_painter.cc:380-397
-fn BorderEdgePolygons(outer: &PaintRect, inner: &PaintRect) -> [[Offset; 4]; 4] {
-    let right = outer.x + outer.width;
-    let bottom = outer.y + outer.height;
-    let inner_right = inner.x + inner.width;
-    let inner_bottom = inner.y + inner.height;
-    let point = |x, y| Offset { x, y };
-    [
-        [
-            point(outer.x, outer.y),
-            point(right, outer.y),
-            point(inner_right, inner.y),
-            point(inner.x, inner.y),
-        ],
-        [
-            point(right, outer.y),
-            point(right, bottom),
-            point(inner_right, inner_bottom),
-            point(inner_right, inner.y),
-        ],
-        [
-            point(right, bottom),
-            point(outer.x, bottom),
-            point(inner.x, inner_bottom),
-            point(inner_right, inner_bottom),
-        ],
-        [
-            point(outer.x, bottom),
-            point(outer.x, outer.y),
-            point(inner.x, inner.y),
-            point(inner.x, inner_bottom),
-        ],
-    ]
-}
-
-// cpp: paint/box_fragment_painter.cc:399-412
-fn BorderEdgeClip(
-    node_id: u64,
-    phase: PaintPhase,
-    polygon: &[Offset; 4],
-    antialias: bool,
-) -> DisplayItem {
-    let mut clip = DisplayItem {
-        r#type: DisplayItemType::kClipPath,
-        phase,
-        node_id,
-        antialias,
-        ..Default::default()
-    };
-    clip.path = [
-        PaintPathVerb::kMoveTo,
-        PaintPathVerb::kLineTo,
-        PaintPathVerb::kLineTo,
-        PaintPathVerb::kLineTo,
-    ]
-    .into_iter()
-    .zip(*polygon)
-    .map(|(verb, point)| PaintPathCommand {
-        verb,
-        point,
-        ..Default::default()
-    })
-    .collect();
-    clip
-}
-
-// cpp: paint/box_fragment_painter.cc:414-487
-fn BorderEdgeCornerClips(
-    edge: usize,
-    outer: &PaintRect,
-    inner: &PaintRect,
-    radii: &PaintCornerRadii,
-) -> [[Offset; 4]; 2] {
-    let l = outer.x;
-    let t = outer.y;
-    let r = outer.x + outer.width;
-    let b = outer.y + outer.height;
-    let il = inner.x;
-    let it = inner.y;
-    let ir = inner.x + inner.width;
-    let ib = inner.y + inner.height;
-    let top = inner.y - outer.y;
-    let right = r - ir;
-    let bottom = b - ib;
-    let left = inner.x - outer.x;
-    const E: f64 = 0.1;
-    let point = |x, y| Offset { x, y };
-    match edge {
-        0 => {
-            let ly = t + (radii.top_left.y + top) * 0.5;
-            let ry = t + (radii.top_right.y + top) * 0.5;
-            let lx = if top > 0.0 {
-                l + left * (ly - t) / top
-            } else {
-                il
-            };
-            let rx = if top > 0.0 {
-                r - right * (ry - t) / top
-            } else {
-                ir
-            };
-            [
-                [
-                    point(l - E, t),
-                    point(lx - E, ly),
-                    point(r, ly),
-                    point(r, t),
-                ],
-                [
-                    point(l, t),
-                    point(l, ry),
-                    point(rx + E, ry),
-                    point(r + E, t),
-                ],
-            ]
-        }
-        1 => {
-            let tx = r - (radii.top_right.x + right) * 0.5;
-            let bx = r - (radii.bottom_right.x + right) * 0.5;
-            let ty = (if right > 0.0 {
-                t + top * (r - tx) / right
-            } else {
-                it
-            }) - E;
-            let by = (if right > 0.0 {
-                b - bottom * (r - bx) / right
-            } else {
-                ib
-            }) + E;
-            [
-                [point(r, t - E), point(tx, ty), point(tx, b), point(r, b)],
-                [point(r, t), point(bx, t), point(bx, by), point(r, b + E)],
-            ]
-        }
-        2 => {
-            let ry = b - (radii.bottom_right.y + bottom) * 0.5;
-            let ly = b - (radii.bottom_left.y + bottom) * 0.5;
-            let rx = if bottom > 0.0 {
-                r - right * (b - ry) / bottom
-            } else {
-                ir
-            };
-            let lx = if bottom > 0.0 {
-                l + left * (b - ly) / bottom
-            } else {
-                il
-            };
-            [
-                [
-                    point(r + E, b),
-                    point(rx + E, ry),
-                    point(l, ry),
-                    point(l, b),
-                ],
-                [point(r, b), point(r, ly), point(lx, ly), point(l - E, b)],
-            ]
-        }
-        _ => {
-            let bx = l
-                + (radii.bottom_left.x * left * left / (left * left + bottom * bottom).max(1e-9))
-                    .max((radii.bottom_left.x + left) * 0.5);
-            let tx = l
-                + (radii.top_left.x * left * left / (left * left + top * top).max(1e-9))
-                    .max((radii.top_left.x + left) * 0.5);
-            let by = (if left > 0.0 {
-                b - bottom * (bx - l) / left
-            } else {
-                ib
-            }) + E;
-            let ty = (if left > 0.0 {
-                t + top * (tx - l) / left
-            } else {
-                it
-            }) - E;
-            [
-                [point(l, b + E), point(bx, by), point(bx, t), point(l, t)],
-                [point(l, b), point(tx, b), point(tx, ty), point(l, t - E)],
-            ]
-        }
-    }
-}
-
-// cpp: paint/box_fragment_painter.cc:489-520
-fn CombinedBorderEdgeClip(
-    edge: usize,
-    outer: &PaintRect,
-    inner: &PaintRect,
-    clips: &[[Offset; 4]; 2],
-    first_adjacent_renders: bool,
-    second_adjacent_renders: bool,
-) -> [Offset; 4] {
-    let l = outer.x;
-    let t = outer.y;
-    let r = outer.x + outer.width;
-    let b = outer.y + outer.height;
-    let il = inner.x;
-    let it = inner.y;
-    let ir = inner.x + inner.width;
-    let ib = inner.y + inner.height;
-    const E: f64 = 0.1;
-    let point = |x, y| Offset { x, y };
-    match edge {
-        0 => [
-            point(l, t),
-            if first_adjacent_renders {
-                point(clips[0][1].x + E, clips[0][1].y)
-            } else {
-                point(l, it)
-            },
-            if second_adjacent_renders {
-                point(clips[1][2].x - E, clips[1][2].y)
-            } else {
-                point(r, it)
-            },
-            point(r, t),
-        ],
-        1 => [
-            point(r, t),
-            if first_adjacent_renders {
-                point(clips[0][1].x, clips[0][1].y + E)
-            } else {
-                point(ir, t)
-            },
-            if second_adjacent_renders {
-                point(clips[1][2].x, clips[1][2].y - E)
-            } else {
-                point(ir, b)
-            },
-            point(r, b),
-        ],
-        2 => [
-            point(r, b),
-            if first_adjacent_renders {
-                point(clips[0][1].x - E, clips[0][1].y)
-            } else {
-                point(r, ib)
-            },
-            if second_adjacent_renders {
-                point(clips[1][2].x + E, clips[1][2].y)
-            } else {
-                point(l, ib)
-            },
-            point(l, b),
-        ],
-        _ => [
-            point(l, b),
-            if first_adjacent_renders {
-                point(clips[0][1].x, clips[0][1].y - E)
-            } else {
-                point(il, b)
-            },
-            if second_adjacent_renders {
-                point(clips[1][2].x, clips[1][2].y + E)
-            } else {
-                point(il, t)
-            },
-            point(l, t),
-        ],
-    }
-}
-
-// cpp: paint/box_fragment_painter.cc:522-541
 fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> &'a PaintImage {
+    FindAvailableImage(node, id).unwrap_or_else(|| {
+        panic!("paint image must exist with dimensions, scale and width*height RGBA bytes")
+    })
+}
+
+fn FindAvailableReplacedImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
+    FindAvailableImage(node, id)
+}
+
+fn FindAvailableImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
     let fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let Some(resources) = fragment.paint.resources.as_ref() else {
-        panic!("image paint has no PaintResources");
-    };
+    let resources = fragment.paint.resources.as_ref()?;
     let images = &resources.images;
-    let Some(found) = images.iter().find(|image| image.id == id) else {
-        panic!("paint image resource id is missing");
-    };
-    if found.width == 0
-        || found.height == 0
-        || !found.resolution_scale.is_finite()
-        || found.resolution_scale <= 0.0
-        || found
-            .BitmapPixels()
-            .is_some_and(|pixels| pixels.len() != found.width as usize * found.height as usize * 4)
-    {
-        panic!("paint image must contain dimensions, scale and width*height RGBA bytes");
-    }
-    found
+    let found = images.iter().find(|image| image.id == id)?;
+    IsPaintImageAvailable(found).then_some(found)
 }
 
-// cpp: paint/box_fragment_painter.cc:543-557
+fn IsPaintImageAvailable(image: &PaintImage) -> bool {
+    let bitmap_storage_is_valid = image.BitmapPixels().is_none_or(|pixels| {
+        (image.width as usize)
+            .checked_mul(image.height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            == Some(pixels.len())
+    });
+    image.width != 0
+        && image.height != 0
+        && image.resolution_scale.is_finite()
+        && image.resolution_scale > 0.0
+        && bitmap_storage_is_valid
+}
+
+// Source: text_painter.cc:361-369,801-815. Decorations remain outside this
+// state; shadows and glyph passes enter it independently in source paint order.
+fn AppendTextFitTransform(
+    context: &RefCell<PaintContext<'_>>,
+    node: &PaintTreeNode<'_>,
+    phase: PaintPhase,
+    scale: f64,
+    text_origin: Offset,
+    begin: bool,
+) {
+    if !scale.is_finite() || scale <= 0.0 {
+        panic!("text-fit scale must be finite and positive");
+    }
+    if !begin {
+        context.borrow_mut().Append(
+            DisplayItem {
+                r#type: DisplayItemType::kRestore,
+                phase,
+                node_id: node.fragment.as_deref().map_or(0, |f| f.node_id),
+                ..Default::default()
+            },
+            node,
+        );
+        return;
+    }
+    let fragment = node
+        .fragment
+        .as_deref()
+        .expect("paint tree node has a fragment");
+    context.borrow_mut().Append(
+        DisplayItem {
+            r#type: DisplayItemType::kSave,
+            phase,
+            node_id: fragment.node_id,
+            ..Default::default()
+        },
+        node,
+    );
+    let transform = ComputeTextFitTransform(scale, text_origin);
+    context.borrow_mut().Append(
+        DisplayItem {
+            r#type: DisplayItemType::kConcat,
+            phase,
+            node_id: fragment.node_id,
+            transform,
+            ..Default::default()
+        },
+        node,
+    );
+}
+
+// Source: text_painter.cc:463-487,989-999. ShapeResult::Slice retains every
+// glyph in a cluster that intersects the selected character range. The clip
+// then splits a partially selected ligature geometrically.
+fn SliceGlyphsForSelection(
+    glyphs: &Arc<Vec<PaintGlyph>>,
+    selection: (u32, u32),
+    text_end: u32,
+) -> Arc<Vec<PaintGlyph>> {
+    if glyphs.is_empty() {
+        return Arc::clone(glyphs);
+    }
+    let selection = (selection.0.min(selection.1), selection.0.max(selection.1));
+    let mut cluster_starts: Vec<u32> = glyphs.iter().map(|glyph| glyph.character_index).collect();
+    cluster_starts.sort_unstable();
+    cluster_starts.dedup();
+    let selected: Vec<PaintGlyph> = glyphs
+        .iter()
+        .filter(|glyph| {
+            let cluster_start = glyph.character_index;
+            let next = cluster_starts.partition_point(|start| *start <= cluster_start);
+            let cluster_end = cluster_starts
+                .get(next)
+                .copied()
+                .unwrap_or_else(|| text_end.max(cluster_start.saturating_add(1)));
+            cluster_start < selection.1 && cluster_end > selection.0
+        })
+        .cloned()
+        .collect();
+    if selected.len() == glyphs.len() {
+        Arc::clone(glyphs)
+    } else {
+        Arc::new(selected)
+    }
+}
+
+// Source: highlight_painter.cc:952-986,1112-1131. For ordinary horizontal
+// text, retain the line-relative range through stroke inflation and the
+// fragment-edge ink-overflow adjustments, then apply ClipToPartRect's source
+// unit/non-unit used-font block offset and height.
+fn SelectionGlyphClipRect(
+    rect: PaintRect,
+    line_relative_range: Option<PaintRect>,
+    stroke_width: f64,
+    selection: (u32, u32),
+    fragment_range: Option<(u32, u32)>,
+    ink_overflow: Option<layoutng_assembly::fragment_tree::FragmentPaintRect>,
+    item: Option<&layoutng_assembly::fragment_item::FragmentItem>,
+    physical_box_offset: Offset,
+    physical_box_size: Size,
+) -> PaintRect {
+    let stroke_outset = (stroke_width / 2.0).ceil().max(0.0);
+    let fallback = || PaintRect {
+        x: rect.x - stroke_outset,
+        y: rect.y - stroke_outset,
+        width: rect.width + stroke_outset * 2.0,
+        height: rect.height + stroke_outset * 2.0,
+    };
+    let (
+        Some(item),
+        Some(ink_overflow),
+        Some((fragment_start, fragment_end)),
+        Some(line_relative_range),
+    ) = (item, ink_overflow, fragment_range, line_relative_range)
+    else {
+        return fallback();
+    };
+    if item.IsSvgText() {
+        return fallback();
+    }
+
+    // highlight_painter.cc:50-60,1065-1069: the range comes from source
+    // ShapeResult positions in line-relative space, then reuses the physical
+    // text-box origin as its line-relative origin.
+    let mut line_rect = LineRelativeRect::Create(
+        &PhysicalRect::new(
+            PhysicalOffset::new(
+                LayoutUnit::from_f64(line_relative_range.x),
+                LayoutUnit::from_f64(line_relative_range.y),
+            ),
+            PhysicalSize::new(
+                LayoutUnit::from_f64(line_relative_range.width),
+                LayoutUnit::from_f64(line_relative_range.height),
+            ),
+        ),
+        None,
+    );
+    line_rect.Inflate(LayoutUnit::FromFloatCeil(stroke_width as f32 / 2.0));
+    if selection.0 == fragment_start {
+        line_rect.AdjustLineStartToInkOverflow(item);
+    }
+    if selection.1 == fragment_end {
+        line_rect.AdjustLineEndToInkOverflow(item);
+    }
+    let mut line_rect = line_rect.EnclosingLineRelativeRect();
+    let used_font = item.GetUsedFont();
+    let scale = f64::from(used_font.ScalingFactor());
+    if scale != 1.0 {
+        let primary = used_font.PrimaryFont();
+        if primary.is_null() {
+            return fallback();
+        }
+        let unscaled_ascent = f64::from(unsafe { &*primary }.GetFontMetrics().FloatAscent());
+        let local_y_scaled = item.InkOverflowRect().Y().ToDouble();
+        line_rect.offset.line_over +=
+            LayoutUnit::from_f64(local_y_scaled / scale - unscaled_ascent * (1.0 - scale));
+        line_rect.size.block_size /= scale as f32;
+    } else {
+        line_rect.offset.line_over += LayoutUnit::from_f64(ink_overflow.offset.y);
+    }
+    let line_rect = line_rect.ToRectF();
+    let physical = if item.IsHorizontal() {
+        line_rect
+    } else {
+        let rotation = TextWritingModeRotation(
+            item.GetWritingMode(),
+            physical_box_offset,
+            physical_box_size,
+        );
+        rotation.MapRect(line_rect)
+    };
+    PaintRect {
+        x: f64::from(physical.x()),
+        y: f64::from(physical.y()),
+        width: f64::from(physical.width()),
+        height: f64::from(physical.height()),
+    }
+}
+
+// Source: text_painter.cc:474-488; shadow_list.cc:39-52;
+// shadow_data.cc:32-43. Keep the original selection rect and take the maximum
+// non-inset raster outset on each side across the complete shadow list.
+fn AdjustRectForShadow(mut rect: PaintRect, style: &PaintStyle) -> PaintRect {
+    let mut left: f64 = 0.0;
+    let mut right: f64 = 0.0;
+    let mut top: f64 = 0.0;
+    let mut bottom: f64 = 0.0;
+    for index in 0..style.text_shadow_count() {
+        let shadow = style.text_shadow(index);
+        if shadow.inset {
+            continue;
+        }
+        let blur_and_spread = (1.5 * shadow.blur_radius).ceil() + shadow.spread;
+        left = left.max(blur_and_spread - shadow.offset.x);
+        right = right.max(blur_and_spread + shadow.offset.x);
+        top = top.max(blur_and_spread - shadow.offset.y);
+        bottom = bottom.max(blur_and_spread + shadow.offset.y);
+    }
+    rect.x -= left;
+    rect.y -= top;
+    rect.width += left + right;
+    rect.height += top + bottom;
+    rect
+}
+
+// Source: text_painter.cc:361-369.
+fn ComputeTextFitTransform(scale: f64, text_origin: Offset) -> TransformMatrix {
+    let mut transform = TransformMatrix::default();
+    transform.values[0] = scale;
+    transform.values[5] = scale;
+    transform.values[12] = text_origin.x - scale * text_origin.x;
+    transform.values[13] = text_origin.y - scale * text_origin.y;
+    transform
+}
+
 fn TextWritingModeTransform(
     node: &PaintTreeNode<'_>,
     writing_mode: WritingMode,
     physical_box_offset: Offset,
 ) -> TransformMatrix {
-    let mut transform = TransformMatrix::default();
     if writing_mode == WritingMode::kHorizontalTb {
-        return transform;
+        return TransformMatrix::default();
     }
-    let x = physical_box_offset.x;
-    let y = physical_box_offset.y;
-    let block_size = node
+    let size = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment")
-        .size
-        .width;
-    transform.values = [
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        -1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        x + y + block_size,
-        y - x,
-        0.0,
-        1.0,
-    ];
+        .size;
+    let writing_mode = match writing_mode {
+        WritingMode::kHorizontalTb => StyleWritingMode::kHorizontalTb,
+        WritingMode::kVerticalRl => StyleWritingMode::kVerticalRl,
+        WritingMode::kVerticalLr => StyleWritingMode::kVerticalLr,
+    };
+    let rotation = TextWritingModeRotation(writing_mode, physical_box_offset, size);
+    let mut transform = TransformMatrix::default();
+    transform.values[0] = rotation.A();
+    transform.values[1] = rotation.B();
+    transform.values[4] = rotation.C();
+    transform.values[5] = rotation.D();
+    transform.values[12] = rotation.E();
+    transform.values[13] = rotation.F();
     transform
 }
 
-// cpp: paint/box_fragment_painter.cc:559-576
+// text_fragment_painter.cc:383-393. The line box shares its origin between
+// physical and line-relative spaces. Chromium callers retain the five-valued
+// mode, so LineRelativeRect also preserves the sideways-lr distinction.
+fn TextWritingModeRotation(
+    writing_mode: StyleWritingMode,
+    physical_box_offset: Offset,
+    physical_box_size: Size,
+) -> AffineTransform {
+    let physical_box = PhysicalRect::new(
+        PhysicalOffset::new(
+            LayoutUnit::from_f64(physical_box_offset.x),
+            LayoutUnit::from_f64(physical_box_offset.y),
+        ),
+        PhysicalSize::new(
+            LayoutUnit::from_f64(physical_box_size.width),
+            LayoutUnit::from_f64(physical_box_size.height),
+        ),
+    );
+    LineRelativeRect::CreateFromLineBox(&physical_box, false)
+        .ComputeRelativeToPhysicalTransform(writing_mode)
+}
+
 fn RootSpaceTextTransform(node: &PaintTreeNode<'_>) -> TransformMatrix {
     let fragment = node
         .fragment
@@ -6101,8 +6105,7 @@ fn RootSpaceTextTransform(node: &PaintTreeNode<'_>) -> TransformMatrix {
     MultiplyTransforms(&scale, &local)
 }
 
-// cpp: paint/box_fragment_painter.cc:578-585
-fn TextPaintOrigin(node: &PaintTreeNode<'_>) -> Offset {
+pub(crate) fn TextPaintOrigin(node: &PaintTreeNode<'_>) -> Offset {
     let mut origin = node.paint_offset;
     let fragment = node
         .fragment
@@ -6116,35 +6119,1135 @@ fn TextPaintOrigin(node: &PaintTreeNode<'_>) -> Offset {
     origin
 }
 
-// cpp: paint/box_fragment_painter.cc:587-591
-fn TextPaintSize(node: &PaintTreeNode<'_>) -> Size {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("paint tree node has a fragment");
-    if let Some(svg) = fragment.paint.svg_text.as_ref() {
-        return svg.untransformed_size;
-    }
-    fragment.size
-}
-
 #[cfg(test)]
 mod background_attachment_tests {
+    use std::cell::RefCell;
     use std::sync::Arc;
 
     use layoutng_assembly::fragment_tree::{
-        FragmentPaintData, FragmentPaintRect, PaintResources, ScrollContainerPaintData,
+        FragmentPaintData, FragmentPaintRect, PaintGlyph, PaintResources, ReplacedContentPaintData,
+        ScrollContainerPaintData,
     };
-    use layoutng_assembly::internal::layout_input::{Offset, Size, ViewportGeometry};
-    use layoutng_assembly::internal::layout_input_types::IntSize;
+    use layoutng_assembly::internal::layout_input::{
+        Display, Offset, PaintImage, PaintShadow, PaintStyle, Size, ViewportGeometry,
+    };
+    use layoutng_assembly::internal::layout_input_types::{Color, IntSize};
     use layoutng_assembly::internal::paint_input::BackgroundBox;
 
     use crate::geometry_mapper::TranslationTransform;
+    use crate::paint_info::PaintInfo;
+    use crate::PaintPhase;
 
     use super::{
-        BackgroundBoxRectWithin, FixedBackgroundPositioningArea, LocalBackgroundBorderRect,
-        PaintTreeNode,
+        AdjustRectForShadow, BackgroundBoxRectWithin, BoxFragmentPainter, BuildBackplates,
+        ComputeTextFitTransform, FixedBackgroundPositioningArea, ImageDecodingModeForPainting,
+        IsPaintImageAvailable, IsVisibleToPaint, LocalBackgroundBorderRect,
+        MissingImagePlaceholderRect, PaintTreeNode, PaintsCaretAfterChildren,
+        PaintsCaretBeforeChildren, PaintsOverflowControlsBeforeContents,
+        PaintsSelfOutlineAfterChildren, PaintsSelfOutlineBeforeChildren, PaintsTextInPhase,
+        ScrollingBackgroundVisualRect, ShouldRecordHitTestData,
+        ShouldRecordScrollHitTestDataForPaint, SliceGlyphsForSelection, SvgSpriteVisualRect,
+        UpdateImagePaintedRect, UseCachedImageDrawingIfPossible,
     };
+
+    #[test]
+    fn selection_slice_expands_a_partial_cluster_to_all_of_its_glyphs() {
+        let glyphs = Arc::new(vec![
+            PaintGlyph {
+                id: 10,
+                character_index: 0,
+                ..Default::default()
+            },
+            PaintGlyph {
+                id: 11,
+                character_index: 1,
+                ..Default::default()
+            },
+            PaintGlyph {
+                id: 12,
+                character_index: 1,
+                ..Default::default()
+            },
+            PaintGlyph {
+                id: 13,
+                character_index: 3,
+                ..Default::default()
+            },
+        ]);
+        let selected = SliceGlyphsForSelection(&glyphs, (2, 3), 4);
+        assert_eq!(
+            selected.iter().map(|glyph| glyph.id).collect::<Vec<_>>(),
+            vec![11, 12]
+        );
+        let selected = SliceGlyphsForSelection(&glyphs, (3, 4), 4);
+        assert_eq!(
+            selected.iter().map(|glyph| glyph.id).collect::<Vec<_>>(),
+            vec![13]
+        );
+    }
+
+    #[test]
+    fn selection_shadow_clip_uses_maximum_outset_on_each_side() {
+        let rect = crate::PaintRect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let mut style = PaintStyle::default();
+        style.text_shadows = vec![
+            PaintShadow {
+                offset: Offset { x: 4.0, y: 5.0 },
+                ..Default::default()
+            },
+            PaintShadow {
+                offset: Offset { x: -2.0, y: -3.0 },
+                blur_radius: 2.0,
+                ..Default::default()
+            },
+        ];
+        let adjusted = AdjustRectForShadow(rect, &style);
+        assert_eq!(
+            adjusted,
+            crate::PaintRect {
+                x: 5.0,
+                y: 14.0,
+                width: 39.0,
+                height: 51.0,
+            }
+        );
+    }
+
+    #[test]
+    fn text_fit_transform_scales_around_the_text_origin() {
+        let origin = Offset { x: 24.0, y: 40.0 };
+        let transform = ComputeTextFitTransform(1.25, origin);
+        assert_eq!(transform.values[0], 1.25);
+        assert_eq!(transform.values[5], 1.25);
+        assert_eq!(transform.values[12], -6.0);
+        assert_eq!(transform.values[13], -10.0);
+        assert_eq!(
+            transform.values[0] * origin.x + transform.values[12],
+            origin.x
+        );
+        assert_eq!(
+            transform.values[5] * origin.y + transform.values[13],
+            origin.y
+        );
+    }
+
+    #[test]
+    fn non_overlay_controls_precede_scrolling_background_only_in_background_phases() {
+        use crate::PaintPhase;
+
+        assert!(PaintsOverflowControlsBeforeContents(
+            PaintPhase::kBlockBackground,
+            false,
+        ));
+        assert!(PaintsOverflowControlsBeforeContents(
+            PaintPhase::kSelfBlockBackgroundOnly,
+            false,
+        ));
+        assert!(!PaintsOverflowControlsBeforeContents(
+            PaintPhase::kForeground,
+            false,
+        ));
+        assert!(!PaintsOverflowControlsBeforeContents(
+            PaintPhase::kBlockBackground,
+            true,
+        ));
+    }
+
+    #[test]
+    fn hidden_for_paint_and_css_visibility_are_distinct_for_table_parts() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.style.SetVisibleForTesting(false);
+        fragment.paint.display = Display::kBlock;
+        assert!(!IsVisibleToPaint(&fragment));
+
+        fragment.paint.display = Display::kTableRow;
+        assert!(IsVisibleToPaint(&fragment));
+        fragment.paint.display = Display::kTableSection;
+        assert!(IsVisibleToPaint(&fragment));
+        fragment.paint.display = Display::kTableColumn;
+        assert!(IsVisibleToPaint(&fragment));
+
+        fragment.paint.hidden = true;
+        assert!(!IsVisibleToPaint(&fragment));
+        fragment.paint.style.SetVisibleForTesting(true);
+        assert!(!IsVisibleToPaint(&fragment));
+    }
+
+    #[test]
+    fn text_item_phase_admission_matches_box_fragment_painter() {
+        assert!(PaintsTextInPhase(PaintPhase::kForeground));
+        assert!(PaintsTextInPhase(PaintPhase::kSelectionDragImage));
+        assert!(PaintsTextInPhase(PaintPhase::kTextClip));
+        assert!(PaintsTextInPhase(PaintPhase::kMask));
+        assert!(!PaintsTextInPhase(PaintPhase::kBlockBackground));
+        assert!(!PaintsTextInPhase(PaintPhase::kForcedColorsModeBackplate));
+        assert!(!PaintsTextInPhase(PaintPhase::kOutline));
+    }
+
+    #[test]
+    fn fragment_admission_uses_filtered_ink_overflow_and_keeps_paginated_root() {
+        use crate::paint_context::PaintContext;
+        use crate::PaintRecording;
+
+        let filtered = FragmentPaintRect {
+            offset: Offset { x: 10.0, y: 10.0 },
+            size: Size {
+                width: 20.0,
+                height: 20.0,
+            },
+        };
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+        let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
+
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.filtered_ink_overflow = Some(filtered);
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        node.self_cull_rect = Some(crate::PaintRect {
+            x: 100.0,
+            y: 100.0,
+            width: 10.0,
+            height: 10.0,
+        });
+        assert!(!BoxFragmentPainter::ShouldPaintFragment(&node, &paint_info));
+
+        let mut paginated_fragment = FragmentPaintData::default();
+        paginated_fragment.paint.filtered_ink_overflow = Some(filtered);
+        paginated_fragment.paint.is_paginated_root = true;
+        let mut paginated_node = PaintTreeNode::default();
+        paginated_node.SetOwnedFragmentForTesting(&paginated_fragment);
+        paginated_node.self_cull_rect = node.self_cull_rect;
+        assert!(BoxFragmentPainter::ShouldPaintFragment(
+            &paginated_node,
+            &paint_info
+        ));
+    }
+
+    #[test]
+    fn child_admission_uses_contents_paint_info_and_source_item_offset() {
+        use crate::paint_context::PaintContext;
+        use crate::PaintRecording;
+        use paint_model::CullRect;
+
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+        let paint_info = PaintInfo::new_with_cull(
+            &context,
+            CullRect::FromRect(crate::PaintRect {
+                x: 29.0,
+                y: 39.0,
+                width: 4.0,
+                height: 4.0,
+            }),
+            PaintPhase::kForeground,
+        );
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.ink_overflow = Some(FragmentPaintRect {
+            offset: Offset { x: 10.0, y: 10.0 },
+            size: Size {
+                width: 2.0,
+                height: 2.0,
+            },
+        });
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        node.paint_offset = Offset { x: 20.0, y: 30.0 };
+        assert!(BoxFragmentPainter::ChildIntersectsCullRect(
+            &node,
+            &paint_info
+        ));
+
+        node.paint_offset = Offset { x: 100.0, y: 100.0 };
+        assert!(!BoxFragmentPainter::ChildIntersectsCullRect(
+            &node,
+            &paint_info
+        ));
+
+        let mut line_break = FragmentPaintData::default();
+        line_break.paint.ink_overflow = fragment.paint.ink_overflow;
+        line_break.paint.is_line_break = true;
+        let mut line_break_node = PaintTreeNode::default();
+        line_break_node.SetOwnedFragmentForTesting(&line_break);
+        line_break_node.paint_offset = node.paint_offset;
+        assert!(BoxFragmentPainter::ChildIntersectsCullRect(
+            &line_break_node,
+            &paint_info
+        ));
+    }
+
+    #[test]
+    fn line_child_cull_rect_checks_only_the_block_direction() {
+        use crate::paint_context::PaintContext;
+        use crate::PaintRecording;
+        use paint_model::CullRect;
+
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+        let paint_info = PaintInfo::new_with_cull(
+            &context,
+            CullRect::FromRect(crate::PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            }),
+            PaintPhase::kForeground,
+        );
+        let mut fragment = FragmentPaintData::default();
+        fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kLine;
+        fragment.paint.ink_overflow = Some(FragmentPaintRect {
+            offset: Offset::default(),
+            size: Size {
+                width: 10.0,
+                height: 10.0,
+            },
+        });
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+
+        node.paint_offset = Offset { x: 100.0, y: 5.0 };
+        assert!(BoxFragmentPainter::ChildIntersectsCullRect(
+            &node,
+            &paint_info
+        ));
+        node.paint_offset.y = 100.0;
+        assert!(!BoxFragmentPainter::ChildIntersectsCullRect(
+            &node,
+            &paint_info
+        ));
+
+        let mut vertical_fragment = fragment.clone();
+        vertical_fragment.paint.writing_mode =
+            layoutng_assembly::internal::layout_input::WritingMode::kVerticalRl;
+        let mut vertical_node = PaintTreeNode::default();
+        vertical_node.SetOwnedFragmentForTesting(&vertical_fragment);
+        vertical_node.paint_offset = Offset { x: 5.0, y: 100.0 };
+        assert!(BoxFragmentPainter::ChildIntersectsCullRect(
+            &vertical_node,
+            &paint_info
+        ));
+        vertical_node.paint_offset.x = 100.0;
+        assert!(!BoxFragmentPainter::ChildIntersectsCullRect(
+            &vertical_node,
+            &paint_info
+        ));
+    }
+
+    #[test]
+    fn forced_colors_backplates_split_paragraphs_and_exclude_atomic_inline_text() {
+        fn text_fragment(x: f64, width: f64) -> (FragmentPaintData, f64) {
+            let mut fragment = FragmentPaintData::default();
+            fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kText;
+            fragment.size = Size {
+                width,
+                height: 10.0,
+            };
+            (fragment, x)
+        }
+
+        fn node<'a>(fragment: &'a FragmentPaintData, x: f64) -> Box<PaintTreeNode<'a>> {
+            let mut node = PaintTreeNode::default();
+            node.SetOwnedFragmentForTesting(fragment);
+            node.paint_offset.x = x;
+            Box::new(node)
+        }
+
+        let root_fragment = FragmentPaintData::default();
+        let (first, first_x) = text_fragment(10.0, 5.0);
+        let (mut break_one, break_one_x) = text_fragment(20.0, 0.0);
+        break_one.paint.is_line_break = true;
+        let (mut break_two, break_two_x) = text_fragment(21.0, 0.0);
+        break_two.paint.is_line_break = true;
+        let (second, second_x) = text_fragment(30.0, 5.0);
+        let (mut one_break, one_break_x) = text_fragment(36.0, 0.0);
+        one_break.paint.is_line_break = true;
+        let (third, third_x) = text_fragment(40.0, 5.0);
+        let atomic_fragment = {
+            let mut fragment = FragmentPaintData::default();
+            fragment.paint.painted_atomically = true;
+            fragment
+        };
+        let (atomic_text, atomic_text_x) = text_fragment(100.0, 20.0);
+
+        let mut root = PaintTreeNode::default();
+        root.SetOwnedFragmentForTesting(&root_fragment);
+        root.children.push(node(&first, first_x));
+        root.children.push(node(&break_one, break_one_x));
+        root.children.push(node(&break_two, break_two_x));
+        root.children.push(node(&second, second_x));
+        root.children.push(node(&one_break, one_break_x));
+        root.children.push(node(&third, third_x));
+        let mut atomic = node(&atomic_fragment, 100.0);
+        atomic.children.push(node(&atomic_text, atomic_text_x));
+        root.children.push(atomic);
+
+        assert_eq!(
+            BuildBackplates(&root),
+            vec![
+                crate::PaintRect {
+                    x: 10.0,
+                    y: 0.0,
+                    width: 5.0,
+                    height: 10.0,
+                },
+                crate::PaintRect {
+                    x: 30.0,
+                    y: 0.0,
+                    width: 15.0,
+                    height: 10.0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn forced_colors_backplate_records_the_exported_document_color() {
+        use crate::paint_context::PaintContext;
+        use crate::{DisplayItemType, PaintPhase, PaintRecording};
+
+        let color = Color {
+            red: 12.0 / 255.0,
+            green: 34.0 / 255.0,
+            blue: 56.0 / 255.0,
+            alpha: 1.0,
+        };
+        let mut root_fragment = FragmentPaintData::default();
+        root_fragment.paint.has_source = true;
+        root_fragment.paint.is_inline_formatting_context = true;
+        root_fragment.paint.in_forced_colors_mode = true;
+        root_fragment.paint.style.forced_color_adjust_auto = true;
+        root_fragment.paint.style.forced_background_color = color;
+        let (text, text_x) = {
+            let mut fragment = FragmentPaintData::default();
+            fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kText;
+            fragment.size = Size {
+                width: 18.0,
+                height: 9.0,
+            };
+            (fragment, 7.0)
+        };
+        let mut root = PaintTreeNode::default();
+        root.SetOwnedFragmentForTesting(&root_fragment);
+        let mut text_node = PaintTreeNode::default();
+        text_node.SetOwnedFragmentForTesting(&text);
+        text_node.paint_offset = Offset { x: text_x, y: 11.0 };
+        root.children.push(Box::new(text_node));
+
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+        let paint_info = PaintInfo::new(&context, PaintPhase::kForcedColorsModeBackplate);
+        BoxFragmentPainter::new(&root, &context).Paint(&paint_info);
+        drop(paint_info);
+        drop(context);
+
+        let draws = recording
+            .items
+            .iter()
+            .filter(|item| item.r#type == DisplayItemType::kDrawRect)
+            .collect::<Vec<_>>();
+        assert_eq!(draws.len(), 1);
+        assert_eq!(draws[0].phase, PaintPhase::kForcedColorsModeBackplate);
+        assert_eq!(draws[0].color, color);
+        assert_eq!(
+            draws[0].rect,
+            crate::PaintRect {
+                x: 7.0,
+                y: 11.0,
+                width: 18.0,
+                height: 9.0,
+            }
+        );
+    }
+
+    #[test]
+    fn root_group_records_the_opaque_base_backdrop_without_a_css_background() {
+        use crate::paint_context::PaintContext;
+        use crate::{DisplayItemType, PaintPhase, PaintRecording, PaintRect};
+        use paint_model::display_item_id::DisplayItemIdType;
+
+        let mut fragment = FragmentPaintData::default();
+        fragment.size = Size {
+            width: 320.0,
+            height: 210.0,
+        };
+        fragment.paint.has_source = true;
+        fragment.paint.is_layout_view = true;
+        fragment.paint.style.SetVisibleForTesting(true);
+        fragment.paint.resources = Some(Arc::new(PaintResources {
+            paints_opaque_base_background: true,
+            ..PaintResources::default()
+        }));
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        node.is_root = true;
+        let parent = node.contents_properties.nodes.transform.clone();
+        node.contents_properties.nodes.transform =
+            Arc::new(crate::paint_property_tree::TransformPaintPropertyNode {
+                id: 41,
+                parent: Some(parent),
+                ..(*node.contents_properties.nodes.transform).clone()
+            });
+
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+        BoxFragmentPainter::new(&node, &context)
+            .PaintRootGroup(PaintPhase::kSelfBlockBackgroundOnly);
+        drop(context);
+
+        assert_eq!(recording.display_items.len(), 1);
+        assert_eq!(
+            recording.display_items[0].id.r#type,
+            DisplayItemIdType::kDocumentRootBackdrop
+        );
+        assert_eq!(
+            recording.display_items[0].visual_rect,
+            PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 210.0,
+            }
+        );
+        assert_eq!(recording.items.len(), 1);
+        assert_eq!(recording.items[0].r#type, DisplayItemType::kDrawRect);
+        assert_eq!(
+            recording.items[0].phase,
+            PaintPhase::kSelfBlockBackgroundOnly
+        );
+        assert_eq!(recording.items[0].color.alpha, 1.0);
+        assert_eq!(recording.chunks.len(), 1);
+        assert_eq!(
+            recording.chunks[0].id.r#type,
+            DisplayItemIdType::kDocumentRootBackdrop
+        );
+        assert!(Arc::ptr_eq(
+            &recording.chunks[0].properties.transform,
+            &node.contents_properties.nodes.transform,
+        ));
+        assert_eq!(
+            recording.chunks[0].bounds,
+            recording.display_items[0].visual_rect
+        );
+        assert_eq!(
+            recording.chunks[0].rect_known_to_be_opaque,
+            recording.display_items[0].visual_rect,
+        );
+    }
+
+    #[test]
+    fn scroll_hit_test_metadata_respects_omit_compositing_and_canvas_exception() {
+        assert!(ShouldRecordScrollHitTestDataForPaint(false, false, false));
+        assert!(!ShouldRecordScrollHitTestDataForPaint(true, false, false));
+        assert!(!ShouldRecordScrollHitTestDataForPaint(true, true, false));
+        assert!(!ShouldRecordScrollHitTestDataForPaint(true, false, true));
+        assert!(ShouldRecordScrollHitTestDataForPaint(true, true, true));
+    }
+
+    #[test]
+    fn missing_image_placeholder_uses_layout_image_identity_and_half_pixel_inset() {
+        let content = crate::PaintRect {
+            x: 10.2,
+            y: 20.2,
+            width: 30.4,
+            height: 40.4,
+        };
+        let snapped = crate::PaintRect {
+            x: 10.0,
+            y: 20.0,
+            width: 31.0,
+            height: 41.0,
+        };
+        assert_eq!(
+            MissingImagePlaceholderRect(true, content, snapped),
+            Some(crate::PaintRect {
+                x: 10.5,
+                y: 20.5,
+                width: 30.0,
+                height: 40.0,
+            })
+        );
+        assert_eq!(MissingImagePlaceholderRect(false, content, snapped), None);
+        assert_eq!(
+            MissingImagePlaceholderRect(
+                true,
+                crate::PaintRect {
+                    width: 2.0,
+                    ..content
+                },
+                snapped,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn svg_sprite_visual_rect_uses_only_a_fully_contained_local_cull_rect() {
+        use image_resource::{
+            ContainerKey, DocumentPaintContent, DocumentPaintRecord, PaintImageContent,
+        };
+        use layoutng_assembly::internal::layout_input::PaintImage;
+
+        let record: Arc<dyn DocumentPaintRecord> = Arc::new(0u8);
+        let svg = PaintImage {
+            content: PaintImageContent::Document(Arc::new(DocumentPaintContent::new(
+                ContainerKey::default(),
+                record,
+            ))),
+            ..Default::default()
+        };
+        let bitmap = PaintImage {
+            content: PaintImageContent::Bitmap(Arc::new(Vec::new())),
+            ..Default::default()
+        };
+        let visual = crate::PaintRect {
+            x: 10.25,
+            y: 20.25,
+            width: 100.0,
+            height: 80.0,
+        };
+        let transforms = [TranslationTransform(100.0, 50.0)];
+        let root_cull = crate::PaintRect {
+            x: 130.0,
+            y: 90.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        assert_eq!(
+            SvgSpriteVisualRect(&svg, visual, Some(root_cull), &transforms),
+            crate::PaintRect {
+                x: 30.0,
+                y: 40.0,
+                width: 20.0,
+                height: 10.0,
+            }
+        );
+        assert_eq!(
+            SvgSpriteVisualRect(&bitmap, visual, Some(root_cull), &transforms),
+            visual
+        );
+
+        let partially_outside = crate::PaintRect {
+            x: 100.0,
+            y: 60.0,
+            width: 20.0,
+            height: 20.0,
+        };
+        assert_eq!(
+            SvgSpriteVisualRect(&svg, visual, Some(partially_outside), &[]),
+            visual
+        );
+    }
+
+    #[test]
+    fn replaced_image_availability_rejects_null_or_malformed_frames() {
+        use image_resource::PaintImageContent;
+        use layoutng_assembly::internal::layout_input::PaintImage;
+
+        assert!(!IsPaintImageAvailable(&PaintImage::default()));
+        assert!(!IsPaintImageAvailable(&PaintImage {
+            width: 1,
+            height: 1,
+            content: PaintImageContent::Bitmap(Arc::new(vec![0; 3])),
+            ..Default::default()
+        }));
+        assert!(IsPaintImageAvailable(&PaintImage {
+            width: 1,
+            height: 1,
+            content: PaintImageContent::Bitmap(Arc::new(vec![0; 4])),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn layout_image_paint_entry_is_recorded_even_without_an_image_drawing() {
+        use crate::paint_context::PaintContext;
+        use crate::{PaintPhase, PaintRecording};
+
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.has_source = true;
+        fragment.paint.style.SetVisibleForTesting(true);
+        fragment.paint.replaced_is_image = true;
+        fragment.paint.style.image_resource_id = Some(7);
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+        let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
+
+        BoxFragmentPainter::new(&node, &context).Paint(&paint_info);
+
+        drop(paint_info);
+        drop(context);
+        assert_eq!(
+            recording
+                .PaintedLayoutImageResourceIds()
+                .collect::<Vec<_>>(),
+            vec![7]
+        );
+        assert!(recording.items.is_empty());
+    }
+
+    #[test]
+    fn unavailable_layout_image_resource_paints_the_missing_image_placeholder() {
+        use crate::paint_context::PaintContext;
+        use crate::{DisplayItemType, PaintPhase, PaintRecording};
+        use image_resource::{PaintImage, PaintImageContent};
+
+        let mut fragment = FragmentPaintData::default();
+        fragment.content_size = Size {
+            width: 30.0,
+            height: 40.0,
+        };
+        fragment.paint.replaced_is_image = true;
+        fragment.paint.replaced_content = Some(ReplacedContentPaintData {
+            size: fragment.content_size,
+            is_image: true,
+            ..Default::default()
+        });
+        fragment.paint.style.image_resource_id = Some(7);
+        fragment.paint.resources = Some(Arc::new(PaintResources {
+            fonts: Default::default(),
+            images: vec![PaintImage {
+                id: 7,
+                width: 1,
+                height: 1,
+                content: PaintImageContent::Bitmap(Arc::new(vec![0; 3])),
+                ..Default::default()
+            }],
+            device_pixel_ratio: 1.0,
+            preferred_color_scheme: 0,
+            layout_zoom_factor: 1.0,
+            paints_opaque_base_background: false,
+            viewport: None,
+        }));
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+
+        let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
+        BoxFragmentPainter::new(&node, &context).PaintReplaced(&paint_info);
+
+        drop(context);
+        assert!(recording
+            .items
+            .iter()
+            .any(|item| item.r#type == DisplayItemType::kStrokeRect));
+    }
+
+    #[test]
+    fn unavailable_layout_image_skips_placeholder_for_selection_drag_image() {
+        use crate::paint_context::PaintContext;
+        use crate::{DisplayItemType, PaintPhase, PaintRecording};
+
+        let mut fragment = FragmentPaintData::default();
+        fragment.content_size = Size {
+            width: 30.0,
+            height: 40.0,
+        };
+        fragment.paint.replaced_is_image = true;
+        fragment.paint.replaced_content = Some(ReplacedContentPaintData {
+            size: fragment.content_size,
+            is_image: true,
+            ..Default::default()
+        });
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+        let paint_info = PaintInfo::new(&context, PaintPhase::kSelectionDragImage);
+
+        BoxFragmentPainter::new(&node, &context).PaintReplaced(&paint_info);
+
+        drop(paint_info);
+        drop(context);
+        assert!(!recording
+            .items
+            .iter()
+            .any(|item| item.r#type == DisplayItemType::kStrokeRect));
+        assert!(fragment.paint.image_last_paint_rect.get().is_none());
+    }
+
+    #[test]
+    fn privacy_preserving_layout_image_paint_requires_same_origin_pixels() {
+        use crate::paint_context::PaintContext;
+        use crate::{DisplayItemType, PaintPhase, PaintRecording};
+        use image_resource::{PaintImage, PaintImageContent};
+        use paint_model::paint_flags::PaintFlag;
+
+        for (is_cors_same_origin, should_draw) in [(false, false), (true, true)] {
+            let mut fragment = FragmentPaintData::default();
+            fragment.content_size = Size {
+                width: 30.0,
+                height: 40.0,
+            };
+            fragment.paint.replaced_is_image = true;
+            fragment.paint.replaced_content = Some(ReplacedContentPaintData {
+                size: fragment.content_size,
+                is_image: true,
+                ..Default::default()
+            });
+            fragment.paint.style.image_resource_id = Some(7);
+            fragment.paint.resources = Some(Arc::new(PaintResources {
+                fonts: Default::default(),
+                images: vec![PaintImage {
+                    id: 7,
+                    width: 1,
+                    height: 1,
+                    is_cors_same_origin,
+                    content: PaintImageContent::Bitmap(Arc::new(vec![0, 0, 0, 255])),
+                    ..Default::default()
+                }],
+                device_pixel_ratio: 1.0,
+                preferred_color_scheme: 0,
+                layout_zoom_factor: 1.0,
+                paints_opaque_base_background: false,
+                viewport: None,
+            }));
+            let mut node = PaintTreeNode::default();
+            node.SetOwnedFragmentForTesting(&fragment);
+            let mut recording = PaintRecording::default();
+            let context = RefCell::new(PaintContext::new(&mut recording));
+            let paint_info = PaintInfo::new_with_flags(
+                &context,
+                PaintPhase::kForeground,
+                false,
+                PaintFlag::kPrivacyPreserving,
+            );
+
+            BoxFragmentPainter::new(&node, &context).PaintReplaced(&paint_info);
+
+            drop(paint_info);
+            drop(context);
+            assert_eq!(
+                recording
+                    .items
+                    .iter()
+                    .any(|item| item.r#type == DisplayItemType::kDrawImageRect),
+                should_draw,
+                "same_origin={is_cors_same_origin}"
+            );
+            assert_eq!(
+                fragment.paint.image_last_paint_rect.get().is_some(),
+                should_draw,
+                "same_origin={is_cors_same_origin}"
+            );
+        }
+    }
+
+    #[test]
+    fn under_invalidation_diagnostic_marks_only_animated_layout_image_uncacheable() {
+        use crate::paint_context::PaintContext;
+        use crate::{PaintPhase, PaintRecording};
+        use image_resource::{
+            PaintImage, PaintImageAnimationInfo, PaintImageAnimationMetadata,
+            PaintImageAnimationType, PaintImageCompletionState, PaintImageContent,
+            PaintImageMetadata,
+        };
+
+        for (animation_type, should_cache) in [
+            (PaintImageAnimationType::Static, true),
+            (PaintImageAnimationType::Animated, false),
+        ] {
+            let mut fragment = FragmentPaintData::default();
+            fragment.content_size = Size {
+                width: 30.0,
+                height: 40.0,
+            };
+            fragment.paint.replaced_is_image = true;
+            fragment.paint.display_item_client_is_cacheable = true;
+            fragment.paint.display_item_client_invalidation_reason =
+                Some(foundation::PaintInvalidationReason::kNone);
+            fragment.paint.replaced_content = Some(ReplacedContentPaintData {
+                size: fragment.content_size,
+                is_image: true,
+                ..Default::default()
+            });
+            fragment.paint.style.image_resource_id = Some(7);
+            fragment.paint.resources = Some(Arc::new(PaintResources {
+                fonts: Default::default(),
+                images: vec![PaintImage {
+                    id: 7,
+                    width: 1,
+                    height: 1,
+                    compositor_metadata: Ok(PaintImageMetadata {
+                        animation: PaintImageAnimationMetadata::Known(PaintImageAnimationInfo {
+                            animation_type,
+                            repetition_count: 0,
+                            frame_count: if animation_type == PaintImageAnimationType::Animated {
+                                2
+                            } else {
+                                1
+                            },
+                        }),
+                        completion_state: PaintImageCompletionState::Done,
+                        is_multipart: false,
+                    }),
+                    content: PaintImageContent::Bitmap(Arc::new(vec![0, 0, 0, 255])),
+                    ..Default::default()
+                }],
+                device_pixel_ratio: 1.0,
+                preferred_color_scheme: 0,
+                layout_zoom_factor: 1.0,
+                paints_opaque_base_background: false,
+                viewport: None,
+            }));
+            let mut node = PaintTreeNode::default();
+            node.SetOwnedFragmentForTesting(&fragment);
+            let mut recording = PaintRecording::default();
+            let context = RefCell::new(PaintContext::new(&mut recording));
+            context
+                .borrow_mut()
+                .SetPaintUnderInvalidationCheckingForTesting(true);
+            let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
+
+            BoxFragmentPainter::new(&node, &context).PaintReplaced(&paint_info);
+
+            drop(paint_info);
+            drop(context);
+            assert_eq!(recording.display_items.len(), 1);
+            assert_eq!(recording.display_items[0].is_cacheable, should_cache);
+            assert_eq!(
+                recording.display_items[0].paint_invalidation_reason,
+                Some(if should_cache {
+                    foundation::PaintInvalidationReason::kNone
+                } else {
+                    foundation::PaintInvalidationReason::kUncacheable
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn layout_image_decoding_mode_tracks_content_transitions_and_explicit_preference() {
+        let fragment = FragmentPaintData::default();
+        let image_1 = PaintImage {
+            paint_image_id: image_resource::PaintImageId(1),
+            ..Default::default()
+        };
+        let image_2 = PaintImage {
+            paint_image_id: image_resource::PaintImageId(2),
+            ..Default::default()
+        };
+        assert_eq!(
+            ImageDecodingModeForPainting(&fragment, &image_1),
+            image_resource::ImageDecodingMode::kUnspecified
+        );
+        assert_eq!(
+            ImageDecodingModeForPainting(&fragment, &image_2),
+            image_resource::ImageDecodingMode::kSync,
+            "an unspecified content transition is forced synchronous"
+        );
+
+        let mut explicit = FragmentPaintData::default();
+        explicit.paint.image_decoding_mode = image_resource::ImageDecodingMode::kAsync;
+        assert_eq!(
+            ImageDecodingModeForPainting(&explicit, &image_1),
+            image_resource::ImageDecodingMode::kAsync
+        );
+        assert_eq!(
+            ImageDecodingModeForPainting(&explicit, &image_2),
+            image_resource::ImageDecodingMode::kAsync,
+            "an authored async preference wins across a content transition"
+        );
+    }
+
+    #[test]
+    fn image_painted_rect_invalidates_only_when_the_retained_value_changes() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.replaced_is_image = true;
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        let first = crate::PaintRect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        assert!(UpdateImagePaintedRect(&node, first));
+        assert_eq!(
+            fragment.paint.image_last_paint_rect.get(),
+            Some(FragmentPaintRect {
+                offset: Offset { x: 10.0, y: 20.0 },
+                size: Size {
+                    width: 30.0,
+                    height: 40.0,
+                },
+            })
+        );
+        assert!(!UpdateImagePaintedRect(&node, first));
+        assert!(UpdateImagePaintedRect(
+            &node,
+            crate::PaintRect {
+                width: 20.0,
+                ..first
+            }
+        ));
+    }
+
+    #[test]
+    fn display_lock_blocks_layout_image_content_before_recording() {
+        use crate::paint_context::PaintContext;
+        use crate::{PaintPhase, PaintRecording};
+
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.replaced_is_image = true;
+        fragment.paint.child_paint_blocked_by_display_lock = true;
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        let mut recording = PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut recording));
+
+        let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
+        BoxFragmentPainter::new(&node, &context).PaintReplaced(&paint_info);
+
+        drop(context);
+        assert!(recording.display_items.is_empty());
+        assert!(recording.items.is_empty());
+        assert_eq!(fragment.paint.image_last_paint_rect.get(), None);
+    }
+
+    #[test]
+    fn image_drawing_cache_reuses_only_an_unchanged_painted_rect() {
+        use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
+        use crate::paint_context::PaintContext;
+        use crate::{
+            DisplayItem, PaintPhase, PaintRecording, RasterEffectOutset, RecordedDisplayItem,
+            RecordedDisplayItemKind,
+        };
+
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.display_item_client_id = 9;
+        fragment.paint.display_item_client_is_cacheable = true;
+        fragment.paint.display_item_client_invalidation_reason =
+            Some(foundation::PaintInvalidationReason::kNone);
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        let id = DisplayItemId {
+            client_id: 9,
+            r#type: DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kForeground),
+            fragment: 0,
+        };
+        let visual_rect = crate::PaintRect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let mut previous = PaintRecording::default();
+        previous.items = Arc::new(vec![DisplayItem {
+            rect: visual_rect,
+            ..Default::default()
+        }]);
+        previous.display_items.push(RecordedDisplayItem {
+            is_cacheable: true,
+            is_tombstone: false,
+            paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            scrollbar: None,
+            foreign_layer: None,
+            kind: RecordedDisplayItemKind::Drawing,
+            id,
+            visual_rect,
+            visual_rect_is_accurate: true,
+            draws_content: true,
+            raster_effect_outset: RasterEffectOutset::kNone,
+            record_rect_known_to_be_opaque: Default::default(),
+            record_background: Default::default(),
+            record_has_text: false,
+            record_begin: 0,
+            record_end: 1,
+            scroll_translation: None,
+        });
+        let previous = Arc::new(previous);
+
+        let mut reused = PaintRecording::default();
+        let context = RefCell::new(PaintContext::WithEditingAndCache(
+            &mut reused,
+            Default::default(),
+            Some(Arc::clone(&previous)),
+        ));
+        assert!(UseCachedImageDrawingIfPossible(
+            &context,
+            &node,
+            PaintPhase::kForeground,
+            false,
+        ));
+        drop(context);
+        assert_eq!(reused.display_items.len(), 1);
+
+        let mut changed = PaintRecording::default();
+        let context = RefCell::new(PaintContext::WithEditingAndCache(
+            &mut changed,
+            Default::default(),
+            Some(previous),
+        ));
+        assert!(!UseCachedImageDrawingIfPossible(
+            &context,
+            &node,
+            PaintPhase::kForeground,
+            true,
+        ));
+        drop(context);
+        assert!(changed.display_items.is_empty());
+    }
+
+    #[test]
+    fn table_parts_do_not_record_scroll_hit_test_data() {
+        use layoutng_assembly::internal::layout_input::Display;
+
+        assert!(!ShouldRecordHitTestData(Display::kTableRow));
+        assert!(!ShouldRecordHitTestData(Display::kTableSection));
+        assert!(!ShouldRecordHitTestData(Display::kTableHeaderGroup));
+        assert!(!ShouldRecordHitTestData(Display::kTableFooterGroup));
+        assert!(ShouldRecordHitTestData(Display::kBlock));
+    }
+
+    #[test]
+    fn ordinary_outline_is_deferred_but_self_outline_is_direct() {
+        use crate::PaintPhase;
+
+        assert!(PaintsSelfOutlineAfterChildren(PaintPhase::kOutline));
+        assert!(!PaintsSelfOutlineBeforeChildren(PaintPhase::kOutline));
+        assert!(PaintsSelfOutlineBeforeChildren(
+            PaintPhase::kSelfOutlineOnly,
+        ));
+        assert!(!PaintsSelfOutlineAfterChildren(
+            PaintPhase::kSelfOutlineOnly,
+        ));
+        assert!(!PaintsSelfOutlineBeforeChildren(
+            PaintPhase::kDescendantOutlinesOnly,
+        ));
+        assert!(!PaintsSelfOutlineAfterChildren(
+            PaintPhase::kDescendantOutlinesOnly,
+        ));
+    }
+
+    #[test]
+    fn text_combine_caret_is_always_unscaled_before_children() {
+        use layoutng_assembly::internal::caret_rect::CaretShape;
+
+        for shape in [
+            CaretShape::kBar,
+            CaretShape::kBlock,
+            CaretShape::kUnderscore,
+        ] {
+            assert!(PaintsCaretBeforeChildren(Some(shape), true));
+            assert!(!PaintsCaretAfterChildren(Some(shape), true));
+        }
+        assert!(PaintsCaretBeforeChildren(Some(CaretShape::kBlock), false));
+        assert!(PaintsCaretAfterChildren(Some(CaretShape::kBar), false));
+        assert!(PaintsCaretAfterChildren(
+            Some(CaretShape::kUnderscore),
+            false,
+        ));
+        assert!(!PaintsCaretAfterChildren(None, false));
+    }
 
     #[test]
     fn fixed_and_local_backgrounds_use_viewport_zoom_and_scroll_geometry() {
@@ -6161,7 +7264,7 @@ mod background_attachment_tests {
             ..PaintResources::default()
         }));
         let mut fixed = PaintTreeNode::default();
-        fixed.SetFragment(&fixed_fragment);
+        fixed.SetOwnedFragmentForTesting(&fixed_fragment);
         fixed.scroll_offset = Offset { x: 7.0, y: 11.0 };
         fixed.transforms.push(TranslationTransform(5.0, 9.0));
         let viewport = FixedBackgroundPositioningArea(&fixed).unwrap();
@@ -6189,21 +7292,37 @@ mod background_attachment_tests {
         local_fragment.paint.scroll_container = Some(ScrollContainerPaintData {
             compositor_element_id: Default::default(),
             scrollable_axes: [true, true],
+            scroll_origin: Offset::default(),
+            scroll_position: local_fragment.paint.scroll_offset,
             background_needs_repaint_on_scroll: None,
             prefers_non_composited_scrolling: None,
-            scroll_snap_type_is_none: None,
+            scroll_snap_type: None,
             container_rect: FragmentPaintRect::default(),
+            scrolling_background_visual_rect: FragmentPaintRect {
+                offset: Offset { x: 3.0, y: 5.0 },
+                size: Size {
+                    width: 97.0,
+                    height: 71.0,
+                },
+            },
             minimum_scroll_offset: Offset::default(),
             maximum_scroll_offset: Offset::default(),
             user_scrollable_horizontal: true,
             user_scrollable_vertical: true,
+            scrolling_background_client_id: 0,
+            scrolling_background_client_invalidation_reason: None,
+            scrolling_background_client_is_cacheable: true,
+            scrolling_background_client_is_just_created: std::cell::Cell::new(false),
         });
         let mut local = PaintTreeNode::default();
-        local.SetFragment(&local_fragment);
+        local.SetOwnedFragmentForTesting(&local_fragment);
         local.paint_offset = Offset { x: 50.0, y: 40.0 };
         let contents = LocalBackgroundBorderRect(&local);
         assert_eq!((contents.x, contents.y), (37.0, 23.0));
         assert_eq!((contents.width, contents.height), (245.0, 189.0));
+        let visual = ScrollingBackgroundVisualRect(&local);
+        assert_eq!((visual.x, visual.y), (53.0, 45.0));
+        assert_eq!((visual.width, visual.height), (97.0, 71.0));
         let content_clip = BackgroundBoxRectWithin(&local, BackgroundBox::kContentBox, contents);
         assert_eq!((content_clip.x, content_clip.y), (45.0, 35.0));
         assert_eq!((content_clip.width, content_clip.height), (227.0, 163.0));

@@ -26,24 +26,21 @@ pub mod runtime;
 /// The default software compositor family used by the Page assembly. These
 /// aliases expose only the immutable native frame/resource output; translated
 /// layer, tiling, scheduler and host owners remain private to CompositorEngine.
-pub type NativeCompositorTypes = runtime::types::CpuCompositorTypes<runtime::skia::SkRegion>;
-pub type NativeCompositorFrame = runtime::frame::CompositorFrame<
-    runtime::metadata::CompositorFrameMetadata<NativeCompositorTypes>,
-    runtime::frame::CompositorRenderPass<NativeCompositorTypes>,
+pub type CompositorTypes = runtime::types::CpuCompositorTypes<runtime::skia::SkRegion>;
+pub type CompositorFrame = runtime::frame::CompositorFrame<
+    runtime::metadata::CompositorFrameMetadata<CompositorTypes>,
+    runtime::frame::CompositorRenderPass<CompositorTypes>,
     runtime::resources::RasterTransferableResource,
 >;
-pub type NativeCompositorRenderPass = runtime::frame::CompositorRenderPass<NativeCompositorTypes>;
-pub type NativeCompositorFrameMetadata =
-    runtime::metadata::CompositorFrameMetadata<NativeCompositorTypes>;
-pub type NativeTransferableResource = runtime::resources::RasterTransferableResource;
-pub type NativeRasterResourceLease = dyn runtime::raster_execution::RasterResourceLease;
+pub type CompositorRenderPass = runtime::frame::CompositorRenderPass<CompositorTypes>;
+pub type CompositorFrameMetadata = runtime::metadata::CompositorFrameMetadata<CompositorTypes>;
+pub type TransferableResource = runtime::resources::RasterTransferableResource;
+pub type RasterResourceLease = dyn runtime::raster_execution::RasterResourceLease;
 /// The value submitted through LayerTreeFrameSink. Chromium carries the
 /// LocalSurfaceId beside each CompositorFrame; keeping that pair intact lets
 /// Viz reject an older resize generation instead of guessing from dimensions.
-pub type NativeCompositorFrameSubmission = compositor_frame::CompositorFrameSubmission<
-    runtime::types::LocalSurfaceId,
-    NativeCompositorFrame,
->;
+pub type CompositorFrameSubmission =
+    compositor_frame::CompositorFrameSubmission<runtime::types::LocalSurfaceId, CompositorFrame>;
 
 pub mod engine;
 pub use engine::{

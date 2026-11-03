@@ -1,5 +1,5 @@
-#[path = "build_support/native_ostream_abi.rs"]
-mod native_ostream_abi;
+#[path = "build_support/ostream_abi.rs"]
+mod ostream_abi;
 
 // Embedding configuration only; no Skia algorithm/source-row credit.
 // Chromium skia/BUILD.gn selects skia/config/SkUserConfig.h. Resolve that
@@ -47,13 +47,9 @@ fn main() {
         bind_native_location_inputs();
         bind_native_time_inputs();
         bind_native_numeric_inputs();
-        bind_native_ostream_storage();
+        bind_ostream_storage();
     }
-    bind_native_primitive_archive(
-        "LONG_DOUBLE",
-        "sk_native_long_double_ffi",
-        "skia_native_long_double",
-    );
+    bind_native_primitive_archive("LONG_DOUBLE", "sk_long_double_ffi", "skia_long_double");
     bind_sktypes_configuration();
     let memory = bind_memory_configuration();
     for name in [
@@ -96,7 +92,7 @@ struct LoadedUserConfiguration {
     debug: bool,
 }
 
-fn bind_loaded_user_configuration(native: &NativeBindings) -> LoadedUserConfiguration {
+fn bind_loaded_user_configuration(native: &Bindings) -> LoadedUserConfiguration {
     fn read(name: &str) -> Option<String> {
         println!("cargo:rerun-if-env-changed={name}");
         std::env::var(name).ok()
@@ -343,7 +339,7 @@ fn bind_sktypes_configuration() {
 // Embedding transport only, not another runtime feature detector. Cargo's
 // selected target supplies the compiler-predefine equivalents used by the
 // source-aligned SkFeatures constants. Never use this build program's host cfg.
-struct NativeBindings {
+struct Bindings {
     android_defined: bool,
     build_mac: bool,
     build_unix: bool,
@@ -351,7 +347,7 @@ struct NativeBindings {
     pre_user_little_endian: bool,
 }
 
-fn bind_native_features(target_os: &str) -> NativeBindings {
+fn bind_native_features(target_os: &str) -> Bindings {
     use std::collections::BTreeMap;
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo target arch");
     let vendor = std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap_or_default();
@@ -627,7 +623,7 @@ fn bind_native_features(target_os: &str) -> NativeBindings {
             println!("cargo:rustc-cfg={name}");
         }
     }
-    NativeBindings {
+    Bindings {
         android_defined: flag("ANDROID", false),
         build_mac,
         build_unix,
@@ -660,7 +656,7 @@ fn bind_cfstr_configuration(build_ios: bool) {
 // configuration is explicitly distinguishable from a genuinely empty native
 // decoder selection; the codec module must not treat it as an empty registry.
 fn bind_codec_configuration(browser_cpu: bool) {
-    println!("cargo:rustc-check-cfg=cfg(sk_codec_native_inputs_configured)");
+    println!("cargo:rustc-check-cfg=cfg(sk_codec_inputs_configured)");
     println!("cargo:rustc-check-cfg=cfg(cxxbridge1)");
     println!("cargo:rerun-if-env-changed=SK_CODEC_COMPLETE_NATIVE_INPUTS");
     let complete = std::env::var("SK_CODEC_COMPLETE_NATIVE_INPUTS")
@@ -716,18 +712,18 @@ fn bind_codec_configuration(browser_cpu: bool) {
         }
     }
     if complete.is_some() {
-        println!("cargo:rustc-cfg=sk_codec_native_inputs_configured");
+        println!("cargo:rustc-cfg=sk_codec_inputs_configured");
     }
 }
 
 // Native memory-port compiler/platform macro transport. These values are
 // embedding inputs and contribute no Skia implementation credit.
-struct NativeMemoryBindings {
+struct MemoryBindings {
     bionic: bool,
     android_framework: bool,
 }
 
-fn bind_memory_configuration() -> NativeMemoryBindings {
+fn bind_memory_configuration() -> MemoryBindings {
     fn input(name: &str) -> Option<String> {
         let key = format!("SK_MEMORY_INPUT_{name}");
         println!("cargo:rerun-if-env-changed={key}");
@@ -767,7 +763,7 @@ fn bind_memory_configuration() -> NativeMemoryBindings {
             println!("cargo:rustc-cfg=sk_android_api_at_least_17");
         }
     }
-    NativeMemoryBindings {
+    MemoryBindings {
         bionic,
         android_framework,
     }
@@ -775,7 +771,7 @@ fn bind_memory_configuration() -> NativeMemoryBindings {
 
 // Supply the actual selected compiler/SDK macro values used by the translated
 // native memory port. This transports inputs, never probes a compiler or SDK.
-fn bind_compiler_port_inputs(target_os: &str, debug: bool, memory: &NativeMemoryBindings) {
+fn bind_compiler_port_inputs(target_os: &str, debug: bool, memory: &MemoryBindings) {
     fn input(name: &str) -> Option<String> {
         println!("cargo:rerun-if-env-changed={name}");
         std::env::var(name).ok()
@@ -903,7 +899,7 @@ fn bind_native_alias_translation_units() {
 // These are resolved native-TU preprocessor inputs. Presence, including defined
 // zero, is distinct from absence. Never use Rust's host/profile as a substitute.
 fn bind_native_numeric_inputs() {
-    println!("cargo:rustc-check-cfg=cfg(base_numeric_native_inputs_configured)");
+    println!("cargo:rustc-check-cfg=cfg(base_numeric_inputs_configured)");
     let pairs = [
         ("__asmjs__", "base_numeric_asmjs"),
         ("__wasm__", "base_numeric_wasm"),
@@ -962,7 +958,7 @@ fn bind_native_numeric_inputs() {
             "the actual numeric builtin branch requires its real target-native bridge archive"
         );
     }
-    println!("cargo:rustc-cfg=base_numeric_native_inputs_configured");
+    println!("cargo:rustc-cfg=base_numeric_inputs_configured");
 }
 
 // Link an artifact built from the supplied genuine compiler primitive TU.
@@ -1022,7 +1018,7 @@ fn bind_native_primitive_archive(kind: &str, cfg: &str, library: &str) -> bool {
 
 // Build the actual SDK TU only when the embedding supplies genuine metadata,
 // target compiler and its original argv. No measurements or host defaults.
-fn bind_native_ostream_storage() {
+fn bind_ostream_storage() {
     use std::{path::PathBuf, process::Command};
     let read = |suffix: &str| {
         let key = format!("SKIA_NATIVE_OSTREAM_{suffix}");
@@ -1030,7 +1026,7 @@ fn bind_native_ostream_storage() {
         std::env::var_os(key)
     };
     let metadata = read("ABI_METADATA_PATH").map(PathBuf::from);
-    println!("cargo:rustc-check-cfg=cfg(sk_native_ostream_abi_configured)");
+    println!("cargo:rustc-check-cfg=cfg(sk_ostream_abi_configured)");
     let Some(metadata) = metadata else {
         return;
     };
@@ -1040,17 +1036,16 @@ fn bind_native_ostream_storage() {
         .into_string()
         .expect("UTF-8 native ABI identity");
     let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory"));
-    let prepared =
-        native_ostream_abi::prepare_native_ostream_abi(Some(&metadata), &output, &target, &domain)
-            .expect("prepare genuine supplied native stream ABI")
-            .expect("explicit metadata must prepare an actual ABI instance");
+    let prepared = ostream_abi::prepare_ostream_abi(Some(&metadata), &output, &target, &domain)
+        .expect("prepare genuine supplied native stream ABI")
+        .expect("explicit metadata must prepare an actual ABI instance");
     let compiler = read("CXX").expect("actual selected target C++ compiler required");
     let style =
         read("COMPILER_STYLE").expect("explicit actual native compiler argv style required");
     let arguments =
         PathBuf::from(read("CXX_ARGS").expect("actual native compiler argv file required"));
     println!("cargo:rerun-if-changed={}", arguments.display());
-    println!("cargo:rerun-if-changed=interop/native_ostream.cpp");
+    println!("cargo:rerun-if-changed=interop/ostream.cpp");
     let mut command = Command::new(compiler);
     // One complete argv value per line: spaces are preserved, no shell splitting.
     for argument in std::fs::read_to_string(arguments)
@@ -1061,23 +1056,23 @@ fn bind_native_ostream_storage() {
     }
     let msvc = style == "msvc";
     let object = output.join(if msvc {
-        "skia_native_ostream.obj"
+        "skia_ostream.obj"
     } else {
-        "skia_native_ostream.o"
+        "skia_ostream.o"
     });
     if style == "gnu" {
         command
             .arg("-I")
             .arg(prepared.include_dir())
             .arg("-c")
-            .arg("interop/native_ostream.cpp")
+            .arg("interop/ostream.cpp")
             .arg("-o")
             .arg(&object);
     } else if msvc {
         command
             .arg(format!("/I{}", prepared.include_dir().display()))
             .arg("/c")
-            .arg("interop/native_ostream.cpp")
+            .arg("interop/ostream.cpp")
             .arg(format!("/Fo{}", object.display()));
     } else {
         panic!("actual native compiler style must be gnu or msvc");
@@ -1092,9 +1087,9 @@ fn bind_native_ostream_storage() {
     let archiver = read("ARCHIVER").expect("actual target native archiver required");
     let archive_style = read("ARCHIVER_STYLE").expect("actual native archiver argv style required");
     let archive = output.join(if archive_style == "msvc" {
-        "skia_native_ostream.lib"
+        "skia_ostream.lib"
     } else {
-        "libskia_native_ostream.a"
+        "libskia_ostream.a"
     });
     let mut command = Command::new(archiver);
     if archive_style == "gnu" {
@@ -1119,7 +1114,7 @@ fn bind_native_ostream_storage() {
     );
     println!("cargo:rerun-if-changed={}", libraries.display());
     println!("cargo:rustc-link-search=native={}", output.display());
-    println!("cargo:rustc-link-lib=static=skia_native_ostream");
+    println!("cargo:rustc-link-lib=static=skia_ostream");
     for library in std::fs::read_to_string(libraries)
         .expect("read actual C++ runtime libraries")
         .lines()
@@ -1243,10 +1238,10 @@ fn bind_chromium_build_inputs() {
 
 fn bind_native_location_inputs() {
     for cfg in [
-        "native_compiler_gcc",
-        "native_compiler_msvc",
-        "native_compiler_other",
-        "native_location_raw_ptr_noop",
+        "compiler_gcc",
+        "compiler_msvc",
+        "compiler_other",
+        "location_raw_ptr_noop",
     ] {
         println!("cargo:rustc-check-cfg=cfg({cfg})");
     }
@@ -1271,12 +1266,12 @@ fn bind_native_location_inputs() {
         .expect("actual COMPILER_GCC/MSVC/other branch from native build_config.h required");
     match compiler.as_str() {
         "gcc" => {
-            assert!(bind_native_primitive_archive("LOCATION", "native_location_extract_linked", "skia_native_location"),
+            assert!(bind_native_primitive_archive("LOCATION", "location_extract_linked", "skia_native_location"),
                 "actual GCC-family Location requires its true extract-return-address helper archive");
-            println!("cargo:rustc-cfg=native_compiler_gcc");
+            println!("cargo:rustc-cfg=compiler_gcc");
         }
-        "msvc" => println!("cargo:rustc-cfg=native_compiler_msvc"),
-        "other" => println!("cargo:rustc-cfg=native_compiler_other"),
+        "msvc" => println!("cargo:rustc-cfg=compiler_msvc"),
+        "other" => println!("cargo:rustc-cfg=compiler_other"),
         _ => panic!("actual native Location compiler domain must be gcc, msvc or other"),
     }
     // This selection is an explicit native type/config assertion by the embedder.
@@ -1285,7 +1280,7 @@ fn bind_native_location_inputs() {
     let pointer = std::env::var("BASE_LOCATION_RAW_PTR_DOMAIN")
         .expect("actual raw_ptr backend/type domain required");
     match pointer.as_str() {
-        "noop" => println!("cargo:rustc-cfg=native_location_raw_ptr_noop"),
+        "noop" => println!("cargo:rustc-cfg=location_raw_ptr_noop"),
         "instrumented" | "zero_on_move" => {}
         _ => panic!("actual native raw_ptr domain must be explicit, never inferred from host"),
     }

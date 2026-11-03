@@ -86,10 +86,10 @@ unsafe fn JS_AddIntrinsicBasicObjects(ctx: *mut JSContext) -> i32 {
             JS_FreeValue(ctx, obj);
             return -1;
         }
-        (*ctx).native_error_proto[i] =
+        (*ctx).error_proto[i] =
             JS_GetProperty(ctx, func_obj, crate::quickjs_atom::JS_ATOM_prototype);
         JS_FreeValue(ctx, func_obj);
-        if JS_IsException((*ctx).native_error_proto[i]) != 0 {
+        if JS_IsException((*ctx).error_proto[i]) != 0 {
             JS_FreeValue(ctx, obj);
             return -1;
         }

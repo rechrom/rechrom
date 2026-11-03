@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../../layout_fragment/src/native_gap_geometry.rs"]
-mod layout_fragment_native_gap_geometry;
+#[path = "../../../../layout_fragment/src/gap_geometry.rs"]
+mod layout_fragment_gap_geometry;
 
-pub use layout_fragment_native_gap_geometry::*;
+pub use layout_fragment_gap_geometry::*;

@@ -21,6 +21,7 @@ use layoutng_style::style::computed_style::ComputedStyle;
 use crate::fragment_item::{FragmentItem, FragmentItemType};
 use crate::fragment_items::FragmentItems;
 use crate::inline_break_token::InlineBreakToken;
+use crate::inline_paint_context::InlinePaintContext;
 use crate::physical_box_fragment::PhysicalBoxFragment;
 
 // C++ defines these LayoutInline members in inline_cursor.cc. Rust cannot add
@@ -34,7 +35,12 @@ pub extern "Rust" fn LayoutInlineHasInlineFragments(inline: &LayoutInline) -> bo
 }
 
 #[allow(non_snake_case)]
-pub fn LayoutInlinePhysicalLinesBoundingBox(inline: &LayoutInline) -> PhysicalRect {
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutInlinePhysicalLinesBoundingBox(inline: &LayoutInline) -> PhysicalRect {
+    inline.CheckIsNotDestroyed();
+    if !inline.IsInLayoutNGInlineFormattingContext() {
+        return PhysicalRect::default();
+    }
     let mut cursor = InlineCursor::default();
     cursor.MoveToIncludingCulledInline(unsafe {
         &*(inline as *const LayoutInline as *const LayoutObject)
@@ -47,6 +53,94 @@ pub fn LayoutInlinePhysicalLinesBoundingBox(inline: &LayoutInline) -> PhysicalRe
     bounding_box
 }
 
+// cpp: core/layout/layout_text.cc:LayoutText::PhysicalLinesBoundingBox
+// Keep this on the fragment-tree side of the assembly boundary: the result is
+// read from the resident FragmentItems through InlineCursor, with no shadow
+// copy of text layout state.
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutTextPhysicalLinesBoundingBox(text: &LayoutText) -> PhysicalRect {
+    text.CheckIsNotDestroyed();
+    if !text.IsInLayoutNGInlineFormattingContext() {
+        return PhysicalRect::default();
+    }
+    let mut cursor = InlineCursor::default();
+    cursor.MoveToLayoutObject(unsafe { &*(text as *const LayoutText as *const LayoutObject) });
+    let mut bounding_box = PhysicalRect::default();
+    while cursor.IsNotNull() {
+        bounding_box.UniteIfNonZero(&cursor.Current().RectInContainerFragment());
+        cursor.MoveToNextForSameLayoutObject();
+    }
+    bounding_box
+}
+
+// cpp: core/layout/layout_inline.cc:727-744
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutInlineLinesVisualOverflowBoundingBox(
+    inline: &LayoutInline,
+) -> PhysicalRect {
+    inline.CheckIsNotDestroyed();
+    if !inline.IsInLayoutNGInlineFormattingContext() {
+        return PhysicalRect::default();
+    }
+    let mut result = PhysicalRect::default();
+    let mut cursor = InlineCursor::default();
+    cursor.MoveToIncludingCulledInline(unsafe {
+        &*(inline as *const LayoutInline as *const LayoutObject)
+    });
+    while cursor.IsNotNull() {
+        let mut child_rect = cursor.Current().InkOverflowRect();
+        child_rect.offset += cursor.Current().OffsetInContainerFragment();
+        result.Unite(&child_rect);
+        cursor.MoveToNextForSameLayoutObject();
+    }
+    result
+}
+
+// cpp: core/layout/layout_inline.cc:76-86
+fn IsInChildRubyText(start_object: &LayoutInline, target: *const LayoutObject) -> bool {
+    if target.is_null()
+        || !start_object.IsInlineRuby()
+        || std::ptr::eq(
+            start_object as *const LayoutInline as *const LayoutObject,
+            target,
+        )
+    {
+        return false;
+    }
+    let start = start_object as *const LayoutInline as *const LayoutObject;
+    let mut start_child = target;
+    while !start_child.is_null() && unsafe { &*start_child }.Parent() != start as *mut LayoutObject
+    {
+        start_child = unsafe { &*start_child }.Parent();
+    }
+    !start_child.is_null() && unsafe { &*start_child }.IsInlineRubyText()
+}
+
+// cpp: core/layout/layout_inline.cc:401-418
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutInlineCollectLineBoxRects(
+    inline: &LayoutInline,
+    collector: &mut dyn FnMut(&PhysicalRect),
+) {
+    inline.CheckIsNotDestroyed();
+    if !inline.IsInLayoutNGInlineFormattingContext() {
+        return;
+    }
+    let mut cursor = InlineCursor::default();
+    cursor.MoveToIncludingCulledInline(unsafe {
+        &*(inline as *const LayoutInline as *const LayoutObject)
+    });
+    while cursor.IsNotNull() {
+        if !IsInChildRubyText(inline, cursor.Current().GetLayoutObject()) {
+            collector(&cursor.CurrentRectInFirstContainerFragment());
+        }
+        cursor.MoveToNextForSameLayoutObject();
+    }
+}
+
 // cpp: layoutng_fragment_tree/inline_cursor.cc:46-50
 fn IsBidiControl(text: StringView) -> bool {
     if text.length() != 1 {
@@ -57,6 +151,51 @@ fn IsBidiControl(text: StringView) -> bool {
         || (0x200e..=0x200f).contains(&ch)
         || (0x202a..=0x202e).contains(&ch)
         || (0x2066..=0x2069).contains(&ch)
+}
+
+// cpp: core/layout/inline/inline_cursor.cc:39-55
+fn ExpandedSelectionRectForSoftLineBreakIfNeeded(
+    rect: LogicalRect,
+    cursor: &InlineCursor,
+    select_soft_line_break: bool,
+) -> LogicalRect {
+    if !select_soft_line_break {
+        return rect;
+    }
+    let layout_block_flow = cursor.GetLayoutBlockFlow();
+    if !layout_block_flow.is_null()
+        && unsafe { &*layout_block_flow }.ShouldTruncateOverflowingText()
+    {
+        return rect;
+    }
+    let mut rect = rect;
+    rect.size.inline_size +=
+        LayoutUnit::from_f32(unsafe { &*cursor.Current().Style().GetFont() }.SpaceWidth());
+    rect
+}
+
+// cpp: core/layout/inline/inline_cursor.cc:57-80
+fn ExpandSelectionRectToLineHeight(
+    rect: LogicalRect,
+    line_logical_rect: LogicalRect,
+) -> LogicalRect {
+    let selection_top = rect
+        .offset
+        .block_offset
+        .min(line_logical_rect.offset.block_offset);
+    let selection_bottom = rect
+        .BlockEndOffset()
+        .max(line_logical_rect.BlockEndOffset());
+    LogicalRect::from_units(
+        rect.offset.inline_offset,
+        selection_top,
+        rect.size.inline_size,
+        selection_bottom - selection_top,
+    )
+}
+
+fn IsLastBRInPage(layout_object: &LayoutObject) -> bool {
+    layout_object.IsBR() && layout_object.NextInPreOrderDefault().is_null()
 }
 
 // C++ retains both an item pointer and its iterator. The index is the Rust
@@ -361,6 +500,22 @@ impl InlineCursorPosition {
 
     pub fn ObjectBoundingBox(&self, cursor: &InlineCursor) -> gfx::RectF {
         self.item().ObjectBoundingBox(cursor.Items())
+    }
+
+    // Source: core/layout/inline/inline_cursor.cc:493-501.
+    pub fn RecalcInkOverflow(
+        &self,
+        cursor: &InlineCursor,
+        inline_context: &mut InlinePaintContext,
+    ) {
+        debug_assert!(self.IsNotNull());
+        debug_assert_eq!(self.Item(), cursor.Current().Item());
+        let mut self_and_contents_rect = PhysicalRect::default();
+        self.item().GetMutableForPainting().RecalcInkOverflow(
+            cursor,
+            inline_context,
+            &mut self_and_contents_rect,
+        );
     }
 
     pub fn Text(&self, cursor: &InlineCursor) -> StringView {
@@ -749,6 +904,69 @@ impl InlineCursor {
         debug_assert!(self.Current().IsText());
         let item = unsafe { &*self.CurrentItem() };
         item.LocalTextRect(item.Text(self.Items()), start_offset, end_offset)
+    }
+
+    // cpp: core/layout/inline/inline_cursor.cc:521-546
+    pub fn CurrentLocalSelectionRectForText(
+        &self,
+        start_offset: u32,
+        end_offset: u32,
+        select_soft_line_break: bool,
+    ) -> PhysicalRect {
+        debug_assert!(self.Current().IsText());
+        let selection_rect = self.CurrentLocalRect(start_offset, end_offset);
+        let mut logical_rect = self.Current().ConvertChildToLogical(selection_rect);
+        let item = unsafe { &*self.CurrentItem() };
+        if item.IsSvgText() {
+            return self.Current().ConvertChildToPhysical(logical_rect);
+        }
+        if start_offset != end_offset
+            && self.Current().IsLineBreak()
+            && !IsLastBRInPage(unsafe { &*self.Current().GetLayoutObject() })
+        {
+            logical_rect.size.inline_size =
+                LayoutUnit::from_f32(item.ScaledFont().SpaceWidth() * item.GetTextFitScale());
+        }
+        let line_break_extended_rect = if self.Current().IsLineBreak() {
+            logical_rect
+        } else {
+            ExpandedSelectionRectForSoftLineBreakIfNeeded(
+                logical_rect,
+                self,
+                select_soft_line_break,
+            )
+        };
+        let mut line = self.clone();
+        line.MoveToContainingLine();
+        let line_physical_rect = PhysicalRect::new(
+            line.Current().OffsetInContainerFragment() - self.Current().OffsetInContainerFragment(),
+            line.Current().Size(),
+        );
+        let line_logical_rect = self.Current().ConvertChildToLogical(line_physical_rect);
+        self.Current()
+            .ConvertChildToPhysical(ExpandSelectionRectToLineHeight(
+                line_break_extended_rect,
+                line_logical_rect,
+            ))
+    }
+
+    // cpp: core/layout/inline/inline_cursor.cc:549-557
+    pub fn CurrentLocalSelectionRectForReplaced(&self) -> PhysicalRect {
+        debug_assert!(unsafe { &*self.Current().GetLayoutObject() }.IsLayoutReplaced());
+        let selection_rect = PhysicalRect::new(PhysicalOffset::default(), self.Current().Size());
+        let logical_rect = self.Current().ConvertChildToLogical(selection_rect);
+        let mut line = self.clone();
+        line.MoveToContainingLine();
+        let line_physical_rect = PhysicalRect::new(
+            line.Current().OffsetInContainerFragment() - self.Current().OffsetInContainerFragment(),
+            line.Current().Size(),
+        );
+        let line_logical_rect = self.Current().ConvertChildToLogical(line_physical_rect);
+        self.Current()
+            .ConvertChildToPhysical(ExpandSelectionRectToLineHeight(
+                logical_rect,
+                line_logical_rect,
+            ))
     }
 
     // cpp: layoutng_fragment_tree/inline_cursor.cc:431-441

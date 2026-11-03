@@ -3,7 +3,7 @@
 use super::emoji_presentation_scanner::scan_emoji_presentation;
 use super::font_fallback_priority::FontFallbackPriority;
 use super::utf16_ragel_iterator::UTF16RagelIterator;
-use crate::text::native::character::Character;
+use crate::text::implementation::character::Character;
 
 // The C++ span remains borrowed; the source-deleted copy constructor is not
 // exposed as Clone. Offsets continue to count UTF-16 code units.

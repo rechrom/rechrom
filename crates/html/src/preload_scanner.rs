@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn split_decoded_segments_preserve_native_entities_attributes_and_offsets() {
+    fn split_decoded_segments_preserve_source_entities_attributes_and_offsets() {
         let source = "😀<img SRC='你好&amp;.png' src=duplicate><link rel=stylesheet href=a><script src=b>let x='<img src=false>';</script><img src=tail>";
         let expected = scan(source, true);
         assert_eq!(src(&expected.candidates[0]), Some("你好&.png"));

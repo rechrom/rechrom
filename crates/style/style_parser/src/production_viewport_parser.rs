@@ -1,12 +1,10 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Typed legacy clip, zoom and page/locale consumers from Blink longhands.
-// Selected Chromium source audit: effective 561, mapped 454, omitted 22,
-// remaining 85. Parser 275/256/8/11; Apply/converter 188/170/11/7;
-// native/assembly 37/28/2/7; missing page owner 61/0/1/60.
-// Includes genuine shared consumers/native methods reused by this cluster.
+//! Typed legacy clip, zoom, page/locale and object-view-box consumers from
+//! Blink longhands. Includes genuine shared consumers and computed style methods reused
+//! by this cluster.
 // Effective lines exclude blank/comments/preprocessor/namespace/using/
 // visibility/brace-only lines. Nested CSSMath and conversion services,
-// generated native fields, CSSQuadValue implementation, font update backend,
+// generated computed style fields, CSSQuadValue implementation, font update backend,
 // CSSParserImpl @page entry and page-margin/pagination owners are outside
 // this selected scope; their dependencies remain explicit in both ledgers.
 // Partial branches do not count as complete properties.
@@ -15,9 +13,10 @@
 // Parser css/properties/longhands/longhands_custom.cc:
 //   2201-2210,2214-2254,7274-7293,8040-8048,9327-9333,9368-9411,
 //   11344-11352,12722-12750; css/properties/css_parsing_utils.cc:
-//   1262-1284,1286-1292,1294-1392,1394-1418,1757-1772,1803-1809.
-// Parser remaining: custom 7281-7289 (shape owner); utils 1760-1763
-// (CSSIdentFunction test runtime flag, stable disabled). Omitted custom
+//   595-706,1262-1284,1286-1292,1294-1392,1394-1418,1757-1772,
+//   1803-1809.
+// Parser remaining: utils 1760-1763 (CSSIdentFunction test runtime flag,
+// stable disabled). Omitted custom
 // 12740-12748 (usage counter) and utils 1399 (DCHECK).
 //
 // Apply out/Min/gen/.../core/css/properties/longhands.cc:
@@ -26,23 +25,23 @@
 //   12761-12763,12765-12767,12769-12773;
 // css/resolver/style_builder_converter.cc:
 //   342-350,2063-2067,2087-2109,2111-2120,3501-3509,3761-3769.
-// Apply remaining: generated 5899-5903,11742-11746 (stable enabled
-// StandardizedBrowserZoom parent reconversion); converter 3508 (shape).
+// Apply remaining: generated 5899-5903 (stable-enabled standardized browser
+// zoom parent reconversion belongs to a backend that enables that feature).
 // Omitted: custom 9364,9442-9445,9453,11369; converter 2089,2108,
 // 3766-3767 (DCHECK/NOTREACHED).
 //
-// Native/assembly css/resolver/style_resolver_state.cc:325-339;
+// Canonical/assembly css/resolver/style_resolver_state.cc:325-339;
 // css/resolver/font_builder.cc:43-45,149-153;
-// style/computed_style.cc:3102-3111; style/computed_style.h:3104-3111;
+// style/computed style.cc:3102-3111; style/computed style.h:3104-3111;
 // platform/text/layout_locale.cc:277-291.
 // Production remaining: state 336-338, font_builder 43-44,150 (the generic
 // translation exists, but production has no dirty/update-font owner);
-// locale 280,287 (existing native ICU script/per-thread cache owner partial).
+// locale 280,287 (existing computed style ICU script/per-thread cache owner partial).
 // Omitted state 332-334 usage counter. Page owner:
 // css/resolver/style_resolver.cc:2182-2270 entirely remaining except
 // omitted DCHECK 2191. @page must remain typed Unsupported at document entry;
-// direct Size native application is tested without constructing fake page rules.
-// Page's source/native field is AtomicString, not ScopedCSSName.
+// direct Size computed style application is tested without constructing fake page rules.
+// Page's source/computed style field is AtomicString, not ScopedCSSName.
 #![allow(non_snake_case)]
 use super::*;
 
@@ -186,22 +185,19 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
                 stream.ConsumeIncludingWhitespace().Value().ToString(),
             ))
         }
-        // longhands_custom.cc:7274-7293. Only native none can be assembled:
-        // the actual inset/rect/xywh BasicShape/Path owners remain absent.
+        // longhands_custom.cc:7274-7293. Object-view-box accepts only the
+        // rectangular basic shapes; path/shape and non-rectangular functions
+        // remain invalid exactly as in Chromium.
         kObjectViewBox => {
             if stream.Peek().Id() == CSSValueID::kNone {
                 return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
             }
-            if matches!(
-                stream.Peek().FunctionId(),
-                Some(CSSValueID::kInset | CSSValueID::kRect | CSSValueID::kXywh)
-            ) {
-                return Err(unsupported(
-                    id,
-                    "ObjectViewBox BasicShapeInset/Rect/XYWH Path owner",
-                ));
+            match stream.Peek().FunctionId() {
+                Some(CSSValueID::kInset) => super::effects_parser::Inset(id, stream, mode),
+                Some(CSSValueID::kRect) => super::effects_parser::Rect(id, stream, mode),
+                Some(CSSValueID::kXywh) => super::effects_parser::Xywh(id, stream, mode),
+                _ => Err(invalid(id)),
             }
-            Err(invalid(id))
         }
         _ => Err(invalid(id)),
     }

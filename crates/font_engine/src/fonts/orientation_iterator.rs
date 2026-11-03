@@ -3,7 +3,7 @@
 use super::font_orientation::FontOrientation;
 use super::orientation_iterator_types::RenderOrientation;
 use super::utf16_text_iterator::UTF16TextIterator;
-use crate::text::native::character::Character;
+use crate::text::implementation::character::Character;
 
 // C++ stack-only iterator owns a UTF-16 span and cannot be copied. A Rust
 // borrowed slice preserves that lifetime and this type intentionally has no

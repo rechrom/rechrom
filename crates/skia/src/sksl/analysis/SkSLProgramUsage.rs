@@ -1,7 +1,7 @@
 use crate::src::{
     core::{
         SkChecksum::Hash32,
-        SkTHash::{NativeHash, THashMap},
+        SkTHash::{HashPolicy, THashMap},
     },
     sksl::ir::{SkSLSymbol::SymbolData, SkSLVariable::VariableData},
 };
@@ -17,7 +17,7 @@ pub struct VariableCounts {
 // Native pointer hash: only thin object identity bytes, never Rust trait metadata.
 #[derive(Default)]
 pub struct ObjectHash;
-impl<T> NativeHash<NonNull<T>> for ObjectHash {
+impl<T> HashPolicy<NonNull<T>> for ObjectHash {
     fn hash(&self, p: &NonNull<T>) -> u32 {
         if size_of::<usize>() == 4 {
             crate::src::core::SkChecksum::Mix(p.as_ptr() as usize as u32)
@@ -80,7 +80,7 @@ impl TypeKey {
         }
     }
 }
-impl<T: ?Sized> NativeHash<ObjectKey<T>> for ObjectHash {
+impl<T: ?Sized> HashPolicy<ObjectKey<T>> for ObjectHash {
     fn hash(&self, key: &ObjectKey<T>) -> u32 {
         let address = key.as_ptr() as *mut () as usize;
         if size_of::<usize>() == 4 {

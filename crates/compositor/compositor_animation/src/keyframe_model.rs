@@ -24,7 +24,7 @@ pub enum NativePropertyType {
 pub struct TargetPropertyId {
     target_property_type_: i32,
     custom_property_name_: String,
-    native_property_type_: NativePropertyType,
+    property_type_: NativePropertyType,
 }
 impl TargetPropertyId {
     // Source: cc/animation/keyframe_model.cc:44-63
@@ -32,21 +32,21 @@ impl TargetPropertyId {
         Self {
             target_property_type_: target_property_type,
             custom_property_name_: String::new(),
-            native_property_type_: NativePropertyType::kInvalid,
+            property_type_: NativePropertyType::kInvalid,
         }
     }
     pub fn Custom(target_property_type: i32, name: &str) -> Self {
         Self {
             target_property_type_: target_property_type,
             custom_property_name_: name.to_string(),
-            native_property_type_: NativePropertyType::kInvalid,
+            property_type_: NativePropertyType::kInvalid,
         }
     }
-    pub fn Native(target_property_type: i32, kind: NativePropertyType) -> Self {
+    pub fn FromPropertyType(target_property_type: i32, kind: NativePropertyType) -> Self {
         Self {
             target_property_type_: target_property_type,
             custom_property_name_: String::new(),
-            native_property_type_: kind,
+            property_type_: kind,
         }
     }
     // Source: cc/animation/keyframe_model.h:56-63
@@ -57,7 +57,7 @@ impl TargetPropertyId {
         &self.custom_property_name_
     }
     pub fn native_property_type(&self) -> NativePropertyType {
-        self.native_property_type_
+        self.property_type_
     }
 }
 pub trait KeyframeCurve: gfx::AnimationCurve + AnimationEventCurve {

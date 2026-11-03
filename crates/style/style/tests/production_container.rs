@@ -12,8 +12,12 @@ fn media() -> MediaValuesCachedData {
         media_type: foundation::String::from("screen"),
         viewport_width: 800.0,
         viewport_height: 600.0,
+        small_viewport_width: 800.0,
+        small_viewport_height: 600.0,
         large_viewport_width: 800.0,
         large_viewport_height: 600.0,
+        dynamic_viewport_width: 800.0,
+        dynamic_viewport_height: 600.0,
         ..Default::default()
     }
 }
@@ -29,7 +33,7 @@ fn width(owner: &dom::DOM, node: usize) -> f64 {
             .GetDocument()
             .ResolvedStyleFor(node)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -62,6 +66,40 @@ fn state(width: f64) -> ContainerState {
     }
 }
 #[test]
+fn container_relative_units_use_nearest_axis_and_small_viewport_fallback() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML("<div id=outer><span id=target></span></div>");
+    owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(
+        "#outer{container-type:inline-size}#target{width:calc(100cqw - 20px);height:50cqh}",
+    ));
+    let outer = node(&owner, "outer");
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine
+        .SetContainerState(&mut owner, outer, Some(state(400.0)))
+        .unwrap();
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let document = owner.GetDocument();
+    let computed = unsafe {
+        &*document
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
+    assert_eq!(computed.Width().Pixels(), 380.0);
+    // An inline-size container only supplies its physical width. As in Blink,
+    // a missing physical axis falls back independently to the small viewport.
+    assert_eq!(computed.Height().Pixels(), 300.0);
+    assert!(computed.HasContainerRelativeValue());
+    assert!(computed.DependsOnSizeContainerQueries());
+}
+#[test]
 fn computed_ancestor_style_queries_match_and_invalidate_without_layout() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=outer style='--tone:blue;--gap:20px'><div id=inner><span id=target></span></div></div>");
@@ -91,7 +129,7 @@ fn computed_ancestor_style_queries_match_and_invalidate_without_layout() {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Height()
@@ -113,7 +151,7 @@ fn computed_ancestor_style_queries_match_and_invalidate_without_layout() {
             .GetDocument()
             .ResolvedStyleFor(target)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Height()
@@ -175,7 +213,7 @@ fn scroll_state_snapshots_and_computed_font_units_use_the_selected_owner() {
                 .GetDocument()
                 .ResolvedStyleFor(target)
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Height()
@@ -188,13 +226,19 @@ fn scroll_state_snapshots_and_computed_font_units_use_the_selected_owner() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(width(&owner, target), 1.0);
     let document = owner.GetDocument();
-    let native = unsafe { &*document.ResolvedStyleFor(outer).unwrap().native_style.Get() };
+    let computed_style = unsafe {
+        &*document
+            .ResolvedStyleFor(outer)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
     let values =
         style::media_queries::production_container_query::DocumentMediaValues::ForContainer(
             document,
             outer,
             &media(),
-            native,
+            computed_style,
             None,
         );
     assert_eq!(values.ContainerElement(), Some(outer));

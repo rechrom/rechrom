@@ -1,7 +1,7 @@
 use super::{SkSLIRNode::IRNodeBox, SkSLSymbol::Symbol, SkSLType::TypeData};
 use crate::src::core::{
     SkChecksum::Hash32,
-    SkTHash::{NativeHash, THashMap},
+    SkTHash::{HashPolicy, THashMap},
 };
 use crate::src::sksl::SkSLErrorReporter::ErrorReporterExt;
 use core::{mem::ManuallyDrop, ptr::NonNull};
@@ -122,7 +122,7 @@ impl PartialEq for SymbolKey {
 // Source: src/sksl/ir/SkSLSymbolTable.h:212-214
 #[derive(Default)]
 struct Hash;
-impl NativeHash<SymbolKey> for Hash {
+impl HashPolicy<SymbolKey> for Hash {
     fn hash(&self, key: &SymbolKey) -> u32 {
         key.fHash
     }

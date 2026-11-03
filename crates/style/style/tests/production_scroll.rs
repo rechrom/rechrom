@@ -8,7 +8,7 @@ use style::{
     },
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let document = owner.GetDocument();
     let index = (0..document.NodeCount())
         .find(|&i| {
@@ -18,7 +18,13 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*document.ResolvedStyleFor(index).unwrap().native_style.Get() }
+    unsafe {
+        &*document
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn update(owner: &mut dom::DOM) {
     let mut engine = StyleEngine::new(owner);
@@ -41,16 +47,16 @@ fn parse(id: P, text: &str) -> Vec<style::production_css_value::PropertyValue> {
     .unwrap()
 }
 #[test]
-fn scrollbar_overscroll_and_snap_reach_native_fields_with_css_wide_values() {
+fn scrollbar_overscroll_and_snap_reach_computed_style_fields_with_css_wide_values() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='scrollbar-color:currentColor rgb(255,0,0);scrollbar-gutter:both-edges stable;overscroll-behavior:contain none;scroll-snap-align:start end;scroll-snap-type:inline mandatory'><div id=c style='scrollbar-color:inherit;scrollbar-gutter:inherit;overscroll-behavior:inherit;scroll-snap-align:inherit;scroll-snap-type:inherit'></div><div id=i style='scrollbar-color:initial;scrollbar-gutter:initial;overscroll-behavior:initial;scroll-snap-align:initial;scroll-snap-type:initial'></div><div id=u style='scrollbar-color:unset;scrollbar-gutter:unset;overscroll-behavior:unset;scroll-snap-align:unset;scroll-snap-type:unset'></div><div id=a style='scrollbar-color:auto;scrollbar-gutter:auto;scroll-snap-type:y proximity;scroll-snap-align:center center;overscroll-behavior:chain'></div></div>");
     update(&mut owner);
     let (p, c, i, u, a) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "u"),
-        native(&owner, "a"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "a"),
     );
     let colors = unsafe { &*p.ScrollbarColor() };
     assert!(colors.GetThumbColor().IsCurrentColor());
@@ -103,7 +109,7 @@ fn logical_scroll_side_shorthands_map_by_final_writing_direction() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='direction:rtl;writing-mode:vertical-rl;scroll-margin-block:calc(3px + 2px) -7px;scroll-margin-inline:11px 13px;scroll-padding-block:10% 20px;scroll-padding-inline:auto calc(6px + 4px)'><div id=c style='scroll-margin-block:inherit;scroll-margin-inline:inherit;scroll-padding-block:inherit;scroll-padding-inline:inherit'></div><div id=i style='scroll-margin-block:initial;scroll-margin-inline:initial;scroll-padding-block:initial;scroll-padding-inline:initial'></div></div><div id=h style='direction:rtl;scroll-margin-inline:2px;scroll-padding-inline:4% 8%;scroll-margin-block:3px 9px'></div>");
     update(&mut owner);
-    for s in [native(&owner, "p"), native(&owner, "c")] {
+    for s in [computed_style(&owner, "p"), computed_style(&owner, "c")] {
         assert_eq!(
             (
                 s.ScrollMarginRight(),
@@ -118,7 +124,7 @@ fn logical_scroll_side_shorthands_map_by_final_writing_direction() {
         assert!(s.ScrollPaddingBottom().IsAuto());
         assert_eq!(s.ScrollPaddingTop().Pixels(), 10.0);
     }
-    let i = native(&owner, "i");
+    let i = computed_style(&owner, "i");
     assert_eq!(
         (
             i.ScrollMarginRight(),
@@ -134,7 +140,7 @@ fn logical_scroll_side_shorthands_map_by_final_writing_direction() {
             && i.ScrollPaddingBottom().IsAuto()
             && i.ScrollPaddingTop().IsAuto()
     );
-    let h = native(&owner, "h");
+    let h = computed_style(&owner, "h");
     assert_eq!(
         (
             h.ScrollMarginRight(),

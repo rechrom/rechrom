@@ -12,7 +12,130 @@ use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_engine::LayoutEngine;
 use layoutng_assembly::layout_engine::{LayoutMutation, LayoutTreeUpdate};
 use layoutng_style::style::appearance::AppearanceValue;
+use layoutng_style::style::computed_style::{
+    ComputedStyle as StyleComputedStyle, ComputedStyleBuilder,
+};
 use std::collections::HashSet;
+
+fn CanonicalIsBlockContainer(display: foundation::EDisplay) -> bool {
+    matches!(
+        display,
+        foundation::EDisplay::kBlock
+            | foundation::EDisplay::kFlowRoot
+            | foundation::EDisplay::kListItem
+            | foundation::EDisplay::kInlineListItem
+            | foundation::EDisplay::kFlowRootListItem
+            | foundation::EDisplay::kInlineFlowRootListItem
+            | foundation::EDisplay::kTableCell
+            | foundation::EDisplay::kTableCaption
+    )
+}
+
+// cpp: html_parser_idioms.cc:243-251,290-320.
+fn ParseHTMLListOfFloatingPointNumbers(input: &str) -> Vec<f64> {
+    let is_delimiter = |byte: u8| matches!(byte, b'\t' | b'\n' | 0x0c | b'\r' | b' ' | b',' | b';');
+    let is_number_start = |byte: u8| byte.is_ascii_digit() || matches!(byte, b'.' | b'-');
+    let bytes = input.as_bytes();
+    let mut cursor = 0;
+    let mut numbers = Vec::new();
+    while cursor < bytes.len() {
+        while cursor < bytes.len() && is_delimiter(bytes[cursor]) {
+            cursor += 1;
+        }
+        if cursor == bytes.len() {
+            break;
+        }
+        while cursor < bytes.len()
+            && !is_delimiter(bytes[cursor])
+            && !is_number_start(bytes[cursor])
+        {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < bytes.len() && !is_delimiter(bytes[cursor]) {
+            cursor += 1;
+        }
+        let value = input
+            .get(start..cursor)
+            .and_then(parse_c_double_prefix)
+            .map(|(value, _)| value)
+            .filter(|value| value.is_finite())
+            .unwrap_or(0.0);
+        numbers.push(if value == 0.0 { 0.0 } else { value });
+    }
+    numbers
+}
+
+fn ResolveImageMapAreaGeometry(
+    document: &crate::Document,
+    area: usize,
+) -> Option<(ImageMapAreaShape, Vec<f64>)> {
+    let node = document.Node(area);
+    if !node.IsElement("area", DOMNamespace::kHTML) {
+        return None;
+    }
+    let shape = match lower_ascii(attribute(node, "shape").unwrap_or("rect")).as_str() {
+        "default" => ImageMapAreaShape::kDefault,
+        "circle" | "circ" => ImageMapAreaShape::kCircle,
+        "polygon" | "poly" => ImageMapAreaShape::kPoly,
+        _ => ImageMapAreaShape::kRect,
+    };
+    let coordinates = attribute(node, "coords")
+        .map(ParseHTMLListOfFloatingPointNumbers)
+        .unwrap_or_default();
+    Some((shape, coordinates))
+}
+
+impl crate::persistent_document::PersistentDocument {
+    /// Source: core/layout/layout_image.cc:316-323. Non-default area shapes
+    /// with insufficient coordinates cannot produce a Path and therefore do
+    /// not invalidate their associated LayoutImage merely because focus moved.
+    pub fn ImageMapAreaHasPotentialPath(&self, area_id: u64) -> bool {
+        let Some(area) = self.FindNodeById(area_id) else {
+            return false;
+        };
+        let Some((shape, coordinates)) = ResolveImageMapAreaGeometry(self, area) else {
+            return false;
+        };
+        match shape {
+            ImageMapAreaShape::kDefault => true,
+            ImageMapAreaShape::kRect => coordinates.len() >= 4,
+            ImageMapAreaShape::kCircle => coordinates.len() >= 3 && coordinates[2] > 0.0,
+            ImageMapAreaShape::kPoly => coordinates.len() >= 6,
+        }
+    }
+}
+
+fn ResolveFocusedImageMapArea(
+    document: &crate::Document,
+    image: usize,
+    interaction_state: &UserInteractionState,
+) -> Option<FocusedImageMapArea> {
+    let area_id = interaction_state.focused_node_id?;
+    if !document.ImageMapAreaHasPotentialPath(area_id) {
+        return None;
+    }
+    if document.ImageMapImageForAreaId(area_id) != Some(document.Node(image).Id()) {
+        return None;
+    }
+    let area = document.FindNodeById(area_id)?;
+    let resolved = document.ResolvedStyleFor(area)?;
+    let source = unsafe { resolved.computed_style_owner.Get().as_ref() }?;
+    let (shape, coordinates) = ResolveImageMapAreaGeometry(document, area)?;
+    Some(
+        layoutng_assembly::internal::layout_input::FocusedImageMapArea {
+            shape,
+            coordinates,
+            has_outline: source.HasOutline(),
+            outline_style_is_auto: source.OutlineStyleIsAuto(),
+            outline_color: layoutng_assembly::internal::boundary::paint_style_export::StyleColor(
+                source,
+                source.OutlineColor(),
+            ),
+            effective_zoom: source.EffectiveZoom(),
+        },
+    )
+}
 
 // cpp: dom_to_layout/layout_object_tree_builder.cc:376-631
 pub(super) fn ElementMetadata(
@@ -25,8 +148,27 @@ pub(super) fn ElementMetadata(
     let mut data = ElementData::default();
     // cpp: dom_to_layout/layout_object_tree_builder.cc:411-426
     data.nowrap_attribute = attribute(node, "nowrap").is_some();
+    data.html_anchor = node.Name() == "a";
+    data.html_canvas = node.Name() == "canvas";
+    data.canvas_layout_subtree = data.html_canvas && attribute(node, "layoutsubtree").is_some();
+    data.drawable_attribute = attribute(node, "drawable").is_some();
     data.html_image = node.Name() == "img";
+    data.image_map_area = node.Name() == "area";
     data.html_ordered_or_unordered_list = node.Name() == "ol" || node.Name() == "ul";
+    // cpp: core/dom/element.cc:13896-13910
+    data.replaced_respects_css_overflow = (node.Namespace() == DOMNamespace::kHTML
+        && matches!(
+            node.Name(),
+            "img" | "canvas" | "video" | "frame" | "iframe" | "fencedframe" | "embed" | "object"
+        ))
+        || (node.Namespace() == DOMNamespace::kSVG
+            && node.Name() == "svg"
+            && document.CorrespondingSVGElement(index).is_none()
+            && node.Parent().is_some_and(|parent| {
+                let parent = document.Node(parent);
+                parent.Type() != DOMNodeType::kDocument
+                    && svg_has_outermost_parent(Some((parent.Namespace(), parent.Name())))
+            }));
     if node.Name() == "html" {
         data.viewport_defining = true;
         data.document_role = DocumentRole::kDocumentElement;
@@ -34,6 +176,15 @@ pub(super) fn ElementMetadata(
         data.document_role = DocumentRole::kBody;
     }
     if node.Name() == "img" {
+        // ImageElementBase::setDecodingMode: invalid/missing values retain the
+        // unspecified preference.
+        data.image_decoding_mode = match attribute(node, "decoding").map(lower_ascii).as_deref() {
+            Some("sync") => image_resource::ImageDecodingMode::kSync,
+            Some("async") => image_resource::ImageDecodingMode::kAsync,
+            _ => image_resource::ImageDecodingMode::kUnspecified,
+        };
+        data.focused_image_map_area =
+            ResolveFocusedImageMapArea(document, index, interaction_state);
         let width = attribute_number(node, "width", -1.0);
         let height = attribute_number(node, "height", -1.0);
         if width >= 0.0 {
@@ -47,25 +198,35 @@ pub(super) fn ElementMetadata(
         }
         // cpp: dom_to_layout/layout_object_tree_builder.cc:427-435
         if let Some(source) = document.CurrentImageSource(index) {
+            data.image_resource_error = document.ImageResourceFailedFor(source);
             if let Some(image) = document.ImageResourceFor(source) {
+                data.image_resource_is_loaded = true;
+                data.image_resource_known_to_be_opaque = image.known_to_be_opaque;
+                data.image_resource_maybe_animated = document.ImageResourceMaybeAnimated(image.id);
                 let candidate_density = document
                     .ResponsiveImageSelectionFor(index)
                     .and_then(|selection| selection.density);
                 let (image_width, image_height) =
                     image.NaturalSizeForCandidate(respect_image_orientation, candidate_density);
-                if data.natural_width.is_none() {
-                    data.natural_width = Some(image_width);
-                }
-                if data.natural_height.is_none() {
-                    data.natural_height = Some(image_height);
-                }
-                if data.natural_aspect_ratio.is_none() && image_height > 0.0 {
-                    data.natural_aspect_ratio = Some(image_width / image_height);
-                }
-                // Match HTMLImageElement::image_device_pixel_ratio_: this is
-                // inverse candidate density, not the resource resolution.
-                data.image_device_pixel_ratio =
-                    1.0 / candidate_density.unwrap_or(image.resolution_scale);
+                // LayoutImage::UpdateNaturalSizeIfNeeded takes natural sizing
+                // exclusively from ImageResource once decoded.  HTML width /
+                // height attributes are presentational sizing inputs, not a
+                // replacement for the resource's intrinsic aspect ratio.
+                // Retaining their square ratio here makes object-fit:contain
+                // incorrectly behave like fill for a non-square image.
+                data.natural_width = Some(image_width);
+                data.natural_height = Some(image_height);
+                data.natural_aspect_ratio =
+                    (image_height > 0.0).then_some(image_width / image_height);
+                // cpp: core/layout/layout_image.cc:177-185. Match
+                // HTMLImageElement::image_device_pixel_ratio_: this is
+                // inverse selected density unless the response's Content-DPR
+                // header overrides srcset and every other DPR source.
+                data.image_device_pixel_ratio = 1.0
+                    / document
+                        .ImageResourceContentDPR(image.id)
+                        .or(candidate_density)
+                        .unwrap_or(image.resolution_scale);
             }
         }
     }
@@ -87,7 +248,6 @@ pub(super) fn ElementMetadata(
             data.svg_use = Some(match document.SVGUseInstanceStatus(index) {
                 Some(Status::UnsupportedReference) => SvgUseData::UnsupportedReference,
                 Some(Status::UnsupportedViewport) => SvgUseData::UnsupportedViewport,
-                Some(Status::UnsupportedImage) => SvgUseData::UnsupportedImage,
                 Some(Status::UnsupportedSwitch) => SvgUseData::UnsupportedSwitch,
                 Some(_) => SvgUseData::Local,
                 None => SvgUseData::UnbuiltInstance,
@@ -164,10 +324,12 @@ pub(super) fn ElementMetadata(
                     view_box.view_transform = Some(matrix);
                 }
             }
-            if !svg_has_outermost_parent(node.Parent().map(|parent| {
-                let parent = document.Node(parent);
-                (parent.Namespace(), parent.Name())
-            })) {
+            if document.CorrespondingSVGElement(index).is_some()
+                || !svg_has_outermost_parent(node.Parent().map(|parent| {
+                    let parent = document.Node(parent);
+                    (parent.Namespace(), parent.Name())
+                }))
+            {
                 element_metadata_svg_viewport(node, &mut data);
             }
         }
@@ -364,12 +526,15 @@ fn ElementKind(
     index: usize,
     element: &ElementData,
     style: &ComputedStyle,
+    source: Option<&StyleComputedStyle>,
 ) -> NodeKind {
     let node = document.Node(index);
     match node.Namespace() {
         DOMNamespace::kSVG => match node.Name() {
             "svg" => {
-                if svg_has_outermost_parent(node.Parent().map(|parent| {
+                if document.CorrespondingSVGElement(index).is_some() {
+                    NodeKind::kSvgViewportContainer
+                } else if svg_has_outermost_parent(node.Parent().map(|parent| {
                     let parent = document.Node(parent);
                     (parent.Namespace(), parent.Name())
                 })) {
@@ -381,9 +546,7 @@ fn ElementKind(
             "foreignObject" => NodeKind::kSvgForeignObject,
             // SVGGElement::CreateLayoutObject preserves resources below a
             // display:none group through LayoutSVGHiddenContainer.
-            "g" if unsafe { style.native_style.as_ref() }
-                .is_some_and(|style| style.Display() == foundation::EDisplay::kNone) =>
-            {
+            "g" if source.is_some_and(|style| style.Display() == foundation::EDisplay::kNone) => {
                 NodeKind::kSvgHiddenContainer
             }
             "defs" => NodeKind::kSvgHiddenContainer,
@@ -414,7 +577,7 @@ fn ElementKind(
             _ if element.svg_shape.is_some() => NodeKind::kSvgShape,
             _ => NodeKind::kSvgGroup,
         },
-        DOMNamespace::kHTML => element_kind_html(node, element, style),
+        DOMNamespace::kHTML => element_kind_html(node, element, style, source),
         DOMNamespace::kMathML => element_kind_mathml(node),
         DOMNamespace::kNone => NodeKind::kBox,
     }
@@ -480,15 +643,17 @@ fn SelectDisplayedText(document: &Document, index: usize) -> String {
         })
 }
 // cpp: dom_to_layout/layout_object_tree_builder.cc:806-851
-fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyle) -> String {
-    let defaults = ExtendedStyle::default();
-    let extra = style.extended.as_deref().unwrap_or(&defaults);
-    match extra.list_style_type {
-        ListStyleType::kNone => return String::new(),
-        ListStyleType::kCircle => return "○ ".into(),
-        ListStyleType::kSquare => return "■ ".into(),
-        ListStyleType::kDisc => return "• ".into(),
-        ListStyleType::kDecimal | ListStyleType::kLowerAlpha => {}
+fn DefaultListMarkerText(document: &Document, index: usize, style: &StyleComputedStyle) -> String {
+    let style_name = unsafe { style.ListStyleType().Get().as_ref() }
+        .filter(|style| style.IsCounterStyle())
+        .map(|style| style.GetCounterStyleName().Utf8())
+        .unwrap_or_else(|| "none".into());
+    match style_name.as_str() {
+        "none" => return String::new(),
+        "circle" => return "○ ".into(),
+        "square" => return "■ ".into(),
+        "disc" => return "• ".into(),
+        _ => {}
     }
     let Some(parent) = document
         .Node(index)
@@ -519,7 +684,7 @@ fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyl
             value = explicit;
         }
         if child == index {
-            if extra.list_style_type == ListStyleType::kLowerAlpha {
+            if matches!(style_name.as_str(), "lower-alpha" | "lower-latin") {
                 let mut marker = String::new();
                 let mut current = value;
                 while current > 0 {
@@ -538,10 +703,10 @@ fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyl
     format!("{value}. ")
 }
 // Author shadow attachment consumes DOM's single active flat-tree view. UA
-// controls still have specialized owners below (native file nodes, synthesized
+// controls still have specialized owners below (source file nodes, synthesized
 // editor/slider/menu, and host-painted meter/progress). Preserve that existing
-// projection until each adapter migrates together with its native shadow tree;
-// entering a control UA root here would duplicate content or native theme painting.
+// projection until each adapter migrates together with its source shadow tree;
+// entering a control UA root here would duplicate content or source theme painting.
 // SVGUseElement owns real SVG descendants and uses ordinary flat-tree attachment.
 pub(super) fn AttachmentChildren(
     document: &Document,
@@ -596,18 +761,23 @@ fn SuppressesCollapsibleWhitespaceChildren(
         if document.Node(i).Type() == DOMNodeType::kElement {
             if let Some(resolved) = document.ResolvedStyleFor(i).filter(|r| r.generates_box) {
                 if matches!(
-                    resolved.style.display,
-                    Display::kFlex
-                        | Display::kInlineFlex
-                        | Display::kGrid
-                        | Display::kInlineGrid
-                        | Display::kTable
-                        | Display::kInlineTable
-                        | Display::kTableRow
-                        | Display::kTableSection
-                        | Display::kTableHeaderGroup
-                        | Display::kTableFooterGroup
-                        | Display::kTableColumnGroup
+                    unsafe { resolved.computed_style_owner.Get().as_ref() }
+                        .map(|style| style.Display()),
+                    Some(
+                        foundation::EDisplay::kFlex
+                            | foundation::EDisplay::kInlineFlex
+                            | foundation::EDisplay::kGrid
+                            | foundation::EDisplay::kInlineGrid
+                            | foundation::EDisplay::kTable
+                            | foundation::EDisplay::kInlineTable
+                            | foundation::EDisplay::kTableRow
+                            | foundation::EDisplay::kTableRowGroup
+                            | foundation::EDisplay::kTableHeaderGroup
+                            | foundation::EDisplay::kTableFooterGroup
+                            | foundation::EDisplay::kTableColumnGroup
+                            | foundation::EDisplay::kWebkitBox
+                            | foundation::EDisplay::kWebkitInlineBox
+                    )
                 ) {
                     return true;
                 }
@@ -623,7 +793,7 @@ fn SuppressesCollapsibleWhitespaceChildren(
 struct FirstLetterCandidate<'a> {
     text_node: Option<usize>,
     generated: Option<&'a PseudoElement>,
-    source_style: &'a ComputedStyle,
+    source_style: &'a StyleComputedStyle,
     prefix: String,
     remainder: String,
 }
@@ -635,7 +805,8 @@ struct FirstLetterSearch<'a> {
 }
 fn ConsiderFirstLetterText<'a>(
     text: &str,
-    style: &'a ComputedStyle,
+    style: &'a StyleComputedStyle,
+    preserve_breaks: bool,
     node: Option<usize>,
     generated: Option<&'a PseudoElement>,
     search: &mut FirstLetterSearch<'a>,
@@ -643,10 +814,10 @@ fn ConsiderFirstLetterText<'a>(
     if search.stopped {
         return;
     }
-    let native = foundation::String::FromUtf8(text.as_bytes());
+    let source = foundation::String::FromUtf8(text.as_bytes());
     let length = first_letter_length(
-        &foundation::StringView::from(&native),
-        preserves_breaks(style),
+        &foundation::StringView::from(&source),
+        preserve_breaks,
         &mut search.punctuation,
     );
     if length == 0 {
@@ -659,8 +830,8 @@ fn ConsiderFirstLetterText<'a>(
         text_node: node,
         generated,
         source_style: style,
-        prefix: foundation::String::from_utf16(&native.Span16().unwrap()[..length as usize]).Utf8(),
-        remainder: foundation::String::from_utf16(&native.Span16().unwrap()[length as usize..])
+        prefix: foundation::String::from_utf16(&source.Span16().unwrap()[..length as usize]).Utf8(),
+        remainder: foundation::String::from_utf16(&source.Span16().unwrap()[length as usize..])
             .Utf8(),
     };
     if search.punctuation == FirstLetterPunctuationState::Seen {
@@ -683,34 +854,56 @@ fn ConsiderGeneratedFirstLetter<'a>(
     if search.stopped {
         return;
     }
-    if p.style.floating != FloatSide::kNone
-        || matches!(p.style.position, Position::kAbsolute | Position::kFixed)
+    let Some(source) = (unsafe { p.computed_style_owner.Get().as_ref() }) else {
+        return;
+    };
+    if source.Floating() != foundation::EFloat::kNone
+        || matches!(
+            source.GetPosition(),
+            foundation::EPosition::kAbsolute | foundation::EPosition::kFixed
+        )
     {
         return;
     }
-    let block = is_block_container_display(p.style.display);
-    if p.style.display != Display::kInline && !p.display_contents && !block {
+    let block = CanonicalIsBlockContainer(source.Display());
+    if source.Display() != foundation::EDisplay::kInline && !p.display_contents && !block {
         search.stopped = true;
         return;
     }
     if !p.text.is_empty() {
-        ConsiderFirstLetterText(&p.text, &p.style, None, Some(p), search);
+        ConsiderFirstLetterText(
+            &p.text,
+            source,
+            source.ShouldPreserveBreaks(),
+            None,
+            Some(p),
+            search,
+        );
     }
     if block && !search.stopped {
         search.stopped = true;
     }
 }
-fn IsAtomicFirstLetterBoundary(document: &Document, index: usize, style: &ComputedStyle) -> bool {
+fn IsAtomicFirstLetterBoundary(
+    document: &Document,
+    index: usize,
+    source: &StyleComputedStyle,
+) -> bool {
     let element = ElementMetadata(
         document,
         index,
         &UserInteractionState::default(),
-        style.paint.respect_image_orientation,
+        source.ImageOrientation()
+            == foundation::RespectImageOrientationEnum::kRespectImageOrientation,
     );
-    let mut adjusted = style.clone();
-    apply_control_appearance(&element, &mut adjusted);
     matches!(
-        ElementKind(document, index, &element, &adjusted),
+        ElementKind(
+            document,
+            index,
+            &element,
+            &ComputedStyle::default(),
+            Some(source),
+        ),
         NodeKind::kLineBreak
             | NodeKind::kWordBreak
             | NodeKind::kReplaced
@@ -722,7 +915,7 @@ fn IsAtomicFirstLetterBoundary(document: &Document, index: usize, style: &Comput
 fn FindFirstLetterContent<'a>(
     document: &'a Document,
     index: usize,
-    style: &'a ComputedStyle,
+    source: &'a StyleComputedStyle,
     search: &mut FirstLetterSearch<'a>,
 ) {
     let resolved = document.ResolvedStyleFor(index);
@@ -733,7 +926,14 @@ fn FindFirstLetterContent<'a>(
         }
         let node = document.Node(child);
         if node.Type() == DOMNodeType::kText {
-            ConsiderFirstLetterText(node.Data(), style, Some(child), None, search);
+            ConsiderFirstLetterText(
+                node.Data(),
+                source,
+                source.ShouldPreserveBreaks(),
+                Some(child),
+                None,
+                search,
+            );
             continue;
         }
         if node.Type() != DOMNodeType::kElement {
@@ -742,29 +942,35 @@ fn FindFirstLetterContent<'a>(
         let Some(r) = document.ResolvedStyleFor(child) else {
             continue;
         };
+        let Some(child_source) = (unsafe { r.computed_style_owner.Get().as_ref() }) else {
+            continue;
+        };
         if !r.generates_box {
             if r.display_contents {
-                FindFirstLetterContent(document, child, &r.style, search);
+                FindFirstLetterContent(document, child, child_source, search);
             }
             continue;
         }
-        if r.style.floating != FloatSide::kNone
-            || matches!(r.style.position, Position::kAbsolute | Position::kFixed)
+        if child_source.Floating() != foundation::EFloat::kNone
+            || matches!(
+                child_source.GetPosition(),
+                foundation::EPosition::kAbsolute | foundation::EPosition::kFixed
+            )
         {
             continue;
         }
-        if IsAtomicFirstLetterBoundary(document, child, &r.style) {
+        if IsAtomicFirstLetterBoundary(document, child, child_source) {
             search.stopped = true;
             return;
         }
-        if r.style.display == Display::kInline {
-            FindFirstLetterContent(document, child, &r.style, search);
-        } else if is_block_container_display(r.style.display) {
+        if child_source.Display() == foundation::EDisplay::kInline {
+            FindFirstLetterContent(document, child, child_source, search);
+        } else if CanonicalIsBlockContainer(child_source.Display()) {
             if r.first_letter.is_some() {
                 search.stopped = true;
                 return;
             }
-            FindFirstLetterContent(document, child, &r.style, search);
+            FindFirstLetterContent(document, child, child_source, search);
             search.stopped = true;
             return;
         } else {
@@ -780,7 +986,7 @@ fn FindFirstLetterContent<'a>(
 fn FindFirstLetterCandidate<'a>(
     document: &'a Document,
     index: usize,
-    style: &'a ComputedStyle,
+    source: &'a StyleComputedStyle,
 ) -> Option<FirstLetterCandidate<'a>> {
     let mut search = FirstLetterSearch {
         punctuation: FirstLetterPunctuationState::NotSeen,
@@ -788,10 +994,11 @@ fn FindFirstLetterCandidate<'a>(
         result: None,
         stopped: false,
     };
-    FindFirstLetterContent(document, index, style, &mut search);
+    FindFirstLetterContent(document, index, source, &mut search);
     search.result
 }
 struct FirstLetterInsertion<'a> {
+    originating_index: usize,
     originating_id: u64,
     svg_clip_resources: layoutng_assembly::internal::paint_input::SvgClipResourceBinding,
     pseudo: &'a PseudoElement,
@@ -801,27 +1008,43 @@ struct FirstLetterInsertion<'a> {
 // cpp: dom_to_layout/layout_object_tree_builder.cc:1139-1165
 fn AppendInitialLetter(
     tree: &mut LayoutTreeUpdate<'_>,
+    document: &Document,
     parent: *mut LayoutObject,
     insertion: &mut FirstLetterInsertion<'_>,
     remaining_id: u64,
     name: &str,
     generated: bool,
+    svg_filter_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
+    >,
 ) {
     let data = ElementData {
         first_letter_pseudo: true,
         ..Default::default()
     };
-    let mut letter_style = insertion.pseudo.style.clone();
-    letter_style.svg_clip_resources = insertion.svg_clip_resources.clone();
-    let letter = tree.AddBox(
+    let letter_style = unsafe { insertion.pseudo.computed_style_owner.Get().as_ref() }
+        .expect("first-letter pseudo style must be owned");
+    let resolved_resources = document.ResolvedStyleResourcesFor(insertion.originating_index);
+    let replaced_image_shader = None;
+    let resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+        svg_filter_graphs,
+        &insertion.svg_clip_resources,
+        &resolved_resources.svg_mask_resource,
+        &resolved_resources.svg_fill_server,
+        &resolved_resources.svg_stroke_server,
+        &resolved_resources.svg_markers,
+        &replaced_image_shader,
+    );
+    let letter = tree.AddBoxFromStyle(
         unsafe { &mut *parent },
         insertion.originating_id | (1 << 46),
-        &letter_style,
+        letter_style,
+        &resources,
+        None,
         "::first-letter".into(),
         Some(data),
         NodeKind::kBox,
         true,
-        std::ptr::null(),
     ) as *mut LayoutObject;
     tree.AddText(
         unsafe { &mut *letter },
@@ -832,16 +1055,14 @@ fn AppendInitialLetter(
         true,
         std::ptr::null(),
     );
-    let mut remaining_style = insertion.candidate.source_style.clone();
-    remaining_style.svg_clip_resources = insertion.svg_clip_resources.clone();
-    tree.AddText(
+    tree.AddTextFromStyle(
         unsafe { &mut *parent },
         remaining_id,
         insertion.candidate.remainder.clone(),
         name.into(),
-        &remaining_style,
+        insertion.candidate.source_style,
+        &resources,
         generated,
-        std::ptr::null(),
     );
     insertion.consumed = true;
 }
@@ -861,47 +1082,66 @@ fn AppendListMarker(
     originating_index: usize,
     id: u64,
     parent: *mut LayoutObject,
-    item_style: &ComputedStyle,
+    item_style: &StyleComputedStyle,
+    svg_clip_resources: &layoutng_assembly::internal::paint_input::SvgClipResourceBinding,
+    svg_filter_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
+    >,
     marker_pseudo: Option<&PseudoElement>,
     name: &str,
     bits: MarkerObjectBits,
 ) {
-    let marker_has_custom_content = marker_pseudo
-        .and_then(|pseudo| unsafe { pseudo.native_style.Get().as_ref() })
-        .is_some_and(|native| !native.ContentBehavesAsNormal());
-    let mut resolved_marker_style = marker_pseudo.map_or_else(
-        || list_marker_style(item_style),
-        |pseudo| pseudo.style.clone(),
-    );
-    resolved_marker_style.svg_clip_resources = item_style.svg_clip_resources.clone();
-    let marker_style = &resolved_marker_style;
+    let pseudo_style =
+        marker_pseudo.and_then(|pseudo| unsafe { pseudo.computed_style_owner.Get().as_ref() });
+    let marker_has_custom_content =
+        pseudo_style.is_some_and(|source| !source.ContentBehavesAsNormal());
+    let generated_marker_style = if pseudo_style.is_none() {
+        let mut builder = ComputedStyleBuilder::from_style(item_style);
+        builder.SetDisplay(foundation::EDisplay::kInline);
+        builder.TakeStyle()
+    } else {
+        std::ptr::null_mut()
+    };
+    let marker_style = pseudo_style.unwrap_or_else(|| unsafe { &*generated_marker_style });
     let marker_image = (!marker_has_custom_content)
-        .then(|| {
-            marker_style
-                .extended
-                .as_ref()
-                .and_then(|extra| extra.list_style_image.as_ref())
-        })
+        .then(|| layoutng_assembly::style_projection::ProjectListMarkerImage(marker_style))
         .flatten();
     let marker_text = if marker_has_custom_content {
         marker_pseudo.map_or_else(String::new, |pseudo| pseudo.text.clone())
     } else {
-        DefaultListMarkerText(document, originating_index, item_style)
+        DefaultListMarkerText(document, originating_index, marker_style)
     };
-    if item_style.display != Display::kListItem
-        || (!marker_has_custom_content && marker_image.is_none() && marker_text.is_empty())
+    if !matches!(
+        item_style.Display(),
+        foundation::EDisplay::kListItem
+            | foundation::EDisplay::kInlineListItem
+            | foundation::EDisplay::kFlowRootListItem
+            | foundation::EDisplay::kInlineFlowRootListItem
+    ) || (!marker_has_custom_content && marker_image.is_none() && marker_text.is_empty())
     {
         return;
     }
-    let marker = tree.AddBox(
+    let resolved_resources = document.ResolvedStyleResourcesFor(originating_index);
+    let replaced_image_shader = None;
+    let resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+        svg_filter_graphs,
+        svg_clip_resources,
+        &resolved_resources.svg_mask_resource,
+        &resolved_resources.svg_fill_server,
+        &resolved_resources.svg_stroke_server,
+        &resolved_resources.svg_markers,
+        &replaced_image_shader,
+    );
+    let marker = tree.AddBoxFromStyle(
         unsafe { &mut *parent },
         id | bits.box_bit,
         marker_style,
+        &resources,
+        None,
         name.into(),
         None,
         NodeKind::kListMarker,
         true,
-        std::ptr::null(),
     ) as *mut LayoutObject;
     if marker_has_custom_content {
         let pseudo = marker_pseudo.expect("custom marker content has resolved style");
@@ -936,14 +1176,15 @@ fn AppendListMarker(
                     natural_width,
                     natural_height,
                     resolution_scale: _,
+                    known_to_be_opaque,
                 } if *resource_id != 0 || shader.is_some() => {
-                    let mut image_style = marker_style.clone();
-                    image_style.paint.image_resource_id =
-                        (*resource_id != 0).then_some(*resource_id);
-                    image_style.paint.replaced_image_shader = shader.clone();
                     let mut element = ElementData {
                         natural_width: *natural_width,
                         natural_height: *natural_height,
+                        image_resource_is_loaded: *resource_id != 0,
+                        image_resource_known_to_be_opaque: *resource_id != 0 && *known_to_be_opaque,
+                        image_resource_maybe_animated: *resource_id != 0
+                            && document.ImageResourceMaybeAnimated(*resource_id),
                         // NaturalSize is already divided by the selected
                         // image-set resolution at the Style boundary.
                         image_device_pixel_ratio: 1.0,
@@ -954,10 +1195,22 @@ fn AppendListMarker(
                             element.natural_aspect_ratio = Some(width / height);
                         }
                     }
-                    tree.AddGeneratedReplaced(
+                    let image_resources =
+                        layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+                            svg_filter_graphs,
+                            svg_clip_resources,
+                            &resolved_resources.svg_mask_resource,
+                            &resolved_resources.svg_fill_server,
+                            &resolved_resources.svg_stroke_server,
+                            &resolved_resources.svg_markers,
+                            shader,
+                        );
+                    tree.AddGeneratedReplacedFromStyle(
                         unsafe { &mut *marker },
                         id | bits.image_bit | sequence,
-                        &image_style,
+                        marker_style,
+                        &image_resources,
+                        (*resource_id != 0).then_some(*resource_id),
                         element,
                         format!("{name}-image-{ordinal}"),
                     );
@@ -966,23 +1219,41 @@ fn AppendListMarker(
             }
         }
     } else if let Some(image) = marker_image {
-        append_list_marker_image(
-            tree,
-            marker,
+        let image_resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+            svg_filter_graphs,
+            svg_clip_resources,
+            &resolved_resources.svg_mask_resource,
+            &resolved_resources.svg_fill_server,
+            &resolved_resources.svg_stroke_server,
+            &resolved_resources.svg_markers,
+            &image.shader,
+        );
+        tree.AddGeneratedReplacedFromStyle(
+            unsafe { &mut *marker },
             id | bits.image_bit,
             marker_style,
-            image,
+            &image_resources,
+            (image.resource_id != 0).then_some(image.resource_id),
+            ElementData {
+                natural_width: Some(image.natural_width),
+                natural_height: Some(image.natural_height),
+                natural_aspect_ratio: Some(image.natural_width / image.natural_height),
+                image_resource_is_loaded: image.resource_id != 0,
+                image_resource_known_to_be_opaque: image.resource_id != 0
+                    && image.known_to_be_opaque,
+                image_resource_maybe_animated: image.resource_id != 0
+                    && document.ImageResourceMaybeAnimated(image.resource_id),
+                ..Default::default()
+            },
             format!("{name}-image"),
         );
     } else {
-        let marker_type = item_style
-            .extended
+        let marker_type = unsafe { marker_style.ListStyleType().Get().as_ref() }
+            .filter(|style| style.IsCounterStyle())
+            .map(|style| style.GetCounterStyleName().Utf8());
+        let symbol = marker_type
             .as_ref()
-            .map_or(ListStyleType::kDisc, |e| e.list_style_type);
-        let symbol = matches!(
-            marker_type,
-            ListStyleType::kDisc | ListStyleType::kCircle | ListStyleType::kSquare
-        );
+            .is_some_and(|name| matches!(name.as_str(), "disc" | "circle" | "square"));
         if symbol && marker_text.ends_with(' ') {
             tree.AddText(
                 unsafe { &mut *marker },
@@ -993,18 +1264,20 @@ fn AppendListMarker(
                 true,
                 std::ptr::null(),
             );
-            let mut suffix = marker_style.clone();
-            suffix.width = Some(12.0);
-            suffix.height = Some(0.0);
-            tree.AddBox(
+            let mut suffix_builder = ComputedStyleBuilder::from_style(marker_style);
+            suffix_builder.SetWidth(&foundation::Length::Fixed(12.0));
+            suffix_builder.SetHeight(&foundation::Length::Fixed(0.0));
+            let suffix = suffix_builder.TakeStyle();
+            tree.AddBoxFromStyle(
                 unsafe { &mut *marker },
                 id | bits.suffix_bit,
-                &suffix,
+                unsafe { &*suffix },
+                &resources,
+                None,
                 format!("{name}-suffix"),
                 None,
                 NodeKind::kBox,
                 true,
-                std::ptr::null(),
             );
         } else {
             tree.AddText(
@@ -1043,25 +1316,38 @@ fn AppendPseudoElement(
     let box_bit = 1u64 << if before { 50 } else { 48 };
     let text_bit = 1u64 << if before { 49 } else { 47 };
     let name = if before { "::before" } else { "::after" };
-    let mut style = p.style.clone();
-    style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
-    resolve_svg_clip_path(
-        &mut style,
+    let Some(source) = (unsafe { p.computed_style_owner.Get().as_ref() }) else {
+        return;
+    };
+    let clip_resources = super::layout_object_tree_builder::svg_clip_resource_binding(
+        source,
         svg_clip_path_graphs,
         document.SVGResourceScope(originating_index),
+    );
+    let resolved_resources = document.ResolvedStyleResourcesFor(originating_index);
+    let replaced_image_shader = None;
+    let resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+        svg_filter_graphs,
+        &clip_resources,
+        &resolved_resources.svg_mask_resource,
+        &resolved_resources.svg_fill_server,
+        &resolved_resources.svg_stroke_server,
+        &resolved_resources.svg_markers,
+        &replaced_image_shader,
     );
     let object = if p.display_contents {
         parent
     } else {
-        tree.AddBox(
+        tree.AddBoxFromStyle(
             unsafe { &mut *parent },
             id | box_bit,
-            &style,
+            source,
+            &resources,
+            None,
             name.into(),
             None,
             NodeKind::kBox,
             true,
-            std::ptr::null(),
         ) as *mut LayoutObject
     };
     AppendListMarker(
@@ -1070,7 +1356,9 @@ fn AppendPseudoElement(
         originating_index,
         id,
         object,
-        &style,
+        source,
+        &clip_resources,
+        svg_filter_graphs,
         p.marker.as_deref(),
         if before {
             "::before::marker"
@@ -1106,26 +1394,36 @@ fn AppendPseudoElement(
         if let Some(first) = first {
             AppendInitialLetter(
                 tree,
+                document,
                 object,
                 first,
                 id | text_bit,
                 &format!("{name}-text"),
                 true,
+                svg_filter_graphs,
             );
         } else {
-            tree.AddText(
-                unsafe { &mut *object },
-                id | text_bit,
-                p.text.clone(),
-                format!("{name}-text"),
-                if p.display_contents {
-                    &style
-                } else {
-                    std::ptr::null()
-                },
-                true,
-                std::ptr::null(),
-            );
+            if p.display_contents {
+                tree.AddTextFromStyle(
+                    unsafe { &mut *object },
+                    id | text_bit,
+                    p.text.clone(),
+                    format!("{name}-text"),
+                    source,
+                    &resources,
+                    true,
+                );
+            } else {
+                tree.AddText(
+                    unsafe { &mut *object },
+                    id | text_bit,
+                    p.text.clone(),
+                    format!("{name}-text"),
+                    std::ptr::null(),
+                    true,
+                    std::ptr::null(),
+                );
+            }
         }
         return;
     }
@@ -1149,27 +1447,37 @@ fn AppendPseudoElement(
                     // existing split preserve that behavior.
                     AppendInitialLetter(
                         tree,
+                        document,
                         object,
                         first,
                         id | text_bit,
                         &format!("{name}-text"),
                         true,
+                        svg_filter_graphs,
                     );
                     first_consumed_all_text = true;
                 } else {
-                    tree.AddText(
-                        unsafe { &mut *object },
-                        id | text_bit | sequence,
-                        value.clone(),
-                        format!("{name}-text-{ordinal}"),
-                        if p.display_contents {
-                            &style
-                        } else {
-                            std::ptr::null()
-                        },
-                        true,
-                        std::ptr::null(),
-                    );
+                    if p.display_contents {
+                        tree.AddTextFromStyle(
+                            unsafe { &mut *object },
+                            id | text_bit | sequence,
+                            value.clone(),
+                            format!("{name}-text-{ordinal}"),
+                            source,
+                            &resources,
+                            true,
+                        );
+                    } else {
+                        tree.AddText(
+                            unsafe { &mut *object },
+                            id | text_bit | sequence,
+                            value.clone(),
+                            format!("{name}-text-{ordinal}"),
+                            std::ptr::null(),
+                            true,
+                            std::ptr::null(),
+                        );
+                    }
                 }
             }
             PseudoContent::Image {
@@ -1178,13 +1486,15 @@ fn AppendPseudoElement(
                 natural_width,
                 natural_height,
                 resolution_scale: _,
+                known_to_be_opaque,
             } if *resource_id != 0 || shader.is_some() => {
-                let mut image_style = style.clone();
-                image_style.paint.image_resource_id = (*resource_id != 0).then_some(*resource_id);
-                image_style.paint.replaced_image_shader = shader.clone();
                 let mut element = ElementData {
                     natural_width: *natural_width,
                     natural_height: *natural_height,
+                    image_resource_is_loaded: *resource_id != 0,
+                    image_resource_known_to_be_opaque: *resource_id != 0 && *known_to_be_opaque,
+                    image_resource_maybe_animated: *resource_id != 0
+                        && document.ImageResourceMaybeAnimated(*resource_id),
                     // NaturalSize is already divided by the selected
                     // image-set resolution at the Style boundary.
                     image_device_pixel_ratio: 1.0,
@@ -1196,10 +1506,22 @@ fn AppendPseudoElement(
                     }
                 }
                 let image_bit = 1u64 << if before { 44 } else { 43 };
-                tree.AddGeneratedReplaced(
+                let image_resources =
+                    layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+                        svg_filter_graphs,
+                        &clip_resources,
+                        &resolved_resources.svg_mask_resource,
+                        &resolved_resources.svg_fill_server,
+                        &resolved_resources.svg_stroke_server,
+                        &resolved_resources.svg_markers,
+                        shader,
+                    );
+                tree.AddGeneratedReplacedFromStyle(
                     unsafe { &mut *object },
                     id | image_bit | sequence,
-                    &image_style,
+                    source,
+                    &image_resources,
+                    (*resource_id != 0).then_some(*resource_id),
                     element,
                     format!("{name}-image-{ordinal}"),
                 );
@@ -1216,7 +1538,7 @@ fn AppendChildren<'a>(
     interaction: &UserInteractionState,
     index: usize,
     parent: *mut LayoutObject,
-    flattened: Option<&'a ComputedStyle>,
+    flattened: Option<(usize, &'a StyleComputedStyle)>,
     first: Option<&mut FirstLetterInsertion<'a>>,
     svg_filter_graphs: &std::sync::Arc<
         Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
@@ -1246,7 +1568,7 @@ fn AppendSelectedChildren<'a>(
     interaction: &UserInteractionState,
     index: usize,
     parent: *mut LayoutObject,
-    flattened: Option<&'a ComputedStyle>,
+    flattened: Option<(usize, &'a StyleComputedStyle)>,
     mut first: Option<&mut FirstLetterInsertion<'a>>,
     svg_filter_graphs: &std::sync::Arc<
         Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
@@ -1270,8 +1592,19 @@ fn AppendSelectedChildren<'a>(
             if dom_parent.Namespace() == DOMNamespace::kSVG && !svg_text_parent {
                 continue;
             }
-            let style = flattened.or_else(|| document.ResolvedStyleFor(index).map(|r| &r.style));
-            if style.is_some_and(|s| !preserves_breaks(s))
+            let style = flattened.or_else(|| {
+                document
+                    .ResolvedStyleFor(index)
+                    .and_then(|resolved| unsafe {
+                        resolved
+                            .computed_style_owner
+                            .Get()
+                            .as_ref()
+                            .map(|style| (index, style))
+                    })
+            });
+            let preserves_breaks = style.is_some_and(|(_, style)| style.ShouldPreserveBreaks());
+            if !preserves_breaks
                 && contains_only_collapsible_whitespace(node.Data())
                 && SuppressesCollapsibleWhitespaceChildren(document, index, tree, unsafe {
                     &*parent
@@ -1283,17 +1616,55 @@ fn AppendSelectedChildren<'a>(
                 .as_deref_mut()
                 .filter(|f| !f.consumed && f.candidate.text_node == Some(child))
             {
-                AppendInitialLetter(tree, parent, letter, node.Id(), "#text", false);
-            } else if !node.Data().is_empty() {
-                tree.AddText(
-                    unsafe { &mut *parent },
+                AppendInitialLetter(
+                    tree,
+                    document,
+                    parent,
+                    letter,
                     node.Id(),
-                    node.Data().into(),
-                    "#text".into(),
-                    style.map_or(std::ptr::null(), |s| s),
+                    "#text",
                     false,
-                    std::ptr::null(),
+                    svg_filter_graphs,
                 );
+            } else if !node.Data().is_empty() {
+                if let Some((style_index, style)) = style {
+                    let clip = super::layout_object_tree_builder::svg_clip_resource_binding(
+                        style,
+                        svg_clip_path_graphs,
+                        document.SVGResourceScope(style_index),
+                    );
+                    let resolved_resources = document.ResolvedStyleResourcesFor(style_index);
+                    let replaced_image_shader = None;
+                    let resources =
+                        layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+                            svg_filter_graphs,
+                            &clip,
+                            &resolved_resources.svg_mask_resource,
+                            &resolved_resources.svg_fill_server,
+                            &resolved_resources.svg_stroke_server,
+                            &resolved_resources.svg_markers,
+                            &replaced_image_shader,
+                        );
+                    tree.AddTextFromStyle(
+                        unsafe { &mut *parent },
+                        node.Id(),
+                        node.Data().into(),
+                        "#text".into(),
+                        style,
+                        &resources,
+                        false,
+                    );
+                } else {
+                    tree.AddText(
+                        unsafe { &mut *parent },
+                        node.Id(),
+                        node.Data().into(),
+                        "#text".into(),
+                        std::ptr::null(),
+                        false,
+                        std::ptr::null(),
+                    );
+                }
             }
             continue;
         }
@@ -1320,6 +1691,9 @@ fn AppendSelectedChildren<'a>(
         let Some(resolved) = document.ResolvedStyleFor(child) else {
             continue;
         };
+        let Some(source_style) = (unsafe { resolved.computed_style_owner.Get().as_ref() }) else {
+            continue;
+        };
         if !resolved.generates_box {
             if resolved.display_contents {
                 AppendPseudoElement(
@@ -1340,7 +1714,7 @@ fn AppendSelectedChildren<'a>(
                     interaction,
                     child,
                     parent,
-                    Some(&resolved.style),
+                    Some((child, source_style)),
                     first.as_deref_mut(),
                     svg_filter_graphs,
                     svg_clip_path_graphs,
@@ -1364,33 +1738,21 @@ fn AppendSelectedChildren<'a>(
             document,
             child,
             interaction,
-            resolved.style.paint.respect_image_orientation,
+            source_style.ImageOrientation()
+                == foundation::RespectImageOrientationEnum::kRespectImageOrientation,
         );
-        // Most elements project their resolved style without modification.
-        // Own a copy only when resource/control adapters actually need it.
-        let mut style = std::borrow::Cow::Borrowed(&resolved.style);
-        if needs_svg_filter_resources(&style) {
-            style.to_mut().paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
-        }
-        if needs_svg_clip_resources(&style) {
-            resolve_svg_clip_path(
-                style.to_mut(),
-                svg_clip_path_graphs,
-                document.SVGResourceScope(child),
-            );
-        }
-        if node.Name() == "img" {
-            if let Some(image) = document
-                .CurrentImageSource(child)
-                .and_then(|source| document.ImageResourceFor(source))
-            {
-                style.to_mut().paint.image_resource_id = Some(image.id);
-            }
-        }
-        if element.form_control_type.is_some() {
-            apply_control_appearance(&element, style.to_mut());
-        }
-        let kind = ElementKind(document, child, &element, &style);
+        let clip_resources = super::layout_object_tree_builder::svg_clip_resource_binding(
+            source_style,
+            svg_clip_path_graphs,
+            document.SVGResourceScope(child),
+        );
+        let kind = ElementKind(
+            document,
+            child,
+            &element,
+            &ComputedStyle::default(),
+            Some(source_style),
+        );
         let control = element.form_control_type;
         let range = control == Some(FormControlType::kInputRange);
         let file = control == Some(FormControlType::kInputFile);
@@ -1399,47 +1761,73 @@ fn AppendSelectedChildren<'a>(
             control,
             Some(FormControlType::kSelectOne | FormControlType::kSelectMultiple)
         ) && !menu;
-        if range && style.height.is_none() {
-            style.to_mut().height = Some(16.0);
-        }
-        if select_list && style.height.is_none() {
-            let rows = positive_attribute_integer(node, "size", 4);
-            let defaults = ExtendedStyle::default();
-            let e = style.extended.as_deref().unwrap_or(&defaults);
-            let height = rows as f64 * e.line_height.unwrap_or(e.font_size * 1.2) + 2.0;
-            style.to_mut().height = Some(height);
-        }
+        let adjusted_style = if (range || select_list) && source_style.Height().IsAuto() {
+            let mut builder = ComputedStyleBuilder::from_style(source_style);
+            let height = if range {
+                16.0
+            } else {
+                positive_attribute_integer(node, "size", 4) as f32
+                    * source_style.ComputedLineHeight()
+                    + 2.0
+            };
+            builder.SetHeight(&foundation::Length::Fixed(height));
+            builder.TakeStyle()
+        } else {
+            std::ptr::null_mut()
+        };
+        let attached_style = unsafe { adjusted_style.as_ref() }.unwrap_or(source_style);
+        let resolved_resources = document.ResolvedStyleResourcesFor(child);
+        let replaced_image_shader = None;
+        let resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+            svg_filter_graphs,
+            &clip_resources,
+            &resolved_resources.svg_mask_resource,
+            &resolved_resources.svg_fill_server,
+            &resolved_resources.svg_stroke_server,
+            &resolved_resources.svg_markers,
+            &replaced_image_shader,
+        );
+        let image_resource_id = (node.Name() == "img")
+            .then(|| document.CurrentImageSource(child))
+            .flatten()
+            .and_then(|source| document.ImageResourceFor(source))
+            .map(|image| image.id);
         let object = if matches!(kind, NodeKind::kReplaced | NodeKind::kFrame) {
-            tree.AddReplaced(
+            tree.AddReplacedFromStyle(
                 unsafe { &mut *parent },
                 node.Id(),
-                &style,
+                attached_style,
+                &resources,
+                image_resource_id,
                 Some(element),
                 node.Name().into(),
                 kind,
             )
         } else {
-            tree.AddBox(
+            tree.AddBoxFromStyle(
                 unsafe { &mut *parent },
                 node.Id(),
-                &style,
+                attached_style,
+                &resources,
+                image_resource_id,
                 node.Name().into(),
                 Some(element),
                 kind,
                 false,
-                std::ptr::null(),
             )
         } as *mut LayoutObject;
         if range {
-            let mut track_style = ComputedStyle::default();
-            track_style.display = Display::kFlex;
-            track_style.height = Some(16.0);
-            std::sync::Arc::make_mut(track_style.extended.get_or_insert_with(Default::default))
-                .width_percent = Some(100.0);
-            let track = tree.AddBox(
+            let mut track_builder = ComputedStyleBuilder::from_style(attached_style);
+            track_builder.SetDisplay(foundation::EDisplay::kFlex);
+            track_builder.SetHeight(&foundation::Length::Fixed(16.0));
+            track_builder.SetWidth(&foundation::Length::Percent(100.0));
+            let track_style = track_builder.TakeStyle();
+            let track = tree.AddBoxFromStyle(
                 unsafe { &mut *object },
                 node.Id() | (1 << 61),
-                &track_style,
+                unsafe { &*track_style },
+                &resources,
+                None,
                 "::-webkit-slider-container".into(),
                 Some(ElementData {
                     control_host_ancestor: Some(1),
@@ -1447,22 +1835,22 @@ fn AppendSelectedChildren<'a>(
                 }),
                 NodeKind::kBox,
                 false,
-                std::ptr::null(),
             ) as *mut LayoutObject;
-            let mut thumb_style = ComputedStyle::default();
-            thumb_style.width = Some(16.0);
-            thumb_style.height = Some(16.0);
-            std::sync::Arc::make_mut(thumb_style.extended.get_or_insert_with(Default::default))
-                .effective_appearance = AppearanceValue::kSliderThumbHorizontal;
-            tree.AddBox(
+            let mut thumb_builder = ComputedStyleBuilder::from_style(unsafe { &*track_style });
+            thumb_builder.SetWidth(&foundation::Length::Fixed(16.0));
+            thumb_builder.SetHeight(&foundation::Length::Fixed(16.0));
+            thumb_builder.SetEffectiveAppearance(AppearanceValue::kSliderThumbHorizontal);
+            let thumb_style = thumb_builder.TakeStyle();
+            tree.AddBoxFromStyle(
                 unsafe { &mut *track },
                 node.Id() | (1 << 60),
-                &thumb_style,
+                unsafe { &*thumb_style },
+                &resources,
+                None,
                 "::-webkit-slider-thumb".into(),
                 None,
                 NodeKind::kSliderThumb,
                 false,
-                std::ptr::null(),
             );
         }
         if file {
@@ -1477,25 +1865,44 @@ fn AppendSelectedChildren<'a>(
                 .ResolvedStyleFor(button_index)
                 .filter(|style| style.generates_box)
             {
-                let mut button_style = button_resolved.style.clone();
+                let button_source = unsafe { button_resolved.computed_style_owner.Get().as_ref() }
+                    .expect("resolved file button style must be owned");
                 let mut button_data = ElementMetadata(
                     document,
                     button_index,
                     interaction,
-                    button_resolved.style.paint.respect_image_orientation,
+                    button_source.ImageOrientation()
+                        == foundation::RespectImageOrientationEnum::kRespectImageOrientation,
                 );
                 button_data.control_host_ancestor = Some(1);
                 button_data.file_upload_button = true;
-                apply_control_appearance(&button_data, &mut button_style);
-                let button = tree.AddBox(
+                let button_clip = super::layout_object_tree_builder::svg_clip_resource_binding(
+                    button_source,
+                    svg_clip_path_graphs,
+                    document.SVGResourceScope(button_index),
+                );
+                let button_resolved_resources = document.ResolvedStyleResourcesFor(button_index);
+                let replaced_image_shader = None;
+                let button_resources =
+                    layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+                        svg_filter_graphs,
+                        &button_clip,
+                        &button_resolved_resources.svg_mask_resource,
+                        &button_resolved_resources.svg_fill_server,
+                        &button_resolved_resources.svg_stroke_server,
+                        &button_resolved_resources.svg_markers,
+                        &replaced_image_shader,
+                    );
+                let button = tree.AddBoxFromStyle(
                     unsafe { &mut *object },
                     button_node.Id(),
-                    &button_style,
+                    button_source,
+                    &button_resources,
+                    None,
                     "::-webkit-file-upload-button".into(),
                     Some(button_data),
                     NodeKind::kFormControl,
                     false,
-                    std::ptr::null(),
                 ) as *mut LayoutObject;
                 let label = attribute(button_node, "value").unwrap_or_default();
                 if !label.is_empty() {
@@ -1518,20 +1925,42 @@ fn AppendSelectedChildren<'a>(
                 .ResolvedStyleFor(status_index)
                 .filter(|style| style.generates_box)
             {
-                let status = tree.AddBox(
+                let status_source = unsafe { status_resolved.computed_style_owner.Get().as_ref() };
+                let status_source =
+                    status_source.expect("resolved file status style must be owned");
+                let status_clip = super::layout_object_tree_builder::svg_clip_resource_binding(
+                    status_source,
+                    svg_clip_path_graphs,
+                    document.SVGResourceScope(status_index),
+                );
+                let status_resolved_resources = document.ResolvedStyleResourcesFor(status_index);
+                let replaced_image_shader = None;
+                let status_resources =
+                    layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+                        svg_filter_graphs,
+                        &status_clip,
+                        &status_resolved_resources.svg_mask_resource,
+                        &status_resolved_resources.svg_fill_server,
+                        &status_resolved_resources.svg_stroke_server,
+                        &status_resolved_resources.svg_markers,
+                        &replaced_image_shader,
+                    );
+                let status = tree.AddBoxFromStyle(
                     unsafe { &mut *object },
                     status_node.Id(),
-                    &status_resolved.style,
+                    status_source,
+                    &status_resources,
+                    None,
                     "::file-status".into(),
                     Some(ElementMetadata(
                         document,
                         status_index,
                         interaction,
-                        status_resolved.style.paint.respect_image_orientation,
+                        status_source.ImageOrientation()
+                            == foundation::RespectImageOrientationEnum::kRespectImageOrientation,
                     )),
                     NodeKind::kBox,
                     false,
-                    std::ptr::null(),
                 ) as *mut LayoutObject;
                 for &text_index in status_node.Children() {
                     let text = document.Node(text_index);
@@ -1579,17 +2008,20 @@ fn AppendSelectedChildren<'a>(
             }
         }
         if menu {
-            let mut inner_style = list_marker_style(&style);
-            inner_style.display = Display::kBlock;
-            inner_style.flex_grow = 1.0;
-            inner_style.flex_shrink = 1.0;
-            inner_style.min_width = Some(0.0);
-            std::sync::Arc::make_mut(inner_style.extended.get_or_insert_with(Default::default))
-                .SetOverflow(Overflow::kHidden);
-            let inner = tree.AddBox(
+            let mut inner_builder = ComputedStyleBuilder::from_style(attached_style);
+            inner_builder.SetDisplay(foundation::EDisplay::kBlock);
+            inner_builder.SetFlexGrow(1.0);
+            inner_builder.SetFlexShrink(1.0);
+            inner_builder.SetMinWidth(&foundation::Length::Fixed(0.0));
+            inner_builder.SetOverflowX(foundation::EOverflow::kHidden);
+            inner_builder.SetOverflowY(foundation::EOverflow::kHidden);
+            let inner_style = inner_builder.TakeStyle();
+            let inner = tree.AddBoxFromStyle(
                 unsafe { &mut *object },
                 node.Id() | (1 << 52),
-                &inner_style,
+                unsafe { &*inner_style },
+                &resources,
+                None,
                 "::-internal-select-inner-element".into(),
                 Some(ElementData {
                     control_host_ancestor: Some(1),
@@ -1597,7 +2029,6 @@ fn AppendSelectedChildren<'a>(
                 }),
                 NodeKind::kBox,
                 false,
-                std::ptr::null(),
             ) as *mut LayoutObject;
             tree.AddText(
                 unsafe { &mut *inner },
@@ -1613,54 +2044,115 @@ fn AppendSelectedChildren<'a>(
         if control.is_some_and(is_single_line_text_control) || textarea {
             let control_value = document.ControlValue(child);
             let suggested = document.SuggestedValue(child);
-            let mut implementation_text = suggested.is_some();
-            let mut suggested_text = suggested.is_some_and(|value| !value.is_empty());
-            let mut value = suggested
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| control_value.clone());
-            if implementation_text && !suggested_text {
-                value = attribute(node, "placeholder").unwrap_or_default().into();
-            } else if !implementation_text && value.is_empty() {
-                if let Some(placeholder) = attribute(node, "placeholder") {
-                    value = placeholder.into();
-                    implementation_text = true;
-                    suggested_text = false;
+            if let Some(placeholder) = document.TextControlPlaceholderElement(child) {
+                if let Some(placeholder_resolved) = document
+                    .ResolvedStyleFor(placeholder)
+                    .filter(|style| style.generates_box)
+                {
+                    let placeholder_style = unsafe {
+                        placeholder_resolved
+                            .computed_style_owner
+                            .Get()
+                            .as_ref()
+                            .expect("resolved text-control placeholder style must be owned")
+                    };
+                    let placeholder_clip =
+                        super::layout_object_tree_builder::svg_clip_resource_binding(
+                            placeholder_style,
+                            svg_clip_path_graphs,
+                            document.SVGResourceScope(placeholder),
+                        );
+                    let placeholder_resolved_resources =
+                        document.ResolvedStyleResourcesFor(placeholder);
+                    let replaced_image_shader = None;
+                    let placeholder_resources =
+                        layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+                            svg_filter_graphs,
+                            &placeholder_clip,
+                            &placeholder_resolved_resources.svg_mask_resource,
+                            &placeholder_resolved_resources.svg_fill_server,
+                            &placeholder_resolved_resources.svg_stroke_server,
+                            &placeholder_resolved_resources.svg_markers,
+                            &replaced_image_shader,
+                        );
+                    let mut placeholder_data = ElementMetadata(
+                        document,
+                        placeholder,
+                        interaction,
+                        placeholder_style.ImageOrientation()
+                            == foundation::RespectImageOrientationEnum::kRespectImageOrientation,
+                    );
+                    placeholder_data.control_host_ancestor = Some(1);
+                    placeholder_data.text_control_placeholder = true;
+                    let placeholder_object = tree.AddBoxFromStyle(
+                        unsafe { &mut *object },
+                        document.Node(placeholder).Id(),
+                        placeholder_style,
+                        &placeholder_resources,
+                        None,
+                        "::placeholder".into(),
+                        Some(placeholder_data),
+                        NodeKind::kBox,
+                        false,
+                    ) as *mut LayoutObject;
+                    for &text_index in document.Node(placeholder).Children() {
+                        let text = document.Node(text_index);
+                        if text.Type() == DOMNodeType::kText && !text.Data().is_empty() {
+                            tree.AddText(
+                                unsafe { &mut *placeholder_object },
+                                text.Id(),
+                                text.Data().into(),
+                                if suggested.is_some_and(|value| !value.is_empty()) {
+                                    "::-internal-input-suggested"
+                                } else {
+                                    "::placeholder"
+                                }
+                                .into(),
+                                std::ptr::null(),
+                                false,
+                                std::ptr::null(),
+                            );
+                        }
+                    }
                 }
             }
-            // TextControlElement owns a real implementation element in its UA
-            // shadow tree. Consume that element's resolved style so inline
-            // display !important and -internal-input-suggested participate in
-            // the same resolver path as Blink's layout object.
-            let implementation_style = implementation_text
-                .then(|| document.TextControlPlaceholderElement(child))
-                .flatten()
-                .and_then(|placeholder| document.ResolvedStyleFor(placeholder))
-                .map(|resolved| resolved.style.clone())
-                .or_else(|| {
-                    implementation_text
-                        .then(|| resolved.placeholder.as_ref().map(|p| p.style.clone()))
-                        .flatten()
-                });
-            let mut editor_style = if let Some(style) = implementation_style {
-                style
-            } else {
-                list_marker_style(&style)
+            let editor_index = document
+                .TextControlInnerEditorElement(child)
+                .expect("text control UA shadow tree must retain an inner editor");
+            let editor_resolved = document
+                .ResolvedStyleFor(editor_index)
+                .filter(|style| style.generates_box)
+                .expect("text-control inner editor must generate a layout box");
+            let editor_style = unsafe {
+                editor_resolved
+                    .computed_style_owner
+                    .Get()
+                    .as_ref()
+                    .expect("resolved text-control inner editor style must be owned")
             };
-            editor_style.svg_clip_resources = style.svg_clip_resources.clone();
-            editor_style.display = Display::kBlock;
-            let e = std::sync::Arc::make_mut(
-                editor_style.extended.get_or_insert_with(Default::default),
+            let editor_clip = super::layout_object_tree_builder::svg_clip_resource_binding(
+                editor_style,
+                svg_clip_path_graphs,
+                document.SVGResourceScope(editor_index),
             );
-            e.width_percent = Some(100.0);
-            if textarea {
-                e.white_space = WhiteSpace::kPreWrap;
-                e.overflow_wrap = OverflowWrap::kBreakWord;
-            }
-            let editor = tree.AddBox(
+            let editor_resolved_resources = document.ResolvedStyleResourcesFor(editor_index);
+            let replaced_image_shader = None;
+            let editor_resources =
+                layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+                    svg_filter_graphs,
+                    &editor_clip,
+                    &editor_resolved_resources.svg_mask_resource,
+                    &editor_resolved_resources.svg_fill_server,
+                    &editor_resolved_resources.svg_stroke_server,
+                    &editor_resolved_resources.svg_markers,
+                    &replaced_image_shader,
+                );
+            let editor = tree.AddBoxFromStyle(
                 unsafe { &mut *object },
-                node.Id() | (1 << 54),
-                &editor_style,
+                document.Node(editor_index).Id(),
+                editor_style,
+                &editor_resources,
+                None,
                 "::-webkit-textfield-editor".into(),
                 Some(ElementData {
                     control_host_ancestor: Some(1),
@@ -1669,24 +2161,14 @@ fn AppendSelectedChildren<'a>(
                 }),
                 NodeKind::kBox,
                 false,
-                std::ptr::null(),
             ) as *mut LayoutObject;
-            let trailing_newline = textarea && !implementation_text && value.ends_with('\n');
-            if !value.is_empty() {
+            let trailing_newline = textarea && control_value.ends_with('\n');
+            if !control_value.is_empty() {
                 tree.AddText(
                     unsafe { &mut *editor },
                     node.Id() | (1 << 53),
-                    value,
-                    if implementation_text {
-                        if suggested_text {
-                            "::-internal-input-suggested"
-                        } else {
-                            "::placeholder"
-                        }
-                    } else {
-                        "::text-control-value"
-                    }
-                    .into(),
+                    control_value,
+                    "::text-control-value".into(),
                     std::ptr::null(),
                     false,
                     std::ptr::null(),
@@ -1695,19 +2177,20 @@ fn AppendSelectedChildren<'a>(
             // TextControlElement::AdjustPlaceholderBreakElement keeps a caret
             // line after the final newline without changing the control value.
             if trailing_newline {
-                let mut break_style = editor_style.clone();
-                break_style.display = Display::kInline;
-                std::sync::Arc::make_mut(break_style.extended.as_mut().unwrap()).width_percent =
-                    None;
-                tree.AddBox(
+                let mut break_builder = ComputedStyleBuilder::from_style(editor_style);
+                break_builder.SetDisplay(foundation::EDisplay::kInline);
+                break_builder.ResetWidth();
+                let break_style = break_builder.TakeStyle();
+                tree.AddBoxFromStyle(
                     unsafe { &mut *editor },
                     node.Id() | (1 << 50),
-                    &break_style,
+                    unsafe { &*break_style },
+                    &resources,
+                    None,
                     "::text-control-placeholder-break".into(),
                     None,
                     NodeKind::kLineBreak,
                     false,
-                    std::ptr::null(),
                 );
             }
         }
@@ -1717,7 +2200,9 @@ fn AppendSelectedChildren<'a>(
             child,
             node.Id(),
             object,
-            &style,
+            source_style,
+            &clip_resources,
+            svg_filter_graphs,
             resolved.marker.as_ref(),
             "::marker",
             MarkerObjectBits {
@@ -1728,12 +2213,13 @@ fn AppendSelectedChildren<'a>(
             },
         );
         if !matches!(kind, NodeKind::kReplaced | NodeKind::kFrame) && !textarea && !menu && !range {
-            let mut own_first = if is_block_container_display(style.display) {
+            let mut own_first = if CanonicalIsBlockContainer(source_style.Display()) {
                 resolved.first_letter.as_ref().and_then(|pseudo| {
-                    FindFirstLetterCandidate(document, child, &style).map(|candidate| {
+                    FindFirstLetterCandidate(document, child, source_style).map(|candidate| {
                         FirstLetterInsertion {
+                            originating_index: child,
                             originating_id: node.Id(),
-                            svg_clip_resources: style.svg_clip_resources.clone(),
+                            svg_clip_resources: clip_resources.clone(),
                             pseudo,
                             candidate,
                             consumed: false,
@@ -1874,30 +2360,49 @@ pub fn EmitLayoutMutations(
             );
             return;
         }
-        let mut root_style = resolved.style.clone();
-        root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
-        resolve_svg_clip_path(
-            &mut root_style,
+        let Some(source_style) = (unsafe { resolved.computed_style_owner.Get().as_ref() }) else {
+            tree.CreateRootDefault(
+                document.Node(document.Root()).Id(),
+                &ComputedStyle::default(),
+            );
+            return;
+        };
+        let root_clip_resources = super::layout_object_tree_builder::svg_clip_resource_binding(
+            source_style,
             &svg_clip_path_graphs,
             document.SVGResourceScope(index),
         );
-        let root = tree.CreateRoot(
+        let resolved_resources = document.ResolvedStyleResourcesFor(index);
+        let replaced_image_shader = None;
+        let root_resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+            &svg_filter_graphs,
+            &root_clip_resources,
+            &resolved_resources.svg_mask_resource,
+            &resolved_resources.svg_fill_server,
+            &resolved_resources.svg_stroke_server,
+            &resolved_resources.svg_markers,
+            &replaced_image_shader,
+        );
+        let root = tree.CreateRootFromStyle(
             node.Id(),
-            &root_style,
+            source_style,
+            &root_resources,
+            None,
             node.Name().into(),
             Some(ElementMetadata(
                 document,
                 index,
                 interaction,
-                root_style.paint.respect_image_orientation,
+                source_style.ImageOrientation()
+                    == foundation::RespectImageOrientationEnum::kRespectImageOrientation,
             )),
-            std::ptr::null(),
         ) as *mut LayoutObject;
         let mut first = resolved.first_letter.as_ref().and_then(|pseudo| {
-            FindFirstLetterCandidate(document, index, &resolved.style).map(|candidate| {
+            FindFirstLetterCandidate(document, index, source_style).map(|candidate| {
                 FirstLetterInsertion {
+                    originating_index: index,
                     originating_id: node.Id(),
-                    svg_clip_resources: root_style.svg_clip_resources.clone(),
+                    svg_clip_resources: root_clip_resources.clone(),
                     pseudo,
                     candidate,
                     consumed: false,
@@ -1941,7 +2446,7 @@ pub fn EmitLayoutMutations(
         );
     };
     // The projection borrows DOM style/metadata only during this callback.
-    // The receiver must synchronously apply it to its owned native tree.
+    // The receiver must synchronously apply it to its owned source tree.
     receive(LayoutMutation::TreeUpdate(&mut projection));
 }
 
@@ -1955,7 +2460,10 @@ fn AttachmentRoot(document: &Document, mut index: usize) -> Option<usize> {
     loop {
         if document.Node(index).Type() == DOMNodeType::kElement
             && document.ResolvedStyleFor(index).is_some_and(|s| {
-                s.own_generates_box && !s.display_contents && s.style.display != Display::kInline
+                s.own_generates_box
+                    && !s.display_contents
+                    && unsafe { s.computed_style_owner.Get().as_ref() }
+                        .is_some_and(|style| style.Display() != foundation::EDisplay::kInline)
             })
         {
             break;
@@ -2118,8 +2626,8 @@ pub(super) fn EmitLayoutSubtrees(
                 completed.insert(root);
                 break;
             }
-            // Anonymous/flattened native parents require a wider attachment
-            // context. A rejected transaction made no change to the native tree.
+            // Anonymous/flattened source parents require a wider attachment
+            // context. A rejected transaction made no change to the source tree.
             let Some(parent) = AttachmentRoot(document, parent_index) else {
                 return false;
             };
@@ -2130,7 +2638,7 @@ pub(super) fn EmitLayoutSubtrees(
 }
 
 /// Fixture adapter using the same mutation emission as the Page lifecycle.
-/// The engine owns the native tree; DOM only supplies its projection.
+/// The engine owns the source tree; DOM only supplies its projection.
 #[cfg(test)]
 pub fn BuildLayoutObjectTree(
     owner: &mut DOM,
@@ -2164,6 +2672,27 @@ mod tests {
         fn number(self) -> f64 {
             self as i32 as f64
         }
+    }
+
+    #[test]
+    fn image_decoding_attribute_projects_typed_paint_preference() {
+        let owner = crate::test_html::html_parser::ParseHTML(
+            "<img id='sync' decoding='SYNC'><img id='async' decoding='async'><img id='bad' decoding='later'>",
+        );
+        let document = owner.GetDocument();
+        let interaction = UserInteractionState::default();
+        let mode = |id| {
+            ElementMetadata(
+                document,
+                document.FindNodeById(id).unwrap(),
+                &interaction,
+                true,
+            )
+            .image_decoding_mode
+        };
+        assert_eq!(mode("sync"), image_resource::ImageDecodingMode::kSync);
+        assert_eq!(mode("async"), image_resource::ImageDecodingMode::kAsync);
+        assert_eq!(mode("bad"), image_resource::ImageDecodingMode::kUnspecified);
     }
 
     #[test]
@@ -2238,10 +2767,14 @@ mod tests {
                 values.push($value.map(Numeric::number))
             };
         }
-        n!(ElementKind(document, index, &d, s) as i32);
+        n!(ElementKind(document, index, &d, s, None) as i32);
         n!(d.scroll_offset.x);
         n!(d.scroll_offset.y);
         n!(d.nowrap_attribute);
+        n!(d.html_anchor);
+        n!(d.html_canvas);
+        n!(d.canvas_layout_subtree);
+        n!(d.drawable_attribute);
         n!(d.html_image);
         n!(d.html_ordered_or_unordered_list);
         n!(d.viewport_defining);
@@ -2358,7 +2891,7 @@ mod tests {
         for id in ["outer", "foreign"] {
             let data = ElementMetadata(document, ids[id], &interaction, true);
             assert_eq!(
-                ElementKind(document, ids[id], &data, &style),
+                ElementKind(document, ids[id], &data, &style, None),
                 NodeKind::kSvgRoot
             );
             assert!(data.natural_width.is_some());
@@ -2366,7 +2899,7 @@ mod tests {
         }
         let nested = ElementMetadata(document, ids["nested"], &interaction, true);
         assert_eq!(
-            ElementKind(document, ids["nested"], &nested, &style),
+            ElementKind(document, ids["nested"], &nested, &style, None),
             NodeKind::kSvgViewportContainer
         );
         assert_eq!(nested.natural_width, None);
@@ -2431,7 +2964,25 @@ mod tests {
     }
     #[test]
     fn emitted_dom_projection_updates_only_when_received_and_reuses_siblings() {
-        fn native(root: *mut LayoutObject, id: u64) -> *mut LayoutObject {
+        let _heap = foundation::LayoutHeapScope::new();
+        fn resolved_style(
+            width: Option<f64>,
+            height: Option<f64>,
+        ) -> crate::persistent_document::ResolvedNodeStyle {
+            let initial = unsafe { &*StyleComputedStyle::GetInitialStyleSingleton() };
+            let mut builder = ComputedStyleBuilder::from_style(initial);
+            builder.SetDisplay(foundation::EDisplay::kBlock);
+            if let Some(width) = width {
+                builder.SetWidth(&foundation::Length::Fixed(width));
+            }
+            if let Some(height) = height {
+                builder.SetHeight(&foundation::Length::Fixed(height));
+            }
+            let mut resolved = crate::persistent_document::ResolvedNodeStyle::default();
+            resolved.SetComputedStyleOwner(foundation::Persistent::from_ptr(builder.TakeStyle()));
+            resolved
+        }
+        fn source(root: *mut LayoutObject, id: u64) -> *mut LayoutObject {
             let mut object = root;
             while !object.is_null() {
                 let node = unsafe { &*object }.GetNode();
@@ -2440,7 +2991,7 @@ mod tests {
                 }
                 object = unsafe { &*object }.NextInPreOrder(root);
             }
-            panic!("missing native node {id}");
+            panic!("missing source node {id}");
         }
         fn width(object: *mut LayoutObject) -> Option<f64> {
             let node = unsafe { &*object }.GetNode();
@@ -2463,17 +3014,12 @@ mod tests {
         let document = owner.GetDocumentMut();
         for index in 0..document.NodeCount() {
             if document.Node(index).Type() == DOMNodeType::kElement {
-                let mut resolved = crate::persistent_document::ResolvedNodeStyle::default();
-                resolved.style.display = Display::kBlock;
-                document.SetResolvedStyle(index, resolved);
+                document.SetResolvedStyle(index, resolved_style(None, None));
             }
         }
         for (id, width, height) in [("changed", 80.0, 30.0), ("sibling", 40.0, 20.0)] {
             let index = ids[id];
-            let mut resolved = document.ResolvedStyleFor(index).unwrap().clone();
-            resolved.style.width = Some(width);
-            resolved.style.height = Some(height);
-            document.SetResolvedStyle(index, resolved);
+            document.SetResolvedStyle(index, resolved_style(Some(width), Some(height)));
         }
         let changed_id = owner.GetDocument().Node(ids["changed"]).Id();
         let sibling_id = owner.GetDocument().Node(ids["sibling"]).Id();
@@ -2483,8 +3029,8 @@ mod tests {
         owner.EmitLayoutMutations(&interaction, |mutation| engine.ApplyMutation(mutation));
         let root =
             engine.GetLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
-        let changed = native(root, changed_id);
-        let sibling = native(root, sibling_id);
+        let changed = source(root, changed_id);
+        let sibling = source(root, sibling_id);
         let sibling_style = unsafe { &*sibling }.StyleRef() as *const _;
         assert_eq!(width(changed), Some(80.0));
 
@@ -2498,17 +3044,19 @@ mod tests {
             })
             .unwrap();
         let document = owner.GetDocumentMut();
-        let mut resolved = document.ResolvedStyleFor(ids["changed"]).unwrap().clone();
-        resolved.style.width = Some(120.0);
-        document.SetResolvedStyle(ids["changed"], resolved);
+        document.SetResolvedStyle(ids["changed"], resolved_style(Some(120.0), Some(30.0)));
         assert_eq!(
-            owner
-                .GetDocument()
-                .ResolvedStyleFor(ids["changed"])
-                .unwrap()
-                .style
-                .width,
-            Some(120.0)
+            unsafe {
+                &*owner
+                    .GetDocument()
+                    .ResolvedStyleFor(ids["changed"])
+                    .unwrap()
+                    .computed_style_owner
+                    .Get()
+            }
+            .Width()
+            .Pixels(),
+            120.0
         );
         assert_eq!(
             width(changed),
@@ -2524,16 +3072,16 @@ mod tests {
                 Some(80.0),
                 "emission has not applied its borrowed projection"
             );
-            assert_eq!(native(root, sibling_id), sibling);
+            assert_eq!(source(root, sibling_id), sibling);
             engine.ApplyMutation(mutation)
         });
         assert_eq!(received, 1);
         let updated_root =
             engine.GetLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
         assert_eq!(updated_root, root);
-        assert_eq!(native(updated_root, changed_id), changed);
+        assert_eq!(source(updated_root, changed_id), changed);
         assert_eq!(width(changed), Some(120.0));
-        assert_eq!(native(updated_root, sibling_id), sibling);
+        assert_eq!(source(updated_root, sibling_id), sibling);
         assert_eq!(unsafe { &*sibling }.StyleRef() as *const _, sibling_style);
         assert_eq!(engine.GetLayoutTree().unwrap().UpdateStats().created, 0);
     }
@@ -2567,6 +3115,7 @@ mod tests {
                 natural_height: 24.0,
                 resolution_scale: 2.0,
                 orientation: Default::default(),
+                known_to_be_opaque: false,
             },
         );
         let interaction = UserInteractionState {

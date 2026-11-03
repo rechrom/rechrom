@@ -253,7 +253,7 @@ impl ColumnVisitor for ColumnConstraintsBuilder<'_> {
 }
 
 // cpp: layoutng_table/layout_table_column.cc:141-148
-// The children are accessed through the source native virtual child list.
+// The children are accessed through the source source virtual child list.
 fn ClearColumnChildrenNeedsLayout(column: &BlockNode) {
     let object = unsafe { &*column.GetLayoutBox().cast::<LayoutObject>() };
     object.CheckIsNotDestroyed();

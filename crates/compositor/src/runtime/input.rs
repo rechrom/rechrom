@@ -70,20 +70,20 @@ impl SmoothEffectDrivingThread {
 
 /// The actual latency event supplies component timestamps. This trait is kept
 /// with the event allocation so the host never fabricates a reduced event copy.
-pub trait NativeLatencyInfo: Send {
+pub trait LatencyInfoBackend: Send {
     fn FindLatency(&self, component: HostScrollLatencyComponent, timestamp: &mut TimeTicks)
         -> bool;
     fn AddRendererSwapTimestamp(&mut self, timestamp: TimeTicks);
     fn AddRenderingScheduledImpl(&mut self) -> bool;
-    fn CloneForSwapPromise(&self) -> Box<dyn NativeLatencyInfo>;
+    fn CloneForSwapPromise(&self) -> Box<dyn LatencyInfoBackend>;
     fn Terminate(&mut self);
     fn TraceId(&self) -> i64;
     fn TraceMainCommit(&self);
 }
 #[derive(Clone)]
-pub struct LatencyInfo(pub std::sync::Arc<std::sync::Mutex<Box<dyn NativeLatencyInfo>>>);
+pub struct LatencyInfo(pub std::sync::Arc<std::sync::Mutex<Box<dyn LatencyInfoBackend>>>);
 impl LatencyInfo {
-    pub fn new(value: Box<dyn NativeLatencyInfo>) -> Self {
+    pub fn new(value: Box<dyn LatencyInfoBackend>) -> Self {
         Self(std::sync::Arc::new(std::sync::Mutex::new(value)))
     }
     pub(crate) fn CloneForSwapPromise(&self) -> Self {
@@ -139,8 +139,8 @@ impl HostScrollLatency for LatencyInfo {
 }
 /// Source: cc/metrics/events_metrics_manager.h:38-39. Returning None has native
 /// nullptr semantics; ownership of a real metrics event is moved to the caller.
-pub trait NativeEventMetrics {}
-pub type EventMetrics = Box<dyn NativeEventMetrics>;
+pub trait EventMetricsBackend {}
+pub type EventMetrics = Box<dyn EventMetricsBackend>;
 pub type EventMetricsDoneCallback = Box<dyn FnOnce(bool) -> Option<EventMetrics>>;
 /// Native scope objects execute their external destruction behavior on Drop.
 /// No fabricated default monitor exists and neither can expose a tree/host.
@@ -155,7 +155,7 @@ pub trait InputTraceSpan {}
 
 /// Animation state remains owned by the actual external animation subsystem.
 /// This wrapper only provides the exact read interface consumed by cc trees.
-pub trait NativeMutatorHost:
+pub trait MutatorHostBackend:
     LayerTreeMutatorHost + PropertyTreeMutatorHost + std::any::Any
 {
     fn AsAnyMut(&mut self) -> &mut dyn std::any::Any;
@@ -167,7 +167,7 @@ pub trait NativeMutatorHost:
     fn MainThreadAnimationsCount(&self) -> usize;
     fn HasSmilAnimation(&self) -> bool;
 }
-pub struct MutatorHost(pub Box<dyn NativeMutatorHost>);
+pub struct MutatorHost(pub Box<dyn MutatorHostBackend>);
 impl MutatorHost {
     pub(crate) fn identity(&self) -> super::types::MainMutatorHostIdentity {
         self.0.identity()

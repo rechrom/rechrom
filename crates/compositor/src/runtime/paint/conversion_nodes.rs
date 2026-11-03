@@ -75,7 +75,7 @@ where
             .map(|p| Self::from_arc(p.clone()))
     }
     fn PaintClipRect(&self) -> RRectF {
-        let r = self.node().radii;
+        let r = self.node().PaintClipRadii();
         RRectF {
             rect: PendingClipNode::<TransformNode<R>, usize>::PaintClipRectRect(self),
             corner_radii: [r.top_left, r.top_right, r.bottom_right, r.bottom_left]
@@ -83,7 +83,7 @@ where
         }
     }
     fn ClipPath(&self) -> Option<Arc<paint::paint_clip_path::PaintClipPath>> {
-        self.node().clip_path.clone()
+        self.node().ClipPath().cloned()
     }
 }
 impl<R, B> ConversionEffectNode<B> for EffectNode<R>
@@ -102,33 +102,19 @@ where
             .map(|p| Self::from_arc(p.clone()))
     }
     fn HasDirectCompositingReasons(&self) -> bool {
-        !self.node().direct_compositing_reasons.is_empty()
+        self.node().HasDirectCompositingReasons()
     }
     fn RequiresCompositingForCanvasChild(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"CanvasChild")
+        self.node().RequiresCompositingForCanvasChild()
     }
     fn HasRealEffects(&self) -> bool {
-        self.node().opacity!=1.||crate::adapter::pending_layer::PendingEffectNode::<TransformNode<R>,usize>::BlendMode(self)!=crate::adapter::property_types::BlendMode::kSrcOver||self.node().compositor.has_filter_info||self.node().compositor.has_backdrop_filter_info
+        self.node().HasRealEffects()
     }
     fn Filter(&self) -> Option<B::FilterOperations> {
-        self.node().compositor.has_filter_info.then(|| {
-            self.node()
-                .filters
-                .canonical()
-                .expect("validated native filter")
-                .clone()
-        })
+        self.node().Filter().cloned()
     }
     fn BackdropFilter(&self) -> Option<B::FilterOperations> {
-        self.node().compositor.has_backdrop_filter_info.then(|| {
-            self.node()
-                .backdrop_filters
-                .canonical()
-                .expect("validated native backdrop filter")
-                .clone()
-        })
+        self.node().BackdropFilter().cloned()
     }
     fn BackdropFilterBounds(&self) -> Arc<paint::paint_clip_path::PaintClipPath> {
         Arc::new(paint::paint_clip_path::PaintClipPath::from_path(
@@ -140,17 +126,7 @@ where
         ))
     }
     fn HasReferenceFilter(&self) -> bool {
-        self.node()
-            .filters
-            .canonical()
-            .expect("validated filter")
-            .HasReferenceFilter()
-            || self
-                .node()
-                .backdrop_filters
-                .canonical()
-                .expect("validated backdrop filter")
-                .HasReferenceFilter()
+        self.node().HasReferenceFilter()
     }
     fn FilterOutputBounds(&self) -> Rect {
         rect(
@@ -192,28 +168,27 @@ where
             .map(|s| Self::from_arc(s.clone()))
     }
     fn ContentsRect(&self) -> Rect {
-        rect(self.node().contents_rect)
+        rect(self.node().ContentsRect())
     }
     fn ContainerRect(&self) -> Rect {
-        rect(self.node().container_rect)
+        rect(self.node().ContainerRect())
     }
     fn UserScrollableHorizontal(&self) -> bool {
-        self.node().user_scrollable_horizontal
+        self.node().UserScrollableHorizontal()
     }
     fn PropagatesXScroll(&self) -> bool {
-        self.node().compositor.overscroll_behavior[0].AllowsScrollChaining()
+        self.node().OverscrollBehavior()[0].AllowsScrollChaining()
     }
     fn CompositedScrollingNotPreferred(&self) -> bool {
-        self.node().compositor.composited_scrolling_preference
-            == native::PaintCompositedScrollingPreference::NotPreferred
+        self.node().GetCompositedScrollingPreference()
+            == paint_property_tree::PaintCompositedScrollingPreference::NotPreferred
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        element(self.node().compositor.compositor_element_id)
+        element(self.node().GetCompositorElementId())
     }
     fn OverflowClipNode(&self) -> Option<ClipNode<R>> {
         self.node()
-            .overflow_clip
-            .as_ref()
+            .OverflowClipNode()
             .map(|p| ClipNode::from_arc(p.clone()))
     }
 }

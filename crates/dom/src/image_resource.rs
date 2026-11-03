@@ -21,6 +21,9 @@ pub fn AddImageResource(
         || image.height == 0
         || !image.resolution_scale.is_finite()
         || image.resolution_scale <= 0.0
+        || image
+            .content_dpr
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
         || image.BitmapPixels().is_some_and(|pixels| {
             pixels.len()
                 != (image.width as usize)
@@ -41,6 +44,21 @@ pub fn AddImageResource(
     let natural_width = image.width as f64 / image.resolution_scale;
     let natural_height = image.height as f64 / image.resolution_scale;
     let is_document_image = image.IsDocumentImage();
+    let maybe_animated = image.MaybeAnimated();
+    let known_to_be_opaque = image
+        .BitmapPixels()
+        .is_some_and(|pixels| pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
+    owner
+        .GetDocumentMut()
+        .SetImageResourceIsDocument(image.id, is_document_image);
+    owner
+        .GetDocumentMut()
+        .SetImageResourceMaybeAnimated(image.id, maybe_animated);
+    owner
+        .GetDocumentMut()
+        .SetImageResourceContentDPR(image.id, image.content_dpr);
+    // Resource-owned facts are visible when SetImageResource performs the
+    // synchronous ImageResourceContent client notification, as in Blink.
     owner.GetDocumentMut().SetImageResource(
         source,
         ImageResourceMetadata {
@@ -49,10 +67,9 @@ pub fn AddImageResource(
             natural_height,
             resolution_scale: image.resolution_scale,
             orientation: image.orientation,
+            known_to_be_opaque,
+            is_cors_same_origin: image.is_cors_same_origin,
         },
     );
-    owner
-        .GetDocumentMut()
-        .SetImageResourceIsDocument(image.id, is_document_image);
     constraints.images.push(image);
 }

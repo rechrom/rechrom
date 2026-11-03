@@ -14,7 +14,7 @@ use super::font_fallback_priority::{
     IsTextPresentationEmoji,
 };
 use super::simple_font_data::SimpleFontData;
-use crate::text::native::character::Character;
+use crate::text::implementation::character::Character;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FallbackStage {
@@ -67,7 +67,8 @@ impl<'a> FontFallbackIterator<'a> {
 
     pub(crate) fn HasLikelyScript(character: u32) -> bool {
         let mut status = 0;
-        let script = unsafe { icu_bidi::native::uscript_getScript(character as i32, &mut status) };
+        let script =
+            unsafe { icu_bidi::ubidi_ffi::uscript_getScript(character as i32, &mut status) };
         status <= 0 && script != 0 && script != 1
     }
 
@@ -461,7 +462,7 @@ pub(crate) mod tests {
     use crate::fonts::font_orientation::FontOrientation;
     use crate::fonts::font_platform_data::FontPlatformData;
     use crate::fonts::text_rendering_mode::TextRenderingMode;
-    use crate::text::native::opentype_font::OpenTypeFont;
+    use crate::text::implementation::opentype_font::OpenTypeFont;
     use foundation::{LayoutHeapScope, MakeGarbageCollected};
     use std::sync::Arc;
 

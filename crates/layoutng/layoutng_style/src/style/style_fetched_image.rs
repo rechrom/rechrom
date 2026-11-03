@@ -26,6 +26,8 @@ pub struct StyleFetchedImage {
     override_image_resolution: f32,
     is_document_image: bool,
     orientation: image_resource::ImageOrientation,
+    is_cors_same_origin: bool,
+    known_to_be_opaque: bool,
 }
 
 impl StyleFetchedImage {
@@ -37,7 +39,9 @@ impl StyleFetchedImage {
         override_image_resolution: f32,
         is_document_image: bool,
         orientation: image_resource::ImageOrientation,
+        is_cors_same_origin: bool,
         error_occurred: bool,
+        known_to_be_opaque: bool,
     ) -> Self {
         let mut base = StyleImage::new_for_derived(&FETCHED_VTABLE);
         base.set_image_resource_for_derived(true);
@@ -63,6 +67,8 @@ impl StyleFetchedImage {
             },
             is_document_image,
             orientation,
+            is_cors_same_origin,
+            known_to_be_opaque,
         }
     }
 
@@ -89,6 +95,7 @@ impl StyleFetchedImage {
         &self,
         respect_orientation: RespectImageOrientationEnum,
     ) -> Option<(f64, f64)> {
+        let respect_orientation = self.EffectiveOrientation(respect_orientation);
         self.natural_size.as_ref().map(|size| {
             let scale = f64::from(self.AppliedResolutionScale());
             let size = (
@@ -121,6 +128,20 @@ impl StyleFetchedImage {
     pub fn Orientation(&self) -> image_resource::ImageOrientation {
         self.orientation
     }
+
+    // cpp: core/style/style_fetched_image.cc:123-129, 141-160, 163-182.
+    // SVG/document images use their container sizing path; bitmap images force
+    // encoded orientation for cross-origin content.
+    fn EffectiveOrientation(
+        &self,
+        requested: RespectImageOrientationEnum,
+    ) -> RespectImageOrientationEnum {
+        if self.is_document_image {
+            RespectImageOrientationEnum::kDoNotRespectImageOrientation
+        } else {
+            self.StyleImage().ForceOrientationIfNecessary(requested)
+        }
+    }
 }
 
 impl Traceable for StyleFetchedImage {
@@ -142,6 +163,7 @@ fn image_size(
     multiplier: f32,
     respect_orientation: RespectImageOrientationEnum,
 ) -> SizeF {
+    let respect_orientation = image.EffectiveOrientation(respect_orientation);
     image
         .natural_size
         .as_ref()
@@ -180,7 +202,10 @@ static FETCHED_VTABLE: StyleImageVTable = StyleImageVTable {
     IsLoaded: |base| fetched(base).resource_id != 0 || fetched(base).error_occurred,
     IsLoading: |base| fetched(base).resource_id == 0 && !fetched(base).error_occurred,
     ErrorOccurred: |base| fetched(base).error_occurred,
-    IsCorsSameOrigin: |_| true,
+    // cpp: core/style/style_fetched_image.cc:123-129. The resource owner
+    // publishes ImageResourceContent::IsCorsSameOrigin through the existing
+    // immutable Style input instead of exposing the resource object itself.
+    IsCorsSameOrigin: |base| fetched(base).is_cors_same_origin,
     GetNaturalSizingInfo: |base, multiplier, orientation| {
         let image = fetched(base);
         image
@@ -210,6 +235,9 @@ static FETCHED_VTABLE: StyleImageVTable = StyleImageVTable {
             image.resource_resolution_scale
         }
     },
+    // cpp: core/style/style_fetched_image.cc:248-251. The resource owner
+    // publishes Image::IsOpaque when it commits decoded pixels.
+    KnownToBeOpaque: |base, _| fetched(base).known_to_be_opaque,
     CachedImage: StyleImageDefaultCachedImage,
     DependsOnCurrentColor: StyleImageDefaultDependsOnCurrentColor,
     IsLoadedAfterMouseover: StyleImageDefaultIsLoadedAfterMouseover,
@@ -217,6 +245,13 @@ static FETCHED_VTABLE: StyleImageVTable = StyleImageVTable {
     IsEqual: |base, other| {
         FetchedImage(other).is_some_and(|other| {
             let this = fetched(base);
+            // Chromium compares the retained ImageResourceContent owner. Its
+            // loading state, intrinsic size and decoded-image facts change on
+            // that same owner, so an equal StyleFetchedImage observes them in
+            // place. Rechrom currently publishes those facts in an immutable
+            // StyleFetchedImage. Equality therefore has to include every
+            // published resource fact; otherwise ComputedStyle deduplication
+            // can keep the pending snapshot after the resource completed.
             this.url_data == other.url_data
                 && this.resource_id == other.resource_id
                 && this.error_occurred == other.error_occurred
@@ -231,6 +266,8 @@ static FETCHED_VTABLE: StyleImageVTable = StyleImageVTable {
                 )
                 && this.is_document_image == other.is_document_image
                 && this.orientation == other.orientation
+                && this.is_cors_same_origin == other.is_cors_same_origin
+                && this.known_to_be_opaque == other.known_to_be_opaque
         })
     },
 };
@@ -252,6 +289,8 @@ mod tests {
             0.0,
             true,
             image_resource::ImageOrientation::kDefault,
+            true,
+            false,
             false,
         ));
         let value = unsafe { &*fetched }.StyleImage().CssValue();
@@ -270,7 +309,8 @@ mod tests {
         use crate::style::{computed_style::ComputedStyle, forward::CSSValuePhase};
 
         let _heap = foundation::LayoutHeapScope::new();
-        let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
+        let initial =
+            unsafe { &*crate::style::computed_style::ComputedStyle::GetInitialStyleSingleton() };
         for (unresolved, resolved, expected) in [
             (
                 "../image.svg",
@@ -291,6 +331,8 @@ mod tests {
                 0.0,
                 true,
                 image_resource::ImageOrientation::kDefault,
+                true,
+                false,
                 false,
             ));
             let owner = unsafe { &*fetched }.StyleImage();
@@ -329,6 +371,8 @@ mod tests {
                 0.0,
                 true,
                 image_resource::ImageOrientation::kDefault,
+                true,
+                false,
                 false,
             ));
             weak_image = WeakPersistent::from_ptr(fetched);
@@ -377,7 +421,9 @@ mod tests {
                 0.0,
                 false,
                 image_resource::ImageOrientation::kDefault,
+                true,
                 failed,
+                false,
             ))
         };
         let pending = image(false);
@@ -426,6 +472,8 @@ mod tests {
             0.0,
             false,
             image_resource::ImageOrientation::kDefault,
+            true,
+            false,
             false,
         ));
         let loaded = foundation::MakeGarbageCollected(StyleFetchedImage::new(
@@ -437,12 +485,18 @@ mod tests {
             false,
             image_resource::ImageOrientation::kRotate90,
             false,
+            false,
+            true,
         ));
         let pending = unsafe { &*pending }.StyleImage();
         let loaded = unsafe { &*loaded }.StyleImage();
         assert!(pending.IsImageResource() && pending.IsLoading() && !pending.CanRender());
         assert!(loaded.IsLoaded() && loaded.CanRender());
         assert!(!loaded.IsLoading() && !loaded.ErrorOccurred());
+        let initial =
+            unsafe { &*crate::style::computed_style::ComputedStyle::GetInitialStyleSingleton() };
+        assert!(!pending.KnownToBeOpaque(initial));
+        assert!(loaded.KnownToBeOpaque(initial));
         assert_eq!(FetchedImage(loaded).unwrap().ResourceId(), 7);
         assert_eq!(
             loaded.ImageSize(
@@ -458,7 +512,8 @@ mod tests {
                 &SizeF::default(),
                 foundation::RespectImageOrientationEnum::kDoNotRespectImageOrientation
             ),
-            SizeF::new(20.0, 10.0)
+            SizeF::new(10.0, 20.0),
+            "cross-origin bitmap content forces encoded orientation",
         );
         let svg = foundation::MakeGarbageCollected(StyleFetchedImage::new(
             CSSUrlData::unresolved(foundation::String::from("https://example.test/a.svg")),
@@ -468,6 +523,8 @@ mod tests {
             2.0,
             true,
             image_resource::ImageOrientation::kDefault,
+            true,
+            false,
             false,
         ));
         let svg = unsafe { &*svg }.StyleImage();
@@ -486,6 +543,7 @@ mod tests {
             "paint geometry consumes the same SVG sizing resolution",
         );
         assert_eq!(svg.ImageScaleFactor(), 2.0);
+        assert!(!svg.KnownToBeOpaque(initial));
         assert!(pending != loaded);
     }
 }

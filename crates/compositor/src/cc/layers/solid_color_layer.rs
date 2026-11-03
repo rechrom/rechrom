@@ -70,4 +70,4 @@ impl<B: SolidColorLayerTypes> LayerObject<B> for SolidColorLayer<B> {
 }
 // Source: cc/layers/solid_color_layer.h:36; cc/layers/solid_color_layer.cc:25.
 // Native defaulted derived destructor has no payload; LayerObject's default
-// NativeShutdown invokes the unique canonical base destructor synchronously.
+// ShutdownLayer invokes the unique canonical base destructor synchronously.

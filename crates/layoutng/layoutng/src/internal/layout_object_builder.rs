@@ -1,21 +1,17 @@
 #![allow(non_snake_case)]
 
+use super::boundary::input::{FontResolverScope, InvalidLayoutInput, PrepareStyle};
 use super::boundary::layout_boundary::{
     ConstructionFontResolver, CreateLayoutObject, RequiresPaintBackedInlineFragment,
 };
-use super::boundary::native_input::{
-    InvalidLayoutInput, NativeFontResolverScope, PrepareNativeStyle,
-};
-use super::boundary::node_metadata_input::CreateNativeElementMetadata;
+use super::boundary::node_metadata_input::CreateElementMetadata;
 use super::constraint_space::FragmentationType;
-use super::layout_font_resolver::NativeFontResolver;
+use super::layout_font_resolver::FontResolver;
 use super::layout_inline::LayoutInline;
 use super::layout_input::{
-    ComputedStyle, ConstraintSpace, DocumentRole, ElementData, NativeNodeConstructionData, NodeKind,
+    ComputedStyle, ConstraintSpace, DocumentRole, ElementData, NodeConstructionData, NodeKind,
 };
-use super::layout_node_metadata::{
-    ContainerNode, NativeNodeMetadataRelations, Node, Text as TextNode,
-};
+use super::layout_node_metadata::{ContainerNode, Node, NodeMetadataRelations, Text as TextNode};
 use super::layout_object::{AllowDestroyingLayoutObjectInFinalizerScope, LayoutObject};
 use super::layout_object_factory_set::LayoutObjectFactorySet;
 use super::layout_pass_scope::LayoutObjectFactoryScope;
@@ -24,42 +20,44 @@ use foundation::{
     DynamicTo, InitStringStatics, LayoutHeapScope, Length, MakeGarbageCollected, Persistent,
     RuntimeEnabledFeatures, String as BlinkString,
 };
-use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
+use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use std::{collections::HashMap, sync::Arc};
 
-#[path = "../../../layout_algo_block/src/native_fragmentation_context.rs"]
+#[path = "../../../layout_algo_block/src/fragmentation_context.rs"]
 mod layout_algo_block_fragmentation_context;
-#[path = "../../../layout_algo_inline/src/native_collapsible_whitespace.rs"]
+#[path = "../../../layout_algo_inline/src/collapsible_whitespace.rs"]
 mod layout_algo_inline_collapsible_whitespace;
-#[path = "../../../layout_commit/src/native_output_node_lookup.rs"]
-mod layout_commit_native_output_node_lookup;
-#[path = "../../../layout_commit/src/native_scroll_offset_snapshot.rs"]
+#[path = "../../../layout_commit/src/output_node_lookup.rs"]
+mod layout_commit_output_node_lookup;
+#[path = "../../../layout_commit/src/scroll_offset_snapshot.rs"]
 mod layout_commit_scroll_offset_snapshot;
-#[path = "../../../layout_fragment/src/native_paint_input_update.rs"]
+#[path = "../../../layout_fragment/src/paint_input_update.rs"]
 mod layout_fragment_paint_input;
-#[path = "../../../layout_fragment/src/native_scroll_input_update.rs"]
+#[path = "../../../layout_fragment/src/scroll_input_update.rs"]
 mod layout_fragment_scroll_input;
-#[path = "../../../layout_invalidation/src/native_input_invalidation.rs"]
+#[path = "../../../layout_invalidation/src/input_invalidation.rs"]
 mod layout_invalidation_input_updates;
-#[path = "../../../layout_invalidation/src/native_managed_input_admission.rs"]
-mod layout_invalidation_native_managed_input_admission;
-#[path = "../../../layout_invalidation/src/native_managed_object_update.rs"]
-mod layout_invalidation_native_managed_object_update;
-#[path = "../../../layout_invalidation/src/native_node_input_update.rs"]
+#[path = "../../../layout_invalidation/src/managed_input_admission.rs"]
+mod layout_invalidation_managed_input_admission;
+#[path = "../../../layout_invalidation/src/managed_object_update.rs"]
+mod layout_invalidation_managed_object_update;
+#[path = "../../../layout_invalidation/src/node_input_update.rs"]
 mod layout_invalidation_node_input;
-#[path = "../../../layout_invalidation/src/native_tree_update.rs"]
+#[path = "../../../layout_invalidation/src/tree_update.rs"]
 mod layout_invalidation_package;
-#[path = "../../../layout_reuse/src/native_managed_input_index.rs"]
-mod layout_reuse_native_managed_input_index;
-#[path = "../../../layout_reuse/src/native_managed_object_compatibility.rs"]
-mod layout_reuse_native_managed_object_compatibility;
-#[path = "../../../layout_reuse/src/native_paint_only_font_binding.rs"]
-mod layout_reuse_native_paint_only_font_binding;
-use layout_invalidation_native_managed_input_admission::{
-    ControlPaintStateChanged, GeometryMetadataEqual, NonStyleInputsEqual, RetainInputStyles,
+#[path = "../../../layout_reuse/src/managed_input_index.rs"]
+mod layout_reuse_managed_input_index;
+#[path = "../../../layout_reuse/src/managed_object_compatibility.rs"]
+mod layout_reuse_managed_object_compatibility;
+#[path = "../../../layout_reuse/src/paint_only_font_binding.rs"]
+mod layout_reuse_paint_only_font_binding;
+use layout_invalidation_managed_input_admission::{
+    ControlPaintStateChanged, GeometryMetadataEqual, ImagePaintStateChanged,
+    LayoutImageNaturalSizeChangeIsPaintOnly, LayoutImageNaturalSizeChanged, NonStyleInputsEqual,
+    RetainInputStyles,
 };
-use layout_reuse_native_managed_input_index::BuildManagedInputIndex;
-use layout_reuse_native_paint_only_font_binding::PreservePaintOnlyFontBinding;
+use layout_reuse_managed_input_index::BuildManagedInputIndex;
+use layout_reuse_paint_only_font_binding::PreservePaintOnlyFontBinding;
 
 // The one-argument constructor is defined by //src/main/default_layout_engine.cc
 // and supplies FullLayoutAssembly().objects from outside this Bazel package.
@@ -81,15 +79,18 @@ struct ManagedObject {
     object: *mut LayoutObject,
     node: *mut Node,
     parent: *mut LayoutObject,
-    input: NativeNodeConstructionData,
+    input: NodeConstructionData,
     effective_style: Arc<ComputedStyle>,
+    // Canonical Blink style installed on Node/LayoutObject. Keep its identity
+    // independent from the small resource envelope assembled at the boundary.
+    effective_computed_style: *const StyleComputedStyle,
     // These descriptors survive DOM style replacement and are read during the
     // next incremental comparison. LayoutObject::StyleRef can be a distinct
     // font-bound copy; tracing it does not retain the canonical source styles.
-    input_style_roots: Vec<Persistent<NativeComputedStyle>>,
+    input_style_roots: Vec<Persistent<StyleComputedStyle>>,
 }
 
-/// Non-CSS data attached by DOM/resource loading and needed when a native
+/// Non-CSS data attached by DOM/resource loading and needed when a source
 /// `ComputedStyle` is frozen for Paint.  This stays separate from Blink's
 /// style object, matching the resource/client relationship in Chromium.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -125,7 +126,7 @@ struct ManagedInputIndex {
 }
 
 pub struct LayoutObjectTreeStorage {
-    fonts: Box<dyn NativeFontResolver>,
+    fonts: Box<dyn FontResolver>,
     factories: LayoutObjectFactorySet,
     // Canonical allocation roots, indexed for removal by the exact retired
     // object. Subtree updates must not census every live allocation to unpin one.
@@ -133,7 +134,7 @@ pub struct LayoutObjectTreeStorage {
     objects: HashMap<*mut LayoutObject, Persistent<LayoutObject>>,
     retired: Vec<(*mut LayoutObject, *mut Node)>,
     root: Persistent<LayoutObject>,
-    // The native objects and their input owners have stable storage. Hash
+    // The source objects and their input owners have stable storage. Hash
     // bucket updates move handles, never the large style/metadata descriptors.
     managed: HashMap<InputKey, Box<ManagedObject>>,
     input_index: std::cell::OnceCell<ManagedInputIndex>,
@@ -226,12 +227,12 @@ impl Drop for LayoutObjectTree {
 impl LayoutObjectTree {
     #[inline(always)]
     pub(crate) fn OutputNode(&self, id: u64) -> Option<&LayoutObject> {
-        layout_commit_native_output_node_lookup::output_node(self, id)
+        layout_commit_output_node_lookup::output_node(self, id)
     }
 
     #[inline(always)]
     pub(crate) fn OutputNodeMut(&mut self, id: u64) -> Option<&mut LayoutObject> {
-        layout_commit_native_output_node_lookup::output_node_mut(self, id)
+        layout_commit_output_node_lookup::output_node_mut(self, id)
     }
     pub(crate) fn OutputScrollOffsets(&self) -> Vec<(u64, super::layout_input::Offset)> {
         layout_commit_scroll_offset_snapshot::output_scroll_offsets(self)
@@ -310,7 +311,7 @@ impl LayoutObjectTree {
         self
     }
 
-    /// Dispatch native virtuals with the factories retained by this tree.
+    /// Dispatch source virtuals with the factories retained by this tree.
     /// Keep the scope synchronous so its thread-local pointer cannot outlive
     /// the storage which owns the actual SVG/table assembly callbacks.
     pub(crate) fn WithObjectFactoryScope<T>(&self, operation: impl FnOnce() -> T) -> T {
@@ -436,6 +437,8 @@ impl LayoutObjectTree {
     /// ImageContentData::CreateLayoutObject creates a LayoutImage and applies
     /// the originating pseudo style; keep that identity distinct from a real
     /// DOM replaced element while using the same translated replaced factory.
+    // cpp: core/layout/layout_image.h:53-53
+    // cpp: core/layout/layout_image.cc:54-58
     pub fn AddGeneratedReplaced(
         &mut self,
         parent: &mut LayoutObject,
@@ -554,21 +557,35 @@ impl LayoutObjectTree {
         layout_invalidation_input_updates::invalidate_selection_paint(self, id)
     }
 
+    /// Deliver ImageResourceObserver::ImageChanged to source document-image
+    /// clients when an embedding environment value changes.
+    pub(crate) fn InvalidateDocumentImageClients(
+        &mut self,
+        images: &[super::layout_input::PaintImage],
+    ) -> usize {
+        layout_invalidation_input_updates::invalidate_document_image_clients(self, images)
+    }
+
     /// Synchronize ordinary scroll paint metadata while retaining geometry,
     /// node identity and the owning tree's source descriptor.
     pub fn UpdateScrollOffset(&mut self, id: u64, offset: super::layout_input::Offset) -> bool {
         layout_fragment_scroll_input::update_scroll_offset(self, id, offset)
     }
 
+    /// Retain the compositor-admitted visibility bit on the source scroll owner.
+    pub fn UpdateScrollbarsHiddenIfOverlay(&mut self, id: u64, hidden: bool) -> bool {
+        layout_fragment_scroll_input::update_scrollbars_hidden_if_overlay(self, id, hidden)
+    }
+
     /// Update the source style for one real element after style resolution has
     /// proved that geometry and tree attachment are unchanged. This is the
-    /// targeted counterpart of the paint-only branch in Create(): the native
+    /// targeted counterpart of the paint-only branch in Create(): the source
     /// layout style/result remain resident, while fragment-local paint data reads the new
     /// paint data from the element metadata.
     pub fn UpdatePaintStyle(
         &mut self,
         id: u64,
-        style: &NativeComputedStyle,
+        style: &StyleComputedStyle,
         clip_resource_version: super::paint_input::SvgClipResourceVersion,
     ) -> Option<PaintStyleBinding> {
         layout_fragment_paint_input::update_paint_style(self, id, style, clip_resource_version)
@@ -576,7 +593,7 @@ impl LayoutObjectTree {
 
     /// Element::RecalcOwnStyle updates an attached LayoutObject through
     /// SetStyle; ordinary geometry changes do not reattach every sibling.
-    /// Reuse Create's style/metadata implementation after proving the native
+    /// Reuse Create's style/metadata implementation after proving the source
     /// object kind and attachment are unchanged. Complex generated sources
     /// retain the ordinary attachment transaction.
     pub fn UpdateNodeInput(
@@ -589,34 +606,37 @@ impl LayoutObjectTree {
     }
 
     /// Element::RecalcOwnStyle installs local style/theme inputs on existing
-    /// LayoutObjects. Admission retains native geometry and rejects changes
+    /// LayoutObjects. Admission retains source geometry and rejects changes
     /// requiring the fragment/overflow lifecycle (ComputedStyle::VisualInvalidationDiff).
     fn PaintInputPlan(
         &self,
         id: u64,
-        style: &ComputedStyle,
+        style: &StyleComputedStyle,
+        resources: &crate::style_projection::StyleResourceBindings<'_>,
         element: &Option<ElementData>,
     ) -> Option<(std::collections::HashSet<u64>, Vec<u64>)> {
-        layout_fragment_paint_input::paint_input_plan(self, id, style, element)
+        layout_fragment_paint_input::paint_input_plan(self, id, style, resources, element)
     }
 
     /// Query geometry validation must not install paint/resource bindings.
     pub(crate) fn GeometryInputMatches(
         &self,
         id: u64,
-        style: &ComputedStyle,
+        style: &StyleComputedStyle,
+        resources: &crate::style_projection::StyleResourceBindings<'_>,
         element: &Option<ElementData>,
     ) -> bool {
-        self.PaintInputPlan(id, style, element).is_some()
+        self.PaintInputPlan(id, style, resources, element).is_some()
     }
 
     pub fn UpdatePaintInput(
         &mut self,
         id: u64,
-        style: &ComputedStyle,
+        style: &StyleComputedStyle,
+        resources: &crate::style_projection::StyleResourceBindings<'_>,
         element: Option<ElementData>,
     ) -> Option<PaintInputUpdate> {
-        layout_fragment_paint_input::update_paint_input(self, id, style, element)
+        layout_fragment_paint_input::update_paint_input(self, id, style, resources, element)
     }
 
     /// Exclusive access to the tree-owned root for the layout entry point.

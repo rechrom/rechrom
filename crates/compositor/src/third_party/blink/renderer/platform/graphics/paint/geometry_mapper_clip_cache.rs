@@ -6,22 +6,17 @@
 // opaque cache allocation. Weak references model non-owning GC node members,
 // including a nearest-filter reference to the owning node itself.
 use super::float_clip_rect::FloatClipRect;
+pub use foundation::OverlayScrollbarClipBehavior;
 use paint::paint_property_tree::{ClipPaintPropertyNode, TransformPaintPropertyNode};
-use std::{
-    cell::Cell,
-    sync::{Arc, Mutex, Weak},
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc, Mutex, Weak,
 };
-// Source single-Paint-sequence static: each runtime sequence has its own
-// generation; Pages on different threads never share a mutable generation.
-thread_local! { static S_GLOBAL_GENERATION: Cell<u32> = const { Cell::new(1) }; }
+// Source process-global invalidation generation. Atomic storage preserves the
+// single unsigned generation when native cache owners are lent across threads.
+static S_GLOBAL_GENERATION: AtomicU32 = AtomicU32::new(1);
 fn global_generation() -> u32 {
-    S_GLOBAL_GENERATION.with(Cell::get)
-}
-// Source: third_party/blink/renderer/platform/graphics/overlay_scrollbar_clip_behavior.h:10-15.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OverlayScrollbarClipBehavior {
-    kIgnoreOverlayScrollbarSize,
-    kExcludeOverlayScrollbarSizeForHitTesting,
+    S_GLOBAL_GENERATION.load(Ordering::Relaxed)
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.h:31-50.
 #[derive(Clone, Debug)]
@@ -84,7 +79,7 @@ impl GeometryMapperClipCache {
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.cc:28-34.
     pub fn ClearCache() {
-        S_GLOBAL_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
+        S_GLOBAL_GENERATION.fetch_add(1, Ordering::Relaxed);
     }
     pub fn IsValid(&self) -> bool {
         self.cache_generation_ == global_generation()

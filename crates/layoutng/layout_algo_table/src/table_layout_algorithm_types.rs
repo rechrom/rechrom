@@ -577,8 +577,8 @@ mod tests {
         ]
     }
     #[test]
-    fn native_table_column_and_cell_constraint_algorithms_match_cpp() {
-        crate::native_test_thread::run(column_constraint_body);
+    fn table_column_and_cell_constraint_algorithms_match_cpp() {
+        crate::test_thread::run(column_constraint_body);
     }
     fn column_constraint_body() {
         let _scope = LayoutHeapScope::new();

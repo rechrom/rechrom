@@ -8,17 +8,29 @@ use layoutng_assembly::internal::layout_input::{
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{
     BackgroundRepeatRule, InterpolationQuality, PaintBlendMode, PaintCornerRadii,
-    PaintFilterOperation, PaintImageTileRule, PaintShader, SvgStrokeLineCap, SvgStrokeLineJoin,
+    PaintImageTileRule, PaintShader, SvgStrokeLineCap, SvgStrokeLineJoin,
 };
-use paint_chunk::{PaintChunkBackgroundColorInfo, PaintHitTestOpaqueness};
+use paint_chunk::PaintChunkBackgroundColorInfo;
+use paint_model::property_filter_operations::PropertyFilterOperations;
 use paint_model::PaintPhase;
 use paint_model::PaintRect;
 
 use crate::PaintOpType as DisplayItemType;
 
+pub use crate::scrollbar_display_item::ScrollbarDisplayItemData;
 pub use paint_model::DisplayMaskLayer;
 
-// cpp: paint/paint_engine.h:102-203
+/// The optional SVG PaintFlags pass supplied to DecorationLinePainter.
+/// HTML is the null-flags path; SVG fill and stroke must remain distinct
+/// because the latter strokes the decoration's already-expanded outline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecorationPaintPass {
+    #[default]
+    Html,
+    SvgFill,
+    SvgStroke,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct DisplayItem {
     pub r#type: DisplayItemType,
@@ -36,6 +48,19 @@ pub struct DisplayItem {
     pub line_style: BorderLineStyle,
     pub decoration_style: TextDecorationStyle,
     pub stroke_width: f64,
+    /// DecorationGeometry::Thickness(), kept separate from an SVG stroke
+    /// pass's own PaintFlags stroke width.
+    pub decoration_thickness: f64,
+    pub decoration_dash_intervals: Vec<f64>,
+    pub decoration_dash_offset: f64,
+    pub decoration_round_cap: bool,
+    /// DecorationLinePainter's resolved wave. A zero wavelength denotes a
+    /// legacy/default wave and is resolved by the compositor lowering boundary.
+    pub wavy_wavelength: f64,
+    pub wavy_control_point_distance: f64,
+    pub wavy_phase: f64,
+    pub wavy_offset: f64,
+    pub decoration_paint_pass: DecorationPaintPass,
     pub corner_radius: f64,
     pub inner_corner_radius: f64,
     pub corner_radii: PaintCornerRadii,
@@ -54,15 +79,15 @@ pub struct DisplayItem {
     pub paint_shader: Option<PaintShader>,
     pub blend_mode: PaintBlendMode,
     pub svg_marker_resource_id: u64,
-    pub filters: Vec<PaintFilterOperation>,
-    /// Geometry needed only by the self-contained flat PaintRecord replay.
-    /// Normal page compositing reads the same values from the Effect node.
-    pub filter_reference_box: Option<PaintRect>,
-    pub filter_reference_scale: f64,
+    /// Canonical FilterEffectBuilder output owned by PrePaint. Flat records
+    /// replay this same value; Raster must not rebuild it from authored style.
+    pub canonical_filters: PropertyFilterOperations,
     pub mask_layers: Vec<DisplayMaskLayer>,
     pub round_cap: bool,
     pub resource_id: u64,
     pub image_interpolation_quality: InterpolationQuality,
+    /// PaintImage::DecodingMode selected for this concrete image use.
+    pub image_decoding_mode: image_resource::ImageDecodingMode,
     /// Effective orientation for this image use after CSS image-orientation.
     /// Source rectangles are expressed in the oriented image coordinate space.
     pub image_orientation: image_resource::ImageOrientation,
@@ -123,6 +148,15 @@ impl Default for DisplayItem {
             line_style: BorderLineStyle::kNone,
             decoration_style: TextDecorationStyle::kSolid,
             stroke_width: 0.0,
+            decoration_thickness: 0.0,
+            decoration_dash_intervals: Vec::new(),
+            decoration_dash_offset: 0.0,
+            decoration_round_cap: false,
+            wavy_wavelength: 0.0,
+            wavy_control_point_distance: 0.0,
+            wavy_phase: 0.0,
+            wavy_offset: 0.0,
+            decoration_paint_pass: DecorationPaintPass::Html,
             corner_radius: 0.0,
             inner_corner_radius: 0.0,
             corner_radii: PaintCornerRadii::default(),
@@ -141,13 +175,12 @@ impl Default for DisplayItem {
             paint_shader: None,
             blend_mode: PaintBlendMode::kNormal,
             svg_marker_resource_id: 0,
-            filters: Vec::new(),
-            filter_reference_box: None,
-            filter_reference_scale: 1.0,
+            canonical_filters: Default::default(),
             mask_layers: Vec::new(),
             round_cap: false,
             resource_id: 0,
             image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            image_decoding_mode: Default::default(),
             image_orientation: Default::default(),
             document_image_container_key: None,
             repeat_x: false,
@@ -193,23 +226,7 @@ impl Default for DisplayItem {
 pub enum RecordedDisplayItemKind {
     Drawing,
     Scrollbar,
-}
-
-/// Source-owned inputs retained by ScrollbarDisplayItem until PAC chooses
-/// composited or non-composited painting. The cc layer is created only at the
-/// compositor boundary; Paint retains geometry and identity, not a cc owner.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ScrollbarDisplayItemData {
-    pub element_id: foundation::CompositorElementId,
-    pub track_rect: PaintRect,
-    pub thumb_rect: PaintRect,
-    pub thumb_color: Color,
-    pub horizontal: bool,
-    pub overlay: bool,
-    pub left_side_vertical: bool,
-    pub minimum_thumb_length: i32,
-    pub needs_update_display: bool,
-    pub hit_test_opaqueness: PaintHitTestOpaqueness,
+    ForeignLayer,
 }
 
 /// A semantic item containing a PaintRecord range in the flat replay ABI.
@@ -220,24 +237,10 @@ pub struct RecordedDisplayItem {
     pub is_cacheable: bool,
     pub is_tombstone: bool,
     pub paint_invalidation_reason: Option<foundation::PaintInvalidationReason>,
-    /// Immutable content versions of image resources sampled by this record.
-    ///
-    /// Blink normally carries an image client's invalidation through the next
-    /// PaintController transaction. Rechrom also permits an older immutable
-    /// PaintArtifact to be presented again, so a one-shot dirty bit is not a
-    /// sufficient proof. Keeping the exact `(resource id, revision)` set on
-    /// the record lets RasterInvalidator compare any two retained artifacts in
-    /// either direction without retaining Paint or Page state.
-    pub image_content_revisions: Vec<(image_resource::ImageId, u64)>,
-    pub scrollbar_needs_update_display: Option<bool>,
     pub scrollbar: Option<ScrollbarDisplayItemData>,
+    pub foreign_layer: Option<crate::ForeignLayerDisplayItemData>,
     pub kind: RecordedDisplayItemKind,
     pub id: paint_model::display_item_id::DisplayItemId,
-    /// The client visual rect supplied when the PaintRecord was created.
-    /// ObjectPaintInvalidator compares this geometry before PaintController
-    /// moves a cached DrawingDisplayItem. Keep the producer value separate
-    /// from `visual_rect`, which may be tightened to the recorded operations.
-    pub client_visual_rect: PaintRect,
     pub visual_rect: PaintRect,
     pub visual_rect_is_accurate: bool,
     pub draws_content: bool,
@@ -253,6 +256,314 @@ pub struct RecordedDisplayItem {
         Option<Arc<paint_model::paint_property_tree::TransformPaintPropertyNode>>,
 }
 
+impl RecordedDisplayItem {
+    /// Source: `display_item.cc:40-66`.
+    ///
+    /// The resident artifacts are explicit because Rechrom stores a drawing's
+    /// PaintRecord in the artifact's flat PaintOp backing instead of in the
+    /// heterogeneous DisplayItem allocation itself.
+    pub fn EqualsForUnderInvalidation(
+        &self,
+        artifact: &crate::PaintRecording,
+        other: &Self,
+        other_artifact: &crate::PaintRecording,
+    ) -> bool {
+        assert!(!self.IsTombstone());
+        if self.id != other.id
+            || self.kind != other.kind
+            || self.raster_effect_outset != other.raster_effect_outset
+            || self.draws_content != other.draws_content
+        {
+            return false;
+        }
+
+        if self.visual_rect != other.visual_rect
+            // Change of empty visual rect doesn't matter.
+            && self.visual_rect.is_empty()
+            && other.visual_rect.is_empty()
+            // Visual rect of a DrawingDisplayItem not drawing content doesn't matter.
+            && (!self.IsDrawing() || self.draws_content)
+        {
+            return false;
+        }
+
+        match self.kind {
+            RecordedDisplayItemKind::Drawing => {
+                self.EqualsDrawingRecordFastPath(artifact, other, other_artifact)
+            }
+            RecordedDisplayItemKind::ForeignLayer => {
+                self.EqualsForeignLayerForUnderInvalidation(other)
+            }
+            RecordedDisplayItemKind::Scrollbar => self.EqualsScrollbarForUnderInvalidation(other),
+        }
+    }
+
+    // Source: display_item.h:206.
+    pub fn GetId(&self) -> paint_model::display_item_id::DisplayItemId {
+        self.id
+    }
+
+    // Source: display_item.h:208-211.
+    pub fn ClientId(&self) -> u64 {
+        self.id.client_id
+    }
+
+    // Source: display_item.h:213-225.
+    pub fn VisualRect(&self) -> PaintRect {
+        self.visual_rect
+    }
+
+    pub fn GetRasterEffectOutset(&self) -> RasterEffectOutset {
+        self.raster_effect_outset
+    }
+
+    pub fn GetType(&self) -> paint_model::display_item_id::DisplayItemIdType {
+        self.id.r#type
+    }
+
+    pub fn Fragment(&self) -> u32 {
+        self.id.fragment
+    }
+
+    // Source: display_item.h:226.
+    pub fn SetFragment(&mut self, fragment: u32) {
+        self.id.fragment = fragment;
+    }
+
+    // Source: display_item.h:246-258.
+    pub fn IsDrawing(&self) -> bool {
+        self.GetType().IsDrawingType()
+    }
+
+    pub fn IsForeignLayer(&self) -> bool {
+        self.GetType().IsForeignLayerType()
+    }
+
+    pub fn IsScrollbar(&self) -> bool {
+        matches!(
+            self.GetType(),
+            paint_model::display_item_id::DisplayItemIdType::kScrollbarHorizontal
+                | paint_model::display_item_id::DisplayItemIdType::kScrollbarVertical
+        )
+    }
+
+    // Source: display_item.h:260-268.
+    pub fn GetPaintInvalidationReason(&self) -> Option<foundation::PaintInvalidationReason> {
+        self.paint_invalidation_reason
+    }
+
+    pub fn SetPaintInvalidationReason(&mut self, reason: foundation::PaintInvalidationReason) {
+        self.paint_invalidation_reason = Some(reason);
+        self.is_cacheable = reason != foundation::PaintInvalidationReason::kUncacheable;
+    }
+
+    pub fn IsCacheable(&self) -> bool {
+        self.paint_invalidation_reason
+            .map_or(self.is_cacheable, |reason| {
+                reason != foundation::PaintInvalidationReason::kUncacheable
+            })
+    }
+
+    // Source: display_item.h:272-276.
+    pub fn IsTombstone(&self) -> bool {
+        self.is_tombstone
+    }
+
+    // Source: display_item.h:317-325. A single-item move keeps identity and
+    // invalidation fields available to diagnostics and raster invalidation.
+    pub fn CreateTombstone(&mut self) {
+        // MoveItem's memcpy transfers subclass ownership without incrementing
+        // scoped_refptr counts, and Destruct() intentionally skips the old
+        // tombstone. Rust must explicitly release the old owner slot after the
+        // destination clone has retained it.
+        self.foreign_layer = None;
+        self.draws_content = false;
+        self.is_tombstone = true;
+    }
+
+    // Source: display_item_list.h:225-231. A moved subsequence is never read
+    // for raster invalidation, so Blink zeroes every old slot rather than
+    // preserving the single-item tombstone fields.
+    pub fn CreateSubsequenceTombstone(&mut self) {
+        self.is_cacheable = true;
+        self.is_tombstone = true;
+        self.paint_invalidation_reason = Some(foundation::PaintInvalidationReason::kNone);
+        self.scrollbar = None;
+        self.foreign_layer = None;
+        self.kind = RecordedDisplayItemKind::Drawing;
+        self.id = Default::default();
+        self.visual_rect = Default::default();
+        self.visual_rect_is_accurate = false;
+        self.draws_content = false;
+        self.raster_effect_outset = RasterEffectOutset::kNone;
+        self.record_rect_known_to_be_opaque = Default::default();
+        self.record_background = Default::default();
+        self.record_has_text = false;
+        self.record_begin = 0;
+        self.record_end = 0;
+        self.scroll_translation = None;
+    }
+
+    // Source: display_item.h:278-286; display_item.cc:203-240.
+    pub fn IsSubsequenceTombstone(&self) -> bool {
+        self.is_tombstone && self.id.client_id == 0
+    }
+
+    pub fn IdAsString(&self, paint_artifact: &crate::PaintRecording) -> String {
+        if self.IsSubsequenceTombstone() {
+            return "SUBSEQUENCE TOMBSTONE".into();
+        }
+        if self.IsTombstone() {
+            return format!("TOMBSTONE {}", paint_artifact.IdAsString(&self.id));
+        }
+        paint_artifact.IdAsString(&self.id)
+    }
+
+    pub fn PropertiesAsJSON(&self, paint_artifact: &crate::PaintRecording) -> serde_json::Value {
+        let mut properties = serde_json::Map::new();
+        properties.insert(
+            "id".into(),
+            serde_json::Value::String(self.IdAsString(paint_artifact)),
+        );
+        if self.IsSubsequenceTombstone() {
+            return serde_json::Value::Object(properties);
+        }
+
+        properties.insert(
+            "invalidation".into(),
+            serde_json::Value::String(
+                foundation::PaintInvalidationReasonToString(
+                    self.paint_invalidation_reason
+                        .unwrap_or(foundation::PaintInvalidationReason::kNone),
+                )
+                .into(),
+            ),
+        );
+        properties.insert(
+            "visualRect".into(),
+            serde_json::Value::String(format!(
+                "{},{} {}x{}",
+                self.visual_rect.x,
+                self.visual_rect.y,
+                self.visual_rect.width,
+                self.visual_rect.height
+            )),
+        );
+        match self.raster_effect_outset {
+            RasterEffectOutset::kNone => {}
+            RasterEffectOutset::kHalfPixel => {
+                properties.insert("outset".into(), serde_json::json!(0.5));
+            }
+            RasterEffectOutset::kWholePixel => {
+                properties.insert("outset".into(), serde_json::json!(1));
+            }
+        }
+
+        if self.IsTombstone() {
+            return serde_json::Value::Object(properties);
+        }
+        if self.kind == RecordedDisplayItemKind::Scrollbar {
+            let scroll_translation = self
+                .scroll_translation
+                .as_ref()
+                .map_or_else(|| "0x0".into(), |node| format!("{:p}", Arc::as_ptr(node)));
+            properties.insert(
+                "scrollTranslation".into(),
+                serde_json::Value::String(scroll_translation),
+            );
+        } else if self.kind == RecordedDisplayItemKind::ForeignLayer {
+            properties.insert(
+                "layer".into(),
+                serde_json::json!(self.GetForeignLayer().LayerId()),
+            );
+        }
+        serde_json::Value::Object(properties)
+    }
+
+    pub fn AsDebugString(&self, paint_artifact: &crate::PaintRecording) -> String {
+        serde_json::to_string_pretty(&self.PropertiesAsJSON(paint_artifact))
+            .expect("DisplayItem debug properties contain only finite source values")
+    }
+
+    pub fn DrawsContent(&self) -> bool {
+        self.draws_content
+    }
+}
+
+// Source: display_item.cc:271-273.
+impl std::fmt::Display for RecordedDisplayItem {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(output, "{{\"id\": {}}}", self.GetId())
+    }
+}
+
+#[cfg(test)]
+mod recorded_display_item_debug_tests {
+    use super::*;
+    use paint_model::display_item_id::{DisplayItemId, DisplayItemIdType};
+
+    fn item() -> RecordedDisplayItem {
+        RecordedDisplayItem {
+            is_cacheable: true,
+            is_tombstone: false,
+            paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kLayout),
+            scrollbar: None,
+            foreign_layer: None,
+            kind: RecordedDisplayItemKind::Drawing,
+            id: DisplayItemId {
+                client_id: 0x2a,
+                r#type: DisplayItemIdType::kCaret,
+                fragment: 3,
+            },
+            visual_rect: PaintRect {
+                x: 1.0,
+                y: 2.0,
+                width: 30.0,
+                height: 40.0,
+            },
+            visual_rect_is_accurate: true,
+            draws_content: true,
+            raster_effect_outset: RasterEffectOutset::kHalfPixel,
+            record_rect_known_to_be_opaque: PaintRect::default(),
+            record_background: PaintChunkBackgroundColorInfo::default(),
+            record_has_text: false,
+            record_begin: 0,
+            record_end: 0,
+            scroll_translation: None,
+        }
+    }
+
+    #[test]
+    fn properties_use_artifact_identity_reason_rect_and_outset() {
+        let item = item();
+        let mut artifact = crate::PaintRecording::default();
+        artifact.RecordDebugInfo(0x2a, Arc::<str>::from("caret-client"), 7);
+        let properties = item.PropertiesAsJSON(&artifact);
+        assert_eq!(properties["id"], "0x2a:caret-client:Caret:3");
+        assert_eq!(properties["invalidation"], "geometry");
+        assert_eq!(properties["visualRect"], "1,2 30x40");
+        assert_eq!(properties["outset"], 0.5);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&item.AsDebugString(&artifact)).unwrap(),
+            properties
+        );
+    }
+
+    #[test]
+    fn tombstone_strings_keep_source_distinction() {
+        let artifact = crate::PaintRecording::default();
+        let mut moved = item();
+        moved.is_tombstone = true;
+        assert_eq!(moved.IdAsString(&artifact), "TOMBSTONE 0x2a:Caret:3");
+        moved.id.client_id = 0;
+        assert_eq!(moved.IdAsString(&artifact), "SUBSEQUENCE TOMBSTONE");
+        assert_eq!(
+            moved.PropertiesAsJSON(&artifact).as_object().unwrap().len(),
+            1
+        );
+    }
+}
+
 pub use layoutng_assembly::caret::CaretPaintState as CaretPosition;
 pub use layoutng_assembly::editing_state::EditingPaintState;
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -261,6 +572,3 @@ pub struct CaretGeometry {
     pub rect: PaintRect,
     pub visible: bool,
 }
-
-/// Drawing display items, each selecting its recorded drawing operations.
-pub type DisplayItemList = Vec<RecordedDisplayItem>;

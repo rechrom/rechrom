@@ -18,11 +18,10 @@ impl<'c, 'o> DrawingRecorder<'c, 'o> {
         context: &'c RefCell<PaintContext<'o>>,
         node: &PaintTreeNode<'_>,
         item_type: DisplayItemIdType,
-        client_visual_rect: PaintRect,
     ) -> bool {
         context
             .borrow_mut()
-            .UseCachedDrawingIfPossible(node, item_type, client_visual_rect)
+            .UseCachedDrawingIfPossible(node, item_type)
     }
 
     pub(crate) fn new(
@@ -51,6 +50,13 @@ impl<'c, 'o> DrawingRecorder<'c, 'o> {
             node.paint_snap_offset,
         );
         Self { context }
+    }
+
+    // Source: platform/graphics/paint/drawing_recorder.h:76-79.
+    pub(crate) fn UniteVisualRect(&self, rect: PaintRect) {
+        self.context
+            .borrow_mut()
+            .UniteDrawingRecorderVisualRect(rect);
     }
 }
 

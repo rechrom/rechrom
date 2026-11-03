@@ -171,7 +171,7 @@ impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerType
     for CpuCompositorTypes<R>
 {
     type ScrollbarCanvas = ();
-    type Scrollbar = super::paint::NativeScrollbar;
+    type Scrollbar = super::paint::Scrollbar;
 }
 impl<R: CpuSkiaBackend> crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes
     for CpuCompositorTypes<R>

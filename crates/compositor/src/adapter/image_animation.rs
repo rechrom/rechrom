@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Weak},
 };
 // Source dependency: cc/paint/paint_image.h:177-186; paint_image.cc:45-46.
-pub use paint::paint_engine::NativePaintImageId as PaintImageId;
+pub use paint::paint_engine::PaintImageResourceId as PaintImageId;
 pub const kInvalidId: PaintImageId = PaintImageId(-2);
 pub const kDefaultFrameIndex: usize = 0;
 // Source dependency: cc/paint/paint_image.h:218-219.

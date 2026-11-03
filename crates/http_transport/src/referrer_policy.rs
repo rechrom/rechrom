@@ -2,6 +2,21 @@
 //! Pure request policy; document ownership and policy installation stay upstream.
 use url::Url;
 
+/// Network-isolation origin comparison shared by request policy and resource
+/// response provenance. Invalid or opaque URLs never acquire same-origin
+/// privileges.
+#[allow(non_snake_case)]
+pub fn IsSameOrigin(source: &str, destination: &str) -> bool {
+    let (Ok(source), Ok(destination)) = (Url::parse(source), Url::parse(destination)) else {
+        return false;
+    };
+    let source = source.origin();
+    let destination = destination.origin();
+    source.ascii_serialization() != "null"
+        && destination.ascii_serialization() != "null"
+        && source == destination
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ReferrerPolicy {
     NoReferrer,
@@ -53,7 +68,7 @@ impl ReferrerPolicy {
         if !matches!(source.scheme(), "http" | "https") {
             return String::new();
         }
-        let same_origin = source.origin() == destination.origin();
+        let same_origin = IsSameOrigin(source.as_str(), destination.as_str());
         let downgrade =
             source.scheme() == "https" && !matches!(destination.scheme(), "https" | "wss");
         if (downgrade
@@ -97,6 +112,15 @@ mod tests {
         );
         assert_eq!(ReferrerPolicy::FromString("origin, no-referrer"), None);
         assert_eq!(ReferrerPolicy::FromHeader("never, default"), None);
+    }
+
+    #[test]
+    fn same_origin_rejects_port_scheme_and_opaque_origin_changes() {
+        assert!(IsSameOrigin("https://a.test/path", "https://a.test/other"));
+        assert!(!IsSameOrigin("https://a.test/", "https://a.test:444/"));
+        assert!(!IsSameOrigin("http://a.test/", "https://a.test/"));
+        assert!(!IsSameOrigin("data:text/plain,a", "data:text/plain,b"));
+        assert!(!IsSameOrigin("not a url", "https://a.test/"));
     }
 
     #[test]

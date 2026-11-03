@@ -22,7 +22,7 @@ fn node(owner: &dom::DOM, id: &str) -> usize {
         .unwrap()
 }
 #[test]
-fn dom_attr_custom_inheritance_and_mutation_reach_native_computed_style() {
+fn dom_attr_custom_inheritance_and_mutation_reach_computed_style_computed_style() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=parent data-size=31><span id=child data-size=99></span></div>",
@@ -39,15 +39,15 @@ fn dom_attr_custom_inheritance_and_mutation_reach_native_computed_style() {
     );
     {
         let parent_style = owner.GetDocument().ResolvedStyleFor(parent).unwrap();
-        let native = unsafe { &*parent_style.native_style.Get() };
-        assert_eq!(native.Width().Pixels(), 31.0);
-        assert!(native.HasAttrFunction());
+        let computed_style = unsafe { &*parent_style.computed_style_owner.Get() };
+        assert_eq!(computed_style.Width().Pixels(), 31.0);
+        assert!(computed_style.HasAttrFunction());
         let child_style = owner.GetDocument().ResolvedStyleFor(child).unwrap();
-        let native = unsafe { &*child_style.native_style.Get() };
-        assert_eq!(native.Width().Pixels(), 31.0);
-        assert_eq!(native.Height().Pixels(), 99.0);
-        assert_eq!(native.PaddingTop().Pixels(), 5.0);
-        assert!(native.HasAttrFunction());
+        let computed_style = unsafe { &*child_style.computed_style_owner.Get() };
+        assert_eq!(computed_style.Width().Pixels(), 31.0);
+        assert_eq!(computed_style.Height().Pixels(), 99.0);
+        assert_eq!(computed_style.PaddingTop().Pixels(), 5.0);
+        assert!(computed_style.HasAttrFunction());
     }
     owner.GetDocumentMut().SetAttribute(
         parent,
@@ -64,12 +64,12 @@ fn dom_attr_custom_inheritance_and_mutation_reach_native_computed_style() {
         engine.Diagnostics()
     );
     let child_style = owner.GetDocument().ResolvedStyleFor(child).unwrap();
-    let native = unsafe { &*child_style.native_style.Get() };
-    assert_eq!(native.Width().Pixels(), 47.0);
-    assert_eq!(native.Height().Pixels(), 99.0);
+    let computed_style = unsafe { &*child_style.computed_style_owner.Get() };
+    assert_eq!(computed_style.Width().Pixels(), 47.0);
+    assert_eq!(computed_style.Height().Pixels(), 99.0);
 }
 #[test]
-fn invalid_attr_uses_typed_fallback_and_native_unset() {
+fn invalid_attr_uses_typed_fallback_and_computed_style_unset() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner =
         html::html_parser::ParseHTML("<div id=target data-size=12px data-ratio=.25></div>");
@@ -83,10 +83,10 @@ fn invalid_attr_uses_typed_fallback_and_native_unset() {
         engine.Diagnostics()
     );
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
-    assert_eq!(native.Width().Pixels(), 19.0);
-    assert!(native.Height().IsAuto());
-    assert_eq!(native.Opacity(), 0.25);
-    assert_eq!(native.PaddingTop().Pixels(), 0.0);
-    assert!(native.HasAttrFunction());
+    let computed_style = unsafe { &*style.computed_style_owner.Get() };
+    assert_eq!(computed_style.Width().Pixels(), 19.0);
+    assert!(computed_style.Height().IsAuto());
+    assert_eq!(computed_style.Opacity(), 0.25);
+    assert_eq!(computed_style.PaddingTop().Pixels(), 0.0);
+    assert!(computed_style.HasAttrFunction());
 }

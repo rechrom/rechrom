@@ -1,6 +1,6 @@
 //! Multi-layer sprite geometry must reach native style and document-image replay.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::{Page, PreferredColorScheme};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -50,6 +50,15 @@ fn page_fixture_with_preference(
     image: Option<&str>,
     preferred_color_scheme: u8,
 ) -> Page {
+    fn fixture_image_ready(page: &Page) -> bool {
+        let document = page.Document();
+        let document = document.GetDocument();
+        document.ImageResourceFor("fixture.svg").is_some()
+            || document
+                .ImageResourceFor("https://nested-svg.test/fixture.svg")
+                .is_some()
+    }
+
     let html =
         format!("<!doctype html><style>body{{margin:0}}svg,img{{display:block}}</style>{markup}");
     let assembly = browser::CreateLayoutAssembly();
@@ -80,12 +89,17 @@ fn page_fixture_with_preference(
     page.Open("https://nested-svg.test/", 16384, 4096).unwrap();
     for _ in 0..100 {
         page.RunTask().unwrap();
-        if !page.IsLoading() && page.CurrentFrame().is_some() {
+        let image_ready = image.is_none() || fixture_image_ready(&page);
+        if !page.IsLoading() && page.CurrentFrame().is_some() && image_ready {
             break;
         }
     }
     assert!(!page.IsLoading());
     assert!(page.CurrentFrame().is_some());
+    assert!(
+        image.is_none() || fixture_image_ready(&page),
+        "fixture image completed"
+    );
     page
 }
 
@@ -176,7 +190,7 @@ fn assert_tile(page: &Page, size: f64, y: f64) {
 }
 #[test]
 fn one_layer_sprite_crop_control() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = sprite_page("url(fixture.svg)", "");
         assert_tile(&page, 20.0, 20.0);
@@ -184,7 +198,7 @@ fn one_layer_sprite_crop_control() {
 }
 #[test]
 fn multilayer_svg_sprite_repeats_position_and_repeat_before_paint() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = sprite_page(
             "linear-gradient(transparent,transparent),url(fixture.svg)",
@@ -201,7 +215,7 @@ fn multilayer_svg_sprite_repeats_position_and_repeat_before_paint() {
 }
 #[test]
 fn multilayer_svg_sprite_repeats_background_size_in_paint_geometry() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = sprite_page(
             "linear-gradient(transparent,transparent),url(fixture.svg)",
@@ -220,7 +234,7 @@ fn multilayer_svg_sprite_repeats_background_size_in_paint_geometry() {
 
 #[test]
 fn scaled_single_layer_svg_publishes_the_exact_requested_container() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = sprite_page(
             "url(fixture.svg)",
@@ -310,7 +324,7 @@ fn artifact_pixels(page: &Page, artifact: &Arc<paint::paint_engine::PaintArtifac
 
 #[test]
 fn resized_svg_keeps_old_artifacts_and_reuses_exact_container_variants() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = sprite_page(
             "url(fixture.svg)",
@@ -371,7 +385,7 @@ fn resized_svg_keeps_old_artifacts_and_reuses_exact_container_variants() {
 
 #[test]
 fn one_svg_resource_supports_simultaneous_image_and_background_containers() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = page_fixture(
             r#"<img src=fixture.svg style="position:absolute;left:0;top:0;width:20px;height:40px">
@@ -402,8 +416,56 @@ fn one_svg_resource_supports_simultaneous_image_and_background_containers() {
 }
 
 #[test]
+fn missing_image_records_placeholder_without_treating_canvas_as_image() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let page = page_fixture(
+            r#"<img id=missing style="position:absolute;left:10px;top:20px;width:30px;height:40px">
+          <canvas id=canvas style="position:absolute;left:60px;top:20px;width:30px;height:40px"></canvas>"#,
+            None,
+        );
+        let doc = page.Document();
+        let doc = doc.GetDocument();
+        let id = |wanted: &str| {
+            (0..doc.NodeCount())
+                .find_map(|index| {
+                    let node = doc.Node(index);
+                    node.FindAttribute("id")
+                        .filter(|attribute| attribute.value == wanted)
+                        .map(|_| node.Id())
+                })
+                .unwrap()
+        };
+        let items = &page.CurrentFrame().unwrap().display_items.items;
+        let placeholder = items
+            .iter()
+            .find(|item| {
+                item.node_id == id("missing") && item.r#type == DisplayItemType::kStrokeRect
+            })
+            .expect("missing LayoutImage placeholder");
+        assert_eq!(
+            placeholder.rect,
+            PaintRect {
+                x: 10.5,
+                y: 20.5,
+                width: 29.0,
+                height: 39.0,
+            }
+        );
+        assert_eq!(placeholder.stroke_width, 1.0);
+        assert_eq!(placeholder.color.red, 211.0 / 255.0);
+        assert_eq!(placeholder.color.green, 211.0 / 255.0);
+        assert_eq!(placeholder.color.blue, 211.0 / 255.0);
+        assert_eq!(placeholder.color.alpha, 1.0);
+        assert!(!items.iter().any(
+            |item| item.node_id == id("canvas") && item.r#type == DisplayItemType::kStrokeRect
+        ));
+    });
+}
+
+#[test]
 fn svg_container_identity_resolves_host_preference_per_embedding_and_mutation() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="40" viewBox="0 0 20 40"><style>rect{fill:red}@media(prefers-color-scheme:dark){rect{fill:blue}}</style><rect width="20" height="40"/></svg>"#;
         let mut page = page_fixture(
@@ -435,7 +497,7 @@ fn svg_container_identity_resolves_host_preference_per_embedding_and_mutation() 
 
 #[test]
 fn scaled_tiled_svg_background_uses_container_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = page_fixture(
             r#"<div style="width:100px;height:170px;background:url(fixture.svg);background-size:40px 80px"></div>"#,
@@ -458,7 +520,7 @@ fn scaled_tiled_svg_background_uses_container_pixels() {
 
 #[test]
 fn svg_reflection_mask_container_is_requested_before_resource_snapshot() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = page_fixture(
             r#"<div style="width:40px;height:80px;background:red;-webkit-box-reflect:below 0 url(fixture.svg) 0 fill stretch"></div>"#,
@@ -489,7 +551,7 @@ fn svg_reflection_mask_container_is_requested_before_resource_snapshot() {
 
 #[test]
 fn svg_container_resize_without_viewbox_preserves_fixed_units_and_resolves_percentages() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = page_fixture(
             r#"<div style="width:40px;height:80px;background:url(fixture.svg) no-repeat;background-size:40px 80px"></div>"#,
@@ -516,7 +578,7 @@ fn svg_container_resize_without_viewbox_preserves_fixed_units_and_resolves_perce
 
 #[test]
 fn initial_host_scheme_agrees_with_later_preference_mutations() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = page_fixture_with_preference(
             r#"<div style="width:40px;height:80px;background:url(fixture.svg) no-repeat;background-size:40px 80px"></div>"#,
@@ -530,6 +592,24 @@ fn initial_host_scheme_agrees_with_later_preference_mutations() {
         page.SetPreferredColorScheme(PreferredColorScheme::kLight);
         page.RunTask().unwrap();
         assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+        assert_eq!(pixels(&page)[5 * 320 + 5].to_ne_bytes(), [255, 0, 0, 255]);
+    });
+}
+
+#[test]
+fn transferred_root_background_tracks_host_preference_mutations() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut page = page_fixture_with_preference(
+            r#"<style>html{background:url(fixture.svg) no-repeat;background-size:40px 80px}</style><div style="width:1px;height:1px"></div>"#,
+            Some(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="40" viewBox="0 0 20 40"><style>rect{fill:red}@media(prefers-color-scheme:dark){rect{fill:blue}}</style><rect width="20" height="40"/></svg>"#,
+            ),
+            1,
+        );
+        assert_eq!(pixels(&page)[5 * 320 + 5].to_ne_bytes(), [0, 0, 255, 255]);
+        page.SetPreferredColorScheme(PreferredColorScheme::kLight);
+        page.RunTask().unwrap();
         assert_eq!(pixels(&page)[5 * 320 + 5].to_ne_bytes(), [255, 0, 0, 255]);
     });
 }

@@ -3,7 +3,7 @@
 //! css_parsing_utils.cc:7885-7894. Production gates live at the parser entry.
 //! Selected source audit: effective 300, mapped 291, omitted 3, remaining 6.
 //! Parser 108/105/1/2; Apply/converter 93/88/1/4; typed owner 44/44/0/0;
-//! reused native types 55/54/1/0. Effective excludes comments, blank lines,
+//! reused computed style types 55/54/1/0. Effective excludes comments, blank lines,
 //! preprocessor/namespace/visibility/brace-only lines. Omitted are DCHECK only.
 //! Remaining selected lines: custom 4006-4007 FunctionLocalContext adapter;
 //! generated 8272-8274 changed-zoom reconversion; converter 1843 shared length
@@ -19,7 +19,7 @@
 //! css_dynamic_range_limit_mix_value.h:18-25,27,31-36,39-40;
 //! .cc:14-27,29-42,44-56. The production Rc<Value> owner retains child values;
 //! Blink GC Trace methods are outside the selected owner-method count.
-//! reused native flow_tolerance.h:20-31,33-50; style_interest_delay.h:17-25,28-34;
+//! reused computed style flow_tolerance.h:20-31,33-50; style_interest_delay.h:17-25,28-34;
 //! cc/paint/paint_flags.h:95-100,104-123,130-131 (runtime HDR methods excluded).
 //! Runtime defaults: platform/runtime_enabled_features.json5:1615-1616 stable,
 //! 1641-1643 experimental. InterestDelay has no runtime flag in css_properties.json5.
@@ -135,7 +135,7 @@ fn Limit<T: TokenStreamTokenizer>(
 mod tests {
     use super::*;
     #[test]
-    fn hidden_flow_tolerance_typed_consumer_matches_native_grammar() {
+    fn hidden_flow_tolerance_typed_consumer_matches_computed_style_grammar() {
         for text in ["normal", "infinite", "20px", "5%", "calc(10px + 5%)"] {
             let text = String::from(text);
             let mut s: Stream = Stream::new(StringView::from(&text), 0);

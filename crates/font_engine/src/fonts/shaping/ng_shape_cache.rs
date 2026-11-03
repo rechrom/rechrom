@@ -4,7 +4,7 @@ use super::font_features::FontFeatureRange;
 use super::shape_result::ShapeResult;
 use crate::fonts::simple_font_data::SimpleFontData;
 #[cfg(feature = "expensive_dchecks")]
-use crate::text::native::character::Character;
+use crate::text::implementation::character::Character;
 use foundation::heap_hash_containers::StrongHeapMapKey;
 use foundation::{
     AddIntToHash, AtomicString, HeapHashMap, Member, RuntimeEnabledFeatures, String, TextDirection,

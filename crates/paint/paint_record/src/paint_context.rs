@@ -3,12 +3,15 @@
 use foundation::TrustedIdentityHashMap as HashMap;
 use layoutng_assembly::fragment_tree::PaintGlyphRun;
 use layoutng_assembly::internal::paint_input::PaintBlendMode;
-use layoutng_assembly::layout_engine::NativePaintFragmentCursor;
+use layoutng_assembly::layout_engine::PaintFragmentCursor;
 use std::sync::Arc;
 
-use crate::border_shape_utils::UniformCornerRadius;
+use crate::contoured_border_geometry::UniformCornerRadius;
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
-use crate::paint_chunker::{DisplayItemClientInfo, PaintChunker};
+use crate::drawing_display_item::{
+    CalculateRectKnownToBeOpaqueForRecord, DrawingBackgroundColor, TightenVisualRect,
+};
+use crate::paint_chunker::DisplayItemClientInfo;
 use crate::paint_engine::{
     DisplayItem, DisplayItemType, PaintPhase, RasterEffectOutset, RecordedDisplayItem,
     RecordedDisplayItemKind,
@@ -21,227 +24,23 @@ use crate::PaintRecording;
 use crate::PaintRect;
 use layoutng_assembly::internal::layout_input::Offset;
 
-// Source: drawing_display_item.cc:64-81,116-157. This is calculated once at
-// the real record producer, retaining the native flags/color/visual bounds.
-fn DrawingBackgroundColor(
-    id: DisplayItemId,
-    visual: PaintRect,
-    record: &[DisplayItem],
-) -> crate::paint_engine::PaintChunkBackgroundColorInfo {
-    use crate::paint_engine::PaintChunkBackgroundColorInfo;
-    let empty = PaintChunkBackgroundColorInfo::default();
-    if record.is_empty() {
-        return empty;
-    }
-    let mut solid = record.len() == 1;
-    for op in record {
-        let is_flags = (op.r#type as u8) >= DisplayItemType::kDrawRect as u8;
-        let fill = !matches!(
-            op.r#type,
-            DisplayItemType::kStrokeEllipse
-                | DisplayItemType::kStrokePath
-                | DisplayItemType::kStrokeRect
-                | DisplayItemType::kStrokeLine
-                | DisplayItemType::kStrokeWavyLine
-        );
-        if !is_flags
-            || !fill
-            || op.is_shadow
-            || op.blur_radius != 0.
-            || !op.filters.is_empty()
-            || op.paint_shader.is_some()
-            || op.blend_mode != PaintBlendMode::kNormal
-        {
-            if ![
-                DisplayItemIdType::kBoxDecorationBackground,
-                DisplayItemIdType::kDocumentBackground,
-                DisplayItemIdType::kDocumentRootBackdrop,
-                DisplayItemIdType::kScrollCorner,
-            ]
-            .contains(&id.r#type)
-            {
-                return empty;
-            }
-            continue;
-        }
-        let r = match op.r#type {
-            DisplayItemType::kDrawRect => op.rect,
-            DisplayItemType::kDrawRoundedRect => {
-                solid = false;
-                op.rect
-            }
-            _ => return empty,
-        };
-        let mut value = PaintChunkBackgroundColorInfo::default();
-        value.background_color = op.color;
-        value.background_color.alpha *= op.opacity;
-        value.background_area = r.width as f32 * r.height as f32;
-        value.background_is_solid_color = solid
-            && r.x <= visual.x
-            && r.y <= visual.y
-            && r.x + r.width >= visual.x + visual.width
-            && r.y + r.height >= visual.y + visual.height;
-        return value;
-    }
-    empty
-}
-
-// drawing_display_item.h:70-98 and drawing_display_item.cc:64-81,285-320.
-// Only one fill rect/rrect op without a shader or pixel-moving paint flags
-// qualifies. Images, text, strokes and multi-op records retain painter ink bounds.
-fn TightenDrawingVisualRect(
-    visual_rect: PaintRect,
-    record: &[DisplayItem],
-    delta: Offset,
-) -> (PaintRect, bool) {
-    if let [op] = record {
-        if matches!(
-            op.r#type,
-            DisplayItemType::kDrawRect | DisplayItemType::kDrawRoundedRect
-        ) && op.paint_shader.is_none()
-            && op.filters.is_empty()
-            && op.blend_mode == PaintBlendMode::kNormal
-        {
-            return (EnclosingRectInPropertySpace(op.rect, delta), true);
-        }
-        // SkCanvas image draws cannot write outside their destination/tile
-        // rectangle unless an image filter, shadow or blur expands the op.
-        // Treating ordinary DrawImage records as unknown made LayerTile fall
-        // back to the whole viewport for each animated image layer.
-        if matches!(
-            op.r#type,
-            DisplayItemType::kDrawImageRect | DisplayItemType::kDrawTiledImage
-        ) && op.filters.is_empty()
-            && !op.is_shadow
-            && op.blur_radius == 0.0
-        {
-            return (EnclosingRectInPropertySpace(op.rect, delta), true);
-        }
-    }
-    (EnclosingRectInPropertySpace(visual_rect, delta), false)
-}
-
-// drawing_display_item.cc:172-282. Keep this bounded and independent of image
-// pixel contents. The standalone ABI has no certified shader/image opacity,
-// so only solid fill rectangles supply a new proof. Unknown state is rejected.
-pub fn CalculateRectKnownToBeOpaqueForRecord(
-    visual_rect: PaintRect,
-    record: &[DisplayItem],
-) -> PaintRect {
-    const OP_COUNT_LIMIT: usize = 8;
-    if record.is_empty() {
-        return PaintRect::default();
-    }
-    let mut opaque = PaintRect::default();
-    let mut clip = visual_rect.enclosed();
-    for op in record.iter().take(OP_COUNT_LIMIT) {
-        match op.r#type {
-            DisplayItemType::kSave => continue,
-            DisplayItemType::kClipRect => {
-                clip = clip.intersection(op.rect.enclosed());
-                continue;
-            }
-            // Source drawing_display_item.cc stops when the bounded prefix
-            // reaches any other non-draw operation, including Restore.
-            kind if (kind as u8) < DisplayItemType::kDrawRect as u8 => break,
-            _ => {}
-        }
-        if op.blend_mode != PaintBlendMode::kNormal
-            || !op.filters.is_empty()
-            || !op.mask_layers.is_empty()
-            || op.r#type == DisplayItemType::kDrawMask
-        {
-            continue;
-        }
-        if op.paint_shader.is_some()
-            || op.color.alpha != 1.0
-            || op.opacity != 1.0
-            || op.is_shadow
-            || op.blur_radius != 0.0
-        {
-            continue;
-        }
-        let rect = match op.r#type {
-            DisplayItemType::kDrawRect => op.rect.enclosed(),
-            DisplayItemType::kDrawRoundedRect => {
-                let r = op.corner_radii;
-                if [
-                    r.top_left.x,
-                    r.top_left.y,
-                    r.top_right.x,
-                    r.top_right.y,
-                    r.bottom_left.x,
-                    r.bottom_left.y,
-                    r.bottom_right.x,
-                    r.bottom_right.y,
-                ]
-                .iter()
-                .any(|v| !v.is_finite() || *v < 0.0)
-                {
-                    continue;
-                }
-                // The contained rectangle excludes all four rounded corners.
-                // Chromium uses .3, conservatively above (2 - sqrt(2)) / 2.
-                let left = r.top_left.x.max(r.bottom_left.x) * 0.3;
-                let top = r.top_left.y.max(r.top_right.y) * 0.3;
-                let right = r.top_right.x.max(r.bottom_right.x) * 0.3;
-                let bottom = r.bottom_left.y.max(r.bottom_right.y) * 0.3;
-                PaintRect {
-                    x: op.rect.x + left,
-                    y: op.rect.y + top,
-                    width: op.rect.width - left - right,
-                    height: op.rect.height - top - bottom,
-                }
-                .enclosed()
-            }
-            _ => continue,
-        };
-        opaque = PaintRect::maximum_covered_rect(opaque, rect).intersection(clip);
-        if opaque == visual_rect.enclosed() {
-            break;
-        }
-    }
-    opaque
-}
-
-// cpp: paint/paint_context.h:8-26
 pub struct PaintContext<'o> {
     output: &'o mut PaintRecording,
-    previous: Option<Arc<PaintRecording>>,
-    cached_items: HashMap<DisplayItemId, Vec<usize>>,
-    /// Borrowed native text sources exist only for this synchronous Paint
+    paint_controller: crate::PaintController,
+    /// Borrowed source text sources exist only for this synchronous Paint
     /// recording. The committed PaintArtifact retains final immutable drawing
     /// payloads, never LayoutResult or FragmentItem pointers.
-    native_text_sources: HashMap<u64, NativePaintFragmentCursor<'o>>,
+    text_sources: HashMap<u64, PaintFragmentCursor<'o>>,
     /// Multiple paint phases and decorations for one FragmentItem share the
     /// single payload built from ShapeResult during this recording.
-    native_text_runs: HashMap<u64, Arc<Vec<PaintGlyphRun>>>,
-    pub cached_display_items: usize,
-    /// PaintController-style cache diagnostics. These are traced on
-    /// Paint.RecordPaint so a performance capture can distinguish invalidated
-    /// clients from unstable DisplayItem identities without changing cache
-    /// behavior.
-    pub cache_candidates: usize,
-    pub cache_attempts: usize,
-    pub cache_rejected_uncacheable: usize,
-    pub cache_rejected_just_created: usize,
-    pub cache_rejected_invalid: usize,
-    pub cache_rejected_geometry: usize,
-    pub cache_rejected_missing_id: usize,
-    pub cache_rejected_missing_previous: usize,
+    text_runs: HashMap<u64, Arc<Vec<PaintGlyphRun>>>,
     pub walk_metrics: paint_model::PaintWalkMetrics,
     pub caret: Option<crate::paint_engine::CaretPosition>,
     pub document_selection: Option<layoutng_assembly::editing_state::DocumentSelection>,
     pub caret_local_rect: Option<layoutng_assembly::caret::geometry::LocalCaretRect>,
-    /// Editing ranges resolved through the current native FragmentItem links
-    /// before PrePaint retains its derived tree. Empty during normal page
-    /// painting, so resize does no document-wide caret projection.
-    pub text_range_rects: Vec<(
-        u64,
-        (u32, u32),
-        layoutng_assembly::caret::geometry::LocalCaretRect,
-    )>,
-    chunker: PaintChunker,
+    /// Effective FrameCaret shape for this recording. IME composition forces
+    /// this to bar independently of the owner's computed caret-shape.
+    pub caret_shape: Option<layoutng_assembly::internal::caret_rect::CaretShape>,
     drawing_recorder: Option<(
         DisplayItemId,
         DisplayItemClientInfo,
@@ -257,37 +56,49 @@ pub struct PaintContext<'o> {
         Option<usize>,
     )>,
     next_property_id: u64,
+    paint_under_invalidation_checking: bool,
+    skipping_cache_count: usize,
+    document_element_is_invisible: bool,
 }
 
 impl<'o> PaintContext<'o> {
-    pub fn Finish(&mut self) {
-        self.chunker.Finish(&mut self.output.chunks);
+    /// Record the LayoutImage paint entry independently from whether its
+    /// ImagePainter later emits a DrawImage operation.
+    pub fn RecordPaintedLayoutImage(&mut self, image_id: image_resource::ImageId) {
+        if image_id != 0 {
+            self.output
+                .painted_layout_image_resource_ids
+                .insert(image_id);
+        }
     }
-    // cpp: paint/paint_context.h:10
+
+    pub fn Finish(&mut self) -> crate::paint_controller::SubsequencesData {
+        self.paint_controller.Finish(self.output)
+    }
+
+    /// Source: platform/graphics/paint/paint_controller.cc:154-157.
+    /// SVG reference filters need a property-bearing chunk even when their
+    /// container contributes no ordinary drawing item.
+    pub fn EnsureChunk(&mut self) {
+        self.paint_controller.EnsureChunk(self.output);
+    }
     pub fn new(output: &'o mut PaintRecording) -> Self {
         Self {
             output,
-            previous: None,
-            cached_items: HashMap::default(),
-            native_text_sources: HashMap::default(),
-            native_text_runs: HashMap::default(),
-            cached_display_items: 0,
-            cache_candidates: 0,
-            cache_attempts: 0,
-            cache_rejected_uncacheable: 0,
-            cache_rejected_just_created: 0,
-            cache_rejected_invalid: 0,
-            cache_rejected_geometry: 0,
-            cache_rejected_missing_id: 0,
-            cache_rejected_missing_previous: 0,
+            paint_controller: crate::PaintController::default(),
+            text_sources: HashMap::default(),
+            text_runs: HashMap::default(),
             walk_metrics: Default::default(),
             caret: None,
             document_selection: None,
             caret_local_rect: None,
-            text_range_rects: Vec::new(),
-            chunker: PaintChunker::default(),
+            caret_shape: None,
             drawing_recorder: None,
             next_property_id: 1,
+            paint_under_invalidation_checking:
+                foundation::RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled(),
+            skipping_cache_count: 0,
+            document_element_is_invisible: false,
         }
     }
 
@@ -303,45 +114,82 @@ impl<'o> PaintContext<'o> {
         editing: crate::paint_engine::EditingPaintState,
         previous: Option<Arc<PaintRecording>>,
     ) -> Self {
-        let mut cached_items: HashMap<DisplayItemId, Vec<usize>> = HashMap::default();
-        if let Some(artifact) = &previous {
-            for (index, item) in artifact.display_items.iter().enumerate() {
-                if item.is_cacheable
-                    && !item.is_tombstone
-                    && item.kind == RecordedDisplayItemKind::Drawing
-                {
-                    cached_items.entry(item.id).or_default().push(index);
-                }
-            }
-            for indices in cached_items.values_mut() {
-                indices.reverse();
-            }
-        }
-        let cache_candidates = cached_items.values().map(Vec::len).sum();
+        Self::WithEditingAndPersistentCache(
+            output,
+            editing,
+            previous,
+            crate::paint_controller::SubsequencesData::default(),
+        )
+    }
+
+    pub fn WithEditingAndPersistentCache(
+        output: &'o mut PaintRecording,
+        editing: crate::paint_engine::EditingPaintState,
+        previous: Option<Arc<PaintRecording>>,
+        previous_subsequences: crate::paint_controller::SubsequencesData,
+    ) -> Self {
+        let paint_controller =
+            crate::PaintController::WithPreviousAndSubsequences(previous, previous_subsequences);
+        paint_controller.PrepareNewArtifact(output);
         Self {
             output,
-            previous,
-            cached_items,
-            native_text_sources: HashMap::default(),
-            native_text_runs: HashMap::default(),
-            cached_display_items: 0,
-            cache_candidates,
-            cache_attempts: 0,
-            cache_rejected_uncacheable: 0,
-            cache_rejected_just_created: 0,
-            cache_rejected_invalid: 0,
-            cache_rejected_geometry: 0,
-            cache_rejected_missing_id: 0,
-            cache_rejected_missing_previous: 0,
+            paint_controller,
+            text_sources: HashMap::default(),
+            text_runs: HashMap::default(),
             walk_metrics: Default::default(),
             caret: editing.caret,
             document_selection: editing.document_selection,
             caret_local_rect: None,
-            text_range_rects: Vec::new(),
-            chunker: PaintChunker::default(),
+            caret_shape: None,
             drawing_recorder: None,
             next_property_id: 1,
+            paint_under_invalidation_checking:
+                foundation::RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled(),
+            skipping_cache_count: 0,
+            document_element_is_invisible: false,
         }
+    }
+
+    pub fn PaintUnderInvalidationCheckingEnabled(&self) -> bool {
+        self.paint_under_invalidation_checking
+    }
+
+    pub fn SetPaintUnderInvalidationCheckingForTesting(&mut self, enabled: bool) {
+        self.paint_under_invalidation_checking = enabled;
+    }
+
+    /// Source: paint_layer_painter.cc:338-348. PaintEngine resolves the
+    /// documentElement once from the immutable root fragment; every nested
+    /// layer scope consumes the same document-global fact.
+    pub fn SetDocumentElementIsInvisible(&mut self, invisible: bool) {
+        self.document_element_is_invisible = invisible;
+    }
+
+    pub fn DocumentElementIsInvisible(&self) -> bool {
+        self.document_element_is_invisible
+    }
+
+    // Source: display_item_cache_skipper.h:18-26 and
+    // paint_controller.h:248-261.
+    pub fn BeginSkippingCache(&mut self) {
+        self.skipping_cache_count += 1;
+    }
+
+    pub fn EndSkippingCache(&mut self) {
+        assert!(self.skipping_cache_count > 0, "cache skipper is unbalanced");
+        self.skipping_cache_count -= 1;
+    }
+
+    pub fn IsSkippingCache(&self) -> bool {
+        self.skipping_cache_count != 0
+    }
+
+    fn ApplyCacheSkipping(&self, mut client: DisplayItemClientInfo) -> DisplayItemClientInfo {
+        if self.skipping_cache_count != 0 {
+            client.is_cacheable = false;
+            client.invalidation_reason = Some(foundation::PaintInvalidationReason::kUncacheable);
+        }
+        client
     }
 
     pub fn WithCaret(
@@ -360,13 +208,13 @@ impl<'o> PaintContext<'o> {
         self.output.caret = Some(geometry);
     }
 
-    /// Index native FragmentItem cursors without copying their shape or child
+    /// Index source FragmentItem cursors without copying their shape or child
     /// topology. The cursor lifetime is deliberately tied to this PaintContext
     /// and therefore cannot escape into the committed artifact.
-    pub fn BindNativeTextSources(&mut self, root: NativePaintFragmentCursor<'o>) {
+    pub fn BindTextSources(&mut self, root: PaintFragmentCursor<'o>) {
         fn collect<'a>(
-            cursor: NativePaintFragmentCursor<'a>,
-            output: &mut HashMap<u64, NativePaintFragmentCursor<'a>>,
+            cursor: PaintFragmentCursor<'a>,
+            output: &mut HashMap<u64, PaintFragmentCursor<'a>>,
         ) {
             if matches!(
                 cursor.kind,
@@ -379,28 +227,36 @@ impl<'o> PaintContext<'o> {
                 collect(child, output);
             }
         }
-        collect(root, &mut self.native_text_sources);
+        collect(root, &mut self.text_sources);
     }
 
-    pub fn HasNativeTextSource(&self, fragment_instance_id: u64) -> bool {
-        self.native_text_sources.contains_key(&fragment_instance_id)
+    pub fn HasTextSource(&self, fragment_instance_id: u64) -> bool {
+        self.text_sources.contains_key(&fragment_instance_id)
+    }
+
+    pub fn TextSource(&self, fragment_instance_id: u64) -> Option<PaintFragmentCursor<'o>> {
+        self.text_sources.get(&fragment_instance_id).copied()
     }
 
     /// Resolve ShapeResult only after a cache miss has committed Paint to
     /// recording this text item. Later phases share the same immutable owner.
     pub fn TextGlyphRuns(&mut self, fragment_instance_id: u64) -> Arc<Vec<PaintGlyphRun>> {
-        if let Some(runs) = self.native_text_runs.get(&fragment_instance_id) {
+        if let Some(runs) = self.text_runs.get(&fragment_instance_id) {
             return Arc::clone(runs);
         }
         let runs = self
-            .native_text_sources
+            .text_sources
             .get(&fragment_instance_id)
             .copied()
-            .and_then(NativePaintFragmentCursor::PaintGlyphRuns)
+            .and_then(PaintFragmentCursor::PaintGlyphRuns)
             .unwrap_or_else(|| Arc::new(Vec::new()));
-        self.native_text_runs
+        self.text_runs
             .insert(fragment_instance_id, Arc::clone(&runs));
         runs
+    }
+
+    pub fn CacheMetrics(&self) -> paint_reuse::PaintReuseMetrics {
+        self.paint_controller.Metrics()
     }
 
     // paint_controller.cc:UseCachedItemIfPossible. A valid cacheable client
@@ -410,7 +266,6 @@ impl<'o> PaintContext<'o> {
         &mut self,
         node: &PaintTreeNode<'_>,
         item_type: DisplayItemIdType,
-        client_visual_rect: PaintRect,
     ) -> bool {
         let fragment = node
             .fragment
@@ -428,7 +283,6 @@ impl<'o> PaintContext<'o> {
                 fragment.paint.display_item_client_owner_node_id,
                 fragment.paint.display_item_client_debug_name.clone(),
             )),
-            Some(client_visual_rect),
         )
     }
 
@@ -437,69 +291,24 @@ impl<'o> PaintContext<'o> {
         id: DisplayItemId,
         client: DisplayItemClientInfo,
         debug: Option<(i32, Arc<str>)>,
-        client_visual_rect: Option<PaintRect>,
     ) -> bool {
-        self.cache_attempts += 1;
-        let invalidated = !matches!(
-            client.invalidation_reason,
-            Some(foundation::PaintInvalidationReason::kNone)
-        );
-        if paint_reuse::DecideDisplayItemReuse(
-            true,
-            client.is_cacheable,
-            client.is_just_created,
-            invalidated,
-            true,
-        ) == paint_reuse::CacheDecision::Record
-        {
-            if !client.is_cacheable {
-                self.cache_rejected_uncacheable += 1;
-            } else if client.is_just_created {
-                self.cache_rejected_just_created += 1;
-            } else if invalidated {
-                self.cache_rejected_invalid += 1;
-            }
-            return false;
-        }
-        let Some(index) = self
-            .cached_items
-            .get_mut(&id)
-            .and_then(|indices| indices.pop())
-        else {
-            self.cache_rejected_missing_id += 1;
+        let Some(cached) = self.paint_controller.TakeCachedDrawing(
+            id,
+            client,
+            self.paint_under_invalidation_checking,
+        ) else {
             return false;
         };
-        let Some(previous) = &self.previous else {
-            self.cache_rejected_missing_previous += 1;
-            return false;
-        };
-        let old = &previous.display_items[index];
-        let geometry_matches = client_visual_rect.is_none_or(|rect| rect == old.client_visual_rect);
-        if paint_reuse::DecideDisplayItemReuse(
-            true,
-            client.is_cacheable,
-            client.is_just_created,
-            invalidated,
-            geometry_matches,
-        ) == paint_reuse::CacheDecision::Record
-        {
-            self.cache_rejected_geometry += 1;
-            return false;
-        }
-        let old_record = &previous.items[old.record_begin..old.record_end];
+        let old = &cached.item;
         let record_begin = self.output.items.len();
-        Arc::make_mut(&mut self.output.items).extend_from_slice(old_record);
+        Arc::make_mut(&mut self.output.items).extend_from_slice(&cached.record);
         let record_end = self.output.items.len();
         if let Some((owner, name)) = debug {
             self.output
-                .client_owner_node_ids
-                .insert(id.client_id as usize, owner);
-            self.output
-                .client_debug_names
-                .insert(id.client_id as usize, name);
+                .RecordDebugInfo(id.client_id as usize, name, owner);
         }
-        self.chunker.increment_display_item(
-            &mut self.output.chunks,
+        self.paint_controller.ProcessNewItem(
+            self.output,
             id,
             client,
             old.visual_rect,
@@ -507,26 +316,60 @@ impl<'o> PaintContext<'o> {
             old.raster_effect_outset,
             old.visual_rect_is_accurate,
             old.record_rect_known_to_be_opaque,
+            old.record_background,
+            old.record_has_text,
         );
-        if old.draws_content {
-            self.chunker.UpdateDrawingDerivedData(
-                &mut self.output.chunks,
-                old.record_background,
-                old.record_has_text,
-                old.visual_rect,
-            );
-        }
         let mut moved = old.clone();
         moved.paint_invalidation_reason = Some(foundation::PaintInvalidationReason::kNone);
         moved.record_begin = record_begin;
         moved.record_end = record_end;
         self.output.display_items.push(moved);
-        self.cached_display_items += 1;
         true
     }
 
-    // cpp: paint/paint_context.h:22
-    // cpp: paint/paint_context.cc:60-80
+    /// Source: `paint_controller.cc:337-409` through
+    /// `SubsequenceRecorder::UseCachedSubsequenceIfPossible`.
+    pub fn UseCachedSubsequenceIfPossible(
+        &mut self,
+        client_id: u64,
+        client: DisplayItemClientInfo,
+        debug: Option<(i32, Arc<str>)>,
+    ) -> Option<paint_model::PaintResult> {
+        if let Some((owner, name)) = debug {
+            self.output.RecordDebugInfo(client_id as usize, name, owner);
+        }
+        self.paint_controller.UseCachedSubsequenceIfPossible(
+            self.output,
+            client_id,
+            client,
+            self.paint_under_invalidation_checking,
+        )
+    }
+
+    /// Source: `paint_controller.cc:411-418`.
+    pub fn BeginSubsequence(&mut self, client_id: u64, debug: Option<(i32, Arc<str>)>) -> usize {
+        if let Some((owner, name)) = debug {
+            self.output.RecordDebugInfo(client_id as usize, name, owner);
+        }
+        self.paint_controller
+            .BeginSubsequence(client_id, self.output)
+    }
+
+    /// Source: `paint_controller.cc:420-460`.
+    pub fn EndSubsequence(&mut self, subsequence_index: usize) {
+        self.paint_controller
+            .EndSubsequence(subsequence_index, self.output);
+    }
+
+    pub fn SetSubsequencePaintResult(
+        &mut self,
+        subsequence_index: usize,
+        result: paint_model::PaintResult,
+    ) {
+        self.paint_controller
+            .SetSubsequencePaintResult(subsequence_index, result);
+    }
+
     pub fn Append(&mut self, mut item: DisplayItem, node: &PaintTreeNode<'_>) {
         let fragment = node
             .fragment
@@ -549,16 +392,13 @@ impl<'o> PaintContext<'o> {
             r#type: DisplayItemIdType::PaintPhaseToDrawingType(item.phase),
             fragment: fragment.paint.display_item_fragment,
         };
-        let client = DisplayItemClientInfo::from_fragment(fragment);
-        self.output.client_owner_node_ids.insert(
-            id.client_id as usize,
-            fragment.paint.display_item_client_owner_node_id,
-        );
-        self.output.client_debug_names.insert(
+        let client = self.ApplyCacheSkipping(DisplayItemClientInfo::from_fragment(fragment));
+        self.output.RecordDebugInfo(
             id.client_id as usize,
             fragment.paint.display_item_client_debug_name.clone(),
+            fragment.paint.display_item_client_owner_node_id,
         );
-        let (visual_rect, visual_rect_is_accurate) = TightenDrawingVisualRect(
+        let (visual_rect, visual_rect_is_accurate) = TightenVisualRect(
             item.rect,
             std::slice::from_ref(&item),
             node.paint_snap_offset,
@@ -566,8 +406,11 @@ impl<'o> PaintContext<'o> {
         let raster_effect_outset = fragment.paint.display_item_raster_effect_outset;
         let rect_known_to_be_opaque =
             CalculateRectKnownToBeOpaqueForRecord(visual_rect, std::slice::from_ref(&item));
-        self.chunker.increment_display_item(
-            &mut self.output.chunks,
+        let record_background =
+            DrawingBackgroundColor(id, visual_rect, std::slice::from_ref(&item));
+        let record_has_text = item.r#type == DisplayItemType::kDrawGlyphRun;
+        self.paint_controller.ProcessNewItem(
+            self.output,
             id,
             client,
             visual_rect,
@@ -575,27 +418,18 @@ impl<'o> PaintContext<'o> {
             raster_effect_outset,
             visual_rect_is_accurate,
             rect_known_to_be_opaque,
-        );
-        let record_background =
-            DrawingBackgroundColor(id, visual_rect, std::slice::from_ref(&item));
-        let record_has_text = item.r#type == DisplayItemType::kDrawGlyphRun;
-        self.chunker.UpdateDrawingDerivedData(
-            &mut self.output.chunks,
             record_background,
             record_has_text,
-            visual_rect,
         );
         self.output.display_items.push(RecordedDisplayItem {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
-            image_content_revisions: Vec::new(),
-            scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             scrollbar: None,
+            foreign_layer: None,
             kind: RecordedDisplayItemKind::Drawing,
             scroll_translation: None,
             id,
-            client_visual_rect: item.rect,
             visual_rect,
             visual_rect_is_accurate,
             draws_content: true,
@@ -607,6 +441,8 @@ impl<'o> PaintContext<'o> {
             record_end: self.output.items.len() + 1,
         });
         std::sync::Arc::make_mut(&mut self.output.items).push(item);
+        self.paint_controller
+            .CheckNewItem(self.output, self.skipping_cache_count != 0);
     }
 
     pub fn InDrawingRecorder(&self) -> bool {
@@ -623,13 +459,10 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        self.output.client_owner_node_ids.insert(
-            fragment.paint.display_item_client_id as usize,
-            fragment.paint.display_item_client_owner_node_id,
-        );
-        self.output.client_debug_names.insert(
+        self.output.RecordDebugInfo(
             fragment.paint.display_item_client_id as usize,
             fragment.paint.display_item_client_debug_name.clone(),
+            fragment.paint.display_item_client_owner_node_id,
         );
         self.BeginDrawingRecorderWithClient(
             DisplayItemId {
@@ -646,6 +479,16 @@ impl<'o> PaintContext<'o> {
             recorder.9 = fragment.paint.self_ink_overflow.is_some()
                 || fragment.paint.box_self_visual_overflow.is_some();
         }
+    }
+
+    pub fn RegisterAuxiliaryClient(
+        &mut self,
+        id: u64,
+        owner_node_id: i32,
+        debug_name: std::sync::Arc<str>,
+    ) {
+        self.output
+            .RecordDebugInfo(id as usize, debug_name, owner_node_id);
     }
 
     pub fn BeginDrawingRecorderWithClient(
@@ -677,13 +520,29 @@ impl<'o> PaintContext<'o> {
         id: DisplayItemId,
         client: DisplayItemClientInfo,
         visual_rect: PaintRect,
-        scroll_translation: std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>,
+        scroll_translation: Option<
+            std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>,
+        >,
         scrollbar: crate::paint_engine::ScrollbarDisplayItemData,
+        raster_effect_outset: RasterEffectOutset,
         delta: Offset,
     ) {
         assert!(
             !self.InDrawingRecorder(),
             "ScrollbarDisplayItem is an outer item"
+        );
+        assert!(
+            id.r#type == DisplayItemIdType::kScrollbarHorizontal
+                || id.r#type == DisplayItemIdType::kScrollbarVertical
+        );
+        assert!(RecordedDisplayItem::IsScrollbarElementId(
+            scrollbar.element_id
+        ));
+        debug_assert!(
+            scroll_translation
+                .as_ref()
+                .is_none_or(|translation| translation.scroll.is_some()),
+            "ScrollbarDisplayItem scroll translation must own a ScrollNode"
         );
         self.drawing_recorder = Some((
             id,
@@ -693,12 +552,21 @@ impl<'o> PaintContext<'o> {
             self.output.items.len(),
             RecordedDisplayItemKind::Scrollbar,
             Some(scrollbar),
-            Some(scroll_translation),
-            RasterEffectOutset::kNone,
+            scroll_translation,
+            raster_effect_outset,
             true,
             delta,
             None,
         ));
+    }
+
+    /// Source: `drawing_recorder.h:76-79`.
+    pub fn UniteDrawingRecorderVisualRect(&mut self, rect: PaintRect) {
+        let recorder = self
+            .drawing_recorder
+            .as_mut()
+            .expect("DrawingRecorder must be active");
+        recorder.3.union(rect);
     }
 
     pub fn EndDrawingRecorder(&mut self) {
@@ -719,10 +587,10 @@ impl<'o> PaintContext<'o> {
             .drawing_recorder
             .take()
             .expect("DrawingRecorder must be active");
+        let client = self.ApplyCacheSkipping(client);
         let record_end = self.output.items.len();
-        let client_visual_rect = visual_rect;
         let (mut visual_rect, tightened) = if kind == RecordedDisplayItemKind::Drawing {
-            TightenDrawingVisualRect(
+            TightenVisualRect(
                 visual_rect,
                 &self.output.items[record_begin..record_end],
                 delta,
@@ -730,7 +598,7 @@ impl<'o> PaintContext<'o> {
         } else {
             (EnclosingRectInPropertySpace(visual_rect, delta), false)
         };
-        // Source: paint_chunks_to_cc_layer.cc:816-827. A reference filter can
+        // Source: paint_chunks_to_cc_layer.cc:806-814. A reference filter can
         // produce pixels outside every source DrawingDisplayItem (or with no
         // source pixels at all). PendingLayer is sized from PaintChunk bounds
         // before PaintChunksToCcLayer records its synthetic empty visual op, so
@@ -746,7 +614,8 @@ impl<'o> PaintContext<'o> {
         // ScrollbarDisplayItem is independently drawable, without a PaintRecord.
         let draws_content =
             kind == RecordedDisplayItemKind::Scrollbar || record_begin != record_end;
-        self.chunker.update_properties(properties);
+        self.paint_controller
+            .UpdateCurrentPaintChunkProperties(properties);
         let rect_known_to_be_opaque = if kind == RecordedDisplayItemKind::Drawing {
             CalculateRectKnownToBeOpaqueForRecord(
                 visual_rect,
@@ -755,16 +624,6 @@ impl<'o> PaintContext<'o> {
         } else {
             PaintRect::default()
         };
-        self.chunker.increment_display_item(
-            &mut self.output.chunks,
-            id,
-            client,
-            visual_rect,
-            draws_content,
-            raster_effect_outset,
-            visual_rect_is_accurate,
-            rect_known_to_be_opaque,
-        );
         let mut record_background = Default::default();
         let mut record_has_text = false;
         if kind == RecordedDisplayItemKind::Drawing {
@@ -774,25 +633,29 @@ impl<'o> PaintContext<'o> {
                 record_has_text = record
                     .iter()
                     .any(|op| op.r#type == DisplayItemType::kDrawGlyphRun);
-                self.chunker.UpdateDrawingDerivedData(
-                    &mut self.output.chunks,
-                    record_background,
-                    record_has_text,
-                    visual_rect,
-                );
             }
         }
+        self.paint_controller.ProcessNewItem(
+            self.output,
+            id,
+            client,
+            visual_rect,
+            draws_content,
+            raster_effect_outset,
+            visual_rect_is_accurate,
+            rect_known_to_be_opaque,
+            record_background,
+            record_has_text,
+        );
         self.output.display_items.push(RecordedDisplayItem {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
-            image_content_revisions: Vec::new(),
-            scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             scrollbar,
+            foreign_layer: None,
             kind,
             scroll_translation,
             id,
-            client_visual_rect,
             visual_rect,
             visual_rect_is_accurate,
             draws_content,
@@ -803,10 +666,45 @@ impl<'o> PaintContext<'o> {
             record_begin,
             record_end,
         });
+        self.paint_controller
+            .CheckNewItem(self.output, self.skipping_cache_count != 0);
     }
 
-    // Source: paint_controller.cc:RecordScrollHitTestData and
-    // paint_chunker.cc:RecordScrollHitTestData. The caller supplies the actual
+    /// Package-boundary half of `PaintController::CreateAndAppend` used by
+    /// `RecordForeignLayer`; the source-shaped orchestration remains in
+    /// `foreign_layer_display_item.rs`.
+    pub(crate) fn AppendForeignLayerDisplayItem(
+        &mut self,
+        mut item: RecordedDisplayItem,
+        client: DisplayItemClientInfo,
+    ) {
+        assert!(!self.InDrawingRecorder());
+        assert_eq!(item.kind, RecordedDisplayItemKind::ForeignLayer);
+        assert!(item.id.r#type.IsForeignLayerType());
+        let client = self.ApplyCacheSkipping(client);
+        item.is_cacheable = client.is_cacheable;
+        item.paint_invalidation_reason = client.invalidation_reason;
+        item.record_begin = self.output.items.len();
+        item.record_end = item.record_begin;
+        self.paint_controller.ProcessNewItem(
+            self.output,
+            item.id,
+            client,
+            item.visual_rect,
+            true,
+            item.raster_effect_outset,
+            item.visual_rect_is_accurate,
+            PaintRect::default(),
+            Default::default(),
+            false,
+        );
+        self.output.display_items.push(item);
+        self.paint_controller
+            .CheckNewItem(self.output, self.skipping_cache_count != 0);
+    }
+
+    // Source: paint_controller.cc:204-218 and paint_chunker.cc:300-339. The
+    // caller supplies the actual
     // border-box state and ScrollTranslation node from PrePaint.
     pub fn RecordScrollHitTestData(
         &mut self,
@@ -823,16 +721,13 @@ impl<'o> PaintContext<'o> {
             fragment: fragment.paint.display_item_fragment,
         };
         let client = DisplayItemClientInfo::from_fragment(fragment);
-        self.output.client_owner_node_ids.insert(
-            id.client_id as usize,
-            fragment.paint.display_item_client_owner_node_id,
-        );
-        self.output.client_debug_names.insert(
+        self.output.RecordDebugInfo(
             id.client_id as usize,
             fragment.paint.display_item_client_debug_name.clone(),
+            fragment.paint.display_item_client_owner_node_id,
         );
-        self.chunker.RecordScrollHitTestData(
-            &mut self.output.chunks,
+        self.paint_controller.RecordScrollHitTestData(
+            self.output,
             id,
             client,
             rect,
@@ -848,6 +743,38 @@ impl<'o> PaintContext<'o> {
         );
     }
 
+    // Source: scrollable_area_painter.cc:97-114 and
+    // paint_controller.cc:204-218. A resizer uses the scroll-corner client,
+    // its own display-item type, and deliberately has no scroll translation:
+    // the metadata exists only to force touch resizing onto the main thread.
+    pub fn RecordResizerScrollHitTestData(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        client_id: u64,
+        client: DisplayItemClientInfo,
+        rect: PaintRect,
+    ) {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("resizer scroll hit-test fragment");
+        let id = DisplayItemId {
+            client_id,
+            r#type: DisplayItemIdType::kResizerScrollHitTest,
+            fragment: fragment.paint.display_item_fragment,
+        };
+        let mut data = crate::paint_engine::PaintHitTestData::default();
+        data.scroll_hit_test_rect = rect;
+        self.paint_controller.RecordScrollHitTestData(
+            self.output,
+            id,
+            client,
+            rect,
+            crate::paint_engine::PaintHitTestOpaqueness::Mixed,
+            data,
+        );
+    }
+
     pub fn SetNextPropertyId(&mut self, next: u64) {
         self.next_property_id = next;
     }
@@ -859,11 +786,42 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn chunk_properties(&self) -> PropertyTreeState {
-        self.chunker.current_properties().clone()
+        self.paint_controller.CurrentPaintChunkProperties().clone()
     }
 
     pub fn update_chunk_properties(&mut self, properties: PropertyTreeState) {
-        self.chunker.update_properties(properties);
+        self.paint_controller
+            .UpdateCurrentPaintChunkProperties(properties);
+    }
+
+    pub fn SetCurrentEffectivelyInvisible(&mut self, invisible: bool) {
+        self.paint_controller
+            .SetCurrentEffectivelyInvisible(invisible);
+    }
+
+    pub fn CurrentEffectivelyInvisible(&self) -> bool {
+        self.paint_controller.CurrentEffectivelyInvisible()
+    }
+
+    pub fn NumNewChunks(&self) -> usize {
+        self.paint_controller.NumNewChunks(self.output)
+    }
+
+    pub fn LastChunkProperties(&self) -> Option<PropertyTreeState> {
+        self.paint_controller
+            .LastChunk(self.output)
+            .map(|chunk| chunk.properties.clone())
+    }
+
+    pub fn LastChunkBounds(&self) -> Option<PaintRect> {
+        self.paint_controller
+            .LastChunk(self.output)
+            .map(|chunk| chunk.bounds)
+    }
+
+    pub fn CurrentChunkIsNonEmptyAndTransparentToHitTest(&self) -> bool {
+        self.paint_controller
+            .CurrentChunkIsNonEmptyAndTransparentToHitTest(self.output)
     }
 
     pub fn update_chunk_id_and_properties(
@@ -875,34 +833,41 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        self.chunker.update_id_and_properties(
-            DisplayItemId {
-                client_id: fragment.paint.display_item_client_id,
-                r#type: item_type,
-                fragment: fragment.paint.display_item_fragment,
-            },
-            DisplayItemClientInfo::from_fragment(fragment),
-            node.properties.nodes.clone(),
-        );
+        self.paint_controller
+            .UpdateCurrentPaintChunkIdAndProperties(
+                DisplayItemId {
+                    client_id: fragment.paint.display_item_client_id,
+                    r#type: item_type,
+                    fragment: fragment.paint.display_item_fragment,
+                },
+                DisplayItemClientInfo::from_fragment(fragment),
+                node.properties.nodes.clone(),
+            );
     }
 
-    // cpp: paint/paint_context.h:12
-    // cpp: paint/paint_context.cc:82-86
+    pub(crate) fn update_chunk_id_and_properties_raw(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        properties: PropertyTreeState,
+    ) {
+        self.paint_controller
+            .UpdateCurrentPaintChunkIdAndProperties(id, client, properties);
+    }
+
     pub fn BeginNode(&mut self, node: &PaintTreeNode<'_>) {
         self.BeginGeometry(node);
         self.BeginEffects(node);
         self.BeginEscapableGeometry(node, None);
     }
 
-    // cpp: paint/paint_context.h:16
-    // cpp: paint/paint_context.cc:88-130
     pub fn BeginGeometry(&mut self, node: &PaintTreeNode<'_>) {
         let fragment = node
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.establishes_paint_state
-            || (!fragment.paint.has_source && fragment.paint.text_combine.is_none())
+            || (!fragment.paint.HasSource() && fragment.paint.text_combine.is_none())
         {
             return;
         }
@@ -976,8 +941,6 @@ impl<'o> PaintContext<'o> {
         }
     }
 
-    // cpp: paint/paint_context.h:18-20
-    // cpp: paint/paint_context.cc:132-169
     pub fn BeginEscapableGeometry(
         &mut self,
         node: &PaintTreeNode<'_>,
@@ -987,7 +950,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source
+        if !fragment.paint.HasSource()
             || !fragment.paint.establishes_paint_state
             || !node.applies_overflow_clip
             || node.local_clip.is_none()
@@ -1003,6 +966,28 @@ impl<'o> PaintContext<'o> {
             },
             node,
         );
+        if clip_override.is_none() {
+            if let Some(inner_clip) = node.local_inner_border_radius_clip {
+                let inner_radii = node.local_inner_border_radius_radii;
+                self.Append(
+                    DisplayItem {
+                        r#type: if inner_radii.HasRadius() {
+                            DisplayItemType::kClipRoundedRect
+                        } else {
+                            DisplayItemType::kClipRect
+                        },
+                        phase: PaintPhase::kForeground,
+                        node_id: fragment.node_id,
+                        rect: inner_clip,
+                        corner_radius: UniformCornerRadius(&inner_radii),
+                        corner_radii: inner_radii,
+                        antialias: true,
+                        ..Default::default()
+                    },
+                    node,
+                );
+            }
+        }
         let local_clip = node.local_clip.expect("overflow clip checked above");
         let clip = clip_override.unwrap_or(local_clip);
         let mut radii = node.local_clip_radii;
@@ -1038,30 +1023,16 @@ impl<'o> PaintContext<'o> {
         );
     }
 
-    // cpp: paint/paint_context.h:14
-    // cpp: paint/paint_context.cc:171-223
     pub fn BeginEffects(&mut self, node: &PaintTreeNode<'_>) {
         let fragment = node
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
             return;
         }
-        let style = &*fragment.paint.style;
-        if node.applies_compositing_layer {
-            self.Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kSaveLayer,
-                    phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
-                    ..Default::default()
-                },
-                node,
-            );
-        }
+        let style = &fragment.paint.style;
         if node.applies_backdrop_filter
-            && !node.applies_compositing_layer
             && !node.applies_blend
             && !node.applies_opacity
             && !node.applies_mask
@@ -1085,7 +1056,7 @@ impl<'o> PaintContext<'o> {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase: PaintPhase::kForeground,
                     node_id: fragment.node_id,
-                    blend_mode: style.blend_mode,
+                    blend_mode: style.blend_mode(),
                     opacity: if node.applies_opacity {
                         MaskAdjustedOpacity(style)
                     } else {
@@ -1156,33 +1127,26 @@ impl<'o> PaintContext<'o> {
                 node_id: fragment.node_id,
                 ..Default::default()
             };
-            // PrePaint owns size-dependent filter resolution (including the
-            // physical box-reflection offset and fetched filter resources).
-            // Recording the raw style chain here would feed percentages to
-            // Raster a second time and bypass that typed boundary.
-            item.filters = node.recording_filters.clone();
-            item.filter_reference_box = node.properties.nodes.effect.filter_reference_box;
-            item.filter_reference_scale = node.properties.nodes.effect.filter_reference_scale;
+            // PaintLayer::UpdateCompositorFilterOperationsForFilter publishes
+            // one canonical value on the Effect node. Flat PaintRecords retain
+            // that value instead of asking Raster to rebuild authored filters.
+            item.canonical_filters = node.properties.nodes.effect.filters.clone();
             self.Append(item, node);
         }
     }
 
-    // cpp: paint/paint_context.h:13
-    // cpp: paint/paint_context.cc:225-229
     pub fn EndNode(&mut self, node: &PaintTreeNode<'_>) {
         self.EndEscapableGeometry(node);
         self.EndEffects(node);
         self.EndGeometry(node);
     }
 
-    // cpp: paint/paint_context.h:15
-    // cpp: paint/paint_context.cc:231-265
     pub fn EndFilter(&mut self, node: &PaintTreeNode<'_>) {
         let fragment = node
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
             return;
         }
         if node.applies_filter {
@@ -1203,7 +1167,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if fragment.paint.has_source && fragment.paint.establishes_paint_state && node.applies_mask
+        if fragment.paint.HasSource() && fragment.paint.establishes_paint_state && node.applies_mask
         {
             // The mask source uses its original ancestor clip, not MaskClip.
             self.Append(
@@ -1230,7 +1194,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source
+        if !fragment.paint.HasSource()
             || !fragment.paint.establishes_paint_state
             || !node.applies_css_clip
         {
@@ -1264,7 +1228,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source
+        if !fragment.paint.HasSource()
             || !fragment.paint.establishes_paint_state
             || !node.applies_css_clip
         {
@@ -1286,7 +1250,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
             return;
         }
         if node.applies_mask {
@@ -1323,7 +1287,6 @@ impl<'o> PaintContext<'o> {
             );
         }
         if node.applies_backdrop_filter
-            && !node.applies_compositing_layer
             && !node.applies_blend
             && !node.applies_opacity
             && !node.applies_mask
@@ -1338,28 +1301,15 @@ impl<'o> PaintContext<'o> {
                 node,
             );
         }
-        if node.applies_compositing_layer {
-            self.Append(
-                DisplayItem {
-                    r#type: DisplayItemType::kRestore,
-                    phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
-                    ..Default::default()
-                },
-                node,
-            );
-        }
     }
 
-    // cpp: paint/paint_context.h:17
-    // cpp: paint/paint_context.cc:267-289
     pub fn EndGeometry(&mut self, node: &PaintTreeNode<'_>) {
         let fragment = node
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.establishes_paint_state
-            || (!fragment.paint.has_source && fragment.paint.text_combine.is_none())
+            || (!fragment.paint.HasSource() && fragment.paint.text_combine.is_none())
         {
             return;
         }
@@ -1398,14 +1348,12 @@ impl<'o> PaintContext<'o> {
         }
     }
 
-    // cpp: paint/paint_context.h:21
-    // cpp: paint/paint_context.cc:291-301
     pub fn EndEscapableGeometry(&mut self, node: &PaintTreeNode<'_>) {
         let fragment = node
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source
+        if !fragment.paint.HasSource()
             || !fragment.paint.establishes_paint_state
             || !node.applies_overflow_clip
             || node.local_clip.is_none()
@@ -1427,8 +1375,8 @@ impl<'o> PaintContext<'o> {
 /// Translated scope behavior from Blink scoped_paint_chunk_properties.h.
 /// Restoring properties deliberately does not restore the previous chunk ID.
 pub struct ScopedPaintChunkProperties<'c, 'o> {
-    context: &'c std::cell::RefCell<PaintContext<'o>>,
-    previous: PropertyTreeState,
+    pub(crate) context: &'c std::cell::RefCell<PaintContext<'o>>,
+    pub(crate) previous: PropertyTreeState,
 }
 
 impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
@@ -1469,6 +1417,8 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 local_transform_space: previous.transform.clone(),
                 output_clip: None,
                 filter_reference_box: None,
+                filter_viewport: None,
+                filter_space_origin: Offset::default(),
                 filter_reference_scale: 1.0,
                 opacity: if caret.visible { 1.0 } else { 0.001 },
                 blend_mode: layoutng_assembly::internal::paint_input::PaintBlendMode::kNormal,
@@ -1479,12 +1429,14 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 isolates_blending: false,
                 has_mask: false,
                 is_mask: false,
-                direct_compositing_reasons: vec!["ActiveOpacityAnimation"],
+                direct_compositing_reasons: foundation::CompositingReasons::FromReason(
+                    foundation::CompositingReason::kActiveOpacityAnimation,
+                ),
             }
             .with_filter_presence()
             .with_inherited_view_transition(),
         );
-        borrowed.chunker.update_id_and_properties(
+        borrowed.update_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id: caret.display_item_client_id,
                 r#type: DisplayItemIdType::kCaret,
@@ -1493,7 +1445,6 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             DisplayItemClientInfo {
                 is_cacheable: caret.display_item_client_is_cacheable,
                 invalidation_reason: Some(caret.display_item_client_invalidation_reason),
-                scrollbar_needs_update_display: None,
                 is_just_created: caret.display_item_client_is_just_created,
             },
             properties,
@@ -1510,7 +1461,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
         if fragment.paint.paint_layer_client_id != 0 {
-            borrowed.chunker.update_id_and_properties(
+            borrowed.update_chunk_id_and_properties_raw(
                 DisplayItemId {
                     client_id: fragment.paint.paint_layer_client_id,
                     r#type: item_type,
@@ -1519,7 +1470,6 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 DisplayItemClientInfo {
                     is_cacheable: fragment.paint.paint_layer_client_is_cacheable,
                     invalidation_reason: fragment.paint.paint_layer_client_invalidation_reason,
-                    scrollbar_needs_update_display: None,
                     is_just_created: fragment.paint.paint_layer_client_is_just_created.get(),
                 },
                 node.properties.nodes.clone(),
@@ -1533,6 +1483,18 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
     pub fn mask(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         node: &PaintTreeNode<'_>,
+    ) -> Self {
+        Self::mask_with_type(
+            context,
+            node,
+            DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kMask),
+        )
+    }
+
+    pub fn mask_with_type(
+        context: &'c std::cell::RefCell<PaintContext<'o>>,
+        node: &PaintTreeNode<'_>,
+        item_type: DisplayItemIdType,
     ) -> Self {
         let fragment = node.fragment.as_deref().expect("mask fragment");
         let properties = node
@@ -1549,22 +1511,21 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 DisplayItemClientInfo {
                     is_cacheable: fragment.paint.paint_layer_client_is_cacheable,
                     invalidation_reason: fragment.paint.paint_layer_client_invalidation_reason,
-                    scrollbar_needs_update_display: None,
                     is_just_created: fragment.paint.paint_layer_client_is_just_created.get(),
                 },
             )
         } else {
-            // Standalone owners without a native PaintLayer use their real
+            // Standalone owners without a source PaintLayer use their real
             // drawing client. The recorder supplies the same legal fallback.
             (
                 fragment.paint.display_item_client_id,
                 DisplayItemClientInfo::from_fragment(fragment),
             )
         };
-        borrowed.chunker.update_id_and_properties(
+        borrowed.update_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id,
-                r#type: DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kMask),
+                r#type: item_type,
                 fragment: fragment.paint.display_item_fragment,
             },
             client,
@@ -1581,7 +1542,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let fragment = node.fragment.as_deref().expect("contents fragment");
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
-        borrowed.chunker.update_id_and_properties(
+        borrowed.update_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id: fragment.paint.display_item_client_id,
                 r#type: DisplayItemIdType::PaintPhaseToClipType(phase),
@@ -1620,7 +1581,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             .parent
             .clone()
             .expect("text combine transform must have a parent");
-        borrowed.chunker.update_id_and_properties(
+        borrowed.update_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id: fragment.paint.display_item_client_id,
                 r#type: DisplayItemIdType::PaintPhaseToDrawingType(phase),
@@ -1644,14 +1605,6 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
     }
 }
 
-impl Drop for ScopedPaintChunkProperties<'_, '_> {
-    fn drop(&mut self) {
-        self.context
-            .borrow_mut()
-            .update_chunk_properties(self.previous.clone());
-    }
-}
-
 #[cfg(test)]
 mod opaque_record_tests {
     use super::*;
@@ -1659,6 +1612,52 @@ mod opaque_record_tests {
     use layoutng_assembly::internal::paint_input::{
         PaintCornerRadii, PaintCornerRadius, PaintShader,
     };
+    use paint_chunk::PaintChunker;
+
+    #[test]
+    fn scoped_chunk_transform_changes_only_transform_and_restores_properties() {
+        use crate::paint_property_tree::TransformPaintPropertyNode;
+
+        let mut output = PaintRecording::default();
+        let context = std::cell::RefCell::new(PaintContext::new(&mut output));
+        let root = context.borrow().chunk_properties();
+        let transform = std::sync::Arc::new(TransformPaintPropertyNode {
+            compositor: Default::default(),
+            geometry_mapper_cache: Default::default(),
+            lifecycle: Default::default(),
+            id: 1,
+            parent: Some(root.transform.clone()),
+            matrix: Default::default(),
+            origin: [0.0; 3],
+            flattens_inherited_transform: false,
+            rendering_context_id: 0,
+            backface_visibility: Default::default(),
+            scroll: None,
+            scroll_parent_scroll_translation: None,
+            sticky_constraint: None,
+            direct_compositing_reasons: Default::default(),
+        });
+        let id = DisplayItemId {
+            client_id: 9,
+            r#type: DisplayItemIdType::kLayerChunk,
+            fragment: 2,
+        };
+        let client = DisplayItemClientInfo {
+            is_cacheable: true,
+            invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            is_just_created: false,
+        };
+        {
+            let _scope =
+                ScopedPaintChunkProperties::transform(&context, transform.clone(), id, client);
+            let current = context.borrow().chunk_properties();
+            assert!(std::sync::Arc::ptr_eq(&current.transform, &transform));
+            assert!(std::sync::Arc::ptr_eq(&current.clip, &root.clip));
+            assert!(std::sync::Arc::ptr_eq(&current.effect, &root.effect));
+        }
+        let restored = context.borrow().chunk_properties();
+        assert!(restored.same_nodes(&root));
+    }
 
     #[test]
     fn drawing_cache_uses_display_item_client_validity() {
@@ -1683,12 +1682,10 @@ mod opaque_record_tests {
             is_cacheable: true,
             is_tombstone: false,
             paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
-            image_content_revisions: Vec::new(),
-            scrollbar_needs_update_display: None,
             scrollbar: None,
+            foreign_layer: None,
             kind: RecordedDisplayItemKind::Drawing,
             id,
-            client_visual_rect: visual_rect,
             visual_rect,
             visual_rect_is_accurate: true,
             draws_content: true,
@@ -1706,7 +1703,6 @@ mod opaque_record_tests {
         let previous = Arc::new(previous);
         let client = DisplayItemClientInfo {
             invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
-            scrollbar_needs_update_display: None,
             is_cacheable: true,
             is_just_created: false,
         };
@@ -1717,22 +1713,9 @@ mod opaque_record_tests {
             Default::default(),
             Some(previous.clone()),
         );
-        assert!(context.UseCachedDrawingWithClient(id, client, None, None));
+        assert!(context.UseCachedDrawingWithClient(id, client, None));
         drop(context);
         assert_eq!(cached.display_items[0].visual_rect, visual_rect);
-
-        let mut moved = PaintRecording::default();
-        let mut context = PaintContext::WithEditingAndCache(
-            &mut moved,
-            Default::default(),
-            Some(previous.clone()),
-        );
-        let moved_rect = PaintRect {
-            x: visual_rect.x + 1.0,
-            ..visual_rect
-        };
-        assert!(!context.UseCachedDrawingWithClient(id, client, None, Some(moved_rect),));
-        assert_eq!(context.cache_rejected_geometry, 1);
 
         let mut invalid = PaintRecording::default();
         let mut context =
@@ -1741,7 +1724,35 @@ mod opaque_record_tests {
             invalidation_reason: Some(foundation::PaintInvalidationReason::kLayout),
             ..client
         };
-        assert!(!context.UseCachedDrawingWithClient(id, invalid_client, None, None));
+        assert!(!context.UseCachedDrawingWithClient(id, invalid_client, None));
+    }
+
+    #[test]
+    fn under_invalidation_cache_skipper_repaints_and_marks_new_items_uncacheable() {
+        let mut output = PaintRecording::default();
+        let mut context = PaintContext::new(&mut output);
+        context.SetPaintUnderInvalidationCheckingForTesting(true);
+        let client = DisplayItemClientInfo {
+            invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            is_cacheable: true,
+            is_just_created: false,
+        };
+        let id = DisplayItemId {
+            client_id: 7,
+            r#type: DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kForeground),
+            fragment: 0,
+        };
+        assert!(!context.UseCachedDrawingWithClient(id, client, None));
+
+        context.BeginSkippingCache();
+        let skipped = context.ApplyCacheSkipping(client);
+        assert!(!skipped.is_cacheable);
+        assert_eq!(
+            skipped.invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kUncacheable)
+        );
+        context.EndSkippingCache();
+        assert!(context.ApplyCacheSkipping(client).is_cacheable);
     }
 
     #[test]
@@ -1861,7 +1872,6 @@ mod opaque_record_tests {
         let client = DisplayItemClientInfo {
             is_cacheable: true,
             invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
-            scrollbar_needs_update_display: None,
             is_just_created: false,
         };
         let mut chunker = PaintChunker::default();

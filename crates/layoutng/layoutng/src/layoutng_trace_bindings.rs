@@ -183,8 +183,10 @@ trace_source_method!(
     FragmentedOofData,
 );
 
-// cpp: layoutng/internal/layout_replaced.h:152-160
-// LayoutInputReplaced adds no managed fields; trace the inherited LayoutBox.
+// cpp: core/layout/layout_image.h:50-51
+// cpp: core/layout/layout_image.cc:62-62,64-65
+// LayoutInputReplaced adds no traced managed fields; trace the inherited
+// LayoutBox. Its retained sizing and decode-cache members are ordinary values.
 impl Traceable for LayoutInputReplaced {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         let box_: &LayoutBox = self;

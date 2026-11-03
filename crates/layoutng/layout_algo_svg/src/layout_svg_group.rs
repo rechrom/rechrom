@@ -110,9 +110,6 @@ impl LayoutSVGGroup {
                 SvgUseData::UnsupportedViewport => crate::svg_viewport::Unsupported(
                     "SVG use svg/symbol viewport instances are not translated",
                 ),
-                SvgUseData::UnsupportedImage => {
-                    crate::svg_viewport::Unsupported("SVG use image instances are not translated")
-                }
                 SvgUseData::UnsupportedSwitch => {
                     crate::svg_viewport::Unsupported("SVG use switch instances are not translated")
                 }
@@ -184,7 +181,7 @@ impl Traceable for LayoutSVGGroup {
 }
 
 // core/layout/svg/layout_svg_model_object.cc::StyleDidChange and
-// layout_svg_viewport_container.cc:133-146. Native SVG transforms participate
+// layout_svg_viewport_container.cc:133-146. Chromium SVG transforms participate
 // in SVG layout (including descendant text scaling), even when ordinary CSS
 // boxes can commit the same style change as paint-only.
 pub fn SvgContainerStyleDidChange(

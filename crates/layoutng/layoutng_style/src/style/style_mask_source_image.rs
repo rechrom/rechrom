@@ -42,6 +42,12 @@ impl StyleMaskSourceImage {
     pub fn IsLocal(&self) -> bool {
         self.scope.is_some()
     }
+    // cpp: core/style/style_mask_source_image.cc:143-152. A local mask source
+    // necessarily represents an SVG resource. External SVG target selection
+    // remains a separate typed document-image input and is not guessed here.
+    pub fn HasSVGMask(&self) -> bool {
+        self.IsLocal()
+    }
     pub fn SourceURL(&self) -> &str {
         self.url_data.resolved_url.as_ref()
     }
@@ -141,6 +147,12 @@ static MASK_VTABLE: StyleImageVTable = StyleImageVTable {
             .FetchedImage()
             .map_or(1., StyleImage::ImageScaleFactor)
     },
+    // cpp: core/style/style_mask_source_image.cc:134-137.
+    KnownToBeOpaque: |b, style| {
+        mask(b)
+            .FetchedImage()
+            .is_some_and(|image| image.KnownToBeOpaque(style))
+    },
     CachedImage: |b| {
         mask(b)
             .FetchedImage()
@@ -176,6 +188,7 @@ mod tests {
         let b = local("#mask", 2);
         assert!(a.base.IsMaskSource());
         assert!(!a.base.IsImageResource());
+        assert!(a.HasSVGMask());
         assert!(a.base.IsLoaded());
         assert!(a.base.CanRender());
         assert!(!a.base.IsLoading());

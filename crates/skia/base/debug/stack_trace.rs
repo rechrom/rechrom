@@ -1,5 +1,5 @@
 // Source: base/debug/stack_trace.h; base/debug/stack_trace.cc
-use crate::base::strings::native_ostream::{NativeOStream, NativeStdString, StdStringStorage};
+use crate::base::strings::ostream::{OStream, StdString, StdStringStorage};
 use core::pin::Pin;
 use core::{
     ffi::{c_void, CStr},
@@ -94,7 +94,7 @@ impl StackTrace {
             let message = unsafe { g_stack_trace_message };
             if !message.is_null() {
                 unsafe {
-                    platform::PrintMessageWithPrefix(prefix, NativeMessageView(message));
+                    platform::PrintMessageWithPrefix(prefix, MessageView(message));
                 }
             }
             return;
@@ -105,7 +105,7 @@ impl StackTrace {
     }
     #[cfg(not(any(__UCLIBC__, target_os = "aix")))]
     // Source: base/debug/stack_trace.cc:352
-    pub unsafe fn OutputToStream<S: StdStringStorage>(&self, os: &mut NativeOStream<'_>) {
+    pub unsafe fn OutputToStream<S: StdStringStorage>(&self, os: &mut OStream<'_>) {
         unsafe {
             self.OutputToStreamWithPrefix::<S>(os, c"");
         }
@@ -114,7 +114,7 @@ impl StackTrace {
     // Source: base/debug/stack_trace.cc:356
     pub unsafe fn OutputToStreamWithPrefix<S: StdStringStorage>(
         &self,
-        os: &mut NativeOStream<'_>,
+        os: &mut OStream<'_>,
         prefix: &CStr,
     ) {
         if self.count_ == 0 || unsafe { Self::ShouldSuppressOutput() } {
@@ -122,7 +122,7 @@ impl StackTrace {
             if !message.is_null() {
                 unsafe {
                     os.insert_cstr(prefix.as_ptr().cast());
-                    InsertNativeMessage(os, message);
+                    InsertMessage(os, message);
                 }
             }
             return;
@@ -159,7 +159,7 @@ pub struct OverrideStackTraceOutputForTesting {
 }
 // Actual ctor/dtor require the selected CHECK_NE/EQ enum ostream protocol;
 // these bodies are kept pending, never replaced by Rust panic or trap-only checks.
-pub unsafe fn insert_stack_trace<S: StdStringStorage>(os: &mut NativeOStream<'_>, s: &StackTrace) {
+pub unsafe fn insert_stack_trace<S: StdStringStorage>(os: &mut OStream<'_>, s: &StackTrace) {
     #[cfg(not(any(__UCLIBC__, target_os = "aix")))]
     unsafe {
         s.OutputToStream::<S>(os);
@@ -181,25 +181,20 @@ unsafe extern "C" {
 }
 /// The actual global std::string must remain live and unmodified for this borrow;
 /// native suppression configuration has the original external synchronization.
-unsafe fn NativeMessageView<'a>(message: *const c_void) -> &'a CStr {
+unsafe fn MessageView<'a>(message: *const c_void) -> &'a CStr {
     unsafe { CStr::from_ptr(rechrom_debug_string_cstr(message)) }
 }
-unsafe fn InsertNativeMessage(os: &mut NativeOStream<'_>, message: *const c_void) {
+unsafe fn InsertMessage(os: &mut OStream<'_>, message: *const c_void) {
     unsafe {
         rechrom_ostream_string(os.as_native_mut_ptr(), message);
     }
 }
 
-#[cfg(all(
-    CAN_UNWIND_WITH_FRAME_POINTERS,
-    target_arch = "arm",
-    native_gcc,
-    not(native_clang)
-))]
+#[cfg(all(CAN_UNWIND_WITH_FRAME_POINTERS, target_arch = "arm", gcc, not(clang)))]
 const kStackFrameAdjustment: usize = core::mem::size_of::<usize>();
 #[cfg(all(
     CAN_UNWIND_WITH_FRAME_POINTERS,
-    not(all(target_arch = "arm", native_gcc, not(native_clang)))
+    not(all(target_arch = "arm", gcc, not(clang)))
 ))]
 const kStackFrameAdjustment: usize = 0;
 #[cfg(CAN_UNWIND_WITH_FRAME_POINTERS)]
@@ -449,7 +444,7 @@ impl StackTrace {
     /// retain their original external synchronization and process lifetime.
     // Source: base/debug/stack_trace.cc:380
     pub unsafe fn SuppressStackTracesWithMessageForTesting<S: StdStringStorage>(
-        mut message: Pin<&mut NativeStdString<S>>,
+        mut message: Pin<&mut StdString<S>>,
     ) {
         unsafe {
             let replacement = if message.as_ref().view().is_empty() {
@@ -469,11 +464,11 @@ impl StackTrace {
     /// exactly once after successful synchronous return. No stream heap owner.
     // Source: base/debug/stack_trace.cc:367
     pub unsafe fn ToString_at<
-        SS: crate::base::strings::native_ostream::StringStreamStorage,
+        SS: crate::base::strings::ostream::StringStreamStorage,
         DS: StdStringStorage,
     >(
         &self,
-        dst: *mut NativeStdString<DS>,
+        dst: *mut StdString<DS>,
     ) {
         unsafe {
             self.ToStringWithPrefix_at::<SS, DS>(c"", dst);
@@ -481,17 +476,17 @@ impl StackTrace {
     }
     // Source: base/debug/stack_trace.cc:371
     pub unsafe fn ToStringWithPrefix_at<
-        SS: crate::base::strings::native_ostream::StringStreamStorage,
+        SS: crate::base::strings::ostream::StringStreamStorage,
         DS: StdStringStorage,
     >(
         &self,
         prefix: &CStr,
-        dst: *mut NativeStdString<DS>,
+        dst: *mut StdString<DS>,
     ) {
-        use crate::base::strings::native_ostream::NativeStringStream;
-        let mut stream = MaybeUninit::<NativeStringStream<SS>>::uninit();
+        use crate::base::strings::ostream::StringStream;
+        let mut stream = MaybeUninit::<StringStream<SS>>::uninit();
         unsafe {
-            NativeStringStream::initialize_at_assuming_native_abi(stream.as_mut_ptr());
+            StringStream::initialize_at_assuming_native_abi(stream.as_mut_ptr());
         }
         let mut pinned = unsafe { Pin::new_unchecked(stream.assume_init_mut()) };
         #[cfg(not(any(__UCLIBC__, target_os = "aix")))]

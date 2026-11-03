@@ -27,7 +27,7 @@ pub const PHASE_NAMES: [&str; 18] = [
     "render",
     "resource",
     "font",
-    "native_gc",
+    "gc",
     "diagnostic_trace",
     "diagnostic_report",
 ];
@@ -76,7 +76,7 @@ fn phase(category: &str, name: &str) -> Option<usize> {
         "LayoutEngine.TreeUpdate" | "Page.SynchronizeLayoutTree" => 6,
         "Host.MemoryCensus" => 17,
         "LayoutEngine.PopulatePaintData" | "LayoutEngine.RefreshTargetedPaintData" => 8,
-        "NativeHeapCollection" => 15,
+        "HeapCollection" => 15,
         "Page.PumpLoading"
         | "Page.ResolveStylesAndLoadResources"
         | "Page.DiscoverImages"

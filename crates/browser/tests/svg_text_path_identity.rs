@@ -1,6 +1,6 @@
 //! SVG textPath identity and unresolved-resource lifecycle through production Page.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -146,8 +146,8 @@ fn set_attribute(page: &mut Page, name: &str, attribute: &str, value: &str) {
 const EMPTY: &str = r#"<svg width="300" height="100"><text id="text" y="30" style="font:20px SvgTextPathFixture"></text></svg>"#;
 
 #[test]
-fn unresolved_text_path_keeps_native_identity_and_hides_glyphs() {
-    native_test_thread::run(|| {
+fn unresolved_text_path_keeps_source_identity_and_hides_glyphs() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             r##"<svg width="300" height="100"><text y="30" style="font:20px SvgTextPathFixture"><textPath id="textpath" href="#missing">HIDDEN</textPath></text></svg>"##,
@@ -161,7 +161,7 @@ fn unresolved_text_path_keeps_native_identity_and_hides_glyphs() {
 
 #[test]
 fn text_path_identity_is_independent_of_supported_geometry() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (path, href, expected_resolved) in [
             ("M0 30 H280", "#path", true),
@@ -200,7 +200,7 @@ fn text_path_identity_is_independent_of_supported_geometry() {
 
 #[test]
 fn retained_text_path_resolution_changes_keep_identity_and_old_frame() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(
             r##"<svg width="300" height="100"><defs style="display:none"><path id="path" d="M0 30 H280"/></defs><text style="font:20px SvgTextPathFixture"><textPath id="textpath" href="#missing">Visible</textPath></text></svg>"##,
@@ -265,7 +265,7 @@ fn retained_text_path_resolution_changes_keep_identity_and_old_frame() {
 
 #[test]
 fn text_path_requires_an_eligible_svg_text_parent() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for markup in [
             r##"<svg width="300" height="100"><textPath id="invalid" href="#missing"/></svg>"##,
@@ -298,7 +298,7 @@ fn text_path_requires_an_eligible_svg_text_parent() {
 
 #[test]
 fn consecutive_moveto_text_paths_match_their_single_moveto_geometry_and_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (source, normalized) in [
             ("M200 180 M10 60 H290", "M10 60 H290"),
@@ -350,7 +350,7 @@ fn consecutive_moveto_text_paths_match_their_single_moveto_geometry_and_pixels()
 
 #[test]
 fn consecutive_moveto_shape_pixels_preserve_curves_close_and_stroke_caps() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (source, normalized) in [
             ("M300 220 M20 60 H280", "M20 60 H280"),
@@ -397,7 +397,7 @@ fn consecutive_moveto_shape_pixels_preserve_curves_close_and_stroke_caps() {
 
 #[test]
 fn visible_move_only_paths_are_valid_and_paint_no_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let control = fixture(
             r#"<svg width="320" height="240"><rect x="200" y="180" width="20" height="20" fill="green"/></svg>"#,
@@ -422,7 +422,7 @@ fn assert_same_pixels(actual: &Page, expected: &Page, context: &str) {
 
 #[test]
 fn explicit_close_and_zero_length_lines_keep_their_wide_stroke_caps() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let empty = pixels(&fixture(EMPTY));
         for cap in ["butt", "round", "square"] {
@@ -448,7 +448,7 @@ fn explicit_close_and_zero_length_lines_keep_their_wide_stroke_caps() {
 
 #[test]
 fn consecutive_moveto_closed_fill_pixels_match_normalized_path() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let markup =
             |d: &str| format!(r#"<svg width="320" height="240"><path d="{d}" fill="red"/></svg>"#);

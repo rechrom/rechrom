@@ -11,12 +11,12 @@ use style::{
     },
     production_css_value as values, StyleEngine,
 };
-fn native<'a>(d: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(d: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = d.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn parse(id: P, text: &str, mode: M) -> Vec<values::PropertyValue> {
     ParseProperty(id, &String::from(text), false, mode).unwrap()
@@ -33,7 +33,7 @@ fn apply(id: P, b: &mut ComputedStyleBuilder, parent: Option<&ComputedStyle>, v:
     .unwrap();
 }
 #[test]
-fn palettes_retain_native_owner_name_and_css_wide_inheritance() {
+fn palettes_retain_computed_style_owner_name_and_css_wide_inheritance() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut d = html::html_parser::ParseHTML(
         "<div id=p style='font-palette:dark'><div id=c style='font-palette:inherit'></div><div id=u style='font-palette:unset'></div><div id=i style='font-palette:initial'></div><div id=n style='font-palette:normal'></div></div><div id=l style='font-palette:light'></div><div id=custom style='font-palette:--Case'></div>",
@@ -42,33 +42,33 @@ fn palettes_retain_native_owner_name_and_css_wide_inheritance() {
     e.Update(&mut d, &MediaValuesCachedData::default(), &[])
         .unwrap();
     assert!(e.Diagnostics().is_empty(), "{:?}", e.Diagnostics());
-    let p = native(&d, "p")
+    let p = computed_style(&d, "p")
         .GetFontDescription()
         .FontPaletteValue()
         .unwrap();
     assert_eq!(p.GetPaletteNameKind(), K::kDarkPalette);
     for id in ["c", "u"] {
-        let child = native(&d, id)
+        let child = computed_style(&d, id)
             .GetFontDescription()
             .FontPaletteValue()
             .unwrap();
         assert!(std::sync::Arc::ptr_eq(&p, &child));
     }
     for id in ["i", "n"] {
-        assert!(native(&d, id)
+        assert!(computed_style(&d, id)
             .GetFontDescription()
             .FontPaletteValue()
             .is_none());
     }
     assert_eq!(
-        native(&d, "l")
+        computed_style(&d, "l")
             .GetFontDescription()
             .FontPaletteValue()
             .unwrap()
             .GetPaletteNameKind(),
         K::kLightPalette
     );
-    let custom = native(&d, "custom")
+    let custom = computed_style(&d, "custom")
         .GetFontDescription()
         .FontPaletteValue()
         .unwrap();

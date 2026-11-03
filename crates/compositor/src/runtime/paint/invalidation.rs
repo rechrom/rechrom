@@ -109,39 +109,33 @@ fn enclosing(r: paint::paint_engine::PaintRect) -> Rect {
 impl RasterInvalidationItem for DisplayItem {
     type Id = paint::display_item_id::DisplayItemId;
     fn GetId(&self) -> Self::Id {
-        self.id
+        self.GetId()
     }
     fn ClientId(&self) -> usize {
-        self.id.client_id as usize
+        self.ClientId() as usize
     }
     fn DrawsContent(&self) -> bool {
-        self.draws_content
+        self.DrawsContent()
     }
     fn IsCacheable(&self) -> bool {
-        self.is_cacheable
+        self.IsCacheable()
     }
     fn IsTombstone(&self) -> bool {
-        self.is_tombstone
+        self.IsTombstone()
     }
     fn ScrollbarNeedsUpdateDisplay(&self) -> Option<bool> {
         if self.kind == RecordedDisplayItemKind::Scrollbar {
-            Some(
-                self.scrollbar_needs_update_display
-                    .expect("validated scrollbar owner metadata"),
-            )
+            Some(self.NeedsUpdateDisplay())
         } else {
             None
         }
     }
     fn VisualRect(&self) -> Rect {
-        enclosing(self.visual_rect)
+        enclosing(self.VisualRect())
     }
     fn GetPaintInvalidationReason(&self) -> PaintInvalidationReason {
-        self.paint_invalidation_reason
+        self.GetPaintInvalidationReason()
             .expect("validated native DisplayItem reason")
-    }
-    fn ImageContentRevisions(&self) -> &[(u64, u64)] {
-        &self.image_content_revisions
     }
 }
 impl<R: CpuSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for PaintChunk {
@@ -165,13 +159,13 @@ impl<R: CpuSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for PaintC
         self.is_cacheable
     }
     fn CanMatchOldChunk(&self) -> bool {
-        self.can_match_old_chunk()
+        paint::paint_engine::PaintChunk::CanMatchOldChunk(self)
     }
     fn Matches(&self, old: &Self) -> bool {
-        self.matches(old)
+        paint::paint_engine::PaintChunk::Matches(self, old)
     }
     fn DrawsContent(&self) -> bool {
-        !self.drawable_bounds.is_empty()
+        paint::paint_engine::PaintChunk::DrawsContent(self)
     }
     fn IsForeignLayerType(&self) -> bool {
         self.id.r#type.0 >= paint::display_item_id::DisplayItemIdType::kForeignLayerFirst.0
@@ -183,12 +177,17 @@ impl<R: CpuSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for Pai
         &self.chunks[index]
     }
     fn DisplayItemsInChunk(&self, index: usize) -> &[DisplayItem] {
-        let chunk = &self.chunks[index];
-        &self.display_items[chunk.begin_index as usize..chunk.end_index as usize]
+        self.DisplayItemsInChunk(index)
+    }
+    fn ImageContentRevisionsInChunk(&self, index: usize) -> &[Vec<(u64, u64)>] {
+        self.ImageContentRevisionsInChunk(index)
+    }
+    fn ChunkHasResourceChange(&self, index: usize) -> bool {
+        self.ChunkHasResourceChange(index)
     }
     // Source: paint_artifact.cc:37-41; absent diagnostic name is native empty.
     fn ClientDebugName(&self, id: usize) -> &str {
-        self.client_debug_names.get(&id).map_or("", |s| s.as_ref())
+        self.ClientDebugName(id)
     }
 }
 impl<R: CpuSkiaBackend> RasterInvalidationSubset<CpuGeometryMapper<R>> for PaintChunkSubset {
@@ -245,8 +244,8 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
     ) -> bool {
         paint::property_node_geometry::PropertyStateChanged(
             &chunk.properties,
-            native::PaintPropertyChangeType::ChangedOnlyCompositedValues,
-            &layer.native(),
+            paint_property_tree::PaintPropertyChangeType::ChangedOnlyCompositedValues,
+            &layer.as_source(),
         )
     }
     fn EffectChangedOnlySimple(
@@ -256,8 +255,8 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
     ) -> bool {
         paint::property_node_geometry::EffectChanged(
             state.effect_.node(),
-            native::PaintPropertyChangeType::ChangedOnlySimpleValues,
-            &layer.native(),
+            paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
+            &layer.as_source(),
             Some(state.transform_.node()),
         )
     }
@@ -268,8 +267,8 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
     ) -> bool {
         paint::property_node_geometry::ClipChanged(
             state.clip_.node(),
-            native::PaintPropertyChangeType::ChangedOnlySimpleValues,
-            &layer.native(),
+            paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
+            &layer.as_source(),
             Some(state.transform_.node()),
         )
     }
@@ -280,7 +279,7 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         t: f32,
         o: f32,
     ) -> bool {
-        a.native().ApproximatelyEqual(b.native(), t, o, o)
+        a.as_source().ApproximatelyEqual(b.as_source(), t, o, o)
     }
     fn BackdropFilterBounds(&self, chunk: &PaintChunk) -> Option<RectF> {
         let effect = &chunk.properties.effect;
@@ -301,13 +300,20 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
     }
 }
 
-pub struct CpuRasterInvalidator<R:CpuSkiaBackend>{
-    source:crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidator::RasterInvalidator<CpuGeometryMapper<R>>,
-    mapper:Arc<CpuGeometryMapper<R>>,
+pub struct CpuRasterInvalidator<R: CpuSkiaBackend> {
+    source: crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidator::RasterInvalidator<
+        CpuGeometryMapper<R>,
+    >,
+    mapper: Arc<CpuGeometryMapper<R>>,
 }
 impl<R: CpuSkiaBackend> CpuRasterInvalidator<R> {
     pub fn new(mapper: Arc<CpuGeometryMapper<R>>) -> Self {
-        Self{source:crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidator::RasterInvalidator::new(mapper.as_ref()),mapper}
+        Self {
+            source: crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidator::RasterInvalidator::new(
+                mapper.as_ref(),
+            ),
+            mapper,
+        }
     }
 }
 impl<R, B> crate::adapter::content_layer_client_impl::RasterInvalidator<B>
@@ -403,12 +409,64 @@ where
         Self::ClearInvalidations(self)
     }
 }
-impl crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::RasterInvalidationJson for serde_json::Value{
- fn SetInvalidations(&mut self,detailed:bool,values:&[crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::RasterInvalidationInfo]){
-    use crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::PaintInvalidationReasonToString;
-    self["invalidations"]=serde_json::Value::Array(values.iter().map(|v|if detailed{serde_json::json!({"object":v.client_debug_name,"rect":[v.rect.x,v.rect.y,v.rect.width,v.rect.height],"reason":PaintInvalidationReasonToString(v.reason)})}else{serde_json::json!([v.rect.x,v.rect.y,v.rect.width,v.rect.height])}).collect());
- }
- fn SetUnderInvalidations(&mut self,values:&[crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::RasterUnderInvalidation]){self["underInvalidations"]=serde_json::Value::Array(values.iter().map(|v|serde_json::json!({"x":v.x,"y":v.y,"oldPixel":sk_color_name(v.old_pixel),"newPixel":sk_color_name(v.new_pixel)})).collect());}
+// Source: raster_invalidation_tracking.cc:82-126. Allocation belongs to the
+// selected JSON value backend; sorting and containment filtering stay in the
+// source-relative RasterInvalidationTracking owner.
+impl crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::RasterInvalidationJson
+    for serde_json::Value
+{
+    fn SetInvalidations(
+        &mut self,
+        detailed: bool,
+        values: &[crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::RasterInvalidationInfo],
+    ) {
+        use crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::PaintInvalidationReasonToString;
+        self["invalidations"] = serde_json::Value::Array(
+            values
+                .iter()
+                .map(|value| {
+                    if detailed {
+                        serde_json::json!({
+                            "object": value.client_debug_name,
+                            "rect": [
+                                value.rect.x,
+                                value.rect.y,
+                                value.rect.width,
+                                value.rect.height
+                            ],
+                            "reason": PaintInvalidationReasonToString(value.reason)
+                        })
+                    } else {
+                        serde_json::json!([
+                            value.rect.x,
+                            value.rect.y,
+                            value.rect.width,
+                            value.rect.height
+                        ])
+                    }
+                })
+                .collect(),
+        );
+    }
+
+    fn SetUnderInvalidations(
+        &mut self,
+        values: &[crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::RasterUnderInvalidation],
+    ) {
+        self["underInvalidations"] = serde_json::Value::Array(
+            values
+                .iter()
+                .map(|value| {
+                    serde_json::json!({
+                        "x": value.x,
+                        "y": value.y,
+                        "oldPixel": sk_color_name(value.old_pixel),
+                        "newPixel": sk_color_name(value.new_pixel)
+                    })
+                })
+                .collect(),
+        );
+    }
 }
 
 // Source: Color::NameForLayoutTreeAsText, color.cc:1113-1124; SkColor is ARGB.
@@ -421,5 +479,65 @@ fn sk_color_name(pixel: u32) -> String {
         format!("#{r:02X}{g:02X}{b:02X}")
     } else {
         format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
+}
+
+#[cfg(test)]
+mod raster_invalidation_json_tests {
+    use super::*;
+    use crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::{
+        RasterInvalidationInfo, RasterInvalidationJson, RasterUnderInvalidation,
+    };
+
+    #[test]
+    fn detailed_json_preserves_source_field_names_and_rect_order() {
+        let mut json = serde_json::json!({});
+        RasterInvalidationJson::SetInvalidations(
+            &mut json,
+            true,
+            &[RasterInvalidationInfo {
+                client_id: 7,
+                client_debug_name: "client".into(),
+                rect: Rect::new(1, 2, 3, 4),
+                reason: PaintInvalidationReason::kLayout,
+            }],
+        );
+
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "invalidations": [{
+                    "object": "client",
+                    "rect": [1, 2, 3, 4],
+                    "reason": "geometry"
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn under_invalidation_colors_follow_layout_tree_hex_serialization() {
+        let mut json = serde_json::json!({});
+        RasterInvalidationJson::SetUnderInvalidations(
+            &mut json,
+            &[RasterUnderInvalidation {
+                x: 5,
+                y: 6,
+                old_pixel: 0xff123456,
+                new_pixel: 0x7fabcdef,
+            }],
+        );
+
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "underInvalidations": [{
+                    "x": 5,
+                    "y": 6,
+                    "oldPixel": "#123456",
+                    "newPixel": "#ABCDEF7F"
+                }]
+            })
+        );
     }
 }

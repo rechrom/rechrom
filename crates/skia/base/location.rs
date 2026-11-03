@@ -205,7 +205,7 @@ macro_rules! FROM_HERE {
 // Capture in the actual noinline Rust Location boundary, not in an FFI wrapper
 // frame. GCC extraction is a separate primitive taking the already-captured
 // address, so it cannot substitute its own helper's caller PC.
-#[cfg(native_compiler_gcc)]
+#[cfg(compiler_gcc)]
 unsafe extern "C" {
     fn chromium_location_extract_return_address(address: *const c_void) -> *const c_void;
 }
@@ -216,13 +216,13 @@ impl Location {
     /// lifetime and file carries the exact native build prefix above.
     #[inline(never)]
     pub unsafe fn Current(function: *const c_char, file: *const c_char, line: c_int) -> Self {
-        #[cfg(native_compiler_gcc)]
+        #[cfg(compiler_gcc)]
         let pc = unsafe {
             chromium_location_extract_return_address(core::intrinsics::return_address().cast())
         };
-        #[cfg(native_compiler_msvc)]
+        #[cfg(compiler_msvc)]
         let pc = core::intrinsics::return_address().cast();
-        #[cfg(native_compiler_other)]
+        #[cfg(compiler_other)]
         let pc = core::ptr::null(); // Exact original RETURN_ADDRESS fallback only.
         unsafe { Self::from_source_pc(function, file.add(kStrippedPrefixLength), line, pc) }
     }
@@ -232,13 +232,13 @@ impl Location {
     /// exact native prefix; no temporary or Rust host source metadata.
     #[inline(never)]
     pub unsafe fn CurrentWithoutFunctionName(file: *const c_char, line: c_int) -> Self {
-        #[cfg(native_compiler_gcc)]
+        #[cfg(compiler_gcc)]
         let pc = unsafe {
             chromium_location_extract_return_address(core::intrinsics::return_address().cast())
         };
-        #[cfg(native_compiler_msvc)]
+        #[cfg(compiler_msvc)]
         let pc = core::intrinsics::return_address().cast();
-        #[cfg(native_compiler_other)]
+        #[cfg(compiler_other)]
         let pc = core::ptr::null(); // Explicit native compiler fallback only.
         unsafe {
             Self::from_source_pc(core::ptr::null(), file.add(kStrippedPrefixLength), line, pc)
@@ -249,22 +249,22 @@ impl Location {
 // Source: base/location.cc:121-123
 #[inline(never)]
 pub fn GetProgramCounter() -> *const c_void {
-    #[cfg(native_compiler_gcc)]
+    #[cfg(compiler_gcc)]
     {
         unsafe {
             chromium_location_extract_return_address(core::intrinsics::return_address().cast())
         }
     }
-    #[cfg(native_compiler_msvc)]
+    #[cfg(compiler_msvc)]
     {
         core::intrinsics::return_address().cast()
     }
-    #[cfg(native_compiler_other)]
+    #[cfg(compiler_other)]
     {
         core::ptr::null()
     }
 }
-#[cfg(not(any(native_compiler_gcc, native_compiler_msvc, native_compiler_other)))]
+#[cfg(not(any(compiler_gcc, compiler_msvc, compiler_other)))]
 compile_error!("Location requires the actual native COMPILER_GCC/MSVC/other selection");
 // Source: base/location.h:50-52
 // Genuine template operation protocol for an actual external hash-state type;

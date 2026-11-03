@@ -5,7 +5,7 @@ use super::{
     paint_op_buffer::{MetadataOp, PaintOpBufferMetadata},
     paint_op_buffer_iterator::PaintOpType,
 };
-/// Borrowed actual flags. All methods project native resident values, not
+/// Borrowed actual flags. All methods project source resident values, not
 /// summary booleans cached beside a Paint operation.
 pub trait MetadataFlags<C> {
     fn IsValid(&self) -> bool;
@@ -37,9 +37,9 @@ pub trait PaintOpMetadataFields<C: Copy> {
 }
 pub struct PaintOpMetadata<'a, V>(pub &'a V);
 
-/// Native geometry/SkPaint primitives for the source paint-rect algorithm.
+/// Chromium geometry/SkPaint primitives for the source paint-rect algorithm.
 /// Bounds and flags are projected from the actual selected command. Returning
-/// None from ComputeFastBounds means the native paint cannot compute them,
+/// None from ComputeFastBounds means the source paint cannot compute them,
 /// never permission to skip an unavailable image/path/filter capability.
 pub trait PaintRectBackend {
     type Rect;
@@ -56,7 +56,7 @@ pub trait PaintRectBackend {
     fn OutsetOne(&self, rect: &mut Self::Rect);
 }
 // Source: cc/paint/paint_op.cc:2327-2368. The final one-pixel outset is part
-// of native antialias-aware image queries, including the complete-clip case.
+// of source antialias-aware image queries, including the complete-clip case.
 pub fn ComputePaintRect<B: PaintRectBackend>(backend: &B) -> B::Rect {
     let clip = backend.Clip();
     let mut transformed = if let Some(bounds) = backend.GetBounds() {

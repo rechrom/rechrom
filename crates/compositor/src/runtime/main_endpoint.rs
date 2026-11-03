@@ -1,10 +1,10 @@
 //! Engine-local Proxy effect endpoint for the canonical main LayerTreeHost.
 //! No reference to a main/impl Host or Page can be recovered from this object.
 use super::{
+    animation_host::AnimationHostOwner,
     execution::EngineTaskQueue,
     main_host::CpuMainHostEndpoint,
-    native_animation::NativeAnimationOwner,
-    native_services::NativeEventSink,
+    services::EventSink,
     types::{LocalSurfaceId, ResultTaskRunner, TaskRunner},
 };
 use crate::{
@@ -40,8 +40,8 @@ pub(crate) struct EngineMainEndpoint {
     executor: Arc<dyn CompositorExecutor>,
     tasks: TaskRunner,
     commands: EngineTaskQueue,
-    animations: NativeAnimationOwner,
-    events: Arc<dyn NativeEventSink>,
+    animations: AnimationHostOwner,
+    events: Arc<dyn EventSink>,
     commit_requested: AtomicBool,
     rendering_paused: AtomicBool,
     protected_sequence: AtomicBool,
@@ -50,8 +50,8 @@ impl EngineMainEndpoint {
     pub(crate) fn new(
         executor: Arc<dyn CompositorExecutor>,
         commands: EngineTaskQueue,
-        animations: NativeAnimationOwner,
-        events: Arc<dyn NativeEventSink>,
+        animations: AnimationHostOwner,
+        events: Arc<dyn EventSink>,
     ) -> Self {
         Self {
             tasks: Arc::new(MainTaskRunner {

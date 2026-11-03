@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native counter directive/list, QuotesData and ListStyleTypeData application.
+//! Canonical counter directive/list, QuotesData and ListStyleTypeData application.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{Member, QuotesData, ScopedRefPtr};
@@ -129,7 +129,7 @@ fn Counters(
     {
         return Err(LonghandApplicationError::InvalidValue(id));
     }
-    // Resolve the typed entries before changing native state.
+    // Resolve the typed entries before changing computed style state.
     let mut entries = Vec::new();
     for item in &list.values {
         let CSSValuePayload::kCounterClass(counter) = item.Payload() else {
@@ -154,7 +154,7 @@ fn Counters(
     }
     Clear(id, b);
     let map = b.AccessCounterDirectives();
-    let mut native_list = CounterPropertyList::default();
+    let mut list = CounterPropertyList::default();
     for (name, number) in entries {
         let target = map.entry(name.clone()).or_default();
         let mut entry = CounterPropertyEntry {
@@ -185,9 +185,9 @@ fn Counters(
                 0
             });
         }
-        native_list.push(entry);
+        list.push(entry);
     }
-    SetList(id, b, Some(Box::new(native_list)));
+    SetList(id, b, Some(Box::new(list)));
     Ok(())
 }
 // cpp: StyleBuilderConverter::ConvertQuotes, style_builder_converter.cc:2554-2571.

@@ -1,7 +1,7 @@
 //! Concrete external resource values used by the native compositor family.
 //!
 //! The cc resource pool owns reuse, accounting and release policy. The actual
-//! shared image remains an injected platform object behind `NativeSharedImage`;
+//! shared image remains an injected platform object behind `SharedImageBackend`;
 //! this module does not allocate pixels or implement a second resource pool.
 
 use super::types::{CpuCompositorTypes, CpuSkiaBackend};
@@ -432,7 +432,7 @@ pub trait RasterWriteMapping: Send {
 }
 
 /// Platform shared-image owner injected by the browser/Viz boundary.
-pub trait NativeSharedImage: Send + Sync {
+pub trait SharedImageBackend: Send + Sync {
     /// Identity of the actual raster allocation, independent of the Viz resource
     /// ID assigned later by ClientResourceProvider::ImportResource. Raster
     /// acquisition precedes export and must address the backing allocation.
@@ -458,9 +458,9 @@ pub trait NativeSharedImage: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct RasterSharedImage(Arc<dyn NativeSharedImage>);
+pub struct RasterSharedImage(Arc<dyn SharedImageBackend>);
 impl RasterSharedImage {
-    pub fn new(image: Arc<dyn NativeSharedImage>) -> Self {
+    pub fn new(image: Arc<dyn SharedImageBackend>) -> Self {
         Self(image)
     }
     pub fn creation_sync_token(&self) -> RasterSyncToken {

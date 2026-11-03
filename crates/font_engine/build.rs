@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    // HarfBuzz is still a native dependency. Resolve the installed development
+    // HarfBuzz is still a C dependency. Resolve the installed development
     // package explicitly, never an unrelated sibling checkout's static archive.
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=HARFBUZZ_PKG_CONFIG_PATH");

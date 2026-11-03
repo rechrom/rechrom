@@ -1,5 +1,5 @@
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 use browser::page::{Page, PageClient, ScriptEnvironment};
 use std::{
     cell::{Cell, RefCell},
@@ -108,7 +108,7 @@ fn assert_script(page: &mut Page, source: &str) {
 
 #[test]
 fn synchronous_scroll_queries_before_html_arrives_keep_navigation_alive() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let (mut page, body, _, finished) = create(true);
         body.borrow_mut().push_back(response());
         page.Open("https://stream.test/", 4096, 4096).unwrap();
@@ -131,7 +131,7 @@ fn synchronous_scroll_queries_before_html_arrives_keep_navigation_alive() {
 
 #[test]
 fn hidden_document_element_geometry_is_empty_and_can_be_restored() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let (mut page, body, _, _) = create(true);
         body.borrow_mut().extend([response(),URLLoadEvent::Data(b"<html style='display:none'><body style='margin:0'><div style='height:2000px'>content</div></body></html>".to_vec()),URLLoadEvent::Finished]);
         page.Open("https://stream.test/", 4096, 4096).unwrap();

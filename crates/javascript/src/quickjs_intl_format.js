@@ -43,7 +43,7 @@
         choice(opts, 'localeMatcher', ['lookup', 'best fit'], 'best fit');
         return supported(value)[0] || 'en-US';
     }
-    const numbers = new WeakMap(), dates = new WeakMap(), plurals = new WeakMap();
+    const numbers = new WeakMap(), dates = new WeakMap(), plurals = new WeakMap(), segmenters = new WeakMap(), segments = new WeakMap();
     function record(map, value) {
         const result = map.get(value);
         if (!result) throw new TypeError('Incompatible Intl receiver');
@@ -69,9 +69,21 @@
             if (!Number.isFinite(n)) return service('special-number', locale, String(n));
             return service('number', locale, n, resolved.minimumFractionDigits, resolved.maximumFractionDigits, resolved.minimumIntegerDigits, +resolved.useGrouping);
         };
-        numbers.set(this, {resolved, format});
+        const formatToParts = value => {
+            const n = Number(value);
+            if (Number.isNaN(n)) return [{type:'nan', value:service('special-number', locale, 'NaN')}];
+            if (!Number.isFinite(n)) {
+                const value = service('special-number', locale, String(n));
+                return n < 0
+                    ? [{type:'minusSign', value:value.slice(0, -1)}, {type:'infinity', value:value.slice(-1)}]
+                    : [{type:'infinity', value}];
+            }
+            return service('number-parts', locale, n, resolved.minimumFractionDigits, resolved.maximumFractionDigits, resolved.minimumIntegerDigits, +resolved.useGrouping);
+        };
+        numbers.set(this, {resolved, format, formatToParts});
     }
     Object.defineProperty(NumberFormat.prototype, 'format', {get() {return record(numbers, this).format}, configurable: true});
+    NumberFormat.prototype.formatToParts = function(value) {return record(numbers, this).formatToParts(value)};
     NumberFormat.prototype.resolvedOptions = function() {return {...record(numbers, this).resolved}};
     NumberFormat.supportedLocalesOf = supported;
     function DateTimeFormat(value, settings) {
@@ -137,7 +149,61 @@
     };
     PluralRules.prototype.resolvedOptions = function() {const r = record(plurals, this); return {...r, pluralCategories: [...r.pluralCategories]}};
     PluralRules.supportedLocalesOf = supported;
-    for (const [name, constructor] of Object.entries({NumberFormat, DateTimeFormat, PluralRules})) {
+    function segmentData(input, start, end, wordLike) {
+        const result = {segment: input.slice(start, end), index: start, input};
+        if (wordLike !== undefined) result.isWordLike = wordLike;
+        return result;
+    }
+    class Segments {
+        constructor(input, entries, word) {segments.set(this, {input, entries, word})}
+        containing(index) {
+            const r = record(segments, this);
+            let n = Number(index);
+            if (Number.isNaN(n)) n = 0;
+            else if (Number.isFinite(n)) n = n < 0 ? Math.ceil(n) : Math.floor(n);
+            if (n < 0 || n >= r.input.length) return undefined;
+            for (let i = r.entries.length - 1; i >= 0; --i) {
+                const entry = r.entries[i];
+                if (entry.index <= n) {
+                    const end = i + 1 < r.entries.length ? r.entries[i + 1].index : r.input.length;
+                    return segmentData(r.input, entry.index, end, r.word ? entry.wordLike : undefined);
+                }
+            }
+        }
+        [Symbol.iterator]() {
+            const r = record(segments, this);
+            let i = 0;
+            return {
+                next() {
+                    if (i >= r.entries.length) return {value: undefined, done: true};
+                    const entry = r.entries[i];
+                    const end = i + 1 < r.entries.length ? r.entries[i + 1].index : r.input.length;
+                    ++i;
+                    return {value: segmentData(r.input, entry.index, end, r.word ? entry.wordLike : undefined), done: false};
+                },
+                [Symbol.iterator]() {return this}
+            };
+        }
+    }
+    class Segmenter {
+        constructor(value, settings) {
+            const opts = options(settings), locale = resolve(value, opts);
+            const granularity = choice(opts, 'granularity', ['grapheme','word','sentence'], 'grapheme');
+            segmenters.set(this, {locale, granularity});
+        }
+        segment(value) {
+            const r = record(segmenters, this), input = String(value);
+            const encoded = service('segment', r.locale, input, r.granularity);
+            const entries = encoded === '' ? [] : encoded.split(',').map(value => {
+                const parts = value.split(':');
+                return {index: Number(parts[0]), wordLike: parts[1] === '1'};
+            });
+            return new Segments(input, entries, r.granularity === 'word');
+        }
+        resolvedOptions() {return {...record(segmenters, this)}}
+        static supportedLocalesOf(value, settings) {return supported(value, settings)}
+    }
+    for (const [name, constructor] of Object.entries({NumberFormat, DateTimeFormat, PluralRules, Segmenter})) {
         Object.defineProperty(constructor.prototype, Symbol.toStringTag, {value:'Intl.' + name, configurable:true});
         Object.defineProperty(Intl, name, {value:constructor, writable:true, configurable:true});
     }

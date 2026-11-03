@@ -1,7 +1,7 @@
 //! UA button alignment must survive the canonical cascade and subsequent
 //! author/style mutations. Check both ComputedStyle and published geometry.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use foundation::ETextAlign;
@@ -76,7 +76,7 @@ fn fixture(author_color: bool) -> Page {
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -127,7 +127,7 @@ fn assert_label_alignment(page: &Page, name: &str, align: ETextAlign) {
         .unwrap();
     let style = document.ResolvedStyleFor(index).unwrap();
     assert_eq!(
-        unsafe { &*style.native_style.Get() }.GetTextAlign(),
+        unsafe { &*style.computed_style_owner.Get() }.GetTextAlign(),
         align,
         "{name}: native alignment"
     );
@@ -161,7 +161,7 @@ fn assert_label_alignment(page: &Page, name: &str, align: ETextAlign) {
 
 #[test]
 fn author_text_color_preserves_ua_button_label_centering() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(true);
         for id in ["submit", "reset", "input-button", "button", "flex"] {
@@ -174,7 +174,7 @@ fn author_text_color_preserves_ua_button_label_centering() {
 
 #[test]
 fn button_alignment_survives_color_change_and_dynamic_insertion() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(false);
         assert_label_alignment(&page, "button", ETextAlign::kCenter);

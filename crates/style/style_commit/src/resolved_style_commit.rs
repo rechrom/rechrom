@@ -4,7 +4,7 @@
 //!
 //! Resolution owns construction of each style and the document adapter owns
 //! storage. This operation transfers each completed style into that adapter in
-//! traversal order, without cloning or projecting the native style payload.
+//! traversal order, without cloning or projecting the computed style style payload.
 
 #![allow(non_snake_case)]
 

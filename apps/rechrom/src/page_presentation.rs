@@ -28,6 +28,10 @@ pub(crate) struct ContentFrameProvenance {
     pub main_frame_epoch: u64,
     /// Last impl scroll callback incorporated by this Page output.
     pub compositor_scroll_sequence: u64,
+    /// Latest browser-owned mutation applied before this Page frame was
+    /// produced. The root embedder uses this only as a commit fence; the Page
+    /// still owns and renders its normal live state.
+    pub embedder_revision: u64,
     /// App-owned live-resize transaction represented by this content frame.
     pub resize: Option<ResizeProvenance>,
 }
@@ -83,4 +87,10 @@ pub(crate) struct Scene {
     pub placements: Vec<Placement>,
     pub live_documents: Vec<Document>,
     pub metadata: Vec<DragRegion>,
+    /// Exact browser chrome revision belonging to this root commit.
+    ///
+    /// A minimum revision fence is insufficient: the toolbar Page can finish
+    /// the next mutation before this Scene reaches Display, which would pair
+    /// new browser chrome with the previous tab Surface for one frame.
+    pub toolbar_revision: u64,
 }

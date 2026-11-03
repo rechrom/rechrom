@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native Chromium interaction/render-hint application. No CSS text is parsed.
+//! Canonical Chromium interaction/render-hint application. No CSS text is parsed.
 #![allow(non_snake_case)]
 use super::*;
 use crate::{
@@ -48,7 +48,7 @@ fn Flags(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(crate::resolver::style_builder_converter::StyleBuilderConverter::ConvertFlagsFromBits(bits))
 }
-// css_identifier_value_mappings.h:285-323, exactly the source native enum.
+// css_identifier_value_mappings.h:285-323, exactly the source computed style enum.
 fn Appearance(
     id: CSSPropertyID,
     v: &Value,
@@ -78,7 +78,7 @@ fn Appearance(
     })
 }
 // longhands_custom.cc:12504-12591. Lookup only supplies name identity/exposure;
-// shorthand expansion and all native transform flags use real property IDs.
+// shorthand expansion and all computed style transform flags use real property IDs.
 fn WillChange(b: &mut ComputedStyleBuilder, parent: Option<&ComputedStyle>, v: &Value) -> Result {
     use CSSPropertyID::*;
     let id = kWillChange;
@@ -319,7 +319,7 @@ mod tests {
         }
     }
     #[test]
-    fn production_interaction_touch_action_combinations_and_native_css_wide() {
+    fn production_interaction_touch_action_combinations_and_computed_style_css_wide() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut parent = ComputedStyleBuilder::from_style(initial());
         apply(
@@ -448,7 +448,7 @@ mod tests {
             ],
         );
         // Context-dependent property exposure remains a typed boundary and
-        // rejects before mutating the native will-change data.
+        // rejects before mutating the computed style will-change data.
         let p = ParseProperty(
             CSSPropertyID::kWillChange,
             &foundation::String::from("margin-trim"),
@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(child.Appearance(), AppearanceValue::kMediaControl);
     }
     #[test]
-    fn production_interaction_webkit_appearance_resolves_alias_to_native_field() {
+    fn production_interaction_webkit_appearance_resolves_alias_to_computed_style_field() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut parent = ComputedStyleBuilder::from_style(initial());
         apply(
@@ -582,7 +582,7 @@ mod tests {
         );
     }
     #[test]
-    fn production_interaction_disabled_runtime_entries_and_native_bitsets() {
+    fn production_interaction_disabled_runtime_entries_and_computed_style_bitsets() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut parent = ComputedStyleBuilder::from_style(initial());
         use crate::production_css_value as values;

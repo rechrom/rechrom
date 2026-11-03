@@ -133,7 +133,9 @@ struct Listener {
 pub type FocusChangeHandler = Rc<dyn Fn(HostObjectId, bool, &mut dyn JavaScriptHostRuntime)>;
 // A source Emit can synchronously reenter JavaScript (image events and
 // mutation notifications). Execute it after releasing the host borrow.
-pub type ScopedDOMMutationEmitter = Rc<dyn Fn(&DOMMutation, &mut dyn JavaScriptHostRuntime)>;
+pub type ScopedDOMMutationEmitter = Rc<
+    dyn Fn(&DOMMutation, &mut dyn JavaScriptHostRuntime) -> Result<(), dom::error::DOMException>,
+>;
 pub struct DOMJavaScriptBindings {
     document: Rc<RefCell<DOM>>,
     services: services::DOMServices,
@@ -720,6 +722,9 @@ impl DOMJavaScriptBindings {
             "data" if is_character_data(node.Type()) => {
                 Self::value(HostValue::String(node.Data().into()))
             }
+            "target" if node.Type() == DOMNodeType::kProcessingInstruction => {
+                Self::value(HostValue::String(node.Name().into()))
+            }
             "nodeValue" => Self::value(if is_character_data(node.Type()) {
                 HostValue::String(node.Data().into())
             } else {
@@ -1005,10 +1010,10 @@ impl DOMJavaScriptBindings {
             trace
         });
         if member == "__domAttributeGetter" {
-            return self.NativeAttributeGetter(arguments);
+            return self.AttributeGetter(arguments);
         }
         if matches!(member, "__domHasInterface" | "__domAttributeSet") {
-            return self.NativeAttributeCall(receiver, member, arguments);
+            return self.AttributeCall(receiver, member, arguments);
         }
         if member == "__domCollectionBrand" {
             return self.collections.borrow().get(&receiver).map_or_else(
@@ -1512,7 +1517,7 @@ impl DOMJavaScriptBindings {
                 if *sheet_index < 0.0 || *sheet_index >= sheets.len() as f64 || *rule_index < 0.0 {
                     return Self::type_error("Invalid stylesheet index");
                 }
-                let mut sheet = sheets[*sheet_index as usize].clone();
+                let sheet = &sheets[*sheet_index as usize];
                 if *rule_index > sheet.rules.len() as f64
                     || (member == "stylesheetDeleteRule" && *rule_index == sheet.rules.len() as f64)
                 {
@@ -1522,22 +1527,36 @@ impl DOMJavaScriptBindings {
                     );
                 }
                 let index = *rule_index as usize;
-                if member == "stylesheetInsertRule" {
+                let sheet = if member == "stylesheetInsertRule" {
                     let text = match arguments.get(2) {
                         Some(HostValue::String(text)) => text.as_str(),
                         _ => "",
                     };
-                    let mut parsed = style::ParseCSS(text);
-                    if parsed.rules.len() != 1 || !parsed.font_faces.is_empty() {
+                    style::InsertCSSStyleSheetRule(sheet, index, text)
+                } else {
+                    style::DeleteCSSStyleSheetRule(sheet, index)
+                };
+                let sheet = match sheet {
+                    Ok(sheet) => sheet,
+                    Err(style::CSSStyleSheetRuleMutationError::IndexSize) => {
+                        return HostResult::Failure(
+                            javascript::javascript_runtime::JavaScriptExceptionKind::kRangeError,
+                            "CSS rule index out of bounds",
+                        );
+                    }
+                    Err(style::CSSStyleSheetRuleMutationError::Syntax) => {
                         return HostResult::Failure(
                             javascript::javascript_runtime::JavaScriptExceptionKind::kSyntaxError,
                             "Expected one CSS style rule",
                         );
                     }
-                    sheet.rules.insert(index, parsed.rules.remove(0));
-                } else {
-                    sheet.rules.remove(index);
-                }
+                    Err(style::CSSStyleSheetRuleMutationError::MissingTypedBacking) => {
+                        return HostResult::Failure(
+                            javascript::javascript_runtime::JavaScriptExceptionKind::kTypeError,
+                            "Stylesheet has no current parsed owner",
+                        );
+                    }
+                };
                 drop(owner);
                 if let Some(emit) = self.services.host.emit_style_sheet.as_mut() {
                     emit(sheet);
@@ -1892,10 +1911,23 @@ impl DOMJavaScriptBindings {
                 Self::value(HostValue::Object(child))
             }
             // cpp: webapi/dom_bindings.cc:899-921
-            "getStyle" | "setStyle" => {
+            "getStyle" | "setStyle" | "hasStyle" => {
                 let Some(HostValue::String(property)) = arguments.first() else {
                     return Self::type_error("style property name is required");
                 };
+                if member == "hasStyle" {
+                    // Source: CSSStyleDeclaration's named-property getter in
+                    // core/css/css_style_declaration.idl:38-44 and generated
+                    // css_property_names.cc:1886-1895.  `property in style`
+                    // tests the exposed CSS property table, not the current
+                    // declaration value.
+                    return Self::value(HostValue::Boolean(
+                        style::css_property_names::FindProperty(
+                            property.to_ascii_lowercase().as_bytes(),
+                        )
+                        .is_some(),
+                    ));
+                }
                 let inline_style = node.InlineStyle();
                 let standard_mode = node.Namespace() == DOMNamespace::kHTML
                     && document.GetCompatibilityMode()
@@ -2105,7 +2137,7 @@ impl DOMJavaScriptBindings {
                 let Some(HostValue::String(id)) = arguments.first() else {
                     return Self::type_error("getElementById requires a string");
                 };
-                let found = find_element_by_id(document, index, id);
+                let found = document.FindElementByIdInTreeScope(index, id);
                 found.map_or_else(
                     || Self::value(HostValue::Null(JavaScriptNull)),
                     |found| {
@@ -2276,7 +2308,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             } else {
                 call.arguments
             };
-            return Some(Self::PrepareNativeGetter(arguments));
+            return Some(Self::PrepareGetter(arguments));
         }
         if call.operation == HostOperation::kCall && member == "__ceIsProxy" {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
@@ -2420,7 +2452,8 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 let emitter = self.emit_mutation.clone();
                 Rc::new(
                     move |mutation: &DOMMutation, _: &mut dyn JavaScriptHostRuntime| {
-                        (emitter.borrow_mut())(mutation)
+                        (emitter.borrow_mut())(mutation);
+                        Ok(())
                     },
                 )
             }
@@ -2511,20 +2544,22 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             let mut outcome = result;
             if let Some(mutation) = mutation {
                 let emitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    emitter(&mutation, runtime);
+                    emitter(&mutation, runtime)
                 }));
-                if let Err(error) = emitted {
-                    if catches_errors {
-                        if let Some(error) = error.downcast_ref::<dom::error::DOMException>() {
-                            outcome = Self::type_error(error.message);
-                        } else if let Some(error) = error.downcast_ref::<std::io::Error>() {
+                match emitted {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) if catches_errors => {
+                        outcome = Self::type_error(error.message);
+                    }
+                    Ok(Err(error)) => std::panic::panic_any(error),
+                    Err(error) if catches_errors => {
+                        if let Some(error) = error.downcast_ref::<std::io::Error>() {
                             outcome = Self::type_error(&error.to_string());
                         } else {
                             std::panic::resume_unwind(error);
                         }
-                    } else {
-                        std::panic::resume_unwind(error);
                     }
+                    Err(error) => std::panic::resume_unwind(error),
                 }
             }
             if let Some(callback) = reactions {
@@ -2644,6 +2679,8 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     "template" => "HTMLTemplateElement",
                     "slot" => "HTMLSlotElement",
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "HTMLHeadingElement",
+                    "div" => "HTMLDivElement",
+                    "li" => "HTMLLIElement",
                     "a" => "HTMLAnchorElement",
                     "video" => "HTMLVideoElement",
                     "audio" => "HTMLAudioElement",
@@ -2658,7 +2695,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             },
             DOMNodeType::kText => "Text",
             DOMNodeType::kComment => "Comment",
-            DOMNodeType::kProcessingInstruction => "CharacterData",
+            DOMNodeType::kProcessingInstruction => "ProcessingInstruction",
             DOMNodeType::kDocumentFragment if document.ShadowHost(index).is_some() => "ShadowRoot",
             DOMNodeType::kDocumentFragment => "DocumentFragment",
             _ => "Node",
@@ -3060,23 +3097,6 @@ fn node_name(node_type: DOMNodeType, name: &str, namespace: DOMNamespace) -> Str
         DOMNodeType::kElement if namespace == DOMNamespace::kHTML => name.to_ascii_uppercase(),
         _ => name.into(),
     }
-}
-
-fn find_element_by_id(document: &dom::Document, index: usize, id: &str) -> Option<usize> {
-    let node = document.Node(index);
-    if node.Type() == DOMNodeType::kElement
-        && node
-            .FindAttribute("id")
-            .is_some_and(|attribute| attribute.value == id)
-    {
-        return Some(index);
-    }
-    for &child in node.Children() {
-        if let Some(found) = find_element_by_id(document, child, id) {
-            return Some(found);
-        }
-    }
-    None
 }
 
 // cpp: webapi/dom_bindings.cc:35-53
@@ -3733,6 +3753,7 @@ mod tests {
             fragment.insertBefore(text,fragment.firstChild);fragment.appendChild(comment);check(fragment.firstChild === text && fragment.lastChild === comment,'create and insert node kinds');
             let invalid=false;try{root.appendChild(root)}catch(e){invalid=e instanceof TypeError}check(invalid && root.parentNode !== null,'invalid cycle');
             a.style.setProperty('color','red');a.style.setProperty('color','blue','important');check(a.getAttribute('style') === 'color: blue !important;' && a.style.getPropertyValue('color') === 'blue','inline style');
+            check('transform' in a.style && 'perspective' in a.style && !('notARealProperty' in a.style),'CSS declaration named properties');
             const separate=document.implementation.createHTMLDocument('title');check(separate.defaultView === null && separate.head.firstChild.textContent === 'title' && separate.hasFocus(),'detached document');
             a.className='one\u000btwo';check(!a.matches('.one.two[class~=two]') && root.getElementsByClassName('one\u000btwo').length >= 1 && !a.matches('\u00a0p'),'source CSS and HTML whitespace sets');
             true

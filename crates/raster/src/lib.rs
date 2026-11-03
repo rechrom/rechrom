@@ -1,4 +1,4 @@
-//! Native cc-selected raster execution.
+//! cc-selected raster execution.
 //!
 //! The compositor selects tile work and consumes only opaque resource
 //! identities. This crate executes immutable paint records through its private
@@ -13,9 +13,11 @@ pub mod svg_filter_graph;
 pub use png::EncodeRgbaPng;
 pub use reflection_mask::CompileReflectionMaskLayers;
 
-pub mod native;
-pub use native::{MapResourceForRead, RasterEngine, RasterReadView};
+pub mod execution;
+#[cfg(target_vendor = "apple")]
+pub use execution::SkiaFontBackendFactory;
+pub use execution::{MapResourceForRead, RasterEngine, RasterReadView};
 #[cfg(any(test, feature = "artifact_test_support"))]
-pub use native::{
+pub use execution::{
     RasterizePaintArtifact, RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,
 };

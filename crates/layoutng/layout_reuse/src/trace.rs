@@ -4,13 +4,13 @@ use crate::{BlockFormattingContextReuseReason, LayoutCacheDecisionReason, Layout
 
 const SLOW_LOOKUP_THRESHOLD_NS: u64 = 50_000;
 
-/// Trace the retained-tree admission check performed by the native adapter.
+/// Trace the retained-tree admission check performed by the source adapter.
 #[inline(never)]
 pub fn retain_tree_span() -> browser_tracing::Span {
     browser_tracing::span("layout", "layout_reuse.RetainTree")
 }
 
-/// Aggregate cache work for one native layout pass. Per-node trace events are
+/// Aggregate cache work for one source layout pass. Per-node trace events are
 /// intentionally avoided: they would flood the timeline and perturb the hot
 /// path that this telemetry is meant to diagnose.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

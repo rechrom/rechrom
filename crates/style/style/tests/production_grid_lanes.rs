@@ -7,7 +7,7 @@ use style::{
 // runtime_enabled_features.json5:1641-1643 marks CSSGridLanesLayout experimental.
 // Author declarations must stay hidden before CSS-wide or var() expansion.
 #[test]
-fn style_engine_grid_lanes_exposure_keeps_stable_grid_fields_and_native_defaults() {
+fn style_engine_grid_lanes_exposure_keeps_stable_grid_fields_and_computed_style_defaults() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<style>#g{display:block;grid-template-columns:10px 1fr;grid-template-rows:20px;grid-template-areas:'a a';grid-lanes:row 99px 'b';grid-lanes-direction:row fill-reverse;grid-lanes-pack:dense}</style><div id=g style='--lanes:row 30px;grid-lanes:var(--lanes);grid-lanes:initial;grid-lanes-direction:inherit;grid-lanes-pack:unset;flow-tolerance:1px;display:grid-lanes'><div id=c style='grid-lanes:inherit;display:inline grid-lanes'></div></div>",
@@ -32,14 +32,14 @@ fn style_engine_grid_lanes_exposure_keeps_stable_grid_fields_and_native_defaults
         );
     }
     let d = owner.GetDocument();
-    let native = |id: &str| {
+    let computed_style = |id: &str| {
         let n = (0..d.NodeCount())
             .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
             .unwrap();
-        unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+        unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
     };
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
-    let g = native("g");
+    let g = computed_style("g");
     assert_eq!(g.Display(), EDisplay::kBlock);
     let areas = unsafe { &*g.GridTemplateAreas().Get() };
     assert_eq!((areas.row_count, areas.column_count), (1, 2));
@@ -54,10 +54,13 @@ fn style_engine_grid_lanes_exposure_keeps_stable_grid_fields_and_native_defaults
     );
     let rows = unsafe { &*g.SpecifiedGridTemplateRows().Get() }.GetTrackList();
     assert_eq!(rows.RepeatTrackSize(0, 0).MinTrackBreadth().Pixels(), 20.);
-    for s in [g, native("c")] {
+    for s in [g, computed_style("c")] {
         assert_eq!(s.GetGridLanesDirection(), initial.GetGridLanesDirection());
         assert_eq!(s.GridLanesPack(), initial.GridLanesPack());
         assert_eq!(s.GetFlowTolerance(), initial.GetFlowTolerance());
     }
-    assert!(native("c").SpecifiedGridTemplateColumns().Get().is_null());
+    assert!(computed_style("c")
+        .SpecifiedGridTemplateColumns()
+        .Get()
+        .is_null());
 }

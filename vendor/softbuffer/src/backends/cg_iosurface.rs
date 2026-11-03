@@ -22,6 +22,84 @@ unsafe impl Send for SendSurface {}
 struct Slot {
     surface: SendSurface,
     lease: Arc<()>,
+    /// Damage produced since this IOSurface last became the submitted buffer.
+    /// Chromium keeps this as an SkRegion on each SoftwareOutputDeviceMac
+    /// buffer. The queue is at most four entries, so retaining the source
+    /// rectangles directly keeps the same semantics without another graphics
+    /// type at this platform boundary.
+    accumulated_damage: Vec<DamageRect>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct DamageRect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl DamageRect {
+    fn full(width: usize, height: usize) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
+
+    fn right(self) -> usize {
+        self.x.saturating_add(self.width)
+    }
+
+    fn bottom(self) -> usize {
+        self.y.saturating_add(self.height)
+    }
+
+    fn clipped(self, width: usize, height: usize) -> Self {
+        let right = self.right().min(width);
+        let bottom = self.bottom().min(height);
+        let x = self.x.min(right);
+        let y = self.y.min(bottom);
+        Self {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    /// Return `self - cut` as the same at-most-four rectangles used by an
+    /// SkRegion difference for one rectangular damage input.
+    fn subtract(self, cut: Self) -> Vec<Self> {
+        let left = self.x.max(cut.x);
+        let top = self.y.max(cut.y);
+        let right = self.right().min(cut.right());
+        let bottom = self.bottom().min(cut.bottom());
+        if left >= right || top >= bottom {
+            return (!self.is_empty()).then_some(self).into_iter().collect();
+        }
+        let mut result = Vec::with_capacity(4);
+        let mut push = |x, y, width, height| {
+            if width != 0 && height != 0 {
+                result.push(Self {
+                    x,
+                    y,
+                    width,
+                    height,
+                });
+            }
+        };
+        push(self.x, self.y, self.width, top - self.y);
+        push(self.x, bottom, self.width, self.bottom() - bottom);
+        push(self.x, top, left - self.x, bottom - top);
+        push(right, top, self.right() - right, bottom - top);
+        result
+    }
 }
 
 #[derive(Debug, Default)]
@@ -34,6 +112,24 @@ fn error(message: &str) -> SoftBufferError {
 }
 impl TargetPool {
     pub fn acquire(&mut self, width: usize, height: usize) -> Result<Mapping, SoftBufferError> {
+        self.acquire_with_damage_rects(width, height, &[DamageRect::full(width, height)])
+    }
+
+    pub fn acquire_with_damage(
+        &mut self,
+        width: usize,
+        height: usize,
+        damage: DamageRect,
+    ) -> Result<Mapping, SoftBufferError> {
+        self.acquire_with_damage_rects(width, height, &[damage])
+    }
+
+    pub fn acquire_with_damage_rects(
+        &mut self,
+        width: usize,
+        height: usize,
+        damage: &[DamageRect],
+    ) -> Result<Mapping, SoftBufferError> {
         // Chromium gfx::CreateIOSurface reserves even width/height, then asks
         // IOSurface to align row pitch and allocation size. Visible size stays
         // unchanged. CPU mappings expose only the visible rows plus padding.
@@ -67,13 +163,14 @@ impl TargetPool {
         }
         self.buffers
             .retain(|s| s.surface.0.width() == width && s.surface.0.height() == height);
+        let previous = self.buffers.last().map(|slot| slot.surface.clone());
         let reusable = self
             .buffers
             .iter()
-            .find(|s| Arc::strong_count(&s.lease) == 1 && !s.surface.0.is_in_use())
-            .map(|s| (s.surface.clone(), s.lease.clone()));
-        let (surface, lease) = if let Some(surface) = reusable {
-            surface
+            .position(|s| Arc::strong_count(&s.lease) == 1 && !s.surface.0.is_in_use());
+        if let Some(index) = reusable {
+            let slot = self.buffers.remove(index);
+            self.buffers.push(slot);
         } else {
             let values = [
                 width as i64,
@@ -123,9 +220,30 @@ impl TargetPool {
             self.buffers.push(Slot {
                 surface: surface.clone(),
                 lease: lease.clone(),
+                accumulated_damage: vec![DamageRect::full(width, height)],
             });
-            (surface, lease)
-        };
+        }
+        let damage: Vec<_> = damage
+            .iter()
+            .map(|damage| damage.clipped(width, height))
+            .filter(|damage| !damage.is_empty())
+            .collect();
+        if !damage.is_empty() {
+            for slot in &mut self.buffers {
+                slot.accumulated_damage.extend(damage.iter().copied());
+            }
+        }
+        let current = self.buffers.last_mut().expect("acquired IOSurface slot");
+        let accumulated = std::mem::take(&mut current.accumulated_damage);
+        let surface = current.surface.clone();
+        let lease = current.lease.clone();
+        let mut copy_rects = accumulated;
+        for damage in &damage {
+            copy_rects = copy_rects
+                .into_iter()
+                .flat_map(|rect| rect.subtract(*damage))
+                .collect();
+        }
         // SAFETY: no external CPU/GPU accesses to this not-in-use mapping. A
         // queued target retains an extra lease until its CA transaction commits.
         if unsafe {
@@ -145,14 +263,25 @@ impl TargetPool {
             }
             return Err(error("unaligned IOSurface mapping"));
         }
-        Ok(Mapping {
+        let mut mapping = Mapping {
             surface,
             _lease: lease,
             ptr,
             len,
             row_stride: stride / 4,
             locked: true,
-        })
+            retained: previous.is_some(),
+        };
+        if !copy_rects.is_empty() && previous.is_some() {
+            let previous = previous.expect("checked previous IOSurface");
+            if previous.0.id() == mapping.surface.0.id() {
+                return Err(error(
+                    "reused IOSurface unexpectedly requires a damage copy",
+                ));
+            }
+            mapping.copy_from(&previous, &copy_rects)?;
+        }
+        Ok(mapping)
     }
     /// Record the surface installed in the CALayer and report whether the
     /// layer already names this IOSurface. Chromium uses this distinction to
@@ -171,6 +300,7 @@ pub(super) struct Mapping {
     len: usize,
     row_stride: usize,
     locked: bool,
+    retained: bool,
 }
 // SAFETY: same exclusive mapping contract as SendSurface, retained through Drop.
 unsafe impl Send for Mapping {}
@@ -183,6 +313,48 @@ impl Mapping {
     }
     pub fn pixels_mut(&mut self) -> &mut [u32] {
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+    pub fn retained(&self) -> bool {
+        self.retained
+    }
+    fn copy_from(
+        &mut self,
+        previous: &SendSurface,
+        rects: &[DamageRect],
+    ) -> Result<(), SoftBufferError> {
+        if unsafe {
+            previous.0.lock(
+                IOSurfaceLockOptions::ReadOnly | IOSurfaceLockOptions::AvoidSync,
+                std::ptr::null_mut(),
+            )
+        } != 0
+        {
+            return Err(error("previous IOSurface read lock failed"));
+        }
+        let source = previous.0.base_address().cast::<u32>();
+        let source_stride = previous.0.bytes_per_row() / 4;
+        for rect in rects {
+            for row in 0..rect.height {
+                let source =
+                    unsafe { source.as_ptr().add((rect.y + row) * source_stride + rect.x) };
+                let target = unsafe {
+                    self.ptr
+                        .as_ptr()
+                        .add((rect.y + row) * self.row_stride + rect.x)
+                };
+                unsafe { std::ptr::copy_nonoverlapping(source, target, rect.width) };
+            }
+        }
+        if unsafe {
+            previous.0.unlock(
+                IOSurfaceLockOptions::ReadOnly | IOSurfaceLockOptions::AvoidSync,
+                std::ptr::null_mut(),
+            )
+        } != 0
+        {
+            return Err(error("previous IOSurface read unlock failed"));
+        }
+        Ok(())
     }
     pub fn finish(mut self) -> Result<SendSurface, SoftBufferError> {
         self.unlock()?;
@@ -261,6 +433,51 @@ mod tests {
         drop(lease);
         let reusable = pool.acquire(319, 7).unwrap();
         assert_eq!(reusable.surface.0.id(), id);
+    }
+
+    #[test]
+    fn rotating_target_preserves_pixels_outside_current_damage() {
+        let mut pool = TargetPool::default();
+        let mut first = pool.acquire(8, 6).unwrap();
+        first.pixels_mut().fill(0xff11_2233);
+        let (_submitted, queued_lease) = first.finish_with_lease().unwrap();
+
+        let damage = DamageRect {
+            x: 2,
+            y: 1,
+            width: 3,
+            height: 2,
+        };
+        let second = pool.acquire_with_damage(8, 6, damage).unwrap();
+        assert!(second.retained());
+        for y in 0..6 {
+            for x in 0..8 {
+                if x < 2 || x >= 5 || y < 1 || y >= 3 {
+                    assert_eq!(second.pixels()[y * second.row_stride() + x], 0xff11_2233);
+                }
+            }
+        }
+        drop(queued_lease);
+    }
+
+    #[test]
+    fn first_partial_frame_after_resize_is_unretained() {
+        let mut pool = TargetPool::default();
+        let old = pool.acquire(8, 6).unwrap().finish().unwrap();
+        pool.submitted(old.0.id());
+        let resized = pool
+            .acquire_with_damage(
+                10,
+                7,
+                DamageRect {
+                    x: 2,
+                    y: 1,
+                    width: 3,
+                    height: 2,
+                },
+            )
+            .unwrap();
+        assert!(!resized.retained());
     }
 
     #[test]

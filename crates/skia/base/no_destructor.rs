@@ -47,12 +47,12 @@ impl<T>NoDestructor<T>{
 /// that C++ template specializations have distinct statics.
 /// No destructor runs for the stored T, as for the particular native locals used
 /// here (NoDestructor<Lock>, pointer and function pointer).
-pub struct NativeLocalStatic<T>{guard:std::sync::Once,storage:core::cell::UnsafeCell<MaybeUninit<T>>}
+pub struct LocalStatic<T>{guard:std::sync::Once,storage:core::cell::UnsafeCell<MaybeUninit<T>>}
 // Shared access only exposes an unsafe raw initialization/access operation.
 // This is not a Send/Sync promise about T or its pointee; callers must establish
 // the original static object's cross-thread usage/protected-data requirements.
-unsafe impl<T>Sync for NativeLocalStatic<T>{}
-impl<T>NativeLocalStatic<T>{
+unsafe impl<T>Sync for LocalStatic<T>{}
+impl<T>LocalStatic<T>{
  pub const fn uninitialized()->Self{Self{guard:std::sync::Once::new(),storage:core::cell::UnsafeCell::new(MaybeUninit::uninit())}}
  /// initialize must construct the exact final slot once, clean partial members
  /// on unwind, and obey native recursive-initialization restrictions. Publishing

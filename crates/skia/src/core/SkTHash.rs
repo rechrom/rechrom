@@ -8,15 +8,15 @@ use std::mem::MaybeUninit;
 // Rust expression of T's actual C++ special members, required only by native
 // operations which instantiate them. No Default T, zero bytes or cloning is
 // substituted for std::move. A move must leave source a live destructible T.
-pub trait NativeMove: Sized {
+pub trait CxxMove: Sized {
     fn move_construct(source: &mut Self) -> Self;
     fn move_assign(destination: &mut Self, source: &mut Self);
 }
-pub trait NativeCopy: Sized {
+pub trait CxxCopy: Sized {
     fn copy_construct(source: &Self) -> Self;
     fn copy_assign(destination: &mut Self, source: &Self);
 }
-impl<T: Copy> NativeMove for T {
+impl<T: Copy> CxxMove for T {
     fn move_construct(source: &mut Self) -> Self {
         *source
     }
@@ -24,7 +24,7 @@ impl<T: Copy> NativeMove for T {
         *destination = *source;
     }
 }
-impl<T: Copy> NativeCopy for T {
+impl<T: Copy> CxxCopy for T {
     fn copy_construct(source: &Self) -> Self {
         *source
     }
@@ -35,7 +35,7 @@ impl<T: Copy> NativeCopy for T {
 // Bind an existing actual non-Copy native owner, not a synthetic demonstration
 // value. Its canonical memberwise move transfers Arc/sk_sp while preserving
 // source scalars; canonical Clone supplies its existing native copy protocol.
-impl NativeMove for crate::src::core::SkPaint::SkPaint {
+impl CxxMove for crate::src::core::SkPaint::SkPaint {
     fn move_construct(source: &mut Self) -> Self {
         Self::take_from(source)
     }
@@ -43,7 +43,7 @@ impl NativeMove for crate::src::core::SkPaint::SkPaint {
         destination.assign_move(source);
     }
 }
-impl NativeCopy for crate::src::core::SkPaint::SkPaint {
+impl CxxCopy for crate::src::core::SkPaint::SkPaint {
     fn copy_construct(source: &Self) -> Self {
         source.clone()
     }
@@ -51,7 +51,7 @@ impl NativeCopy for crate::src::core::SkPaint::SkPaint {
         destination.clone_from(source);
     }
 }
-impl NativeMove for crate::src::core::SkPath::SkPath {
+impl CxxMove for crate::src::core::SkPath::SkPath {
     fn move_construct(source: &mut Self) -> Self {
         let mut moved = Self::default();
         moved.swap(source);
@@ -61,7 +61,7 @@ impl NativeMove for crate::src::core::SkPath::SkPath {
         *destination = Self::move_construct(source);
     }
 }
-impl NativeCopy for crate::src::core::SkPath::SkPath {
+impl CxxCopy for crate::src::core::SkPath::SkPath {
     fn copy_construct(source: &Self) -> Self {
         source.clone()
     }
@@ -72,34 +72,34 @@ impl NativeCopy for crate::src::core::SkPath::SkPath {
 
 // Explicit binding for native V{} in operator[]. Producers must provide the
 // genuine native default constructor; no missing owner/backend is synthesized.
-pub trait NativeDefault: Sized {
+pub trait CxxDefault: Sized {
     fn default_construct() -> Self;
 }
-macro_rules! native_scalar_default{($($t:ty),* $(,)?)=>{$(impl NativeDefault for $t{fn default_construct()->Self{Self::default()}})*};}
-native_scalar_default!(bool, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64);
-impl<T> NativeDefault for *const T {
+macro_rules! scalar_default{($($t:ty),* $(,)?)=>{$(impl CxxDefault for $t{fn default_construct()->Self{Self::default()}})*};}
+scalar_default!(bool, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64);
+impl<T> CxxDefault for *const T {
     fn default_construct() -> Self {
         core::ptr::null()
     }
 }
-impl<T> NativeDefault for *mut T {
+impl<T> CxxDefault for *mut T {
     fn default_construct() -> Self {
         core::ptr::null_mut()
     }
 }
-impl NativeDefault for crate::src::core::SkPaint::SkPaint {
+impl CxxDefault for crate::src::core::SkPaint::SkPaint {
     fn default_construct() -> Self {
         Self::default()
     }
 }
 // Canonical existing CPU callers: nullable symbols use native nullptr, and
 // ProgramUsage::VariableCounts has three explicit native zero initializers.
-impl<T> NativeDefault for Option<T> {
+impl<T> CxxDefault for Option<T> {
     fn default_construct() -> Self {
         None
     }
 }
-impl NativeDefault for crate::src::sksl::analysis::SkSLProgramUsage::VariableCounts {
+impl CxxDefault for crate::src::sksl::analysis::SkSLProgramUsage::VariableCounts {
     fn default_construct() -> Self {
         Self::default()
     }
@@ -135,7 +135,7 @@ impl<T, K: ?Sized, Traits> Default for THashTable<T, K, Traits> {
     }
 }
 // Source: src/core/SkTHash.h:42-42
-impl<T: NativeCopy, K: ?Sized, Traits> Clone for THashTable<T, K, Traits> {
+impl<T: CxxCopy, K: ?Sized, Traits> Clone for THashTable<T, K, Traits> {
     fn clone(&self) -> Self {
         let mut out = Self::default();
         out.assign_from(self);
@@ -146,7 +146,7 @@ impl<T, K: ?Sized, Traits> THashTable<T, K, Traits> {
     // Source: src/core/SkTHash.h:43-43
     pub fn move_from(that: &mut Self) -> Self
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         let mut out = Self::default();
         out.assign_move(that);
@@ -155,7 +155,7 @@ impl<T, K: ?Sized, Traits> THashTable<T, K, Traits> {
     // Source: src/core/SkTHash.h:45-55
     pub fn assign_from(&mut self, that: &Self) -> &mut Self
     where
-        T: NativeCopy,
+        T: CxxCopy,
     {
         if !std::ptr::eq(self, that) {
             self.fCount = that.fCount;
@@ -211,7 +211,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Source: src/core/SkTHash.h:104-115
     pub fn set(&mut self, mut val: T) -> Option<&mut T>
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         let shouldGrow = if let Some((grow, _)) = Traits::loadPolicy() {
             grow(self.fCount, self.fCapacity)
@@ -260,7 +260,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Option<T> is native null-or-pointer for the ResourceCache Rec* domain.
     pub fn findOrNull(&self, key: &K) -> Option<T>
     where
-        T: NativeCopy,
+        T: CxxCopy,
     {
         if let Some(p) = self.find(key) {
             return Some(T::copy_construct(p));
@@ -270,7 +270,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Source: src/core/SkTHash.h:146-173
     pub fn removeIfExists(&mut self, key: &K) -> bool
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         let hash = Self::Hash(key);
         let mut index = (hash & (self.fCapacity - 1) as u32) as i32;
@@ -301,7 +301,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Source: src/core/SkTHash.h:176-178
     pub fn remove(&mut self, key: &K)
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         crate::SkAssertResult!(@source b"src/core/SkTHash.h\0".as_ptr(),177; @condition b"this->removeIfExists(key)\0".as_ptr(); self.removeIfExists(key));
     }
@@ -313,7 +313,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Source: src/core/SkTHash.h:197-204
     pub fn resize(&mut self, capacity: i32)
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         crate::SkASSERT!(@source b"src/core/SkTHash.h\0".as_ptr(),184; @condition b"capacity >= fCount\0".as_ptr(); capacity >= self.fCount);
         crate::SkASSERT!(@source b"src/core/SkTHash.h\0".as_ptr(),187; @condition b"(capacity & (capacity - 1)) == 0\0".as_ptr(); (capacity & (capacity - 1))==(0));
@@ -336,7 +336,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Source: src/core/SkTHash.h:224-227
     pub fn reserve(&mut self, n: i32)
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         let mut newCapacity = crate::src::core::SkMathPriv::SkNextPow2(n);
         let grow = if let Some((grow, _)) = Traits::loadPolicy() {
@@ -459,7 +459,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Source: src/core/SkTHash.h:369-373
     fn uncheckedSet(&mut self, val: &mut T) -> Option<std::ptr::NonNull<T>>
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         let key_view = Traits::GetKey(val);
         let key: &K = key_view.borrow();
@@ -489,7 +489,7 @@ impl<T, K: ?Sized + PartialEq, Traits: HashTraits<T, K>> THashTable<T, K, Traits
     // Source: src/core/SkTHash.h:402-405
     fn removeSlot(&mut self, mut index: i32)
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         self.fCount -= 1;
         loop {
@@ -553,7 +553,7 @@ impl<T> Drop for Slot<T> {
     }
 }
 // Source: src/core/SkTHash.h:423-423
-impl<T: NativeCopy> Clone for Slot<T> {
+impl<T: CxxCopy> Clone for Slot<T> {
     fn clone(&self) -> Self {
         let mut out = Self::default();
         out.assign_from(self);
@@ -565,7 +565,7 @@ impl<T> Slot<T> {
     // Source: src/core/SkTHash.h:441-444
     fn assign_from(&mut self, that: &Self) -> &mut Self
     where
-        T: NativeCopy,
+        T: CxxCopy,
     {
         if std::ptr::eq(self, that) {
             return self;
@@ -586,7 +586,7 @@ impl<T> Slot<T> {
     // Source: src/core/SkTHash.h:446-446
     fn move_from(that: &mut Self) -> Self
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         let mut out = Self::default();
         out.assign_move(that);
@@ -596,7 +596,7 @@ impl<T> Slot<T> {
     // Source: src/core/SkTHash.h:464-467
     fn assign_move(&mut self, that: &mut Self) -> &mut Self
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         if std::ptr::eq(self, that) {
             return self;
@@ -633,7 +633,7 @@ impl<T> Slot<T> {
     // Source: src/core/SkTHash.h:474-479
     fn emplace(&mut self, v: &mut T, h: u32) -> &mut Self
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         self.reset();
         self.fVal.write(T::move_construct(v));
@@ -734,11 +734,11 @@ impl<T> Drop for SlotArray<T> {
 // Explicit native HashK()/HashT() callable protocol. Default SkGoodHash is pending;
 // no guessed hash or standard-library table fallback is supplied. A fresh default
 // callable is constructed for every hash, matching the original expression.
-pub trait NativeHash<K>: Default {
+pub trait HashPolicy<K>: Default {
     fn hash(&self, key: &K) -> u32;
 }
 // Callable bridge only; canonical checksum owner supplies the actual hash body.
-impl<K: crate::src::core::SkChecksum::UniqueObjectRepresentation> NativeHash<K>
+impl<K: crate::src::core::SkChecksum::UniqueObjectRepresentation> HashPolicy<K>
     for crate::src::core::SkChecksum::SkGoodHash
 {
     fn hash(&self, key: &K) -> u32 {
@@ -748,7 +748,7 @@ impl<K: crate::src::core::SkChecksum::UniqueObjectRepresentation> NativeHash<K>
 // Adapted/uncredited selected-ARM64 thin-pointer address bridge. Never hash
 // raw provenance-bearing pointer bytes or dereference/name-hash the pointee.
 #[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
-impl<T: Sized> NativeHash<*const T> for crate::src::core::SkChecksum::SkGoodHash {
+impl<T: Sized> HashPolicy<*const T> for crate::src::core::SkChecksum::SkGoodHash {
     fn hash(&self, key: &*const T) -> u32 {
         self.hash_thin_pointer(*key)
     }
@@ -764,7 +764,7 @@ impl<K, V, H> Default for THashMapStorage<K, V, H> {
     }
 }
 // Source: src/core/SkTHash.h:515-516
-impl<K: NativeCopy, V: NativeCopy, H> Clone for THashMapStorage<K, V, H> {
+impl<K: CxxCopy, V: CxxCopy, H> Clone for THashMapStorage<K, V, H> {
     fn clone(&self) -> Self {
         Self {
             fTable: self.fTable.clone(),
@@ -774,8 +774,8 @@ impl<K: NativeCopy, V: NativeCopy, H> Clone for THashMapStorage<K, V, H> {
 impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn move_from(source: &mut Self) -> Self
     where
-        K: NativeMove,
-        V: NativeMove,
+        K: CxxMove,
+        V: CxxMove,
     {
         Self {
             fTable: THashTable::move_from(&mut source.fTable),
@@ -784,15 +784,15 @@ impl<K, V, H> THashMapStorage<K, V, H> {
     // Source: src/core/SkTHash.h:518-519
     pub fn assign_move(&mut self, source: &mut Self)
     where
-        K: NativeMove,
-        V: NativeMove,
+        K: CxxMove,
+        V: CxxMove,
     {
         self.fTable.assign_move(&mut source.fTable);
     }
     pub fn assign_from(&mut self, source: &Self)
     where
-        K: NativeCopy,
-        V: NativeCopy,
+        K: CxxCopy,
+        V: CxxCopy,
     {
         self.fTable.assign_from(&source.fTable);
     }
@@ -814,8 +814,8 @@ impl<K, V> MapPair<K, V> {
     }
     fn from_move(key: &mut K, value: &mut V) -> Self
     where
-        K: NativeMove,
-        V: NativeMove,
+        K: CxxMove,
+        V: CxxMove,
     {
         Self {
             values: core::mem::ManuallyDrop::new((
@@ -843,7 +843,7 @@ impl<K, V> Drop for MapPair<K, V> {
         drop(first);
     }
 }
-impl<K: NativeMove, V: NativeMove> NativeMove for MapPair<K, V> {
+impl<K: CxxMove, V: CxxMove> CxxMove for MapPair<K, V> {
     fn move_construct(source: &mut Self) -> Self {
         let (key, value) = source.tuple_mut();
         Self::from_move(key, value)
@@ -855,7 +855,7 @@ impl<K: NativeMove, V: NativeMove> NativeMove for MapPair<K, V> {
         V::move_assign(dv, sv);
     }
 }
-impl<K: NativeCopy, V: NativeCopy> NativeCopy for MapPair<K, V> {
+impl<K: CxxCopy, V: CxxCopy> CxxCopy for MapPair<K, V> {
     fn copy_construct(source: &Self) -> Self {
         let (key, value) = source.tuple();
         Self {
@@ -874,19 +874,19 @@ impl<K: NativeCopy, V: NativeCopy> NativeCopy for MapPair<K, V> {
 }
 // The real std::pair default/copy constructors exist only when both actual
 // member operations exist. Empty outer containers never invoke these.
-impl<K: NativeDefault, V: NativeDefault> NativeDefault for MapPair<K, V> {
+impl<K: CxxDefault, V: CxxDefault> CxxDefault for MapPair<K, V> {
     fn default_construct() -> Self {
         Self {
             values: core::mem::ManuallyDrop::new((K::default_construct(), V::default_construct())),
         }
     }
 }
-impl<K: NativeDefault, V: NativeDefault> Default for MapPair<K, V> {
+impl<K: CxxDefault, V: CxxDefault> Default for MapPair<K, V> {
     fn default() -> Self {
         Self::default_construct()
     }
 }
-impl<K: NativeCopy, V: NativeCopy> Clone for MapPair<K, V> {
+impl<K: CxxCopy, V: CxxCopy> Clone for MapPair<K, V> {
     fn clone(&self) -> Self {
         Self::copy_construct(self)
     }
@@ -895,7 +895,7 @@ impl<K: NativeCopy, V: NativeCopy> Clone for MapPair<K, V> {
     }
 }
 pub struct MapPairTraits<H>(PhantomData<H>);
-impl<K, V, H: NativeHash<K>> HashTraits<MapPair<K, V>, K> for MapPairTraits<H> {
+impl<K, V, H: HashPolicy<K>> HashTraits<MapPair<K, V>, K> for MapPairTraits<H> {
     type Key<'a>
         = &'a K
     where
@@ -915,9 +915,9 @@ impl<K, V, H: NativeHash<K>> HashTraits<MapPair<K, V>, K> for MapPairTraits<H> {
 impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn from_pairs(pairs: &[(K, V)]) -> Self
     where
-        K: NativeCopy + NativeMove + PartialEq,
-        V: NativeCopy + NativeMove,
-        H: NativeHash<K>,
+        K: CxxCopy + CxxMove + PartialEq,
+        V: CxxCopy + CxxMove,
+        H: HashPolicy<K>,
     {
         let capacity = if pairs.len() >= 4 {
             crate::src::core::SkMathPriv::SkNextPow2((pairs.len() * 4 / 3) as i32)
@@ -966,9 +966,9 @@ impl<K, V, H> THashMapStorage<K, V, H> {
 impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn reserve(&mut self, n: i32)
     where
-        K: NativeMove + PartialEq,
-        V: NativeMove,
-        H: NativeHash<K>,
+        K: CxxMove + PartialEq,
+        V: CxxMove,
+        H: HashPolicy<K>,
     {
         self.fTable.reserve(n);
     }
@@ -989,9 +989,9 @@ impl<K, V, H> THashMapStorage<K, V, H> {
 impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn set(&mut self, mut key: K, mut value: V) -> &mut V
     where
-        K: NativeMove + PartialEq,
-        V: NativeMove,
-        H: NativeHash<K>,
+        K: CxxMove + PartialEq,
+        V: CxxMove,
+        H: HashPolicy<K>,
     {
         let pair = MapPair::from_move(&mut key, &mut value);
         let out = self
@@ -1006,7 +1006,7 @@ impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn find(&self, key: &K) -> Option<&V>
     where
         K: PartialEq,
-        H: NativeHash<K>,
+        H: HashPolicy<K>,
     {
         self.fTable.find(key).map(|pair| &pair.tuple().1)
     }
@@ -1016,7 +1016,7 @@ impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn find_mut(&mut self, key: &K) -> Option<&mut V>
     where
         K: PartialEq,
-        H: NativeHash<K>,
+        H: HashPolicy<K>,
     {
         self.fTable
             .find_index(key)
@@ -1027,9 +1027,9 @@ impl<K, V, H> THashMapStorage<K, V, H> {
 impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn index_or_default(&mut self, key: &K) -> &mut V
     where
-        K: NativeCopy + NativeMove + PartialEq,
-        V: NativeDefault + NativeMove,
-        H: NativeHash<K>,
+        K: CxxCopy + CxxMove + PartialEq,
+        V: CxxDefault + CxxMove,
+        H: HashPolicy<K>,
     {
         if let Some(i) = self.fTable.find_index(key) {
             return &mut self.fTable.fSlots[i].value_mut().tuple_mut().1;
@@ -1041,9 +1041,9 @@ impl<K, V, H> THashMapStorage<K, V, H> {
 impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn remove(&mut self, key: &K)
     where
-        K: NativeMove + PartialEq,
-        V: NativeMove,
-        H: NativeHash<K>,
+        K: CxxMove + PartialEq,
+        V: CxxMove,
+        H: HashPolicy<K>,
     {
         self.fTable.remove(key);
     }
@@ -1052,9 +1052,9 @@ impl<K, V, H> THashMapStorage<K, V, H> {
 impl<K, V, H> THashMapStorage<K, V, H> {
     pub fn removeIfExists(&mut self, key: &K) -> bool
     where
-        K: NativeMove + PartialEq,
-        V: NativeMove,
-        H: NativeHash<K>,
+        K: CxxMove + PartialEq,
+        V: CxxMove,
+        H: HashPolicy<K>,
     {
         self.fTable.removeIfExists(key)
     }
@@ -1149,7 +1149,7 @@ impl<T, H> Default for THashSetStorage<T, H> {
     }
 }
 // Source: src/core/SkTHash.h:634-635
-impl<T: NativeCopy, H> Clone for THashSetStorage<T, H> {
+impl<T: CxxCopy, H> Clone for THashSetStorage<T, H> {
     fn clone(&self) -> Self {
         Self {
             fTable: self.fTable.clone(),
@@ -1159,7 +1159,7 @@ impl<T: NativeCopy, H> Clone for THashSetStorage<T, H> {
 impl<T, H> THashSetStorage<T, H> {
     pub fn move_from(source: &mut Self) -> Self
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         Self {
             fTable: THashTable::move_from(&mut source.fTable),
@@ -1168,13 +1168,13 @@ impl<T, H> THashSetStorage<T, H> {
     // Source: src/core/SkTHash.h:637-638
     pub fn assign_move(&mut self, source: &mut Self)
     where
-        T: NativeMove,
+        T: CxxMove,
     {
         self.fTable.assign_move(&mut source.fTable);
     }
     pub fn assign_from(&mut self, source: &Self)
     where
-        T: NativeCopy,
+        T: CxxCopy,
     {
         self.fTable.assign_from(&source.fTable);
     }
@@ -1183,8 +1183,8 @@ impl<T, H> THashSetStorage<T, H> {
 impl<T, H> THashSetStorage<T, H> {
     pub fn from_values(values: &[T]) -> Self
     where
-        T: NativeCopy + NativeMove + PartialEq,
-        H: NativeHash<T>,
+        T: CxxCopy + CxxMove + PartialEq,
+        H: HashPolicy<T>,
     {
         let capacity = if values.len() >= 4 {
             crate::src::core::SkMathPriv::SkNextPow2((values.len() * 4 / 3) as i32)
@@ -1227,8 +1227,8 @@ impl<T, H> THashSetStorage<T, H> {
 impl<T, H> THashSetStorage<T, H> {
     pub fn reserve(&mut self, n: i32)
     where
-        T: NativeMove + PartialEq,
-        H: NativeHash<T>,
+        T: CxxMove + PartialEq,
+        H: HashPolicy<T>,
     {
         self.fTable.reserve(n);
     }
@@ -1249,8 +1249,8 @@ impl<T, H> THashSetStorage<T, H> {
 impl<T, H> THashSetStorage<T, H> {
     pub fn add(&mut self, item: T)
     where
-        T: NativeMove + PartialEq,
-        H: NativeHash<T>,
+        T: CxxMove + PartialEq,
+        H: HashPolicy<T>,
     {
         self.fTable.set(item);
     }
@@ -1260,7 +1260,7 @@ impl<T, H> THashSetStorage<T, H> {
     pub fn contains(&self, item: &T) -> bool
     where
         T: PartialEq,
-        H: NativeHash<T>,
+        H: HashPolicy<T>,
     {
         self.find(item).is_some()
     }
@@ -1270,7 +1270,7 @@ impl<T, H> THashSetStorage<T, H> {
     pub fn find(&self, item: &T) -> Option<&T>
     where
         T: PartialEq,
-        H: NativeHash<T>,
+        H: HashPolicy<T>,
     {
         self.fTable.find(item)
     }
@@ -1279,8 +1279,8 @@ impl<T, H> THashSetStorage<T, H> {
 impl<T, H> THashSetStorage<T, H> {
     pub fn remove(&mut self, item: &T)
     where
-        T: NativeMove + PartialEq,
-        H: NativeHash<T>,
+        T: CxxMove + PartialEq,
+        H: HashPolicy<T>,
     {
         crate::SkASSERT!(@source b"src/core/SkTHash.h\0".as_ptr(),681; @condition b"this->contains(item)\0".as_ptr(); self.contains(item));
         self.fTable.remove(item);
@@ -1294,7 +1294,7 @@ impl<T, H> THashSetStorage<T, H> {
 }
 // Source: src/core/SkTHash.h:691-695
 pub struct SetTraits<H>(PhantomData<H>);
-impl<T, H: NativeHash<T>> HashTraits<T, T> for SetTraits<H> {
+impl<T, H: HashPolicy<T>> HashTraits<T, T> for SetTraits<H> {
     type Key<'a>
         = &'a T
     where

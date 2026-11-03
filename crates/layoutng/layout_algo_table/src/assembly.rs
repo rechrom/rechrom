@@ -11,7 +11,9 @@ use layoutng_assembly::internal::{
     layout_object_factory_set::LayoutObjectFactorySet,
 };
 use layoutng_assembly::{
-    internal::{algorithm_entry::NativeAlgorithmEntry, layout_algorithm_set::TableLayoutSupport},
+    internal::{
+        algorithm_entry::LayoutAlgorithmEntryFor, layout_algorithm_set::TableLayoutSupport,
+    },
     layout_assembly::LayoutAssembly,
 };
 use layoutng_style::style::computed_style::ComputedStyle;
@@ -47,13 +49,13 @@ pub(crate) fn InstallTableObjects(objects: &mut LayoutObjectFactorySet) {
 // cpp: layoutng_table/assembly.cc:61-72
 pub fn InstallTableAlgorithm(assembly: &mut LayoutAssembly) {
     InstallTableObjects(&mut assembly.objects);
-    assembly.algorithms.table = NativeAlgorithmEntry::<
+    assembly.algorithms.table = LayoutAlgorithmEntryFor::<
         crate::table_layout_algorithm::TableLayoutAlgorithm,
     >("layout_algo_table");
-    assembly.algorithms.table_row = NativeAlgorithmEntry::<
+    assembly.algorithms.table_row = LayoutAlgorithmEntryFor::<
         crate::table_row_layout_algorithm::TableRowLayoutAlgorithm,
     >("layout_algo_table");
-    assembly.algorithms.table_section = NativeAlgorithmEntry::<
+    assembly.algorithms.table_section = LayoutAlgorithmEntryFor::<
         crate::table_section_layout_algorithm::TableSectionLayoutAlgorithm,
     >("layout_algo_table");
     assembly.algorithms.table_support = TableLayoutSupport {

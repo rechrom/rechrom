@@ -178,7 +178,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let fill = if data.has_border_color {
-            fragment.paint.style.border_colors[3]
+            fragment.paint.style.border_colors()[3]
         } else {
             BORDER_FILL_COLOR
         };

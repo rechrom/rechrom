@@ -4,6 +4,26 @@
 
 use crate::PaintPhase;
 
+// Source: display_item.cc:70-102.
+fn PaintPhaseAsDebugString(paint_phase: u8) -> &'static str {
+    match paint_phase {
+        0 => "PaintPhaseBlockBackground",
+        1 => "PaintPhaseSelfBlockBackgroundOnly",
+        2 => "PaintPhaseDescendantBlockBackgroundsOnly",
+        3 => "PaintPhaseForcedColorsModeBackplate",
+        4 => "PaintPhaseFloat",
+        5 => "PaintPhaseForeground",
+        6 => "PaintPhaseOutline",
+        7 => "PaintPhaseSelfOutlineOnly",
+        8 => "PaintPhaseDescendantOutlinesOnly",
+        9 => "PaintPhaseOverlayOverflowControls",
+        10 => "PaintPhaseSelection",
+        11 => "PaintPhaseTextClip",
+        12 => "PaintPhaseMask",
+        _ => "PaintPhaseInvalid",
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct DisplayItemIdType(pub u8);
 
@@ -79,62 +99,107 @@ impl DisplayItemIdType {
     pub fn PaintPhaseToDrawingType(phase: PaintPhase) -> Self {
         Self(Self::kDrawingPaintPhaseFirst.0 + phase as u8)
     }
+
+    pub fn PaintPhaseToScrollType(phase: PaintPhase) -> Self {
+        Self(Self::kScrollPaintPhaseFirst.0 + phase as u8)
+    }
+
+    pub fn PaintPhaseToSVGTransformType(phase: PaintPhase) -> Self {
+        Self(Self::kSVGTransformPaintPhaseFirst.0 + phase as u8)
+    }
+
+    pub fn PaintPhaseToSVGEffectType(phase: PaintPhase) -> Self {
+        Self(Self::kSVGEffectPaintPhaseFirst.0 + phase as u8)
+    }
+
+    pub fn IsDrawingType(self) -> bool {
+        self.0 >= Self::kDrawingFirst.0 && self.0 <= Self::kDrawingLast.0
+    }
+
+    pub fn IsForeignLayerType(self) -> bool {
+        self.0 >= Self::kForeignLayerFirst.0 && self.0 <= Self::kForeignLayerLast.0
+    }
+
+    // Source: display_item.cc:104-201.
+    pub fn TypeAsDebugString(self) -> String {
+        let phase_category = [
+            (Self::kDrawingPaintPhaseFirst.0, "Drawing"),
+            (Self::kClipPaintPhaseFirst.0, "Clip"),
+            (Self::kScrollPaintPhaseFirst.0, "Scroll"),
+            (Self::kSVGTransformPaintPhaseFirst.0, "SVGTransform"),
+            (Self::kSVGEffectPaintPhaseFirst.0, "SVGEffect"),
+        ]
+        .into_iter()
+        .find(|(first, _)| self.0 >= *first && self.0 <= *first + PaintPhase::kMax as u8);
+        if let Some((first, category)) = phase_category {
+            return format!("{category}{}", PaintPhaseAsDebugString(self.0 - first));
+        }
+
+        let name = match self.0 {
+            0 => "UninitializedType",
+            14 => "BoxDecorationBackground",
+            15 => "FixedAttachmentBackground",
+            16 => "CapsLockIndicator",
+            17 => "Caret",
+            18 => "ColumnRules",
+            19 => "CustomHighlightTint",
+            20 => "DocumentRootBackdrop",
+            21 => "DocumentBackground",
+            22 => "DragCaret",
+            23 => "ForcedColorsModeBackplate",
+            24 => "SVGImage",
+            25 => "ImageAreaFocusRing",
+            26 => "OverflowControls",
+            27 => "FrameOverlay",
+            28 => "PrintedContentDestinationLocations",
+            29 => "PrintedContentPDFURLRect",
+            30 => "ReflectionMask",
+            31 => "Resizer",
+            32 => "SVGClip",
+            33 => "SVGMask",
+            34 => "ScrollCorner",
+            35 => "ScrollbarTrackAndButtons",
+            36 => "ScrollbarThumb",
+            37 => "ScrollbarTickmarks",
+            38 => "SelectionTint",
+            39 => "TableCollapsedBorders",
+            40 => "WebPlugin",
+            41 => "ForeignLayerCanvas",
+            42 => "ForeignLayerDevToolsOverlay",
+            43 => "ForeignLayerPlugin",
+            44 => "ForeignLayerVideo",
+            45 => "ForeignLayerRemoteFrame",
+            46 => "ForeignLayerLinkHighlight",
+            47 => "ForeignLayerViewportScroll",
+            48 => "ForeignLayerViewportScrollbar",
+            49 => "ForeignLayerViewTransitionContent",
+            102 => "HitTest",
+            103 => "WebPluginHitTest",
+            104 => "RegionCapture",
+            105 => "TrackedElement",
+            106 => "ScrollHitTest",
+            107 => "ResizerScrollHitTest",
+            108 => "ScrollbarHitTest",
+            109 => "LayerChunk",
+            110 => "LayerChunkForeground",
+            111 => "ScrollbarHorizontal",
+            112 => "ScrollbarVertical",
+            value => return format!("DisplayItemType({value})"),
+        };
+        name.into()
+    }
 }
 
 impl std::fmt::Debug for DisplayItemIdType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            0 => f.write_str("kUninitializedType"),
-            14 => f.write_str("kBoxDecorationBackground"),
-            15 => f.write_str("kFixedAttachmentBackground"),
-            16 => f.write_str("kCapsLockIndicator"),
-            17 => f.write_str("kCaret"),
-            18 => f.write_str("kColumnRules"),
-            19 => f.write_str("kCustomHighlightTint"),
-            20 => f.write_str("kDocumentRootBackdrop"),
-            21 => f.write_str("kDocumentBackground"),
-            22 => f.write_str("kDragCaret"),
-            23 => f.write_str("kForcedColorsModeBackplate"),
-            24 => f.write_str("kSVGImage"),
-            25 => f.write_str("kImageAreaFocusRing"),
-            26 => f.write_str("kOverflowControls"),
-            27 => f.write_str("kFrameOverlay"),
-            28 => f.write_str("kPrintedContentDestinationLocations"),
-            29 => f.write_str("kPrintedContentPDFURLRect"),
-            30 => f.write_str("kReflectionMask"),
-            31 => f.write_str("kResizer"),
-            32 => f.write_str("kSVGClip"),
-            33 => f.write_str("kSVGMask"),
-            34 => f.write_str("kScrollCorner"),
-            35 => f.write_str("kScrollbarTrackAndButtons"),
-            36 => f.write_str("kScrollbarThumb"),
-            37 => f.write_str("kScrollbarTickmarks"),
-            38 => f.write_str("kSelectionTint"),
-            39 => f.write_str("kTableCollapsedBorders"),
-            40 => f.write_str("kWebPlugin"),
-            41 => f.write_str("kForeignLayerCanvas"),
-            42 => f.write_str("kForeignLayerDevToolsOverlay"),
-            43 => f.write_str("kForeignLayerPlugin"),
-            44 => f.write_str("kForeignLayerVideo"),
-            45 => f.write_str("kForeignLayerRemoteFrame"),
-            46 => f.write_str("kForeignLayerLinkHighlight"),
-            47 => f.write_str("kForeignLayerViewportScroll"),
-            48 => f.write_str("kForeignLayerViewportScrollbar"),
-            49 => f.write_str("kForeignLayerViewTransitionContent"),
-            102 => f.write_str("kHitTest"),
-            103 => f.write_str("kWebPluginHitTest"),
-            104 => f.write_str("kRegionCapture"),
-            105 => f.write_str("kTrackedElement"),
-            106 => f.write_str("kScrollHitTest"),
-            107 => f.write_str("kResizerScrollHitTest"),
-            108 => f.write_str("kScrollbarHitTest"),
-            109 => f.write_str("kLayerChunk"),
-            110 => f.write_str("kLayerChunkForeground"),
-            111 => f.write_str("kScrollbarHorizontal"),
-            112 => f.write_str("kScrollbarVertical"),
-            1..=13 => write!(f, "DrawingPaintPhase({})", self.0 - 1),
-            value => write!(f, "DisplayItemIdType({value})"),
-        }
+        f.write_str(&self.TypeAsDebugString())
+    }
+}
+
+// Source: display_item.cc:259-265.
+impl std::fmt::Display for DisplayItemIdType {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str(&self.TypeAsDebugString())
     }
 }
 
@@ -145,4 +210,51 @@ pub struct DisplayItemId {
     pub r#type: DisplayItemIdType,
     // Blink wtf_size_t is uint32_t, including on 64-bit platforms.
     pub fragment: u32,
+}
+
+impl DisplayItemId {
+    // Source: display_item.cc:245-253.
+    pub fn ToString(self) -> String {
+        format!("{:#x}:{}:{}", self.client_id, self.r#type, self.fragment)
+    }
+}
+
+// Source: display_item.cc:267-269.
+impl std::fmt::Display for DisplayItemId {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str(&self.ToString())
+    }
+}
+
+#[cfg(test)]
+mod display_item_debug_tests {
+    use super::*;
+
+    #[test]
+    fn phase_and_special_type_names_match_blink_debug_strings() {
+        assert_eq!(
+            DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kForeground).TypeAsDebugString(),
+            "DrawingPaintPhaseForeground"
+        );
+        assert_eq!(
+            DisplayItemIdType::PaintPhaseToSVGEffectType(PaintPhase::kMask).TypeAsDebugString(),
+            "SVGEffectPaintPhaseMask"
+        );
+        assert_eq!(
+            DisplayItemIdType::kForeignLayerVideo.TypeAsDebugString(),
+            "ForeignLayerVideo"
+        );
+        assert_eq!(DisplayItemIdType::kLayerChunk.to_string(), "LayerChunk");
+    }
+
+    #[test]
+    fn id_string_uses_source_type_name_and_fragment() {
+        let id = DisplayItemId {
+            client_id: 0x2a,
+            r#type: DisplayItemIdType::kCaret,
+            fragment: 7,
+        };
+        assert_eq!(id.ToString(), "0x2a:Caret:7");
+        assert_eq!(id.to_string(), id.ToString());
+    }
 }

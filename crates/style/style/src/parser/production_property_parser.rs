@@ -96,7 +96,7 @@ mod tests {
         assert!(!unsafe { &*a.Next() }.IsSizeSet());
         assert_eq!(b.MaskBoxImage().ImageSlices().Top().Pixels(), 20.0);
         assert_eq!(b.MaskBoxImage().BorderSlices().Top().length().Pixels(), 3.0);
-        // Native FillUnsetProperties cycles independent longhand lists.
+        // Canonical FillUnsetProperties cycles independent longhand lists.
         apply(
             &mut b,
             None,
@@ -142,7 +142,7 @@ mod tests {
         assert!(b.MaskBoxImage().BorderSlices().Top().length().IsAuto());
     }
     #[test]
-    fn production_mask_css_wide_inherits_and_initial_real_native() {
+    fn production_mask_css_wide_inherits_and_initial_real_computed_style() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut parent = ComputedStyleBuilder::from_style(initial());
         apply(&mut parent,None,"mask:linear-gradient(red,blue) right bottom / contain space view-box no-clip exclude alpha;-webkit-mask-box-image:15 / 2 / 3 round");
@@ -172,7 +172,7 @@ mod tests {
             "mask:inherit;-webkit-mask-box-image:inherit",
         );
         assert!(snapshot(&child).MaskLayers().GetImage().is_null());
-        // Prefix aliases share the production resolved-ID path and native fields.
+        // Prefix aliases share the production resolved-ID path and computed style fields.
         apply(&mut child,None,"-webkit-mask:none center / contain border text add alpha;-webkit-mask-composite:source-in");
         assert_eq!(snapshot(&child).MaskLayers().Clip(), EFillBox::kText);
         assert_eq!(

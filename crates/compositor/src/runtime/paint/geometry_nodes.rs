@@ -7,7 +7,7 @@ use crate::{
     },
     runtime::{geometry::Transform, types::CpuSkiaBackend},
 };
-use paint::paint_property_tree as native;
+use paint::paint_property_tree;
 use std::sync::{Arc, Weak};
 fn rect(value: paint::paint_engine::PaintRect) -> Rect {
     ToEnclosingRect(RectF::new(
@@ -19,7 +19,7 @@ fn rect(value: paint::paint_engine::PaintRect) -> Rect {
 }
 impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
     type Matrix = Transform<R>;
-    type Weak = Weak<native::TransformPaintPropertyNode>;
+    type Weak = Weak<paint_property_tree::TransformPaintPropertyNode>;
     fn Downgrade(&self) -> Self::Weak {
         Arc::downgrade(self.as_arc())
     }
@@ -33,7 +33,7 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
         self.node().parent.is_none()
     }
     fn IsIdentity(&self) -> bool {
-        self.node().matrix.values == native::PropertyTreeState::default().transform.matrix.values
+        self.node().IsIdentity()
     }
     fn Parent(&self) -> Option<Self> {
         self.node()
@@ -42,24 +42,20 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
             .map(|p| Self::from_arc(p.clone()))
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"StickyPosition")
+        self.node().RequiresCompositingForStickyPosition()
     }
     fn RequiresCompositingForAnchorPosition(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"AnchorPosition")
+        self.node().RequiresCompositingForAnchorPosition()
     }
     fn IsBackfaceHiddenInternal(&self, parent: bool) -> bool {
         match self.node().backface_visibility {
-            native::PaintBackfaceVisibility::Inherited => parent,
-            native::PaintBackfaceVisibility::Hidden => true,
-            native::PaintBackfaceVisibility::Visible => false,
+            paint_property_tree::PaintBackfaceVisibility::Inherited => parent,
+            paint_property_tree::PaintBackfaceVisibility::Hidden => true,
+            paint_property_tree::PaintBackfaceVisibility::Visible => false,
         }
     }
     fn HasScrollNode(&self) -> bool {
-        self.node().scroll.is_some()
+        self.node().ScrollNode().is_some()
     }
     fn ScrollParentScrollTranslation(&self) -> Option<Self> {
         self.node()
@@ -68,7 +64,7 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
             .map(|n| Self::from_arc(n.clone()))
     }
     fn HasDirectCompositingReasons(&self) -> bool {
-        !self.node().direct_compositing_reasons.is_empty()
+        self.node().HasDirectCompositingReasons()
     }
     fn IsIdentityOr2dTranslation(&self) -> bool {
         crate::adapter::paint_chunks_to_cc_layer::ConversionTransform::IsIdentityOr2dTranslation(
@@ -76,24 +72,16 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
         )
     }
     fn HasActiveTransformAnimation(&self) -> bool {
-        self.node().direct_compositing_reasons.iter().any(|r| {
-            matches!(
-                *r,
-                "ActiveTransformAnimation"
-                    | "ActiveScaleAnimation"
-                    | "ActiveRotateAnimation"
-                    | "ActiveTranslateAnimation"
-            )
-        })
+        self.node().HasActiveTransformAnimation()
     }
     fn Get2dTranslation(&self) -> Vector2dF {
-        let value = self.Matrix().native().To2dTranslation();
+        let value = self.Matrix().as_source().To2dTranslation();
         Vector2dF::new(value.x(), value.y())
     }
     fn MatrixWithOriginApplied(&self) -> Self::Matrix {
         let mut matrix = self.Matrix();
-        let origin = self.node().origin;
-        matrix.native_mut().ApplyTransformOrigin(
+        let origin = self.node().Origin();
+        matrix.transform_mut().ApplyTransformOrigin(
             origin[0] as f32,
             origin[1] as f32,
             origin[2] as f32,
@@ -101,18 +89,18 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
         matrix
     }
     fn FlattensInheritedTransform(&self) -> bool {
-        self.node().flattens_inherited_transform
+        self.node().FlattensInheritedTransform()
     }
 }
 impl<R: CpuSkiaBackend> GeometryMapperNode for TransformNode<R> {
-    fn RawNode(&self) -> &Arc<native::TransformPaintPropertyNode> {
+    fn RawNode(&self) -> &Arc<paint_property_tree::TransformPaintPropertyNode> {
         self.as_arc()
     }
     fn OriginIsOrigin(&self) -> bool {
-        self.node().origin == [0.; 3]
+        self.node().Origin() == [0.; 3]
     }
     fn Matrix(&self) -> Transform<R> {
-        Transform::FromColMajor(&self.node().matrix.values)
+        Transform::FromColMajor(&self.node().Matrix().values)
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
         Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
@@ -130,7 +118,7 @@ impl<R: CpuSkiaBackend> GeometryMapperNode for TransformNode<R> {
                 .scroll
                 .as_ref()
                 .expect("source ScrollNode")
-                .contents_rect,
+                .ContentsRect(),
         )
     }
     fn ScrollContainerRect(&self) -> Rect {
@@ -139,16 +127,16 @@ impl<R: CpuSkiaBackend> GeometryMapperNode for TransformNode<R> {
                 .scroll
                 .as_ref()
                 .expect("source ScrollNode")
-                .container_rect,
+                .ContainerRect(),
         )
     }
-    fn ScrollOverflowClip(&self) -> Option<Arc<native::ClipPaintPropertyNode>> {
+    fn ScrollOverflowClip(&self) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
         self.node()
             .scroll
             .as_ref()
             .expect("source ScrollNode")
-            .overflow_clip
-            .clone()
+            .OverflowClipNode()
+            .cloned()
     }
 }
 impl<R: CpuSkiaBackend> GeometryMapperState for PropertyTreeState<R> {
@@ -157,13 +145,13 @@ impl<R: CpuSkiaBackend> GeometryMapperState for PropertyTreeState<R> {
     fn Transform(&self) -> &Self::Node {
         &self.transform_
     }
-    fn Clip(&self) -> &Arc<native::ClipPaintPropertyNode> {
+    fn Clip(&self) -> &Arc<paint_property_tree::ClipPaintPropertyNode> {
         self.clip_.as_arc()
     }
     fn Effect(&self) -> &Self::Effect {
         &self.effect_
     }
-    fn SetClip(&mut self, clip: Arc<native::ClipPaintPropertyNode>) {
+    fn SetClip(&mut self, clip: Arc<paint_property_tree::ClipPaintPropertyNode>) {
         self.set_clip(super::ClipNode::from_arc(clip));
     }
     fn SetEffect(&mut self, effect: Self::Effect) {

@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn cached_typed_html_quirks_svg_mathml_ua_sheets_reach_browser_computed_style() {
-        crate::native_test_thread::run(body);
+        crate::test_thread::run(body);
     }
 
     fn body() {
@@ -137,12 +137,7 @@ mod tests {
                 .unwrap()
         };
         let display = |id: &str| unsafe {
-            (&*document
-                .ResolvedStyleFor(find(id))
-                .unwrap()
-                .native_style
-                .Get())
-                .Display()
+            (&*document.ResolvedStyleFor(find(id)).unwrap().style.Get()).Display()
         };
         assert_eq!(display("title"), EDisplay::kNone);
         assert_eq!(display("body"), EDisplay::kBlock);

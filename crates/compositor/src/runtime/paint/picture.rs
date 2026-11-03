@@ -37,7 +37,7 @@ impl<R: CpuSkiaBackend> RecordingSourceTypes for CpuRecordingTypes<R> {
     type RegionBackend = R;
     type DirectlyCompositedImageInfo = DirectlyCompositedImageInfo;
     type DisplayItemList = ContentDisplayItemList<R>;
-    type RasterSource = NativeRasterSource<R>;
+    type RasterSource = RasterSourceStorage<R>;
 }
 impl<R: CpuSkiaBackend> RecordingDisplayItemList<DirectlyCompositedImageInfo>
     for ContentDisplayItemList<R>
@@ -63,7 +63,7 @@ impl<R: CpuSkiaBackend> RecordingDisplayItemList<DirectlyCompositedImageInfo>
 }
 /// Source: cc/raster/raster_source.cc:26-40. These are precisely the immutable
 /// metadata values owned by RasterSource; its recording lease remains shared.
-pub struct NativeRasterSource<R: CpuSkiaBackend> {
+pub struct RasterSourceStorage<R: CpuSkiaBackend> {
     display_list: Option<Arc<ContentDisplayItemList<R>>>,
     pub background_color: Color4f,
     pub requires_clear: bool,
@@ -76,7 +76,7 @@ pub struct NativeRasterSource<R: CpuSkiaBackend> {
     directly_composited_image_info: Option<DirectlyCompositedImageInfo>,
     debug_name: RwLock<String>,
 }
-impl<R: CpuSkiaBackend> NativeRasterSource<R> {
+impl<R: CpuSkiaBackend> RasterSourceStorage<R> {
     pub fn from_recording(recording: &RecordingSource<CpuRecordingTypes<R>>) -> Self {
         let value = recording.RasterSourceFields();
         let source = Self {
@@ -117,7 +117,7 @@ impl Deref for RasterDebugName<'_> {
         self.0.as_str()
     }
 }
-impl<R: CpuSkiaBackend> TilingRasterSource for NativeRasterSource<R> {
+impl<R: CpuSkiaBackend> TilingRasterSource for RasterSourceStorage<R> {
     fn IsSolidColor(&self) -> bool {
         self.is_solid_color
     }
@@ -137,7 +137,7 @@ impl<R: CpuSkiaBackend> TilingRasterSource for NativeRasterSource<R> {
         self.recorded_bounds().Intersects(rect)
     }
 }
-impl<R: CpuSkiaBackend> PictureRasterSource for NativeRasterSource<R> {
+impl<R: CpuSkiaBackend> PictureRasterSource for RasterSourceStorage<R> {
     type DisplayItemList = ContentDisplayItemList<R>;
     fn GetDisplayItemList(&self) -> &Option<Arc<Self::DisplayItemList>> {
         &self.display_list
@@ -175,7 +175,7 @@ impl<R: CpuSkiaBackend> PictureRasterSource for NativeRasterSource<R> {
 impl<R: CpuSkiaBackend>
     crate::adapter::tile_manager::TileManagerRasterSource<
         crate::runtime::types::CpuCompositorTypes<R>,
-    > for NativeRasterSource<R>
+    > for RasterSourceStorage<R>
 {
     type DisplayItemList = ContentDisplayItemList<R>;
     type DebugName<'a>

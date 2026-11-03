@@ -98,6 +98,11 @@ pub struct WindowJavaScriptBindings {
     next_request: u64,
     network_jobs: Vec<NetworkJob>,
     host_tasks: Vec<HostTask>,
+    // Exceptions raised by posted-message callbacks are reported at the end
+    // of their task, just like timer and network callback exceptions.  The
+    // callback itself runs after releasing Window's borrow, so retain the
+    // task-owned exception queue separately from the host-task vector.
+    posted_message_errors: Rc<RefCell<Vec<JavaScriptException>>>,
     next_task_source: usize,
     animation_tick: Option<AnimationTick>,
     bound_realm: Option<WeakJavaScriptRealm>,
@@ -177,6 +182,7 @@ impl WindowJavaScriptBindings {
             "queueMicrotask",
             "__queueTask",
             "__request",
+            "__requestSync",
             "__cancelRequest",
             "__urlParts",
             "__urlDecodeForm",
@@ -239,6 +245,7 @@ impl WindowJavaScriptBindings {
             next_request: 1,
             network_jobs: Vec::new(),
             host_tasks: Vec::new(),
+            posted_message_errors: Rc::new(RefCell::new(Vec::new())),
             next_task_source: 0,
             animation_tick: animation_tick.map(|f| Rc::new(RefCell::new(f))),
             bound_realm: None,
@@ -630,7 +637,7 @@ impl WindowJavaScriptBindings {
                 return HostResult::default();
             }
         }
-        if receiver == 0 && matches!(name, "structuredClone" | "__request") {
+        if receiver == 0 && matches!(name, "structuredClone" | "__request" | "__requestSync") {
             if call.operation == HostOperation::kGet {
                 return method(0, name);
             }
@@ -647,25 +654,17 @@ impl WindowJavaScriptBindings {
                     }
                     return runtime.as_mut().unwrap().Clone(&args[0]);
                 }
-                if args.len() != 6 {
+                let synchronous = name == "__requestSync";
+                let expected = if synchronous { 4 } else { 6 };
+                if args.len() != expected {
                     return error("invalid request arguments");
                 }
-                let (
-                    Some(method),
-                    Some(url),
-                    Some(body),
-                    Some(headers),
-                    Some(success),
-                    Some(failure),
-                ) = (
+                let (Some(method), Some(url), Some(body), Some(headers)) = (
                     text_arg(args, 0),
                     text_arg(args, 1),
                     text_arg(args, 2),
                     text_arg(args, 3),
-                    function_arg(args, 4),
-                    function_arg(args, 5),
-                )
-                else {
+                ) else {
                     return error("invalid request arguments");
                 };
                 let mut resolved = url.to_owned();
@@ -689,6 +688,36 @@ impl WindowJavaScriptBindings {
                         .split_terminator('\n')
                         .filter_map(|line| line.split_once(':').map(|(k, v)| (k.into(), v.into())))
                         .collect(),
+                };
+                if synchronous {
+                    // Source: core/xmlhttprequest/xml_http_request.cc:1097-1159.
+                    // Blink selects kRequestSynchronously and returns from
+                    // send() only after ThreadableLoader has completed.  Keep
+                    // that blocking behavior at the existing typed transport
+                    // boundary; no Window task or XHR progress event is
+                    // dispatched while this operation is pending.
+                    let mut operation = match self.xhr_transport.Start(&request) {
+                        Ok(operation) => operation,
+                        Err(e) => return error(&e.to_string()),
+                    };
+                    loop {
+                        match operation.Poll() {
+                            Ok(Some(response)) => {
+                                return value(HostValue::Record(vec![
+                                    ("status".into(), HostValue::Number(response.status as f64)),
+                                    ("bytes".into(), HostValue::Bytes(response.body.into())),
+                                    ("url".into(), HostValue::String(response.final_url)),
+                                    ("mime".into(), HostValue::String(response.mime_type)),
+                                ]));
+                            }
+                            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+                            Err(e) => return error(&e.to_string()),
+                        }
+                    }
+                }
+                let (Some(success), Some(failure)) = (function_arg(args, 4), function_arg(args, 5))
+                else {
+                    return error("invalid request arguments");
                 };
                 let mut job = NetworkJob {
                     success,
@@ -740,12 +769,18 @@ impl WindowJavaScriptBindings {
                     return error("Task queue requires a function");
                 };
                 let callback = callback.clone();
+                let errors = self.posted_message_errors.clone();
                 // MessagePort dispatch belongs to the posted-message task
                 // source. It is a macrotask, but unlike a nested DOM timer it
                 // does not acquire timer nesting or the 4 ms timer clamp.
                 self.EnqueueTaskWithRuntime(
                     Box::new(move |runtime, realm| {
-                        let _ = runtime.Call(realm, &callback, &HostValue::default(), &[]);
+                        if let Some(error) = runtime
+                            .Call(realm, &callback, &HostValue::default(), &[])
+                            .exception
+                        {
+                            errors.borrow_mut().push(error);
+                        }
                     }),
                     None,
                 );
@@ -1364,6 +1399,14 @@ impl WindowJavaScriptBindings {
                 for e in runtime.TakePendingExceptions(realm) {
                     report_error(&e);
                 }
+                let posted_message_errors = {
+                    let errors = window.borrow().posted_message_errors.clone();
+                    let pending = std::mem::take(&mut *errors.borrow_mut());
+                    pending
+                };
+                for error in posted_message_errors {
+                    report_error(&error);
+                }
                 if timer_task {
                     window.borrow_mut().timer_nesting_level = 0;
                 }
@@ -1715,6 +1758,8 @@ mod tests {
             if (!rejected || document.domain !== 'example.test') throw Error('domain');
             var parts=__urlParts('../next?q=2#h');
             if (parts.href !== 'https://www.example.test/next?q=2#h' || parts.pathname !== '/next' || parts.search !== '?q=2' || parts.hash !== '#h') throw Error('relative URL');
+            if(!URL.canParse('https://example.test/a')||!URL.canParse('../next','https://example.test/a/')||URL.canParse('../next')||URL.canParse('/next','not a base'))throw Error('URL.canParse');
+            if(URL.parse('../next')!==null||URL.parse('/next','not a base')!==null||URL.parse('../next','https://example.test/a/').href!=='https://example.test/next')throw Error('URL.parse');
             const form=new URLSearchParams('plain=a+b&plus=%2B&eq=a=b&bad=%FF%C0%AF&bom=%EF%BB%BF&emoji=%F0%9F%98%80&bare=%zz&nil=%00&dup=first&dup=last');
             if(form.get('plain')!=='a b'||form.get('plus')!=='+'||form.get('eq')!=='a=b'||form.get('bad')!=='\ufffd\ufffd\ufffd'||form.get('bom')!=='\ufeff'||form.get('emoji')!=='😀'||form.get('bare')!=='%zz'||form.get('nil')!=='\0'||form.getAll('dup').join(',')!=='first,last')throw Error('form decoding');
             if(new URLSearchParams('q=\ud800').get('q')!=='\ufffd'||new URLSearchParams('q=%ED%A0%80').get('q')!=='\ufffd\ufffd\ufffd')throw Error('form scalar conversion');
@@ -1754,6 +1799,9 @@ mod tests {
             var channel=new MessageChannel();
             channel.port1.onmessage=event=>channelLog.push(event.data.value);
             channel.port2.postMessage({value:9});
+            var failingChannel=new MessageChannel();
+            failingChannel.port1.onmessage=()=>{throw Error('reported message failure')};
+            failingChannel.port2.postMessage(null);
             true
         "#,
         );
@@ -1784,7 +1832,9 @@ mod tests {
                 errors.push(e.clone())
             });
         }
-        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("reported message failure"));
+        errors.clear();
         assert_script(&mut runtime, &realm, "JSON.stringify(channelLog) === '[9]'");
         assert_script(&mut runtime,&realm,"JSON.stringify(log) === JSON.stringify(['queued','promise','network','network-job','timer','timer-job','failure'])");
         assert_eq!(
@@ -1961,9 +2011,9 @@ mod tests {
           let missing=false;try{structuredClone()}catch(e){missing=true}check(missing,'missing value');
           let caught=false;try{structuredClone({bad:()=>{}})}catch(e){caught=true}
           check(caught&&structuredClone({ok:8}).ok===8,'failure recovery');
-          const NativeMap=Map;let calls=0;
-          globalThis.Map=function(){calls++;return new NativeMap()};
-          try {check(structuredClone({ok:9}).ok===9&&calls===1,'current global Map')}finally{globalThis.Map=NativeMap}
+          const OriginalMap=Map;let calls=0;
+          globalThis.Map=function(){calls++;return new OriginalMap()};
+          try {check(structuredClone({ok:9}).ok===9&&calls===1,'current global Map')}finally{globalThis.Map=OriginalMap}
           check(names===Object.getOwnPropertyNames(globalThis).join('|'),'no helper globals');
           return true;
         })()"#,

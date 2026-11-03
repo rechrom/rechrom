@@ -1681,5 +1681,5 @@ pub unsafe fn MakeFromData_decoders<'reader>(
     }
 }
 // Source: src/codec/SkCodec.cpp:34-85
-#[cfg(not(sk_codec_native_inputs_configured))]
+#[cfg(not(sk_codec_inputs_configured))]
 compile_error!("SkCodec requires complete explicit native decoder macro inputs; an unknown configured decoder list cannot be replaced with an empty registry");

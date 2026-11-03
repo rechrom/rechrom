@@ -1,10 +1,18 @@
 //! Derived z-index eligibility must reach native layout and paint order through
 //! the production Style owner, including later style changes.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::{fragment_tree::FragmentPaintData, internal::layout_input::FontFace};
+use foundation::DynamicTo;
+use layoutng_assembly::{
+    fragment_tree::{FragmentPaintData, LayoutResultHandle},
+    internal::{
+        layout_box_model_object::LayoutBoxModelObject, layout_input::FontFace,
+        layout_object::LayoutObject,
+    },
+    layout_engine::PaintFragmentCursor,
+};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -57,7 +65,7 @@ fn fixture(css: &str, children: &str) -> Page {
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -91,6 +99,21 @@ fn node_id(page: &Page, name: &str) -> u64 {
         .map(|i| document.Node(i).Id())
         .unwrap()
 }
+fn layout_object(page: &Page, name: &str) -> *mut LayoutObject {
+    let wanted = node_id(page, name);
+    let engine = page.GetLayoutEngine();
+    let root = engine.GetLayoutTree().unwrap().Root();
+    let mut object = root as *const LayoutObject as *mut LayoutObject;
+    while !object.is_null() {
+        let current = unsafe { &*object };
+        let node = current.GetNode();
+        if !node.is_null() && unsafe { &*node }.InputId() == wanted {
+            return object;
+        }
+        object = current.NextInPreOrder(root);
+    }
+    panic!("layout object for {name} missing")
+}
 fn flags(page: &Page, name: &str) -> (bool, bool, i32) {
     let owner = page.Document();
     let document = owner.GetDocument();
@@ -98,22 +121,26 @@ fn flags(page: &Page, name: &str) -> (bool, bool, i32) {
         .find(|&i| document.Node(i).Id() == node_id(page, name))
         .unwrap();
     let style = document.ResolvedStyleFor(i).unwrap();
-    let native = unsafe { &*style.native_style.Get() };
+    let native = unsafe { &*style.computed_style_owner.Get() };
     (
         native.AllowsZIndex(),
         native.ForcesStackingContext(),
         native.EffectiveZIndex(),
     )
 }
-fn fragment(node: &FragmentPaintData, id: u64) -> &FragmentPaintData {
-    fn find(node: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
-        if node.node_id == id {
+fn fragment(handle: &LayoutResultHandle, id: u64) -> &FragmentPaintData {
+    fn find(node: PaintFragmentCursor<'_>, id: u64) -> Option<PaintFragmentCursor<'_>> {
+        if node.PaintData().node_id == id {
             Some(node)
         } else {
-            node.children.iter().find_map(|child| find(child, id))
+            node.Children()
+                .into_iter()
+                .find_map(|child| find(child, id))
         }
     }
-    find(node, id).unwrap()
+    find(PaintFragmentCursor::FromHandle(handle), id)
+        .map(PaintFragmentCursor::PaintData)
+        .unwrap()
 }
 fn first_background(frame: &browser::page::PageFrame, id: u64) -> usize {
     frame
@@ -134,8 +161,78 @@ const BUTTON_HTML: &str =
     "<div class=wrapper><button id=front>Read in your language</button></div><div id=back></div>";
 
 #[test]
+fn self_painting_inline_recalculates_fragment_item_overflow_without_visiting_layout_text() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let page = fixture(BUTTON_CSS, BUTTON_HTML);
+        let inline = layout_object(&page, "front");
+        assert!(unsafe { &*inline }.IsInline());
+        assert!(unsafe { &*inline }.IsInLayoutNGInlineFormattingContext());
+        let box_model = DynamicTo::<LayoutBoxModelObject>(inline);
+        assert!(!box_model.is_null());
+        assert!(unsafe { &*box_model }.HasSelfPaintingLayer());
+
+        // Before the LayoutBoxModelObject inline-fragment dispatch existed,
+        // this base traversal reached its LayoutText child and hit Chromium's
+        // deliberate LayoutText::RecalcVisualOverflow NOTREACHED assertion.
+        unsafe { &mut *inline }.RecalcVisualOverflow();
+    });
+}
+
+#[test]
+fn inline_svg_root_recalculates_through_layout_replaced_override() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let page = fixture(
+            "svg{display:inline;width:24px;height:24px}",
+            "<svg id=icon viewBox='0 0 24 24'><path d='M2 2h20v20H2z'/></svg>",
+        );
+        let svg_root = layout_object(&page, "icon");
+        assert!(unsafe { &*svg_root }.IsSVGRoot());
+        assert!(unsafe { &*svg_root }.IsLayoutReplaced());
+
+        // LayoutSVGRoot derives from LayoutReplaced. Falling through to the
+        // LayoutBoxModelObject override enters the inline-fragment cursor a
+        // second time and recursively revisits this same SVG root.
+        unsafe { &mut *svg_root }.RecalcVisualOverflow();
+    });
+}
+
+#[test]
+fn anchor_auto_outline_includes_its_out_of_flow_descendant_only_for_anchor() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let page = fixture(
+            ".focus{display:block;position:relative;width:20px;height:20px;outline:auto;margin-bottom:8px}.child{position:absolute;left:80px;top:0;width:20px;height:10px;transform:translateX(20px)}",
+            "<a id=anchor class=focus><span class=child></span></a><div id=plain class=focus><span class=child></span></div>",
+        );
+        let frame = page.CurrentFrame().unwrap();
+        let anchor = fragment(&frame.fragments, node_id(&page, "anchor"));
+        let plain = fragment(&frame.fragments, node_id(&page, "plain"));
+        let anchor_overflow = anchor
+            .paint
+            .self_ink_overflow
+            .expect("anchor self ink overflow");
+        let plain_overflow = plain
+            .paint
+            .self_ink_overflow
+            .expect("plain self ink overflow");
+        let anchor_right = anchor_overflow.offset.x + anchor_overflow.size.width;
+        let plain_right = plain_overflow.offset.x + plain_overflow.size.width;
+        assert!(
+            anchor_right > 100.0,
+            "anchor focus outline must include its absolute descendant: {anchor_right}"
+        );
+        assert!(
+            plain_right < 50.0,
+            "non-anchor focus outline must omit the absolute descendant: {plain_right}"
+        );
+    });
+}
+
+#[test]
 fn positioned_descendant_background_text_and_outline_cover_later_auto_layer() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(BUTTON_CSS, BUTTON_HTML);
         assert_eq!(flags(&page, "front"), (true, true, 1));
@@ -170,7 +267,7 @@ fn positioned_descendant_background_text_and_outline_cover_later_auto_layer() {
 
 #[test]
 fn changing_position_z_index_and_auto_recomputes_flags_without_changing_old_frame() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(BUTTON_CSS, BUTTON_HTML);
         let front = node_id(&page, "front");
@@ -220,7 +317,7 @@ fn changing_position_z_index_and_auto_recomputes_flags_without_changing_old_fram
 
 #[test]
 fn static_flex_and_grid_items_get_stacking_and_revert_with_parent_display() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for display in ["flex", "inline-flex", "grid", "inline-grid"] {
             let mut page = fixture(&format!("#parent{{display:{display}}} .item{{width:80px;height:20px;background:red;z-index:2}}"), "<div id=parent><div id=front class=item></div><div id=copy class=item></div></div>");
@@ -250,7 +347,7 @@ fn static_flex_and_grid_items_get_stacking_and_revert_with_parent_display() {
 
 #[test]
 fn positioned_z_index_applies_to_all_position_schemes_but_not_static_blocks() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for position in ["static", "relative", "absolute", "fixed", "sticky"] {
             let page = fixture(
@@ -274,7 +371,7 @@ fn positioned_z_index_applies_to_all_position_schemes_but_not_static_blocks() {
 
 #[test]
 fn descendant_z_index_stays_in_its_explicit_stacking_context() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture("#parent{position:relative;z-index:0} #front{position:relative;z-index:10;background:red;width:30px;height:30px} #back{position:relative;z-index:1;background:blue;width:30px;height:30px;margin-top:-30px}", "<div id=parent><div id=front></div></div><div id=back></div>");
         let frame = page.CurrentFrame().unwrap();

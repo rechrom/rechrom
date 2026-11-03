@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! FontBuilder's scalar font inputs and text longhands, on native storage.
+//! FontBuilder's scalar font inputs and text longhands, on computed style storage.
 #![allow(non_snake_case)]
 use super::*;
 use font_engine::fonts::{

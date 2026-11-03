@@ -10,7 +10,7 @@ use super::min_max_sizes::MinMaxSizesResult;
 // C++ templates construct a fresh algorithm for each entry call. Implementing
 // this trait supplies the three operations that the templates require.
 // cpp: layoutng/internal/algorithm_entry.h:5-7
-pub trait NativeAlgorithm: Sized {
+pub trait LayoutAlgorithmImplementation: Sized {
     /// Stable package-qualified trace names keep profiles attributable after
     /// monomorphization and make layout and intrinsic measurement separable.
     const LAYOUT_TRACE_NAME: &'static str;
@@ -24,7 +24,7 @@ pub trait NativeAlgorithm: Sized {
 
 // cpp: layoutng/internal/algorithm_entry.h:8-20
 #[inline(never)]
-pub fn RunNativeAlgorithm<A: NativeAlgorithm>(
+pub fn RunAlgorithm<A: LayoutAlgorithmImplementation>(
     params: &LayoutAlgorithmParams,
 ) -> *const LayoutResult {
     let _trace = browser_tracing::span("layout", A::LAYOUT_TRACE_NAME);
@@ -32,7 +32,7 @@ pub fn RunNativeAlgorithm<A: NativeAlgorithm>(
 }
 
 #[inline(never)]
-pub fn MeasureNativeAlgorithm<A: NativeAlgorithm>(
+pub fn MeasureAlgorithm<A: LayoutAlgorithmImplementation>(
     params: &LayoutAlgorithmParams,
     input: &MinMaxSizesFloatInput,
 ) -> MinMaxSizesResult {
@@ -41,10 +41,10 @@ pub fn MeasureNativeAlgorithm<A: NativeAlgorithm>(
 }
 
 #[inline(never)]
-pub fn TraceNativeAlgorithmRoot<A: NativeAlgorithm>() -> browser_tracing::Span {
+pub fn TraceAlgorithmRoot<A: LayoutAlgorithmImplementation>() -> browser_tracing::Span {
     browser_tracing::span(
         "layout",
-        A::ROOT_TRACE_NAME.expect("native root trace was not registered"),
+        A::ROOT_TRACE_NAME.expect("source root trace was not registered"),
     )
 }
 
@@ -55,23 +55,25 @@ fn AssertPackageTraceName(package: &str, name: &str) {
             && name
                 .strip_prefix(package)
                 .is_some_and(|suffix| suffix.starts_with('.')),
-        "native layout trace name {name:?} must be owned by package {package:?}"
+        "source layout trace name {name:?} must be owned by package {package:?}"
     );
 }
 
-pub fn NativeAlgorithmEntry<A: NativeAlgorithm>(package: &'static str) -> LayoutAlgorithmEntry {
+pub fn LayoutAlgorithmEntryFor<A: LayoutAlgorithmImplementation>(
+    package: &'static str,
+) -> LayoutAlgorithmEntry {
     AssertPackageTraceName(package, A::LAYOUT_TRACE_NAME);
     AssertPackageTraceName(package, A::MEASURE_TRACE_NAME);
     let root_trace = if let Some(name) = A::ROOT_TRACE_NAME {
         AssertPackageTraceName(package, name);
-        Some(TraceNativeAlgorithmRoot::<A> as fn() -> browser_tracing::Span)
+        Some(TraceAlgorithmRoot::<A> as fn() -> browser_tracing::Span)
     } else {
         None
     };
     LayoutAlgorithmEntry {
         performance_owner: Some(package),
-        layout: Some(RunNativeAlgorithm::<A>),
-        measure: Some(MeasureNativeAlgorithm::<A>),
+        layout: Some(RunAlgorithm::<A>),
+        measure: Some(MeasureAlgorithm::<A>),
         root_trace,
     }
 }
@@ -82,7 +84,7 @@ mod tests {
 
     struct RootedAlgorithm;
 
-    impl NativeAlgorithm for RootedAlgorithm {
+    impl LayoutAlgorithmImplementation for RootedAlgorithm {
         const LAYOUT_TRACE_NAME: &'static str = "layout_algo_test.Layout";
         const MEASURE_TRACE_NAME: &'static str = "layout_algo_test.Measure";
         const ROOT_TRACE_NAME: Option<&'static str> = Some("layout_algo_test.RootLayout");
@@ -104,14 +106,14 @@ mod tests {
     fn package_qualified_trace_name_is_accepted() {
         AssertPackageTraceName("layout_algo_test", "layout_algo_test.Layout");
         assert_eq!(
-            NativeAlgorithmEntry::<RootedAlgorithm>("layout_algo_test").performance_owner,
+            LayoutAlgorithmEntryFor::<RootedAlgorithm>("layout_algo_test").performance_owner,
             Some("layout_algo_test")
         );
     }
 
     #[test]
     fn optional_root_trace_is_registered_by_the_algorithm_package() {
-        let entry = NativeAlgorithmEntry::<RootedAlgorithm>("layout_algo_test");
+        let entry = LayoutAlgorithmEntryFor::<RootedAlgorithm>("layout_algo_test");
         let recording = browser_tracing::start(Default::default()).unwrap();
         drop(entry.root_trace.expect("root trace")());
         browser_tracing::stop().unwrap();

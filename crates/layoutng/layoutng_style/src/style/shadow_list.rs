@@ -10,7 +10,7 @@ pub struct ShadowList {
     shadows_: ShadowDataVector,
 }
 
-// cpp: shadow_list.h:55. Register native ShadowList with the production GC;
+// cpp: shadow_list.h:55. Register source ShadowList with the production GC;
 // ShadowData's trace retains unresolved StyleColor components.
 impl foundation::Traceable for ShadowList {
     fn Trace(&self, visitor: &mut Visitor<'_>) {

@@ -15,7 +15,7 @@ pub use paint::paint_engine::{
     DisplayItem as PaintOp, PaintArtifact, PaintChunk, RecordedDisplayItem as DisplayItem,
     RecordedDisplayItemKind,
 };
-use paint::paint_property_tree as native;
+use paint::paint_property_tree;
 mod artifact_nodes;
 mod conversion;
 mod conversion_nodes;
@@ -23,7 +23,7 @@ mod conversion_values;
 mod scroll_nodes;
 mod scrollbar;
 pub use artifact_nodes::{CpuCanvasSnapshot, CpuLayersAsJson};
-pub use scrollbar::NativeScrollbar;
+pub use scrollbar::Scrollbar;
 mod reasons;
 pub use conversion_values::CpuConversionRecorder;
 pub use reasons::CpuCompositingReasons;
@@ -45,16 +45,16 @@ pub use worklet::*;
 mod image_values;
 pub use image_values::CpuPaintImageInputError;
 mod lowering;
-pub use lowering::{CpuPaintColorFilter, CpuPaintShader, NativePaintSource};
-mod native_services;
-pub use native_services::{
-    CpuNativePaintConfigurationError, CpuNativePaintDiagnostics, CpuNativePaintPlatform,
-    CpuNativePaintValueServices, CpuNativeRasterTrackingServices,
+pub use lowering::{CpuPaintColorFilter, CpuPaintShader, PaintSource};
+mod services;
+pub use services::{
+    PaintConfigurationError, SkiaPaintDiagnostics, SkiaPaintPlatform, SkiaPaintValueServices,
+    SkiaRasterTrackingServices,
 };
-mod native_discardable;
-mod native_metadata;
-mod native_solid;
-pub use native_solid::{CpuPaintAnalysisTrace, CpuSolidColorBackend};
+mod discardable_image_map;
+mod metadata;
+mod solid_color_analyzer;
+pub use solid_color_analyzer::{CpuPaintAnalysisTrace, CpuSolidColorBackend};
 mod record;
 pub use picture::*;
 pub use record::CpuPaintImage as PaintImage;
@@ -73,8 +73,25 @@ pub struct PaintInput {
 
 impl PaintInput {
     pub(crate) fn ViewportProperties<R:crate::runtime::types::CpuSkiaBackend>(&self)->crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::ViewportProperties<crate::runtime::types::CpuCompositorTypes<R>>{
-        match self.artifact.compositor_viewport.as_ref().expect("validated native viewport").mode{
-            paint::paint_engine::PaintCompositorViewportMode::SingleLayoutViewport=>crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::ViewportProperties{overscroll_elasticity_transform:None,page_scale:None,inner_scroll_translation:None,outer_clip:None,outer_scroll_translation:None},
+        let viewport = self
+            .artifact
+            .compositor_viewport
+            .as_ref()
+            .expect("validated native viewport");
+        match viewport.mode {
+            paint::paint_engine::PaintCompositorViewportMode::SingleLayoutViewport => {
+                let outer = viewport
+                    .layout_scroll_translation
+                    .as_ref()
+                    .map(|node| TransformNode::from_arc(node.clone()));
+                crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::ViewportProperties{
+                    overscroll_elasticity_transform:Some(TransformNode::from_arc(viewport.overscroll_elasticity_transform.clone())),
+                    page_scale:Some(TransformNode::from_arc(viewport.page_scale.clone())),
+                    inner_scroll_translation:outer.as_ref().map(|_|TransformNode::from_arc(viewport.visual_scroll_translation.clone())),
+                    outer_clip:outer.as_ref().map(|_|ClipNode::from_arc(viewport.viewport_clip.clone())),
+                    outer_scroll_translation:outer,
+                }
+            }
         }
     }
     pub(crate) fn ScrollTranslationNodes<R>(&self) -> impl Iterator<Item = TransformNode<R>> + '_ {
@@ -159,7 +176,7 @@ impl PaintRecord {
 pub struct PropertyNodeIdentity(usize);
 
 impl PropertyNodeIdentity {
-    fn of(lifecycle: &native::PaintPropertyNodeLifecycle) -> Self {
+    fn of(lifecycle: &paint_property_tree::PaintPropertyNodeLifecycle) -> Self {
         Self(Arc::as_ptr(&lifecycle.identity) as usize)
     }
 }
@@ -169,7 +186,7 @@ macro_rules! node_handle {
         /// Retains the actual native node; equality/hash concern persistent
         /// identity, independently of revision and all mutable-value metadata.
         pub struct $handle<R> {
-            node: Arc<native::$node>,
+            node: Arc<paint_property_tree::$node>,
             backend: PhantomData<fn() -> R>,
         }
         impl<R> Clone for $handle<R> {
@@ -178,16 +195,16 @@ macro_rules! node_handle {
             }
         }
         impl<R> $handle<R> {
-            pub fn from_arc(node: Arc<native::$node>) -> Self {
+            pub fn from_arc(node: Arc<paint_property_tree::$node>) -> Self {
                 Self {
                     node,
                     backend: PhantomData,
                 }
             }
-            pub fn as_arc(&self) -> &Arc<native::$node> {
+            pub fn as_arc(&self) -> &Arc<paint_property_tree::$node> {
                 &self.node
             }
-            pub fn node(&self) -> &native::$node {
+            pub fn node(&self) -> &paint_property_tree::$node {
                 &self.node
             }
             pub fn identity(&self) -> PropertyNodeIdentity {
@@ -261,20 +278,20 @@ impl<R> PartialEq for PropertyTreeState<R> {
 impl<R> Eq for PropertyTreeState<R> {}
 impl<R> Default for PropertyTreeState<R> {
     fn default() -> Self {
-        Self::from_native(&native::PropertyTreeState::default())
+        Self::from_source(&paint_property_tree::PropertyTreeState::default())
     }
 }
 
 impl<R> PropertyTreeState<R> {
-    pub fn from_native(state: &native::PropertyTreeState) -> Self {
+    pub fn from_source(state: &paint_property_tree::PropertyTreeState) -> Self {
         Self {
             transform_: TransformNode::from_arc(state.transform.clone()),
             clip_: ClipNode::from_arc(state.clip.clone()),
             effect_: EffectNode::from_arc(state.effect.clone()),
         }
     }
-    pub fn native(&self) -> native::PropertyTreeState {
-        native::PropertyTreeState {
+    pub fn as_source(&self) -> paint_property_tree::PropertyTreeState {
+        paint_property_tree::PropertyTreeState {
             transform: self.transform_.node.clone(),
             clip: self.clip_.node.clone(),
             effect: self.effect_.node.clone(),
@@ -303,62 +320,27 @@ impl<R> PropertyTreeState<R> {
     /// actual persistent Paint node identity, so shared ancestors are visited
     /// once without cloning or rewriting the artifact.
     pub fn clear_changed_to_root(&self, sequence_number: i32) {
-        clear_transform_changed(self.transform_.as_arc(), sequence_number);
-        clear_clip_changed(self.clip_.as_arc(), sequence_number);
-        clear_effect_changed(self.effect_.as_arc(), sequence_number);
+        self.as_source().ClearChangedToRoot(sequence_number);
     }
 }
 
-fn clear_scroll_changed(node: &native::ScrollPaintPropertyNode, sequence_number: i32) {
-    let mut current = Some(node);
-    while let Some(node) = current {
-        if node.lifecycle.changed_sequence_number() == sequence_number {
-            break;
-        }
-        node.lifecycle.clear_changed(sequence_number);
-        current = node.parent.as_deref();
-    }
+fn clear_scroll_changed(node: &paint_property_tree::ScrollPaintPropertyNode, sequence_number: i32) {
+    node.ClearChangedToRoot(sequence_number);
 }
 
-fn clear_transform_changed(node: &native::TransformPaintPropertyNode, sequence_number: i32) {
-    let mut current = Some(node);
-    while let Some(node) = current {
-        if node.lifecycle.changed_sequence_number() == sequence_number {
-            break;
-        }
-        node.lifecycle.clear_changed(sequence_number);
-        if let Some(scroll) = node.scroll.as_deref() {
-            clear_scroll_changed(scroll, sequence_number);
-        }
-        current = node.parent.as_deref();
-    }
+fn clear_transform_changed(
+    node: &paint_property_tree::TransformPaintPropertyNode,
+    sequence_number: i32,
+) {
+    node.ClearChangedToRoot(sequence_number);
 }
 
-fn clear_clip_changed(node: &native::ClipPaintPropertyNode, sequence_number: i32) {
-    let mut current = Some(node);
-    while let Some(node) = current {
-        if node.lifecycle.changed_sequence_number() == sequence_number {
-            break;
-        }
-        node.lifecycle.clear_changed(sequence_number);
-        clear_transform_changed(&node.local_transform_space, sequence_number);
-        current = node.parent.as_deref();
-    }
+fn clear_clip_changed(node: &paint_property_tree::ClipPaintPropertyNode, sequence_number: i32) {
+    node.ClearChangedToRoot(sequence_number);
 }
 
-fn clear_effect_changed(node: &native::EffectPaintPropertyNode, sequence_number: i32) {
-    let mut current = Some(node);
-    while let Some(node) = current {
-        if node.lifecycle.changed_sequence_number() == sequence_number {
-            break;
-        }
-        node.lifecycle.clear_changed(sequence_number);
-        clear_transform_changed(&node.local_transform_space, sequence_number);
-        if let Some(clip) = node.output_clip.as_deref() {
-            clear_clip_changed(clip, sequence_number);
-        }
-        current = node.parent.as_deref();
-    }
+fn clear_effect_changed(node: &paint_property_tree::EffectPaintPropertyNode, sequence_number: i32) {
+    node.ClearChangedToRoot(sequence_number);
 }
 
 // This is a direct native value projection, independent of a complete PAC
@@ -370,7 +352,7 @@ where
         > + ?Sized,
 {
     fn properties_unalias(&self) -> PropertyTreeState<R> {
-        PropertyTreeState::from_native(&self.properties)
+        PropertyTreeState::from_source(&self.properties)
     }
     fn raster_effect_outset(&self) -> crate::adapter::paint_geometry::RasterEffectOutset {
         use crate::adapter::paint_geometry::RasterEffectOutset as Output;
@@ -407,7 +389,7 @@ where
     >,
 {
     fn CanMatchOldChunk(&self) -> bool {
-        self.can_match_old_chunk()
+        paint::paint_engine::PaintChunk::CanMatchOldChunk(self)
     }
     fn SameRawTransform(&self, other: &PaintChunk) -> bool {
         self.properties

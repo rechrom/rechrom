@@ -18,7 +18,7 @@ impl XMLHttpRequestTransport for MockTransport {
 #[test]
 #[ignore = "manual cold/warm full Page creation profile; no timing assertions"]
 fn profile_full_page_creation_and_bootstrap_isolation() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         struct NoNetwork;
         impl url_loader::URLLoader for NoNetwork {
             fn Load(
@@ -40,7 +40,7 @@ fn profile_full_page_creation_and_bootstrap_isolation() {
                 Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
                 crate::CreateBrowserConstraints(1280, 720),
                 Some(crate::page::ScriptEnvironment {
-                    runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+                    runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                         8 * 1024 * 1024,
                     )),
                     xhr: Box::new(MockTransport(Rc::new(RefCell::new(Vec::new())))),

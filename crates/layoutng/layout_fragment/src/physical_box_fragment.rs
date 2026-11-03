@@ -2,31 +2,33 @@ use std::cell::UnsafeCell;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-unsafe extern "Rust" {
-    fn PhysicalBoxFragmentComputeSelfInkOverflow(fragment: &PhysicalBoxFragment) -> PhysicalRect;
-}
 use foundation::graphics_types;
 
 use foundation::{
     gfx, AtomicString, DynamicTo, EVisibility, GCedHeapVector, HeapVector, LayoutUnit, Length,
     MakeGarbageCollected, MakeGarbageCollectedWithAdditionalBytes, Member, PhysicalOffset,
-    PhysicalRect, RuntimeEnabledFeatures, To, ValueForLength, Visitor, WritingMode,
+    PhysicalRect, RuntimeEnabledFeatures, To, UnsupportedLayout, ValueForLength, Visitor,
+    WritingMode,
 };
 use graphics_types::graphics::overlay_scrollbar_clip_behavior::OverlayScrollbarClipBehavior;
 use layoutng::internal::block_node::BlockNode;
 use layoutng::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
 use layoutng::internal::frame_set_layout_data::FrameSetLayoutData;
-use layoutng::internal::gap::gap_geometry::GapGeometry;
+use layoutng::internal::gap::gap_geometry::{GapDecorationInkOutsets, GapGeometry};
 use layoutng::internal::ink_overflow::{InkOverflow, InkOverflowType};
 use layoutng::internal::layout_block_flow::LayoutBlockFlow;
 use layoutng::internal::layout_box::LayoutBox;
 use layoutng::internal::layout_box_core_services::ApplyVisibleOverflowToClipRect;
 use layoutng::internal::layout_node_metadata::ContentLockBlocksChildLayout;
 use layoutng::internal::layout_node_metadata::{ContainerNode, Element, Node};
-use layoutng::internal::layout_object::LayoutObject;
 use layoutng::internal::layout_object::{HitTestLocation, HitTestResult};
+use layoutng::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layoutng::internal::layout_pass_scope::LayoutPassScope;
 use layoutng::internal::layout_view::LayoutView;
 use layoutng::internal::mathml_paint_info::MathMLPaintInfo;
+use layoutng::internal::outline_geometry::OutlineOutsetExtent;
+use layoutng::internal::outline_info::LayoutOutlineInfo;
+use layoutng::internal::outline_rect_collector::{OutlineRectCollector, UnionOutlineRectCollector};
 use layoutng::internal::pagination_utils::{GetPageArea, GetPageBorderBox};
 use layoutng::internal::scrollable_overflow_calculator::ScrollableOverflowCalculator;
 use layoutng::internal::table_borders::TableBorders;
@@ -44,14 +46,19 @@ use layoutng_geometry::geometry::overflow_clip_axes::{
 use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
 use layoutng_geometry::geometry::writing_mode_converter::WritingModeConverter;
 use layoutng_style::style::gap_data_list::GapDataList;
+use layoutng_style::style::grid_enums::GridTrackSizingDirection;
+use layoutng_style::style::outline_type::{
+    OutlineType, ShouldIncludeBlockInkOverflow, ShouldIncludeBlockInkOverflowForAnchorOnly,
+};
 use layoutng_style::style::style_overflow_clip_margin::ReferenceBox;
 
 use crate::block_break_token::BlockBreakToken;
 use crate::box_fragment_builder::BoxFragmentBuilder;
+use crate::fragment_item::ItemType as FragmentItemType;
 use crate::fragment_items::FragmentItems;
 use crate::inline_cursor::InlineCursor;
 use crate::physical_fragment::{
-    FragmentType, PhysicalFragment, PhysicalFragmentFlags, PostLayoutChildLinkList,
+    BoxType, FragmentType, PhysicalFragment, PhysicalFragmentFlags, PostLayoutChildLinkList,
 };
 use crate::physical_fragment_link::PhysicalFragmentLink;
 use crate::physical_fragment_rare_data::{FieldId, PhysicalFragmentRareData, RareField};
@@ -60,7 +67,7 @@ use crate::physical_fragment_rare_data::{FieldId, PhysicalFragmentRareData, Rare
 // fragment. The base stays first for the source's inherited layout contract.
 // cpp: layoutng_fragment_tree/physical_box_fragment.h:40-75
 // cpp: layoutng_fragment_tree/physical_box_fragment.h:627-739
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:83-92
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:52-61
 #[repr(C)]
 pub struct PhysicalBoxFragment {
     pub(crate) base_: UnsafeCell<PhysicalFragment>,
@@ -85,8 +92,8 @@ const _: () = assert!(std::mem::offset_of!(PhysicalBoxFragment, base_) == 0);
 static ALLOW_POST_LAYOUT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 // cpp: layoutng_fragment_tree/physical_box_fragment.h:77-89
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:53
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:956-963
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:46-48
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:1783-1790
 #[cfg(debug_assertions)]
 pub struct AllowPostLayoutScope;
 
@@ -106,18 +113,19 @@ impl AllowPostLayoutScope {
 #[cfg(debug_assertions)]
 impl Drop for AllowPostLayoutScope {
     fn drop(&mut self) {
+        debug_assert!(ALLOW_POST_LAYOUT_COUNT.load(Ordering::Relaxed) != 0);
         ALLOW_POST_LAYOUT_COUNT.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
 // The source restricts these mutations to the enclosing fragment's factory.
 // cpp: layoutng_fragment_tree/physical_box_fragment.h:485-511
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:846-849
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:859-862
 pub struct MutableForStyleRecalc<'a> {
     fragment_: &'a PhysicalBoxFragment,
 }
 
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:871-874
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:887-890
 pub struct MutableForContainerLayout<'a> {
     fragment_: &'a PhysicalBoxFragment,
 }
@@ -147,7 +155,7 @@ pub struct MutableForOofFragmentation<'a> {
 
 #[allow(non_snake_case)]
 impl MutableForOofFragmentation<'_> {
-    // cpp: layoutng_out_of_flow/out_of_flow_fragment_builder.cc:202-215
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:929-943
     pub fn AddChildFragmentainer(
         &self,
         child_fragment: &PhysicalBoxFragment,
@@ -168,7 +176,7 @@ impl MutableForOofFragmentation<'_> {
         unsafe { &mut *self.fragment_.children_.get() }.push(link);
     }
 
-    // cpp: layoutng_out_of_flow/out_of_flow_fragment_builder.cc:217-247
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:945-981
     pub fn Merge(&self, placeholder_fragmentainer: &PhysicalBoxFragment) {
         debug_assert!(placeholder_fragmentainer.IsFragmentainerBox());
         for new_child in unsafe { &*placeholder_fragmentainer.children_.get() } {
@@ -210,7 +218,7 @@ impl MutableForOofFragmentation<'_> {
         self.UpdateOverflow();
     }
 
-    // cpp: layoutng_out_of_flow/out_of_flow_fragment_builder.cc:249-258
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:983-988
     pub fn UpdateOverflow(&self) {
         let overflow = ScrollableOverflowCalculator::RecalculateScrollableOverflowForFragment(
             self.fragment_,
@@ -231,7 +239,7 @@ impl MutableChildrenForOutOfFlow<'_> {
 
 #[allow(non_snake_case)]
 impl MutableForStyleRecalc<'_> {
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:851-862
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:864-875
     pub fn SetScrollableOverflow(&self, scrollable_overflow: PhysicalRect) {
         let has_overflow = scrollable_overflow
             != PhysicalRect::new(PhysicalOffset::default(), self.fragment_.Size());
@@ -249,7 +257,7 @@ impl MutableForStyleRecalc<'_> {
 
 #[allow(non_snake_case)]
 impl MutableForContainerLayout<'_> {
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:876-881
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:892-896
     pub fn SetMargins(&self, margins: PhysicalBoxStrut) {
         let field = self.fragment_.EnsureRareField(FieldId::kMargins);
         unsafe {
@@ -257,7 +265,7 @@ impl MutableForContainerLayout<'_> {
         }
     }
 
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:882-892
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:898-906
     pub fn SetOffsetFromRootFragmentationContext(&self, offset: PhysicalOffset) {
         let id = FieldId::kOffsetFromRootFragmentationContext;
         if offset.IsZero() && self.fragment_.GetRareField(id).is_none() {
@@ -291,7 +299,7 @@ impl MutableForCloning<'_> {
         unsafe { &mut *self.fragment_.children_.get() }.as_mut_slice()
     }
 
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:899-911
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:915-927
     pub fn ReplaceChildren(&self, new_fragment: &PhysicalBoxFragment) {
         debug_assert!(!new_fragment.HasItems() && !self.fragment_.HasItems());
         let children = unsafe { &mut *self.fragment_.children_.get() };
@@ -308,11 +316,15 @@ impl MutableForCloning<'_> {
 
 #[allow(non_snake_case)]
 impl MutableForPainting<'_> {
+    // Source: core/layout/physical_box_fragment.h:523 and
+    // core/layout/physical_box_fragment.cc:1001-1036.
+    pub fn RecalcInkOverflow(&self) {
+        self.fragment_.RecalcInkOverflow();
+    }
+
     pub fn RecalcInkOverflowWithContents(&self, contents: PhysicalRect) {
         self.fragment_.RecalcInkOverflowWithContents(contents);
     }
-    // The no-argument recalculation and debug invalidation bodies are absent
-    // from the supplied C++ tree; their declarations remain in status.
 }
 
 impl Deref for PhysicalBoxFragment {
@@ -324,9 +336,7 @@ impl Deref for PhysicalBoxFragment {
 }
 
 // Source-local helpers used by point positioning and gap-decoration overflow.
-// Their callers have missing source definitions; the supplied behavior stays
-// available for the later cross-package connection.
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:94-120
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:63-74
 fn IsFlexibleBoxWithSingleChildElement(layout_object: &LayoutObject) -> bool {
     if !RuntimeEnabledFeatures::UsePositionForPointInFlexibleBoxWithSingleChildElementEnabled() {
         return false;
@@ -354,7 +364,7 @@ fn IsFlexibleBoxWithSingleChildElement(layout_object: &LayoutObject) -> bool {
     !only_element.is_null()
 }
 
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:122-141
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:76-95
 fn ShouldUsePositionForPointInBlockFlowDirection(layout_object: &LayoutObject) -> bool {
     let block_flow = DynamicTo::<LayoutBlockFlow>(layout_object as *const LayoutObject);
     if block_flow.is_null() && !IsFlexibleBoxWithSingleChildElement(layout_object) {
@@ -363,14 +373,14 @@ fn ShouldUsePositionForPointInBlockFlowDirection(layout_object: &LayoutObject) -
     !layout_object.StyleRef().SpecifiesColumns()
 }
 
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:143-147
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:97-101
 fn IsHitTestCandidate(fragment: &PhysicalBoxFragment) -> bool {
     fragment.Size().height != LayoutUnit::default()
         && fragment.Style().Visibility() == EVisibility::kVisible
         && !fragment.IsFloatingOrOutOfFlowPositioned()
 }
 
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:165-187
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:119-141
 fn MaxGapDecorationsWidth(width_value: &GapDataList<i32>) -> i32 {
     let widths = width_value.GetGapDataList();
     assert!(!widths.is_empty());
@@ -396,7 +406,7 @@ fn MaxGapDecorationsWidth(width_value: &GapDataList<i32>) -> i32 {
     maximum
 }
 
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:189-221
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:143-175
 fn MaxGapDecorationInsetOutset(
     cap_inset: &Length,
     junction_inset: &Length,
@@ -414,7 +424,7 @@ fn MaxGapDecorationInsetOutset(
     maximum
 }
 
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:149-163
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:103-117
 fn ApplyOverflowClip(
     axes: OverflowClipAxes,
     no_overflow: &PhysicalRect,
@@ -432,11 +442,514 @@ fn ApplyOverflowClip(
 
 #[allow(non_snake_case)]
 impl PhysicalBoxFragment {
-    // cpp: layoutng_fragment_tree/physical_box_fragment.h:685
-    // The declaration has no definition in the supplied C++ checkout.
+    // Source: core/layout/physical_box_fragment.cc:1097-1199. Border-shape
+    // still requires its concrete painter; outline geometry is collected
+    // through the source LayoutObject owner rather than estimated from style.
     fn ComputeSelfInkOverflow(&self) -> PhysicalRect {
-        unsafe { PhysicalBoxFragmentComputeSelfInkOverflow(self) }
+        debug_assert_eq!(self.PostLayout(), self as *const Self);
+        let style = self.Style();
+        let mut ink_overflow = self.LocalRect();
+        if self.IsTableRow() {
+            let owner = self.GetSelfOrContainerLayoutObject();
+            let objects = unsafe { &*owner }.FactorySet();
+            let table_virtuals = unsafe { objects.as_ref() }
+                .and_then(|objects| objects.table_virtuals)
+                .expect("source table virtual dispatch is not installed");
+            for child in self.PostLayoutChildren().iter() {
+                let child_fragment = DynamicTo::<PhysicalBoxFragment>(child.get());
+                debug_assert!(!child_fragment.is_null());
+                let child_fragment = unsafe { &*child_fragment };
+                if !child_fragment.IsTableCell() {
+                    continue;
+                }
+                let child_layout_object = To::<LayoutBox>(child_fragment.GetLayoutObject());
+                debug_assert!(!child_layout_object.is_null());
+                if (table_virtuals.computed_row_span)(unsafe { &*child_layout_object }) == 1 {
+                    continue;
+                }
+                let mut child_rect = if child_fragment.CanUseFragmentsForInkOverflow() {
+                    child_fragment.InkOverflowRect()
+                } else {
+                    unsafe { &*child_layout_object }.VisualOverflowRect()
+                };
+                child_rect.offset += child.offset;
+                ink_overflow.Unite(&child_rect);
+            }
+        }
+        if !style.HasVisualOverflowingEffect() {
+            return ink_overflow;
+        }
+
+        ink_overflow.Expand(&style.BoxDecorationOutsets());
+        if style.HasBorderShape() {
+            std::panic::panic_any(UnsupportedLayout::new(
+                "border-shape self ink overflow requires BorderShapePainter",
+            ));
+        }
+        if style.HasOutline() && self.IsOutlineOwner() {
+            let mut collector = UnionOutlineRectCollector::default();
+            let mut info = LayoutOutlineInfo::default();
+            self.AddSelfOutlineRects(
+                PhysicalOffset::default(),
+                style.OutlineRectsShouldIncludeBlockInkOverflow(),
+                &mut collector,
+                Some(&mut info),
+            );
+            let mut rect = collector.Rect();
+            if !style.HasBorderShape() || style.OutlineStyleIsAuto() {
+                rect.Inflate(LayoutUnit::from_signed(OutlineOutsetExtent(style, &info)));
+            }
+            ink_overflow.Unite(&rect);
+        }
+
+        let gap_geometry = self.GetGapGeometry();
+        if !gap_geometry.is_null() {
+            let gap_geometry = unsafe { &*gap_geometry };
+            let inline_thickness =
+                LayoutUnit::from_signed(MaxGapDecorationsWidth(style.ColumnRuleWidth()));
+            let block_thickness =
+                LayoutUnit::from_signed(MaxGapDecorationsWidth(style.RowRuleWidth()));
+            let col_crossing_gap_size =
+                gap_geometry.GetCrossingGapSize(GridTrackSizingDirection::kForColumns);
+            let row_crossing_gap_size =
+                gap_geometry.GetCrossingGapSize(GridTrackSizingDirection::kForRows);
+            let outsets = GapDecorationInkOutsets {
+                block_start: MaxGapDecorationInsetOutset(
+                    style.ColumnRuleInsetCapStart(),
+                    style.ColumnRuleInsetJunctionStart(),
+                    col_crossing_gap_size,
+                ),
+                block_end: MaxGapDecorationInsetOutset(
+                    style.ColumnRuleInsetCapEnd(),
+                    style.ColumnRuleInsetJunctionEnd(),
+                    col_crossing_gap_size,
+                ),
+                inline_start: MaxGapDecorationInsetOutset(
+                    style.RowRuleInsetCapStart(),
+                    style.RowRuleInsetJunctionStart(),
+                    row_crossing_gap_size,
+                ),
+                inline_end: MaxGapDecorationInsetOutset(
+                    style.RowRuleInsetCapEnd(),
+                    style.RowRuleInsetJunctionEnd(),
+                    row_crossing_gap_size,
+                ),
+            };
+            let rect = gap_geometry.ComputeInkOverflowForGaps(
+                style.GetWritingDirection(),
+                &self.Size(),
+                inline_thickness,
+                block_thickness,
+                &outsets,
+            );
+            ink_overflow.Unite(&rect);
+        }
+        ink_overflow
     }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1208-1227
+    pub fn AddSelfOutlineRects(
+        &self,
+        additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+        collector: &mut dyn OutlineRectCollector,
+        info: Option<&mut LayoutOutlineInfo>,
+    ) {
+        if let Some(info) = info {
+            *info = if self.IsSvgText() {
+                LayoutOutlineInfo::GetUnzoomedFromStyle(self.Style())
+            } else {
+                LayoutOutlineInfo::GetFromStyle(self.Style())
+            };
+        }
+
+        let layout_object = self.GetLayoutObject();
+        let node = if layout_object.is_null() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { &*layout_object }.GetNode()
+        };
+        let outline_type = if ShouldIncludeBlockInkOverflow(outline_type)
+            && !node.is_null()
+            && unsafe { &*node }.InputIsHTMLAnchorElement()
+        {
+            OutlineType::kIncludeBlockInkOverflowForAnchor
+        } else {
+            outline_type
+        };
+        self.AddOutlineRectsInternal(additional_offset, outline_type, false, collector);
+    }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1229-1235
+    fn AddOutlineRects(
+        &self,
+        additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+        collector: &mut dyn OutlineRectCollector,
+    ) {
+        self.AddOutlineRectsInternal(additional_offset, outline_type, true, collector);
+    }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1237-1291
+    fn AddOutlineRectsInternal(
+        &self,
+        additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+        inline_container_relative: bool,
+        collector: &mut dyn OutlineRectCollector,
+    ) {
+        debug_assert_eq!(self.PostLayout(), self as *const Self);
+        if self.IsInlineBox() {
+            self.AddOutlineRectsForInlineBox(
+                additional_offset,
+                outline_type,
+                inline_container_relative,
+                collector,
+            );
+            return;
+        }
+        debug_assert!(self.IsOutlineOwner());
+
+        if !self.IsAnonymousBlockFlow() || self.GetBoxType() == BoxType::kPageBorderBox {
+            if self.IsSvgText() {
+                let layout_object = self.GetLayoutObject();
+                debug_assert!(!layout_object.is_null());
+                let algorithms = LayoutPassScope::Algorithms();
+                let object_bounding_box = unsafe { algorithms.as_ref() }
+                    .and_then(|algorithms| algorithms.svg_support.text_object_bounding_box)
+                    .expect("source SVG text ObjectBoundingBox dispatch is not installed");
+                collector.AddRect(&PhysicalRect::EnclosingRect(&object_bounding_box(unsafe {
+                    &*layout_object
+                })));
+            } else {
+                collector.AddRect(&PhysicalRect::new(additional_offset, self.Size()));
+            }
+        }
+
+        if ShouldIncludeBlockInkOverflow(outline_type) && !self.HasNonVisibleOverflow() {
+            let mut child_collector = collector.ForDescendantCollector();
+            self.AddOutlineRectsForNormalChildren(
+                child_collector.as_mut(),
+                PhysicalOffset::default(),
+                outline_type,
+                self.GetLayoutObject(),
+            );
+            collector.CombineWithOffset(child_collector.as_mut(), &additional_offset);
+
+            if ShouldIncludeBlockInkOverflowForAnchorOnly(outline_type) {
+                for child in self.PostLayoutChildren().iter() {
+                    if child.IsOutOfFlowPositioned() {
+                        self.AddOutlineRectsForDescendant(
+                            child.get(),
+                            child.offset,
+                            collector,
+                            additional_offset,
+                            outline_type,
+                            self.GetLayoutObject(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1293-1373
+    fn AddOutlineRectsForInlineBox(
+        &self,
+        mut additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+        container_relative: bool,
+        collector: &mut dyn OutlineRectCollector,
+    ) {
+        debug_assert_eq!(self.PostLayout(), self as *const Self);
+        debug_assert!(self.IsInlineBox());
+
+        let container = self.InlineContainerFragmentIfOutlineOwner();
+        if container.is_null() {
+            return;
+        }
+        let container = unsafe { &*container };
+        let layout_object = self.GetLayoutObject();
+        debug_assert!(!layout_object.is_null());
+        debug_assert!(unsafe { &*layout_object }.IsLayoutInline());
+
+        let mut cursor_collector = collector.ForDescendantCollector();
+        let mut cursor = InlineCursor::from_fragment(container);
+        cursor.MoveToLayoutObject(unsafe { &*layout_object });
+        debug_assert!(cursor.IsNotNull());
+        if cursor.IsNull() {
+            return;
+        }
+        let this_offset_in_container = cursor.Current().OffsetInContainerFragment();
+        while cursor.IsNotNull() {
+            let current = *cursor.Current();
+            if !current.Size().IsZero() {
+                let fragment = current.BoxFragment();
+                debug_assert!(!fragment.is_null());
+                if !fragment.is_null()
+                    && !unsafe { &*fragment }.IsOpaque()
+                    && !unsafe { &*fragment }.IsSvg()
+                {
+                    cursor_collector.AddRect(&current.RectInContainerFragment());
+                }
+            }
+
+            if current.HasChildren() {
+                let mut descendants = cursor.CursorForDescendants();
+                container.AddOutlineRectsForCursor(
+                    cursor_collector.as_mut(),
+                    PhysicalOffset::default(),
+                    outline_type,
+                    layout_object,
+                    &mut descendants,
+                );
+            }
+            cursor.MoveToNextForSameLayoutObject();
+        }
+        if cursor_collector.IsEmpty() {
+            return;
+        }
+
+        if !container_relative {
+            additional_offset -= this_offset_in_container;
+        }
+        collector.CombineWithOffset(cursor_collector.as_mut(), &additional_offset);
+
+        if ShouldIncludeBlockInkOverflowForAnchorOnly(outline_type) && !self.HasNonVisibleOverflow()
+        {
+            for child in container.PostLayoutChildren().iter() {
+                if !child.IsOutOfFlowPositioned() {
+                    continue;
+                }
+                let child_layout_object = child.GetLayoutObject();
+                if child_layout_object.is_null()
+                    || unsafe { &*child_layout_object }.ContainerForAbsolutePosition()
+                        != layout_object.cast_mut()
+                {
+                    continue;
+                }
+                container.AddOutlineRectsForDescendant(
+                    child.get(),
+                    child.offset,
+                    collector,
+                    additional_offset,
+                    outline_type,
+                    layout_object,
+                );
+            }
+        }
+    }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1375-1405
+    fn AddOutlineRectsForNormalChildren(
+        &self,
+        collector: &mut dyn OutlineRectCollector,
+        additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+        containing_block: *const LayoutObject,
+    ) {
+        debug_assert_eq!(self.PostLayout(), self as *const Self);
+        let items = self.Items();
+        if !items.is_null() {
+            let mut cursor = InlineCursor::new_with_items(self, unsafe { &*items });
+            self.AddOutlineRectsForCursor(
+                collector,
+                additional_offset,
+                outline_type,
+                containing_block,
+                &mut cursor,
+            );
+            return;
+        }
+
+        for child in self.PostLayoutChildren().iter() {
+            if child.IsOutOfFlowPositioned() {
+                continue;
+            }
+            self.AddOutlineRectsForDescendant(
+                child.get(),
+                child.offset,
+                collector,
+                additional_offset,
+                outline_type,
+                containing_block,
+            );
+        }
+    }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1406-1464
+    fn AddOutlineRectsForCursor(
+        &self,
+        collector: &mut dyn OutlineRectCollector,
+        additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+        containing_block: *const LayoutObject,
+        cursor: &mut InlineCursor,
+    ) {
+        let text_combine =
+            if !containing_block.is_null() && unsafe { &*containing_block }.IsLayoutTextCombine() {
+                Some(unsafe { &*containing_block })
+            } else {
+                None
+            };
+        while cursor.IsNotNull() {
+            let current = *cursor.Current();
+            let item = unsafe { &*current.Item() };
+            if item.IsLayoutObjectDestroyedOrMoved() {
+                cursor.MoveToNext();
+                continue;
+            }
+            match item.Type() {
+                FragmentItemType::kLine => {
+                    // PhysicalLineBoxFragment is not a box descendant and the
+                    // source descendant helper drops it after DynamicTo.
+                }
+                FragmentItemType::kGeneratedText | FragmentItemType::kText => {
+                    let mut rect = if item.IsSvgText() {
+                        PhysicalRect::EnclosingRect(&current.ObjectBoundingBox(cursor))
+                    } else if ShouldIncludeBlockInkOverflow(outline_type) {
+                        current.RectInContainerFragment()
+                    } else {
+                        cursor.MoveToNext();
+                        continue;
+                    };
+                    if let Some(text_combine) = text_combine {
+                        let objects = unsafe { &*text_combine }.FactorySet();
+                        let adjust = unsafe { objects.as_ref() }
+                            .and_then(|objects| objects.adjust_text_combine_bounding_box)
+                            .expect("source text-combine bounding-box dispatch is not installed");
+                        rect = adjust(text_combine, &rect);
+                    }
+                    rect.offset += additional_offset;
+                    collector.AddRect(&rect);
+                }
+                FragmentItemType::kBox => {
+                    let child_box = item.PostLayoutBoxFragment();
+                    if !child_box.is_null() {
+                        self.AddOutlineRectsForDescendant(
+                            child_box as *const PhysicalFragment,
+                            current.OffsetInContainerFragment(),
+                            collector,
+                            additional_offset,
+                            outline_type,
+                            containing_block,
+                        );
+                        cursor.MoveToNextSkippingChildren();
+                        continue;
+                    }
+                }
+                FragmentItemType::kInvalid => unreachable!("invalid FragmentItem in outline walk"),
+            }
+            cursor.MoveToNext();
+        }
+    }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1466-1519
+    fn AddOutlineRectsForDescendant(
+        &self,
+        descendant: *const PhysicalFragment,
+        descendant_offset: PhysicalOffset,
+        collector: &mut dyn OutlineRectCollector,
+        additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+        containing_block: *const LayoutObject,
+    ) {
+        if descendant.is_null() {
+            return;
+        }
+        let descendant = unsafe { &*descendant };
+        if descendant.IsListMarker() {
+            return;
+        }
+        let descendant_box = DynamicTo::<PhysicalBoxFragment>(descendant);
+        if descendant_box.is_null() {
+            return;
+        }
+        let descendant_box = unsafe { &*descendant_box };
+        if descendant_box.HasLayer() {
+            let descendant_layout_object = descendant_box.GetLayoutObject();
+            debug_assert!(!descendant_layout_object.is_null());
+            let mut descendant_collector = collector.ForDescendantCollector();
+            descendant_box.AddOutlineRectsInternal(
+                PhysicalOffset::default(),
+                outline_type,
+                true,
+                descendant_collector.as_mut(),
+            );
+            collector.CombineWithDescendant(
+                descendant_collector.as_mut(),
+                unsafe { &*descendant_layout_object },
+                containing_block.cast(),
+                &additional_offset,
+            );
+            return;
+        }
+        if !descendant_box.IsInlineBox() {
+            descendant_box.AddSelfOutlineRects(
+                additional_offset + descendant_offset,
+                outline_type,
+                collector,
+                None,
+            );
+            return;
+        }
+        if descendant_box.IsOutlineOwner() {
+            self.AddOutlineRectsForInlineNormalChildren(
+                descendant_box,
+                collector,
+                PhysicalOffset::default(),
+                outline_type,
+            );
+        }
+    }
+
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1505-1519
+    // cpp: core/layout/layout_box_model_object.cc:380-395
+    fn AddOutlineRectsForInlineNormalChildren(
+        &self,
+        inline_fragment: &PhysicalBoxFragment,
+        collector: &mut dyn OutlineRectCollector,
+        additional_offset: PhysicalOffset,
+        outline_type: OutlineType,
+    ) {
+        let container = inline_fragment.InlineContainerFragmentIfOutlineOwner();
+        if container.is_null() {
+            return;
+        }
+        let container = unsafe { &*container };
+        let layout_object = inline_fragment.GetLayoutObject();
+        if layout_object.is_null() {
+            return;
+        }
+
+        let mut cursor = InlineCursor::from_fragment(container);
+        cursor.MoveToLayoutObject(unsafe { &*layout_object });
+        while cursor.IsNotNull() {
+            if cursor.Current().HasChildren() {
+                let mut children = cursor.CursorForDescendants();
+                while children.IsNotNull() {
+                    let current = *children.Current();
+                    let item = unsafe { &*current.Item() };
+                    if item.Type() == FragmentItemType::kBox {
+                        let child_box = item.PostLayoutBoxFragment();
+                        if !child_box.is_null() && !unsafe { &*child_box }.IsOutOfFlowPositioned() {
+                            container.AddOutlineRectsForDescendant(
+                                child_box as *const PhysicalFragment,
+                                current.OffsetInContainerFragment(),
+                                collector,
+                                additional_offset,
+                                outline_type,
+                                layout_object,
+                            );
+                        }
+                    }
+                    children.MoveToNextSkippingChildren();
+                }
+            }
+            cursor.MoveToNextForSameLayoutObject();
+        }
+    }
+
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:739-744
     pub fn AllowFrom(fragment: &PhysicalFragment) -> bool {
         fragment.Type() == FragmentType::kFragmentBox
@@ -458,7 +971,7 @@ impl PhysicalBoxFragment {
     // The GC allocator accepts additional bytes after the fixed object.
     // Reserve the maximum alignment padding as well because Rust may give
     // this repr(C) value a lower alignment than FragmentItems.
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:372-388
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:337-353
     fn AdditionalByteSize(has_fragment_items: bool) -> usize {
         if has_fragment_items {
             std::mem::align_of::<FragmentItems>() - 1 + std::mem::size_of::<FragmentItems>()
@@ -497,7 +1010,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:69-74
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:496-516
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:461-481
     fn copy_from(
         other: &Self,
         _has_scrollable_overflow: bool,
@@ -540,7 +1053,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:47-48
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:42-51
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:263-271
     pub fn Clone(other: &Self) -> *const Self {
         let additional = Self::AdditionalByteSize(other.HasItems());
         unsafe {
@@ -558,8 +1071,7 @@ impl PhysicalBoxFragment {
 
     // The allocated trailing storage follows the source's inline item layout.
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:42-45
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:226-306
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:372-388
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:179-260
     pub fn Create(
         builder: &mut BoxFragmentBuilder,
         block_or_line_writing_mode: WritingMode,
@@ -656,7 +1168,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:50-53
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:309-370
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:273-335
     pub fn CloneWithPostLayoutFragments(other: &Self) -> *const Self {
         let clone = Self::Clone(other);
         #[cfg(debug_assertions)]
@@ -698,7 +1210,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:55-67
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:390-495
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:355-459
     fn from_builder(
         builder: &mut BoxFragmentBuilder,
         has_scrollable_overflow: bool,
@@ -876,7 +1388,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:720-722
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1049-1096
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1876-1922
     #[cfg(debug_assertions)]
     fn CheckIntegrity(&self) {
         let mut has_inflow_blocks = false;
@@ -917,7 +1429,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:466-469
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:965-1046
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1792-1873
     #[cfg(debug_assertions)]
     pub fn CheckSameForSimplifiedLayout(&self, other: &Self, check_no_fragmentation: bool) {
         debug_assert_eq!(
@@ -995,7 +1507,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:622-625
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1098-1102
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1925-1929
     #[cfg(debug_assertions)]
     pub fn AssertFragmentTreeSelf(&self) {
         debug_assert!(!self.IsInlineBox());
@@ -1003,7 +1515,7 @@ impl PhysicalBoxFragment {
         debug_assert_eq!(self as *const Self, self.PostLayout());
     }
 
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1104-1131
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1931-1958
     #[cfg(debug_assertions)]
     pub fn AssertFragmentTreeChildren(&self, allow_destroyed_or_moved: bool) {
         let items = self.Items();
@@ -1068,7 +1580,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:120-121
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:625-634
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:630-639
     pub fn SetChildrenInvalid(&self) {
         if !self.ChildrenValid() {
             return;
@@ -1144,7 +1656,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:675
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:838-844
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:851-857
     fn EnsureRareField(&self, id: FieldId) -> &mut RareField {
         if self.rare_data().is_none() {
             let new_data = foundation::MakeGarbageCollected(PhysicalFragmentRareData::new(1));
@@ -1281,7 +1793,7 @@ impl PhysicalBoxFragment {
         offset
     }
 
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:525-531
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:490-495
     pub fn ContentRect(&self) -> PhysicalRect {
         let mut rect = PhysicalRect::new(PhysicalOffset::default(), self.Size());
         rect.Contract(&(self.Borders() + self.Padding()));
@@ -1291,7 +1803,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:347-350
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:533-561
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:498-522
     pub fn OwnerLayoutBox(&self) -> *const LayoutBox {
         let owner = DynamicTo::<LayoutBox>(self.GetSelfOrContainerLayoutObject());
         #[cfg(debug_assertions)]
@@ -1329,6 +1841,39 @@ impl PhysicalBoxFragment {
         self.OwnerLayoutBox() as *mut _
     }
 
+    // cpp: layoutng_fragment_tree/physical_box_fragment.h:351-351
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:528-566
+    pub fn OffsetFromOwnerLayoutBox(&self) -> PhysicalOffset {
+        debug_assert!(self.IsCSSBox());
+        let owner = unsafe { &*self.OwnerLayoutBox() };
+        debug_assert!(owner.PhysicalFragments().Contains(self));
+        if owner.PhysicalFragmentCount() <= 1 {
+            return PhysicalOffset::default();
+        }
+
+        let containing_block = owner.ContainingBlock();
+        debug_assert!(!containing_block.is_null());
+        if unsafe { &*containing_block }
+            .StyleRef()
+            .IsLeftToRightDirection()
+        {
+            debug_assert_eq!(
+                self.IsFirstForNode(),
+                std::ptr::eq(self, owner.GetPhysicalFragment(0))
+            );
+            if self.IsFirstForNode() {
+                return PhysicalOffset::default();
+            }
+            let fragment_data = owner.FragmentDataFromPhysicalFragment(self);
+            debug_assert!(!fragment_data.is_null());
+            return unsafe { &*fragment_data }.PaintOffset() - owner.FirstFragment().PaintOffset();
+        }
+
+        let fragment_data = owner.FragmentDataFromPhysicalFragment(self);
+        debug_assert!(!fragment_data.is_null());
+        unsafe { &*fragment_data }.PaintOffset() - owner.FragmentList().back().PaintOffset()
+    }
+
     pub fn InflowBounds(&self) -> Option<PhysicalRect> {
         self.GetRareField(FieldId::kInflowBounds)
             .map(|field| unsafe { *field.value_.inflow_bounds })
@@ -1342,14 +1887,14 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:497
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:864-869
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:877-885
     pub fn GetMutableForStyleRecalc(&self) -> MutableForStyleRecalc<'_> {
         debug_assert!(!self.GetSelfOrContainerLayoutObject().is_null());
         MutableForStyleRecalc { fragment_: self }
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:511
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:892-897
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:908-913
     pub fn GetMutableForContainerLayout(&self) -> MutableForContainerLayout<'_> {
         debug_assert!(!self.GetSelfOrContainerLayoutObject().is_null());
         MutableForContainerLayout { fragment_: self }
@@ -1471,7 +2016,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:94
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:563-623
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:568-628
     pub fn PostLayout(&self) -> *const Self {
         if DisableLayoutSideEffectsScope::IsDisabled() {
             return self as *const _;
@@ -1557,7 +2102,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:676-680
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:913-917
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:990-995
     fn SetInkOverflow(&self, self_rect: PhysicalRect, contents: PhysicalRect) {
         let current = self.InkOverflowType();
         let next = unsafe { &mut *self.ink_overflow_.get() }.Set(
@@ -1569,17 +2114,114 @@ impl PhysicalBoxFragment {
         self.SetInkOverflowType(next);
     }
 
-    // cpp: layoutng_fragment_tree/physical_box_fragment.h:616-618
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:919-922
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1202-1206
+    #[cfg(debug_assertions)]
+    pub fn InvalidateInkOverflow(&self) {
+        let current = self.InkOverflowType();
+        let next = unsafe { &mut *self.ink_overflow_.get() }.Invalidate(current);
+        self.SetInkOverflowType(next);
+    }
+
+    // Source: core/layout/physical_box_fragment.cc:996-999.
     fn RecalcInkOverflowWithContents(&self, contents: PhysicalRect) {
-        // ComputeSelfInkOverflow is declared in the header, but its source
-        // definition is absent. Keep the call explicit for later connection.
         let self_rect = self.ComputeSelfInkOverflow();
         self.SetInkOverflow(self_rect, contents);
     }
 
+    // Source: core/layout/physical_box_fragment.cc:1001-1036.
+    fn RecalcInkOverflow(&self) {
+        debug_assert!(self.CanUseFragmentsForInkOverflow());
+        let layout_object = self.GetSelfOrContainerLayoutObject();
+        debug_assert!(!layout_object.is_null());
+
+        let mut contents_rect = PhysicalRect::default();
+        if !unsafe { &*layout_object }.ChildPrePaintBlockedByDisplayLock() {
+            contents_rect = self.RecalcContentsInkOverflow();
+        }
+        self.RecalcInkOverflowWithContents(contents_rect);
+
+        if self.IsFragmentainerBox() {
+            return;
+        }
+        let owner = self.MutableOwnerLayoutBox();
+        debug_assert!(!owner.is_null());
+        if !self.GetBreakToken().is_null() {
+            debug_assert_ne!(
+                self as *const Self,
+                unsafe { &*owner }.PhysicalFragments().back() as *const _
+            );
+            return;
+        }
+        debug_assert_eq!(
+            self as *const Self,
+            unsafe { &*owner }.PhysicalFragments().back() as *const _
+        );
+        debug_assert_eq!(owner.cast::<LayoutObject>(), self.GetMutableLayoutObject());
+        debug_assert!(unsafe { &*owner }.PhysicalFragments().Contains(self));
+        unsafe { &mut *owner }.CopyVisualOverflowFromFragments();
+    }
+
+    // Source: core/layout/physical_box_fragment.cc:1040-1095.
+    fn RecalcContentsInkOverflow(&self) -> PhysicalRect {
+        debug_assert!(!self.GetSelfOrContainerLayoutObject().is_null());
+        debug_assert!(
+            !unsafe { &*self.GetSelfOrContainerLayoutObject() }.ChildPrePaintBlockedByDisplayLock()
+        );
+        let mut contents_rect = PhysicalRect::default();
+        if !self.Items().is_null() {
+            let mut cursor = InlineCursor::from_fragment(self);
+            let mut child_inline_context =
+                crate::inline_paint_context::InlinePaintContext::default();
+            contents_rect = crate::fragment_item::FragmentItem::RecalcInkOverflowForCursor(
+                &mut cursor,
+                &mut child_inline_context,
+            );
+            let layout_object = self.GetLayoutObject();
+            if !layout_object.is_null()
+                && unsafe { &*layout_object }.RuntimeClass() == LayoutObjectClass::TextCombine
+            {
+                let mut text_combine_cursor = InlineCursor::from_fragment(self);
+                let objects = unsafe { &*layout_object }.FactorySet();
+                let recalc = unsafe { objects.as_ref() }
+                    .and_then(|objects| objects.recalc_text_combine_contents_ink_overflow)
+                    .expect("source text-combine ink-overflow dispatch is not installed");
+                let combined = recalc(
+                    unsafe { &*layout_object },
+                    (&mut text_combine_cursor as *mut InlineCursor).cast(),
+                );
+                contents_rect.Unite(&combined);
+            }
+            if !self.HasFloatingDescendantsForPaint() {
+                return contents_rect;
+            }
+        }
+
+        for child in self.PostLayoutChildren().iter() {
+            let child_fragment = DynamicTo::<PhysicalBoxFragment>(child.get());
+            if child_fragment.is_null() || unsafe { &*child_fragment }.HasSelfPaintingLayer() {
+                continue;
+            }
+            let child_fragment = unsafe { &*child_fragment };
+            debug_assert!(!child_fragment.IsOutOfFlowPositioned());
+            let mut child_rect;
+            if child_fragment.CanUseFragmentsForInkOverflow() {
+                child_fragment.GetMutableForPainting().RecalcInkOverflow();
+                child_rect = child_fragment.InkOverflowRect();
+            } else {
+                let child_layout_object = child_fragment.MutableOwnerLayoutBox();
+                debug_assert!(!child_layout_object.is_null());
+                debug_assert!(!unsafe { &*child_layout_object }.CanUseFragmentsForVisualOverflow());
+                unsafe { &mut *child_layout_object }.RecalcVisualOverflow();
+                child_rect = unsafe { &*child_layout_object }.VisualOverflowRect();
+            }
+            child_rect.offset += child.offset;
+            contents_rect.Unite(&child_rect);
+        }
+        contents_rect
+    }
+
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:390-393
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:636-654
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:641-659
     pub fn SelfInkOverflowRect(&self) -> PhysicalRect {
         if !self.CanUseFragmentsForInkOverflow() {
             let owner = DynamicTo::<LayoutBox>(self.GetLayoutObject());
@@ -1602,7 +2244,7 @@ impl PhysicalBoxFragment {
         unsafe { &*self.ink_overflow_.get() }.Contents(self.InkOverflowType(), &self.Size())
     }
 
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:656-695
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:661-700
     pub fn InkOverflowRect(&self) -> PhysicalRect {
         if !self.CanUseFragmentsForInkOverflow() {
             let owner = DynamicTo::<LayoutBox>(self.GetLayoutObject());
@@ -1667,14 +2309,14 @@ impl PhysicalBoxFragment {
 
     // Rust uses a distinct name for the overload that takes an incoming token.
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:353-361
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:697-702
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:702-707
     pub fn OverflowClipRect(&self, behavior: OverlayScrollbarClipBehavior) -> PhysicalRect {
         let object = self.GetLayoutObject();
         debug_assert!(!object.is_null() && unsafe { &*object }.IsBox());
         unsafe { &*To::<LayoutBox>(object) }.OverflowClipRectWithBehavior(behavior)
     }
 
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:704-765
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:709-770
     pub fn OverflowClipRectForFragment(
         &self,
         incoming: *const BlockBreakToken,
@@ -1711,7 +2353,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:397-398
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:767-776
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:772-781
     pub fn MayIntersect(
         &self,
         result: &HitTestResult,
@@ -1726,7 +2368,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:402-405
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:810-836
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:818-849
     pub fn InlineContainerFragmentIfOutlineOwner(&self) -> *const Self {
         debug_assert!(self.IsInlineBox());
         let layout_object = self.GetLayoutObject();
@@ -1763,7 +2405,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:363-366
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:778-808
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:783-803
     pub fn PixelSnappedOverscrollContentOffset(&self) -> gfx::Vector2d {
         debug_assert!(!self.GetLayoutObject().is_null());
         if !self.IsNonOverlayOverscrollScrollContainer() {
@@ -1790,7 +2432,7 @@ impl PhysicalBoxFragment {
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:92
-    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1135-1143
+    // cpp: layoutng_fragment_tree/physical_box_fragment.cc:1962-1970
     pub fn TraceAfterDispatch(&self, visitor: &mut Visitor) {
         visitor.Trace(unsafe { &*self.children_.get() });
         visitor.Trace(unsafe { &*self.rare_data_.get() });
@@ -1808,7 +2450,7 @@ impl PhysicalBoxFragment {
 
 // Drop the placement-constructed trailing FragmentItems explicitly.
 // cpp: layoutng_fragment_tree/physical_box_fragment.h:76
-// cpp: layoutng_fragment_tree/physical_box_fragment.cc:518-523
+// cpp: layoutng_fragment_tree/physical_box_fragment.cc:483-488
 impl Drop for PhysicalBoxFragment {
     fn drop(&mut self) {
         if self.HasInkOverflow() {

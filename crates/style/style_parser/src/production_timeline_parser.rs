@@ -2,10 +2,10 @@
 //! Chromium scroll/view timeline definition consumers and aligned shorthands.
 // Selected Chromium source audit: effective 482, mapped 440, omitted 19,
 // remaining 23. Parser 340/306/14/20; Apply/converter 120/112/5/3;
-// existing native value types 22/22/0/0. Effective lines exclude comments,
+// existing computed style value types 22/22/0/0. Effective lines exclude comments,
 // blank/preprocessor/namespace/using/visibility/brace-only lines. Shared typed
-// consumers and native classes are reused; there is no parallel timeline model.
-// Nested CSSMath/primitive length conversion, native generated fields and
+// consumers and computed style classes are reused; there is no parallel timeline model.
+// Nested CSSMath/primitive length conversion, computed style generated fields and
 // runtime timeline scheduling/consumption are outside this selected scope.
 // Both ledgers retain pending collaborators; partial is not complete.
 //
@@ -34,7 +34,7 @@
 // Apply remaining: generated 18015-18019 (StandardizedBrowserZoom is stable
 // enabled; changed-zoom parent re-conversion owner is typed Unsupported).
 // Omitted DCHECK/NOTREACHED: converter 191,2300,3988,3991; mappings 1971.
-// Existing native owners: animation/timeline_inset.h:14-33;
+// Existing computed style owners: animation/timeline_inset.h:14-33;
 // style/style_timeline_scope.h:14-34.
 // Definition-side source fields are unscoped AtomicString vectors, not
 // CSSAnimationData/ScopedCSSName. Shadow TreeScope/HasTreeScopedReference

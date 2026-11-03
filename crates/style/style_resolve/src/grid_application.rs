@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native stable grid values; track construction is shared with the converter.
+//! Canonical stable grid values; track construction is shared with the converter.
 #![allow(non_snake_case)]
 use super::*;
 use crate::production_css_value::ListSeparator;
@@ -33,7 +33,7 @@ pub(super) fn IsGridProperty(id: CSSPropertyID) -> bool {
     )
 }
 // style_builder_converter.cc:1534-1597. Grid line counts use the shared
-// integer CSSMath range and native kGridMaxTracks clamp.
+// integer CSSMath range and computed style kGridMaxTracks clamp.
 fn Position(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -135,7 +135,7 @@ fn Breadth(
 }
 
 // cpp: style_builder_converter.cc:1618-1635. Production typed values enter the
-// same native constructor dispatch as the generic converter.
+// same computed style constructor dispatch as the generic converter.
 fn Track(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -481,7 +481,7 @@ mod tests {
         unsafe { &*b.SpecifiedGridTemplateColumns().Get() }.GetTrackList()
     }
     #[test]
-    fn production_grid_areas_rectangles_native_spans_and_implicit_lines() {
+    fn production_grid_areas_rectangles_computed_style_spans_and_implicit_lines() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(
@@ -636,7 +636,7 @@ mod tests {
             .all(|p| p.IsImplicit()));
     }
     #[test]
-    fn production_grid_css_wide_uses_native_inherit_and_initial_reset() {
+    fn production_grid_css_wide_uses_computed_style_inherit_and_initial_reset() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = ComputedStyleBuilder::from_style(initial());
         apply(

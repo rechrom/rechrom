@@ -15,7 +15,7 @@ use crate::{
         geometry_mapper_clip_cache::{OverlayScrollbarClipBehavior, WithClipCache},
     },
 };
-use paint::paint_property_tree as native;
+use paint::paint_property_tree;
 use std::{marker::PhantomData, sync::Arc};
 pub struct CpuGeometryMapper<R: CpuSkiaBackend> {
     pub(super) tracking: Arc<dyn super::CpuRasterTrackingServices<R>>,
@@ -40,7 +40,7 @@ impl<R: CpuSkiaBackend> CpuGeometryMapper<R> {
 fn rect(r: paint::paint_engine::PaintRect) -> RectF {
     RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
 }
-fn clip_rect(r: native::ClipLayoutRect) -> FloatClipRect {
+fn clip_rect(r: paint_property_tree::ClipLayoutRect) -> FloatClipRect {
     let mut value = r
         .rect
         .map(|r| FloatClipRect::FromRect(rect(r)))
@@ -61,7 +61,7 @@ impl<R: CpuSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
     fn MakeState(
         &self,
         transform: TransformNode<R>,
-        clip: Arc<native::ClipPaintPropertyNode>,
+        clip: Arc<paint_property_tree::ClipPaintPropertyNode>,
         effect: EffectNode<R>,
     ) -> Self::State {
         PropertyTreeState {
@@ -70,49 +70,56 @@ impl<R: CpuSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
             effect_: effect,
         }
     }
-    fn ClipLocalTransform(&self, clip: &Arc<native::ClipPaintPropertyNode>) -> TransformNode<R> {
-        TransformNode::from_arc(clip.local_transform_space.clone())
+    fn ClipLocalTransform(
+        &self,
+        clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> TransformNode<R> {
+        TransformNode::from_arc(clip.LocalTransformSpace().clone())
     }
     fn ClipLowestCommonAncestor(
         &self,
-        a: &Arc<native::ClipPaintPropertyNode>,
-        b: &Arc<native::ClipPaintPropertyNode>,
-    ) -> Arc<native::ClipPaintPropertyNode> {
+        a: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+        b: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> Arc<paint_property_tree::ClipPaintPropertyNode> {
         paint::property_node_geometry::LowestCommonAncestor(a, b)
     }
     fn LayoutClipRectExcludingOverlayScrollbars(
         &self,
-        c: &Arc<native::ClipPaintPropertyNode>,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> FloatClipRect {
-        clip_rect(
-            c.layout_clip_rects
-                .excluding_overlay
-                .unwrap_or(c.layout_clip_rects.expanded),
-        )
+        clip_rect(c.LayoutClipRectExcludingOverlayScrollbars())
     }
-    fn PreciseLayoutClipRect(&self, c: &Arc<native::ClipPaintPropertyNode>) -> FloatClipRect {
-        clip_rect(c.layout_clip_rects.precise)
+    fn PreciseLayoutClipRect(
+        &self,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> FloatClipRect {
+        clip_rect(c.PreciseLayoutClipRect())
     }
-    fn LayoutClipRect(&self, c: &Arc<native::ClipPaintPropertyNode>) -> FloatClipRect {
-        clip_rect(c.layout_clip_rects.expanded)
+    fn LayoutClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> FloatClipRect {
+        clip_rect(c.LayoutClipRect())
     }
-    fn PaintClipRect(&self, c: &Arc<native::ClipPaintPropertyNode>) -> RectF {
-        c.rect
+    fn PaintClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> RectF {
+        c.PaintClipRect()
             .map(rect)
             .unwrap_or_else(|| *FloatClipRect::default().Rect())
     }
-    fn ClipHasPath(&self, c: &Arc<native::ClipPaintPropertyNode>) -> bool {
-        c.clip_path.is_some()
+    fn ClipHasPath(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> bool {
+        c.ClipPath().is_some()
     }
     // Source: clip_paint_property_node.h:188-217; this is an exact field query,
     // not a geometric inference about whether a CSS animation is running.
-    fn IsForCompositeClipPathAnimation(&self, c: &Arc<native::ClipPaintPropertyNode>) -> bool {
-        c.layout_clip_rects.expanded != c.layout_clip_rects.precise
+    fn IsForCompositeClipPathAnimation(
+        &self,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> bool {
+        c.IsForCompositeClipPathAnimation()
     }
-    fn PixelMovingFilter(&self, c: &Arc<native::ClipPaintPropertyNode>) -> EffectNode<R> {
+    fn PixelMovingFilter(
+        &self,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> EffectNode<R> {
         EffectNode::from_arc(
-            c.pixel_moving_filter
-                .as_ref()
+            c.PixelMovingFilter()
                 .expect("source PixelMovingFilter")
                 .clone(),
         )
@@ -123,7 +130,7 @@ impl<R: CpuSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
     fn HasActiveFilterAnimation(&self, e: &EffectNode<R>) -> bool {
         e.node()
             .direct_compositing_reasons
-            .contains(&"ActiveFilterAnimation")
+            .Has(foundation::CompositingReason::kActiveFilterAnimation)
     }
     fn FilterMapRect(&self, e: &EffectNode<R>, r: Rect) -> Rect {
         let r = e

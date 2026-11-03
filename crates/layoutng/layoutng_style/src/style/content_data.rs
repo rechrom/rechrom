@@ -224,7 +224,7 @@ impl ContentData for ImageContentData {
     // cpp: layoutng_style/style/content_data.h:132
     fn DebugString(&self) -> String {
         // cpp: layoutng_style/style/content_data.h:133-159. CssValue text is
-        // owned by the style-value package; the native flags remain useful at
+        // owned by the style-value package; the source flags remain useful at
         // this package boundary without a reverse dependency.
         let image = unsafe { &*self.GetImage() };
         let mut text = std::string::String::from("<image: ");
@@ -296,7 +296,7 @@ impl ContentData for TextContentData {
         // has no dependency on the concrete layoutng crate, so production
         // generated text is materialized by layoutng's pseudo-content adapter.
         // Keep this impossible reverse dependency explicit instead of retaining
-        // an unresolved native symbol or manufacturing an opaque LayoutObject.
+        // an unresolved source symbol or manufacturing an opaque LayoutObject.
         panic!("TextContentData layout creation belongs to the layoutng adapter")
     }
     // cpp: layoutng_style/style/content_data.h:160-163

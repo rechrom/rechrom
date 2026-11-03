@@ -13,11 +13,11 @@ impl<R: RoundedRectTransformBackend> FloatClipRectTransform for Transform<R> {
         )
     }
     fn To2dTranslation(&self) -> Vector2dF {
-        let value = self.native().To2dTranslation();
+        let value = self.as_source().To2dTranslation();
         Vector2dF::new(value.x(), value.y())
     }
     fn MapRect(&self, rect: RectF) -> RectF {
-        let value = self.native().MapRect(foundation::gfx::RectF::new(
+        let value = self.as_source().MapRect(foundation::gfx::RectF::new(
             foundation::gfx::PointF::new(rect.x(), rect.y()),
             foundation::gfx::SizeF::new(rect.width(), rect.height()),
         ));

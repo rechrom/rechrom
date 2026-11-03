@@ -1,5 +1,5 @@
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
@@ -7,6 +7,8 @@ use interaction::input_event::{
     InputEvent, MouseButton, MouseEvent, MouseEventType, WheelEvent, WheelPhase,
 };
 use layoutng_assembly::internal::layout_input::Offset;
+use paint::display_item_id::DisplayItemIdType;
+use paint::paint_engine::{DisplayItemType, PaintHitTestOpaqueness};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -30,13 +32,16 @@ impl URLLoader for FixtureLoader {
     }
 }
 
-fn fixture(body: &'static [u8]) -> Page {
+fn fixture_with_options(body: &'static [u8], device_scale: f64, printing: bool) -> Page {
     let assembly = browser::CreateLayoutAssembly();
+    let mut constraints = browser::CreateBrowserConstraints(320, 200);
+    constraints.device_pixel_ratio = device_scale;
+    constraints.printing = printing;
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader(body))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
-        browser::CreateBrowserConstraints(320, 200),
+        constraints,
         None,
         None,
     );
@@ -49,6 +54,14 @@ fn fixture(body: &'static [u8]) -> Page {
     }
     assert!(!page.IsLoading());
     page
+}
+
+fn fixture_with_scale(body: &'static [u8], device_scale: f64) -> Page {
+    fixture_with_options(body, device_scale, false)
+}
+
+fn fixture(body: &'static [u8]) -> Page {
+    fixture_with_scale(body, 1.0)
 }
 
 fn id(page: &Page, value: &str) -> u64 {
@@ -67,7 +80,7 @@ fn id(page: &Page, value: &str) -> u64 {
 
 #[test]
 fn root_scroll_hit_tests_visible_descendants() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             br#"<!doctype html><style>
             html, body { margin: 0; }
@@ -97,7 +110,7 @@ fn root_scroll_hit_tests_visible_descendants() {
 
 #[test]
 fn root_scroll_hit_tests_fixed_descendants_in_viewport_space() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             br#"<!doctype html><style>
             html, body { margin: 0; }
@@ -130,7 +143,7 @@ fn root_scroll_hit_tests_fixed_descendants_in_viewport_space() {
 
 #[test]
 fn overflow_scroll_hit_tests_sticky_descendants_at_painted_offset() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             br#"<!doctype html><style>
             html, body { margin: 0; }
@@ -164,7 +177,7 @@ fn overflow_scroll_hit_tests_sticky_descendants_at_painted_offset() {
 
 #[test]
 fn sticky_constraint_reaches_the_paint_property_scroll_owner() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture(
             br#"<!doctype html><style>
             html, body { margin: 0; }
@@ -207,7 +220,7 @@ fn sticky_constraint_reaches_the_paint_property_scroll_owner() {
 
 #[test]
 fn transformed_link_hit_test_applies_the_owner_transform_once() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             br#"<!doctype html><style>
             html, body { margin: 0; }
@@ -228,8 +241,36 @@ fn transformed_link_hit_test_applies_the_owner_transform_once() {
 }
 
 #[test]
+fn replaced_border_radius_excludes_the_outer_corner_from_self_hit_testing() {
+    test_thread::run(|| {
+        let mut page = fixture(
+            br#"<!doctype html><style>
+            html, body { margin: 0; width: 320px; height: 200px; }
+            #rounded { display: block; box-sizing: border-box; width: 100px; height: 100px;
+                       border: 5px solid; border-radius: 40px; overflow: hidden; }
+        </style><body id=body><img id=rounded>"#,
+        );
+        let body = id(&page, "body");
+        let rounded = id(&page, "rounded");
+        let click = |page: &mut Page, x, y| {
+            page.Dispatch(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kClick,
+                button: MouseButton::kPrimary,
+                position: Offset { x, y },
+                ..Default::default()
+            }))
+            .unwrap()
+            .target_node_id
+        };
+        assert_eq!(click(&mut page, 1.0, 1.0), Some(body));
+        assert_eq!(click(&mut page, 3.0, 40.0), Some(rounded));
+        assert_eq!(click(&mut page, 50.0, 50.0), Some(rounded));
+    });
+}
+
+#[test]
 fn overlapping_positioned_links_follow_stable_z_index_order() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             br#"<!doctype html><style>
             html, body { margin: 0; }
@@ -256,7 +297,7 @@ fn overlapping_positioned_links_follow_stable_z_index_order() {
 
 #[test]
 fn overlapping_flex_items_follow_z_index_order() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             br#"<!doctype html><style>
             html, body { margin: 0; }
@@ -279,5 +320,132 @@ fn overlapping_flex_items_follow_z_index_order() {
             }))
             .unwrap();
         assert_eq!(result.target_node_id, Some(front));
+    });
+}
+
+#[test]
+fn resizer_records_the_expanded_touch_hit_test_chunk() {
+    test_thread::run(|| {
+        let page = fixture(
+            br#"<!doctype html><style>
+            html, body { margin: 0; }
+            #resizable { margin: 20px; width: 100px; height: 60px;
+                         overflow: scroll; resize: both; }
+        </style><body><div id=resizable></div>"#,
+        );
+        let chunk = page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .chunks
+            .iter()
+            .find(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest)
+            .expect("resizer touch hit-test chunk");
+        let compositor = chunk.compositor.as_deref().expect("compositor metadata");
+        let hit_test = compositor
+            .hit_test_data
+            .as_deref()
+            .expect("resizer hit-test data");
+        assert_eq!(
+            compositor.hit_test_opaqueness,
+            PaintHitTestOpaqueness::Mixed
+        );
+        assert_eq!(hit_test.scroll_hit_test_rect, chunk.bounds);
+        assert!(hit_test.scroll_translation.is_none());
+        assert_eq!(chunk.bounds.width, 30.0);
+        assert_eq!(chunk.bounds.height, 30.0);
+
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let drawing = artifact
+            .display_items
+            .iter()
+            .find(|item| item.id.r#type == DisplayItemIdType::kResizer)
+            .expect("platform resizer drawing");
+        let record = &artifact.items[drawing.record_begin..drawing.record_end];
+        assert_eq!(
+            record
+                .iter()
+                .filter(|item| item.r#type == DisplayItemType::kStrokePath)
+                .count(),
+            2
+        );
+        assert_eq!(drawing.visual_rect.width, 15.0);
+        assert_eq!(drawing.visual_rect.height, 15.0);
+    });
+}
+
+#[test]
+fn transparent_scroll_hit_test_omits_the_resizer_chunk() {
+    test_thread::run(|| {
+        let page = fixture(
+            br#"<!doctype html><style>
+            html, body { margin: 0; }
+            #resizable { width: 100px; height: 60px; overflow: scroll;
+                         resize: both; pointer-events: none; }
+        </style><body><div id=resizable></div>"#,
+        );
+        assert!(!page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .chunks
+            .iter()
+            .any(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest));
+    });
+}
+
+#[test]
+fn printing_suppresses_overlay_scrollbars_but_not_the_resizer() {
+    test_thread::run(|| {
+        let page = fixture_with_options(
+            br#"<!doctype html><style>
+            html, body { margin: 0; }
+            #resizable { width: 100px; height: 60px; overflow: scroll; resize: both; }
+        </style><body><div id=resizable></div>"#,
+            1.0,
+            true,
+        );
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        assert!(!artifact.display_items.iter().any(|item| matches!(
+            item.id.r#type,
+            DisplayItemIdType::kScrollbarHorizontal | DisplayItemIdType::kScrollbarVertical
+        )));
+        assert!(artifact
+            .display_items
+            .iter()
+            .any(|item| item.id.r#type == DisplayItemIdType::kResizer));
+    });
+}
+
+#[test]
+fn resizer_geometry_scales_from_dip() {
+    test_thread::run(|| {
+        let page = fixture_with_scale(
+            br#"<!doctype html><style>
+            html, body { margin: 0; }
+            #resizable { width: 100px; height: 60px; overflow: scroll; resize: both; }
+        </style><body><div id=resizable></div>"#,
+            2.0,
+        );
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let touch = artifact
+            .chunks
+            .iter()
+            .find(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest)
+            .expect("scaled resizer touch metadata");
+        assert_eq!((touch.bounds.width, touch.bounds.height), (60.0, 60.0));
+        let drawing = artifact
+            .display_items
+            .iter()
+            .find(|item| item.id.r#type == DisplayItemIdType::kResizer)
+            .expect("scaled platform resizer drawing");
+        assert_eq!(
+            (drawing.visual_rect.width, drawing.visual_rect.height),
+            (30.0, 30.0)
+        );
+        assert!(artifact.items[drawing.record_begin..drawing.record_end]
+            .iter()
+            .filter(|item| item.r#type == DisplayItemType::kStrokePath)
+            .all(|item| item.stroke_width == 2.0));
     });
 }

@@ -46,6 +46,7 @@ use layoutng_assembly::internal::oof_positioned_node::{
     OofContainingBlock, OofInlineContainer,
 };
 use layoutng_assembly::internal::pagination_utils::{GetPageArea, GetPageBorderBox};
+use layoutng_assembly::internal::paint_layer::LayerPositionVisibility;
 use layoutng_assembly::internal::scroll_layout_scope::FreezeScrollbarsRootScope;
 use layoutng_assembly::layout_result::EStatus;
 use layoutng_assembly::layout_result::LayoutResult;
@@ -642,6 +643,23 @@ impl OffsetInfo {
         visitor.Trace(&self.non_overflowing_scroll_ranges);
         visitor.Trace(&self.display_locks_affected_by_anchors);
     }
+}
+
+// Source: core/layout/out_of_flow_layout_part.cc:431-450.
+// The chosen position fallback owns whether `position-visibility:no-overflow`
+// suppresses this PaintLayer. Keep the decision in Layout and write the exact
+// bit back to the source PaintLayer; Paint only consumes the retained fact.
+fn UpdatePositionVisibilityAfterLayout(offset_info: &OffsetInfo, node: &BlockNode) {
+    let layout_box = node.GetLayoutBox();
+    assert!(!layout_box.is_null());
+    let layer = unsafe { &*layout_box }.Layer();
+    assert!(!layer.is_null());
+    let invisible = node
+        .Style()
+        .HasPositionVisibility(PositionVisibility::kNoOverflow)
+        && offset_info.overflows_containing_block;
+    unsafe { &mut *layer }
+        .SetInvisibleForPositionVisibility(LayerPositionVisibility::kNoOverflow, invisible);
 }
 
 // cpp: layoutng_out_of_flow/out_of_flow_layout_part.h:276-290
@@ -1405,6 +1423,8 @@ impl OutOfFlowLayoutPart {
                 mutator.SetBlockStartOffset(offset_info.offset.block_offset);
             }
         }
+        // Source: out_of_flow_layout_part.cc:2657-2660.
+        UpdatePositionVisibilityAfterLayout(offset_info, &oof_node_to_layout.node_info.node);
         layout_result
     }
 
@@ -2860,8 +2880,36 @@ impl OutOfFlowLayoutPart {
         }
     }
 
-    // cpp: layoutng_out_of_flow/out_of_flow_layout_part.h:319-319
-    // cpp: layoutng_out_of_flow/out_of_flow_layout_part.cc:993-1105
+    // Source: core/layout/out_of_flow_layout_part.cc:3171-3185.
+    fn SaveStaticPositionOnPaintLayer(
+        &self,
+        layout_box: *mut LayoutBox,
+        mut position: LogicalStaticPosition,
+    ) {
+        let parent = unsafe { &*layout_box }.Parent();
+        assert!(!parent.is_null());
+        let container = unsafe { &*self.container_builder_ }.GetLayoutObject();
+        let parent_is_container = parent.cast_const() == container;
+        let inline_parent_uses_container = unsafe { &*parent }.IsLayoutInline()
+            && unsafe { &*parent }
+                .ContainingBlock()
+                .cast::<LayoutObject>()
+                .cast_const()
+                == container;
+        if !parent_is_container && !inline_parent_uses_container {
+            return;
+        }
+
+        let layer = unsafe { &*layout_box }.Layer();
+        assert!(!layer.is_null());
+        let break_token = unsafe { &*self.container_builder_ }.PreviousBreakToken();
+        if !break_token.is_null() {
+            position.offset.block_offset += unsafe { &*break_token }.ConsumedBlockSize();
+        }
+        unsafe { &mut *layer }.SetStaticPositionFromNG(&position);
+    }
+
+    // Source: core/layout/out_of_flow_layout_part.cc:1117-1127.
     fn LayoutCandidates(&mut self, candidates: &HeapVector<LogicalOofPositionedNode>) {
         let builder_ptr = self.container_builder_;
         if !self.should_add_outer_fragmentainer_children_
@@ -2871,7 +2919,9 @@ impl OutOfFlowLayoutPart {
         }
         for candidate in candidates {
             let layout_box = candidate.Node().GetLayoutBox();
-            unsafe { &mut *layout_box }.SetStaticPositionForLayout(&candidate.StaticPosition());
+            if !unsafe { &*builder_ptr }.IsBlockFragmentationContextRoot() {
+                self.SaveStaticPositionOnPaintLayer(layout_box, candidate.StaticPosition());
+            }
             if self.IsContainingBlockForCandidate(candidate) {
                 if self.should_add_outer_fragmentainer_children_ {
                     debug_assert!(!RuntimeEnabledFeatures::FragmentedOofInCbEnabled());

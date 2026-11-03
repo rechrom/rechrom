@@ -7,7 +7,6 @@ use layoutng_geometry::geometry::axis::PhysicalAxes;
 use layoutng_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layoutng_geometry::geometry::logical_rect::LogicalRect;
 use layoutng_style::style::computed_style::ComputedStyle;
-use layoutng_style::style::outline_type::OutlineType;
 
 use super::caret_rect::CaretShape;
 use super::layout_box::LayoutBox;
@@ -15,20 +14,22 @@ use super::layout_box_model_tree::LayoutBoxModelObjectBaseForNode;
 use super::layout_node_metadata::{ContainerNode, Element};
 use super::layout_object::LayoutObject;
 use super::layout_scrollable_area::PaintLayerScrollableArea;
-use super::outline_rect_collector::OutlineRectCollector;
 pub use super::paint_layer::PaintLayer;
 use super::sticky_position_scrolling_constraints::{PerAxisData, StickyConstraintsData};
 use foundation::PhysicalOffset;
 
-#[path = "../../../layout_fragment/src/native_background_transfer.rs"]
-mod layout_fragment_native_background_transfer;
-use layout_fragment_native_background_transfer::LayoutBoxModelObjectBackgroundTransfersToView;
+#[path = "../../../layout_fragment/src/background_transfer.rs"]
+mod layout_fragment_background_transfer;
+use layout_fragment_background_transfer::LayoutBoxModelObjectBackgroundTransfersToView;
 
-#[path = "../../../layout_fragment/src/native_layout_box_model_scrollable_area.rs"]
-mod layout_fragment_native_layout_box_model_scrollable_area;
+#[path = "../../../layout_fragment/src/layout_box_model_scrollable_area.rs"]
+mod layout_fragment_layout_box_model_scrollable_area;
 
-#[path = "../../../layout_invalidation/src/native_layout_box_model_layer_invalidation.rs"]
-mod layout_invalidation_native_layout_box_model_layer_invalidation;
+#[path = "../../../layout_fragment/src/layout_box_model_outline.rs"]
+mod layout_fragment_layout_box_model_outline;
+
+#[path = "../../../layout_invalidation/src/layout_box_model_layer_invalidation.rs"]
+mod layout_invalidation_layout_box_model_layer_invalidation;
 
 // Declarations without supplied bodies remain typed external contracts.
 unsafe extern "Rust" {
@@ -40,16 +41,11 @@ unsafe extern "Rust" {
     fn LayoutBoxModelObjectVisualOverflowRectIncludingFilters(
         this: &LayoutBoxModelObject,
     ) -> PhysicalRect;
+    fn DispatchLayoutBoxModelObjectVisualOverflowRect(this: &LayoutBoxModelObject) -> PhysicalRect;
     fn LayoutBoxModelObjectApplyFiltersToRect(
         this: &LayoutBoxModelObject,
         rect: &PhysicalRect,
     ) -> PhysicalRect;
-    fn LayoutBoxModelObjectAddOutlineRectsForNormalChildren(
-        this: &LayoutBoxModelObject,
-        collector: &mut dyn OutlineRectCollector,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    );
     fn LayoutBoxModelObjectUpdateCanCompositeBackgroundAttachmentFixed(
         this: &mut LayoutBoxModelObject,
         enable: bool,
@@ -65,13 +61,6 @@ unsafe extern "Rust" {
         text_indent_offset: LayoutUnit,
         shape: CaretShape,
     ) -> LogicalRect;
-    fn LayoutBoxModelObjectAddOutlineRectsForDescendant(
-        this: &LayoutBoxModelObject,
-        descendant: &LayoutObject,
-        collector: &mut dyn OutlineRectCollector,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    );
 }
 
 // cpp: layoutng/internal/layout_box_model_object.h:44-51
@@ -93,6 +82,8 @@ pub struct LayoutBoxModelObject {
     object_: LayoutObject,
     pub(crate) x_sticky_constraints_: Member<PerAxisData>,
     pub(crate) y_sticky_constraints_: Member<PerAxisData>,
+    // Source: core/paint/paint_layer.h:817. Kept on the extracted
+    // LayoutBoxModelObject side of the existing Layout/Paint boundary.
     pub(crate) transform_: Option<Box<gfx::Transform>>,
     scrollable_area_: Member<PaintLayerScrollableArea>,
 }
@@ -132,8 +123,10 @@ impl LayoutBoxModelObject {
         object
     }
 
-    // cpp: layoutng/internal/layout_box_model_object.h:171-171
-    pub fn TransformForLayout(&self) -> *const gfx::Transform {
+    // Source: core/paint/paint_layer.h:297.
+    // PaintLayer's retained transform lives beside the extracted
+    // LayoutBoxModelObject owner, but preserves the source accessor exactly.
+    pub fn Transform(&self) -> *const gfx::Transform {
         self.transform_
             .as_deref()
             .map_or(std::ptr::null(), |transform| transform as *const _)
@@ -258,7 +251,7 @@ impl LayoutBoxModelObject {
         self.FirstFragment().Layer()
     }
 
-    // Native virtual dispatch for the source LayerTypeRequired overrides.
+    // Chromium virtual dispatch for the source LayerTypeRequired overrides.
     // cpp: core/layout/layout_view.h:108-111
     // cpp: core/layout/layout_inline.cc:825-832
     // cpp: core/layout/layout_box.cc:568-587
@@ -308,6 +301,11 @@ impl LayoutBoxModelObject {
         unsafe { LayoutBoxModelObjectVisualOverflowRectIncludingFilters(self) }
     }
 
+    // cpp: core/layout/layout_box_model_object.h:173-173
+    pub fn VisualOverflowRect(&self) -> PhysicalRect {
+        unsafe { DispatchLayoutBoxModelObjectVisualOverflowRect(self) }
+    }
+
     pub fn ApplyFiltersToRect(&self, rect: &PhysicalRect) -> PhysicalRect {
         unsafe { LayoutBoxModelObjectApplyFiltersToRect(self, rect) }
     }
@@ -319,22 +317,6 @@ impl LayoutBoxModelObject {
 
     pub fn BackgroundTransfersToViewDefault(&self) -> bool {
         self.BackgroundTransfersToView(std::ptr::null())
-    }
-
-    pub fn AddOutlineRectsForNormalChildren(
-        &self,
-        collector: &mut dyn OutlineRectCollector,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    ) {
-        unsafe {
-            LayoutBoxModelObjectAddOutlineRectsForNormalChildren(
-                self,
-                collector,
-                additional_offset,
-                outline_type,
-            )
-        }
     }
 
     pub fn UpdateCanCompositeBackgroundAttachmentFixed(&mut self, enable: bool) {
@@ -362,24 +344,6 @@ impl LayoutBoxModelObject {
                 inline_size,
                 text_indent_offset,
                 shape,
-            )
-        }
-    }
-
-    pub fn AddOutlineRectsForDescendant(
-        &self,
-        descendant: &LayoutObject,
-        collector: &mut dyn OutlineRectCollector,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    ) {
-        unsafe {
-            LayoutBoxModelObjectAddOutlineRectsForDescendant(
-                self,
-                descendant,
-                collector,
-                additional_offset,
-                outline_type,
             )
         }
     }

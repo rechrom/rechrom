@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Chromium typography native fields and converter branches.
+//! Chromium typography computed style fields and converter branches.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{
@@ -30,7 +30,7 @@ mod tests {
     use super::*;
     use crate::production_css_value as values;
     #[test]
-    fn hidden_typography_flags_and_percentage_converter_use_native_storage() {
+    fn hidden_typography_flags_and_percentage_converter_use_computed_style_storage() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);
@@ -338,7 +338,7 @@ pub(super) fn ApplyInternal(
             };
             b.SetHyphenationString(&value);
         }
-        // style_builder_converter.cc:1911-1940; native saturates each u8.
+        // style_builder_converter.cc:1911-1940; computed style saturates each u8.
         kHyphenateLimitChars => {
             let value = if initial {
                 StyleHyphenateLimitChars::default()

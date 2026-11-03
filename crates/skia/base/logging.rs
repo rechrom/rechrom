@@ -126,12 +126,12 @@ pub unsafe fn GetLogMessageHandler() -> Option<LogMessageHandlerFunction> {
 }
 // Source: base/logging.h:527-672; base/logging.cc:719-1155
 // Only genuine configured SDK storage admits these complete inline owners.
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 mod owners {
     use super::*;
-    use crate::interop::native_ostream::supplied_abi::SuppliedStdStringStorage;
-    use crate::interop::native_ostream::{
-        AbiMismatch, ConfiguredOStringStream, ConfiguredStdString, NativeOStream,
+    use crate::interop::ostream::supplied_abi::SuppliedStdStringStorage;
+    use crate::interop::ostream::{
+        AbiMismatch, ConfiguredOStringStream, ConfiguredStdString, OStream,
     };
     use core::{marker::PhantomPinned, mem::MaybeUninit, pin::Pin, ptr};
     // Source: base/logging.h:550-560
@@ -170,7 +170,7 @@ mod owners {
             }
         }
         // Source: base/logging.h:534-541
-        pub fn stream(self: Pin<&mut Self>) -> NativeOStream<'_> {
+        pub fn stream(self: Pin<&mut Self>) -> OStream<'_> {
             unsafe { self.map_unchecked_mut(|x| &mut x.stream_) }.stream()
         }
         pub fn severity(&self) -> i32 {
@@ -596,7 +596,7 @@ mod owners {
         pub fn parent(self: Pin<&mut Self>) -> Pin<&mut LogMessage> {
             unsafe { self.map_unchecked_mut(|x| &mut x.parent) }
         }
-        pub fn stream(self: Pin<&mut Self>) -> NativeOStream<'_> {
+        pub fn stream(self: Pin<&mut Self>) -> OStream<'_> {
             self.parent().stream()
         }
     }
@@ -614,7 +614,7 @@ mod owners {
         pub const fn new() -> Self {
             Self
         }
-        pub fn and(&self, _stream: &mut NativeOStream<'_>) {}
+        pub fn and(&self, _stream: &mut OStream<'_>) {}
     }
     // Source: base/logging.h:588-595
     #[cfg(windows)]
@@ -732,7 +732,7 @@ mod owners {
                 pub fn parent(self: Pin<&mut Self>) -> Pin<&mut LogMessage> {
                     unsafe { self.map_unchecked_mut(|x| &mut x.parent) }
                 }
-                pub fn stream(self: Pin<&mut Self>) -> NativeOStream<'_> {
+                pub fn stream(self: Pin<&mut Self>) -> OStream<'_> {
                     self.parent().stream()
                 }
                 pub unsafe fn AppendError(mut self: Pin<&mut Self>) {
@@ -786,7 +786,7 @@ mod owners {
                 pub fn parent(self: Pin<&mut Self>) -> Pin<&mut $name> {
                     unsafe { self.map_unchecked_mut(|x| &mut x.parent) }
                 }
-                pub fn stream(self: Pin<&mut Self>) -> NativeOStream<'_> {
+                pub fn stream(self: Pin<&mut Self>) -> OStream<'_> {
                     self.parent().stream()
                 }
             }
@@ -842,9 +842,8 @@ mod owners {
     }
     #[cfg(windows)]
     unsafe fn SetLogFatalCrashKeyFuncGetter() -> Option<SetLogFatalCrashKeyFunc> {
-        use crate::base::no_destructor::NativeLocalStatic;
-        static FUNC: NativeLocalStatic<Option<SetLogFatalCrashKeyFunc>> =
-            NativeLocalStatic::uninitialized();
+        use crate::base::no_destructor::LocalStatic;
+        static FUNC: LocalStatic<Option<SetLogFatalCrashKeyFunc>> = LocalStatic::uninitialized();
         unsafe {
             *FUNC.get_or_initialize(|out| out.write(rechrom_logging_resolve_bootstrap_fatal_key()))
         }
@@ -889,9 +888,9 @@ mod owners {
                 debug::crash_logging::{
                     AllocateCrashKeyString, CrashKeySize, CrashKeyString, SetCrashKeyString,
                 },
-                no_destructor::NativeLocalStatic,
+                no_destructor::LocalStatic,
             };
-            static KEY: NativeLocalStatic<*mut CrashKeyString> = NativeLocalStatic::uninitialized();
+            static KEY: LocalStatic<*mut CrashKeyString> = LocalStatic::uninitialized();
             let crash_key = *KEY.get_or_initialize(|out| {
                 out.write(AllocateCrashKeyString(
                     c"LOG_FATAL".as_ptr(),
@@ -906,7 +905,7 @@ mod owners {
         }
     }
 }
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 pub use owners::*;
 // Source: base/logging.cc:196-203
 fn log_severity_name(severity: i32) -> *const u8 {
@@ -1183,11 +1182,11 @@ unsafe fn TraceLogMessage(file: *const u8, line: i32, message: &[u8]) {
 #[cfg(any(unix, target_os = "fuchsia"))]
 unsafe fn GetLoggingLock() -> core::pin::Pin<&'static crate::base::synchronization::lock::Lock> {
     use crate::base::{
-        no_destructor::{NativeLocalStatic, NoDestructor},
+        no_destructor::{LocalStatic, NoDestructor},
         synchronization::lock::Lock,
     };
     // This one guard/storage belongs only to this native declaration.
-    static LOCK: NativeLocalStatic<NoDestructor<Lock>> = NativeLocalStatic::uninitialized();
+    static LOCK: LocalStatic<NoDestructor<Lock>> = LocalStatic::uninitialized();
     unsafe {
         let p = LOCK.get_or_initialize(|out| {
             NoDestructor::construct_at(out, |lock| {

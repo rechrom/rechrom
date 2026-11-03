@@ -17,7 +17,7 @@ use layoutng_assembly::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     internal::{
-        algorithm_entry::NativeAlgorithm,
+        algorithm_entry::LayoutAlgorithmImplementation,
         block_node::BlockNode,
         break_appeal::{kBreakAppealPerfect, BreakAppeal},
         constraint_space::{AutoSizeBehavior, ConstraintSpace, FragmentationType},
@@ -90,7 +90,7 @@ impl DerefMut for ColumnLayoutAlgorithm {
         &mut self.base
     }
 }
-impl NativeAlgorithm for ColumnLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for ColumnLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_multicol.Layout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_multicol.Measure";
 

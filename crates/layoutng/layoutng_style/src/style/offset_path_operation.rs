@@ -94,7 +94,7 @@ pub struct ShapeOffsetPathOperation {
 }
 #[allow(non_snake_case)]
 impl ShapeOffsetPathOperation {
-    /// Shape is allocated in the active native layout heap.
+    /// Shape is allocated in the active source layout heap.
     pub unsafe fn new(
         shape: *mut dyn super::basic_shapes::BasicShape,
         coord_box: CoordBox,

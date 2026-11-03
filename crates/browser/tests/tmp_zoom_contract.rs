@@ -49,7 +49,7 @@ fn zoom_contract() {
     for i in 0..d.NodeCount() {
         let n = d.Node(i);
         if let Some(s) = d.ResolvedStyleFor(i) {
-            let st = unsafe { &*s.native_style.Get() };
+            let st = unsafe { &*s.computed_style_owner.Get() };
             eprintln!("ZSTYLE id={} name={} class={:?} zoom={} width={:?} height={:?} marginL={:?} paddingL={:?}",n.Id(),n.Name(),n.FindAttribute("class").map(|a|a.value.as_str()),st.EffectiveZoom(),st.Width(),st.Height(),st.MarginLeft(),st.PaddingLeft())
         }
     }

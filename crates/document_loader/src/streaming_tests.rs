@@ -202,6 +202,59 @@ fn script_pause_applies_backpressure_and_eof_is_distinct_from_parser_completion(
     assert_eq!(result.parser.status, HTMLParserStatus::kFinished);
     assert!(text(&owner).contains("writtenafter"));
 }
+
+#[test]
+fn resumed_parser_rechecks_a_stream_whose_wake_preceded_need_more_input() {
+    let (mut loader, events, _, _) = setup();
+    events.borrow_mut().push_back(head());
+    loader.PollResponse().unwrap();
+    let mut owner = DOM::new();
+    loader
+        .BeginParsing(owner.GetDocumentMut(), &mut Host)
+        .unwrap();
+    let prefix = b"<body>before<script>hold()</script>buffered";
+    events.borrow_mut().extend([
+        URLLoadEvent::Data(prefix.to_vec()),
+        URLLoadEvent::Data(b"<p>tail</p></body>".to_vec()),
+        URLLoadEvent::Finished,
+    ]);
+    let budget = DocumentLoadBudget {
+        body_bytes: prefix.len(),
+        parser_tokens: 4096,
+    };
+    assert_eq!(
+        loader
+            .Pump(owner.GetDocumentMut(), &mut Host, budget)
+            .unwrap()
+            .parser
+            .status,
+        HTMLParserStatus::kWaitingForScript
+    );
+    loader.ResumeAfterScript().unwrap();
+    let resumed = loader
+        .Pump(owner.GetDocumentMut(), &mut Host, budget)
+        .unwrap();
+    assert_eq!(resumed.parser.status, HTMLParserStatus::kNeedMoreInput);
+    assert!(
+        resumed.immediate_work_pending,
+        "the parser must recheck input which may have queued before it needed it"
+    );
+    assert!(text(&owner).contains("buffered"));
+    assert!(!text(&owner).contains("tail"));
+    for _ in 0..4 {
+        if loader
+            .Pump(owner.GetDocumentMut(), &mut Host, budget)
+            .unwrap()
+            .parser
+            .status
+            == HTMLParserStatus::kFinished
+        {
+            break;
+        }
+    }
+    assert_eq!(loader.Status(), DocumentLoaderStatus::kFinished);
+    assert!(text(&owner).contains("tail"));
+}
 #[test]
 fn yielding_does_not_read_more_body_and_cancellation_preserves_dom() {
     let (mut loader, events, polls, dropped) = setup();

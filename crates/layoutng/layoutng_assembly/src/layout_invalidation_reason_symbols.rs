@@ -24,7 +24,7 @@ reason!(kStyleChange, b"Style changed\0");
 reason!(kTextChanged, b"Text changed\0");
 reason!(kChildChanged, b"Child changed\0");
 
-// Labels also verified against the unchanged source build's native
+// Labels also verified against the unchanged source build's source
 // layout_invalidation_reason.cc.o string data.
 reason!(kTableChanged, b"Table changed\0");
 reason!(kAttributeChanged, b"Attribute changed\0");

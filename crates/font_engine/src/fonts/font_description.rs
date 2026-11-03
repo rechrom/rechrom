@@ -187,7 +187,7 @@ pub struct FontDescription {
     size_adjust_: FontSizeAdjust,
     resolved_font_features_: ResolvedFontFeatures,
     // Immutable Style -> FontEngine value boundary. Entries use the requested
-    // CSS family's spelling, never a native/internal face name. Registry lookup
+    // CSS family's spelling, never a platform/internal face name. Registry lookup
     // and its case folding belong to Style, before publishing this snapshot.
     resolved_font_features_for_families_: Arc<[(AtomicString, ResolvedFontFeatures)]>,
     font_selection_request_: FontSelectionRequest,
@@ -534,6 +534,11 @@ impl FontDescription {
         unsafe { &*LayoutLocale::ValueOrDefault(self.Locale()) }
     }
 
+    // cpp: third_party/blink/renderer/platform/fonts/font_description.h:298-302
+    pub fn GetScript(&self) -> i32 {
+        self.LocaleOrDefault().GetScript()
+    }
+
     // cpp: font_engine/fonts/font_description.h:317-322
     pub fn ComputedWordSpacing(&self) -> &Length {
         &self.word_spacing_
@@ -821,7 +826,7 @@ mod core_font_input_tests {
         assert!(inherited == d);
     }
     #[test]
-    fn text_rendering_updates_native_typesetting_features() {
+    fn text_rendering_updates_platform_typesetting_features() {
         let mut d = FontDescription::default();
         d.SetTextRendering(TextRenderingMode::kOptimizeLegibility);
         assert_eq!(d.TextRendering(), TextRenderingMode::kOptimizeLegibility);

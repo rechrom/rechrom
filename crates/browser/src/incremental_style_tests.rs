@@ -62,7 +62,7 @@ fn fixture(css: &str) -> DOM {
 
 #[test]
 fn inline_style_without_selector_dependency_stays_local_and_matches_old_fallback() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let css="body:has(.unrelated){color:blue}.box + .box{height:17px}.box{--w:10px;width:var(--w)}span{color:inherit}::view-transition-old(sb){opacity:0}html:active-view-transition-type(aimc)::view-transition-new(sb){opacity:0}";
         let mut optimized = fixture(css);
         let mut baseline = fixture(css);
@@ -109,7 +109,7 @@ fn inline_style_without_selector_dependency_stays_local_and_matches_old_fallback
 
 #[test]
 fn inline_style_selector_dependency_and_unknown_syntax_keep_full_fallback() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner=fixture(".box{width:10px}body:has(:is(#a[style],.missing)) #b{width:99px}#a[style] + #b{height:44px}");
         attribute(&mut owner, "a", "style", "color:red");
         update(&mut owner);
@@ -154,8 +154,8 @@ fn inline_style_selector_dependency_and_unknown_syntax_keep_full_fallback() {
 }
 
 #[test]
-fn inline_style_control_native_geometry_computed_style_and_pixels_match_old_fallback() {
-    crate::native_test_thread::run(|| {
+fn inline_style_control_source_geometry_computed_style_and_pixels_match_old_fallback() {
+    crate::test_thread::run(|| {
         use javascript::{
             javascript_runtime::JavaScriptRuntime,
             quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
@@ -257,7 +257,7 @@ fn inline_style_control_native_geometry_computed_style_and_pixels_match_old_fall
 
 #[test]
 fn no_op_and_local_mutation_preserve_rule_and_style_handles() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner =
             fixture(".box{height:20px}.active .box{height:40px}.active span{color:red}");
         let c = element(owner.GetDocument(), "c");
@@ -284,7 +284,7 @@ fn no_op_and_local_mutation_preserve_rule_and_style_handles() {
 
 #[test]
 fn sibling_selectors_and_inherited_variables_match_full_recalc() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box{--size:10px;width:var(--size)}.selected + .box{width:70px}.selected ~ .box span{color:blue}.selected{--size:30px}span{height:var(--size)}");
         attribute(&mut owner, "a", "class", "box selected");
         update(&mut owner);
@@ -306,7 +306,7 @@ fn sibling_selectors_and_inherited_variables_match_full_recalc() {
 
 #[test]
 fn child_order_empty_and_reparenting_match_full_recalc() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box:first-child{width:11px}.box:last-child{height:33px}.box:empty{width:44px}#right span{color:blue}");
         let a = element(owner.GetDocument(), "a");
         let left = element(owner.GetDocument(), "left");
@@ -329,7 +329,7 @@ fn child_order_empty_and_reparenting_match_full_recalc() {
 
 #[test]
 fn stylesheet_media_and_hidden_subtree_updates_match_full_recalc() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box{width:10px}@media(min-width:500px){.box{width:80px}}");
         let a = element(owner.GetDocument(), "a");
         let env = media_queries::media_values_cached::MediaValuesCachedData {
@@ -384,7 +384,7 @@ fn stylesheet_media_and_hidden_subtree_updates_match_full_recalc() {
 
 #[test]
 fn paint_only_and_ineffective_changes_report_correct_impact() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box{width:20px;color:black}.red{color:red}");
         attribute(&mut owner, "a", "class", "box red");
         update(&mut owner);
@@ -404,7 +404,7 @@ fn paint_only_and_ineffective_changes_report_correct_impact() {
 
 #[test]
 fn relational_selector_and_pseudo_content_match_full_recalc() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture("section:has(.selected){width:90px}section:has(.selected) + section{height:55px}.selected::before{content:'prefix';color:red}");
         attribute(&mut owner, "a", "class", "box selected");
         update(&mut owner);
@@ -417,7 +417,7 @@ fn relational_selector_and_pseudo_content_match_full_recalc() {
 
 #[test]
 fn unchanged_inline_declarations_are_retained_and_edits_replace_them() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture("");
         attribute(&mut owner, "a", "style", "width:40px;color:red");
         update(&mut owner);
@@ -441,7 +441,7 @@ fn unchanged_inline_declarations_are_retained_and_edits_replace_them() {
 
 #[test]
 fn removing_and_reconnecting_stylesheet_owner_updates_other_subtrees() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box{width:10px}");
         let left = element(owner.GetDocument(), "left");
         let style = owner.GetDocumentMut().CreateElementDefault(
@@ -477,7 +477,7 @@ fn removing_and_reconnecting_stylesheet_owner_updates_other_subtrees() {
 
 #[test]
 fn animation_and_control_state_changes_use_the_same_invalidation_path() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture("span{color:inherit}");
         let a = element(owner.GetDocument(), "a");
         let c = element(owner.GetDocument(), "c");
@@ -531,7 +531,7 @@ fn animation_and_control_state_changes_use_the_same_invalidation_path() {
 
 #[test]
 fn image_completion_updates_consumers_without_recalculating_unrelated_styles() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box + .box{padding:2px}body:has(.active){color:red}#a{background-image:url(test:background)}#b{mask-image:url(test:mask)}#c::before{content:'icon';background-image:url(test:pseudo)}");
         let other = element(owner.GetDocument(), "other");
         let handle = owner.GetDocument().ResolvedStyleHandle(other).unwrap();
@@ -550,6 +550,7 @@ fn image_completion_updates_consumers_without_recalculating_unrelated_styles() {
                     natural_height: 20.0,
                     resolution_scale: 1.0,
                     orientation: Default::default(),
+                    known_to_be_opaque: false,
                 },
             );
             assert!(!owner.GetDocument().StyleState().all_dirty);
@@ -590,7 +591,7 @@ fn image_completion_updates_consumers_without_recalculating_unrelated_styles() {
 #[test]
 #[ignore = "manual Debug resource and resident heap timing"]
 fn profile_loading_resource_and_shared_heap() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut html = String::from("<html><body>");
         for i in 0..1200 {
             html.push_str(&format!(
@@ -617,6 +618,7 @@ fn profile_loading_resource_and_shared_heap() {
                 natural_height: 20.0,
                 resolution_scale: 1.0,
                 orientation: Default::default(),
+                known_to_be_opaque: false,
             },
         );
         update(&mut owner);
@@ -655,7 +657,7 @@ fn profile_loading_resource_and_shared_heap() {
 
 #[test]
 fn image_notification_does_not_hide_simultaneous_dom_invalidation() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture("#a{background-image:url(test:background)}.active{--size:29px;color:red}#leaf{width:var(--size,10px)}");
         owner.GetDocumentMut().SetImageResource(
             "test:background".into(),
@@ -665,6 +667,7 @@ fn image_notification_does_not_hide_simultaneous_dom_invalidation() {
                 natural_height: 20.0,
                 resolution_scale: 1.0,
                 orientation: Default::default(),
+                known_to_be_opaque: false,
             },
         );
         attribute(&mut owner, "a", "class", "box active");
@@ -697,7 +700,7 @@ fn image_notification_does_not_hide_simultaneous_dom_invalidation() {
 
 #[test]
 fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         fn find(
             root: &layoutng_assembly::fragment_tree::FragmentPaintData,
             id: u64,
@@ -761,7 +764,7 @@ fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
 
 #[test]
 fn coalesced_nonempty_text_keeps_selector_styles_and_updates_content() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box + .box{width:70px}.box{color:red}");
         let leaf = element(owner.GetDocument(), "leaf");
         let text = owner.GetDocument().Node(leaf).Children()[0];
@@ -786,7 +789,7 @@ fn coalesced_nonempty_text_keeps_selector_styles_and_updates_content() {
 
 #[test]
 fn inherited_custom_properties_remain_isolated_after_local_override() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner =
             fixture("section{--size:20px}.box{width:var(--size)}span{height:var(--size)}");
         let a = element(owner.GetDocument(), "a");
@@ -829,7 +832,7 @@ fn inherited_custom_properties_remain_isolated_after_local_override() {
 
 #[test]
 fn character_data_keeps_textarea_default_and_style_sheet_invalidation() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = html::html_parser::ParseHTML("<html><head><style id=sheet>textarea{width:20px}</style></head><body><textarea id=control placeholder=hint>old</textarea></body></html>");
         owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(
             "textarea{width:20px}textarea:placeholder-shown{width:40px}",
@@ -875,7 +878,7 @@ fn character_data_keeps_textarea_default_and_style_sheet_invalidation() {
 
 #[test]
 fn repeated_media_conditions_refresh_for_environment_and_cssom() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(".box{width:10px}@media screen and (min-width:600px){.box{width:80px}.box::before{content:'wide'}}@media(prefers-color-scheme:dark){.box{height:90px}}");
         let a = element(owner.GetDocument(), "a");
         let mut env = media_queries::media_values_cached::MediaValuesCachedData {
@@ -935,7 +938,7 @@ fn repeated_media_conditions_refresh_for_environment_and_cssom() {
 
 #[test]
 fn content_on_originating_element_keeps_pseudo_generated_content() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = fixture(
             ".box{content:'ordinary';width:23px}.box::before{content:'pseudo';height:12px}",
         );
@@ -962,7 +965,7 @@ fn content_on_originating_element_keeps_pseudo_generated_content() {
 
 #[test]
 fn bounded_has_class_membership_structure_moves_cascade_and_pseudo_match_full_recalc() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         fn owner() -> DOM {
             let mut owner = html::html_parser::ParseHTML("<html><body><section id=unrelated><span id=retained>outside</span></section><section id=wrap><div id=host class=host><div id=bin><div id=x class=item></div><div id=y></div></div><div id=target class=target></div></div><div id=host2 class=host><div id=bin2></div><div id=target2 class=target></div></div></section></body></html>");
             owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(".target{width:20px;height:10px}.host:has(.active) .target{height:42px;color:red}.host:has(.item:first-child) .target{width:11px}.host:has(.active,#x) .target{--custom:29px}.host:has(.active) .target::before{content:'active';width:var(--custom,7px)}.host + .host{padding:2px}"));
@@ -1077,7 +1080,7 @@ fn bounded_has_class_membership_structure_moves_cascade_and_pseudo_match_full_re
 
 #[test]
 fn bounded_has_nonlocal_and_unknown_grammar_still_recalculates_the_root() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         for selector in [
             ".box:has(.active) + .box",
             "body .box:has(.active)",
@@ -1099,8 +1102,8 @@ fn bounded_has_nonlocal_and_unknown_grammar_still_recalculates_the_root() {
 }
 
 #[test]
-fn bounded_has_native_control_cssom_geometry_pixels_match_full_recalc() {
-    crate::native_test_thread::run(|| {
+fn bounded_has_source_control_cssom_geometry_pixels_match_full_recalc() {
+    crate::test_thread::run(|| {
         use javascript::{
             javascript_runtime::JavaScriptRuntime,
             quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
@@ -1191,8 +1194,8 @@ fn bounded_has_native_control_cssom_geometry_pixels_match_full_recalc() {
 }
 
 #[test]
-fn parent_changed_stops_at_unchanged_children_and_matches_native_fresh_pixels() {
-    crate::native_test_thread::run(|| {
+fn parent_changed_stops_at_unchanged_children_and_matches_source_fresh_pixels() {
+    crate::test_thread::run(|| {
         fn owner() -> DOM {
             let mut owner=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=a><div id=mid class=branch><div id=leaf><span id=text>nested text</span><textarea id=q>abc</textarea></div></div></div><div id=outside>outside text</div></body></html>");
             owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#a{width:80px;height:30px;--label:'before';--tone:black}#mid{width:50%;height:inherit}#leaf{height:inherit;color:var(--tone)}#a::before{content:var(--label);width:inherit;height:2px;background:red;opacity:inherit}textarea{width:40px;height:10px;border:0;padding:0}"));
@@ -1302,7 +1305,7 @@ fn parent_changed_stops_at_unchanged_children_and_matches_native_fresh_pixels() 
 
 #[test]
 fn parent_changed_explicit_variable_inherit_and_custom_override_remain_exact() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner=html::html_parser::ParseHTML("<html><body><div id=a><div id=mid><div id=deep></div></div><div id=isolated><span id=isolatedleaf>text</span></div></div></body></html>");
         owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#a{width:10px;--keyword:inherit;--tone:red}#mid{width:var(--keyword,inherit)}#deep{width:inherit}#isolated{--tone:black}#isolatedleaf{color:var(--tone)}"));
         update(&mut owner);
@@ -1335,7 +1338,7 @@ fn parent_changed_explicit_variable_inherit_and_custom_override_remain_exact() {
 
 #[test]
 fn parent_changed_does_not_shorten_node_or_children_selector_subtrees() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner=html::html_parser::ParseHTML("<html><body><div id=a><div id=mid><section id=branch class=branch><div><span id=deep>deep</span></div></section></div></div></body></html>");
         owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#deep{height:10px;width:10px}.active #deep{height:77px}#mid > .branch:first-child #deep{width:33px}"));
         update(&mut owner);
@@ -1398,7 +1401,7 @@ fn parent_changed_does_not_shorten_node_or_children_selector_subtrees() {
 
 #[test]
 fn parent_changed_bypasses_resource_only_shortcut_when_inherited_inputs_change() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let mut owner = html::html_parser::ParseHTML(
             "<html><body><div id=a><div id=mid><span id=deep>deep</span></div></div></body></html>",
         );
@@ -1413,6 +1416,7 @@ fn parent_changed_bypasses_resource_only_shortcut_when_inherited_inputs_change()
                 natural_height: 20.,
                 resolution_scale: 1.,
                 orientation: Default::default(),
+                known_to_be_opaque: false,
             },
         );
         update(&mut owner);

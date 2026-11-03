@@ -92,10 +92,10 @@ pub struct WheelInjection {
     pub delta_y: f64,
     pub phase: String,
     pub precise: bool,
-    pub native_timestamp_seconds: Option<f64>,
-    pub native_phase: Option<u64>,
+    pub timestamp_seconds: Option<f64>,
+    pub platform_phase: Option<u64>,
     pub momentum_phase: Option<u64>,
-    pub native_scale_factor: Option<f64>,
+    pub scale_factor: Option<f64>,
 }
 pub type WheelHandler = Arc<dyn Fn(WheelInjection) -> Result<(), String> + Send + Sync>;
 fn wheel_handler() -> &'static std::sync::Mutex<Option<WheelHandler>> {
@@ -288,10 +288,10 @@ impl WheelInjection {
             delta_y: number("delta_y", -1_000_000.0)?,
             phase: phase.into(),
             precise,
-            native_timestamp_seconds: optional_number("native_timestamp_seconds")?,
-            native_phase: optional_u64("native_phase")?,
+            timestamp_seconds: optional_number("timestamp_seconds")?,
+            platform_phase: optional_u64("platform_phase")?,
             momentum_phase: optional_u64("momentum_phase")?,
-            native_scale_factor: optional_number("native_scale_factor")?,
+            scale_factor: optional_number("scale_factor")?,
         })
     }
 }
@@ -830,8 +830,8 @@ pub fn analyze_snapshot(snapshot: &Snapshot) -> Value {
                 span.name.as_str(),
                 "LayoutEngine.Layout"
                     | "LayoutEngine.RunLayout"
-                    | "LayoutEngine.NativeLayout"
-                    | "LayoutEngine.RunNativeLayoutWithoutPublication"
+                    | "LayoutEngine.Layout"
+                    | "LayoutEngine.RunLayoutWithoutPublication"
                     | "LayoutEngine.PopulatePaintData"
                     | "Paint.RecordPaint"
                     | "PaintLayerPainter.Paint"
@@ -1287,13 +1287,7 @@ mod tests {
                     10,
                     BTreeMap::from([("records_reused".into(), 1.0)]),
                 ),
-                event(
-                    "layout",
-                    "LayoutEngine.NativeLayout",
-                    1,
-                    11,
-                    BTreeMap::new(),
-                ),
+                event("layout", "LayoutEngine.Layout", 1, 11, BTreeMap::new()),
                 event("render", "LayerTilePaint", 2, 10, cache()),
                 event("lifecycle", "Page.UpdateFrameIfNeeded", 2, 10, scroll()),
                 event("paint", "Paint.RecordPaint", 2, 10, BTreeMap::new()),
@@ -1307,13 +1301,7 @@ mod tests {
                 event("render", "LayerTilePaint", 4, 10, cache()), // Mouse input alone proves no scroll.
                 event("render", "LayerTilePaint", 5, 10, cache()),
                 event("lifecycle", "Page.UpdateFrameIfNeeded", 5, 10, scroll()),
-                event(
-                    "layout",
-                    "LayoutEngine.NativeLayout",
-                    5,
-                    10,
-                    BTreeMap::new(),
-                ),
+                event("layout", "LayoutEngine.Layout", 5, 10, BTreeMap::new()),
             ],
         };
         let summary = analyze_snapshot(&snapshot);

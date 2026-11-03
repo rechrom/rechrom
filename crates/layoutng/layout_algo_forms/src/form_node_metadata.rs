@@ -8,7 +8,7 @@ use layoutng_assembly::internal::form_node_metadata::{
     HTMLMarqueeElement, HTMLOutputElement, HTMLSelectElement, HTMLTextAreaElement,
     SliderThumbElement, SpinButtonElement, TextControlElement, TextControlInnerEditorElement,
 };
-use layoutng_assembly::internal::layout_input::{NativeNodeConstructionData, NodeKind};
+use layoutng_assembly::internal::layout_input::{NodeConstructionData, NodeKind};
 use layoutng_assembly::internal::layout_node_metadata::{Element, ElementType, Node, NodeDowncast};
 use layoutng_style::style::computed_style::ComputedStyle;
 
@@ -20,7 +20,7 @@ fn Require(condition: bool, message: &'static str) {
 }
 
 // cpp: layoutng_forms/form_node_metadata.cc:18-34
-fn ControlType(input: &NativeNodeConstructionData) -> Type {
+fn ControlType(input: &NodeConstructionData) -> Type {
     if input.kind == NodeKind::kFieldset {
         Require(
             input.element.as_ref().is_none_or(|element| {
@@ -66,7 +66,7 @@ fn IsSelectType(control_type: Type) -> bool {
 }
 
 fn html_base(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
     element_type: ElementType,
     form_control: bool,
@@ -78,7 +78,7 @@ fn html_base(
 
 // cpp: layoutng_forms/form_node_metadata.cc:46-67
 fn control_base(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
     element_type: ElementType,
 ) -> HTMLFormControlElement {
@@ -126,7 +126,7 @@ fn control_base(
 }
 
 fn state_base(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
     element_type: ElementType,
 ) -> HTMLFormControlElementWithState {
@@ -136,7 +136,7 @@ fn state_base(
 }
 
 fn text_control_base(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
     element_type: ElementType,
 ) -> TextControlElement {
@@ -144,10 +144,7 @@ fn text_control_base(
 }
 
 // cpp: layoutng_forms/form_node_metadata.cc:69-71
-fn input_element(
-    input: &NativeNodeConstructionData,
-    style: *const ComputedStyle,
-) -> HTMLInputElement {
+fn input_element(input: &NodeConstructionData, style: *const ComputedStyle) -> HTMLInputElement {
     let input_node = HTMLInputElement::from_resolved_text_control(text_control_base(
         input,
         style,
@@ -239,10 +236,7 @@ fn ShouldApplyMiddleEllipsis(input: &HTMLInputElement) -> bool {
 }
 
 // cpp: layoutng_forms/form_node_metadata.cc:109-116
-fn select_element(
-    input: &NativeNodeConstructionData,
-    style: *const ComputedStyle,
-) -> HTMLSelectElement {
+fn select_element(input: &NodeConstructionData, style: *const ComputedStyle) -> HTMLSelectElement {
     let select = HTMLSelectElement {
         state: state_base(input, style, ElementType::kHTMLSelectElement),
     };
@@ -255,7 +249,7 @@ fn select_element(
 
 // cpp: layoutng_forms/form_node_metadata.cc:117-125
 fn text_area_element(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> HTMLTextAreaElement {
     let text_control = text_control_base(input, style, ElementType::kHTMLTextAreaElement);
@@ -276,10 +270,7 @@ fn text_area_element(
 }
 
 // cpp: layoutng_forms/form_node_metadata.cc:126-140
-fn button_element(
-    input: &NativeNodeConstructionData,
-    style: *const ComputedStyle,
-) -> HTMLButtonElement {
+fn button_element(input: &NodeConstructionData, style: *const ComputedStyle) -> HTMLButtonElement {
     let button = HTMLButtonElement {
         control: control_base(input, style, ElementType::kHTMLButtonElement),
     };
@@ -290,7 +281,7 @@ fn button_element(
     button
 }
 fn fieldset_element(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> HTMLFieldSetElement {
     let fieldset = HTMLFieldSetElement {
@@ -302,10 +293,7 @@ fn fieldset_element(
     );
     fieldset
 }
-fn output_element(
-    input: &NativeNodeConstructionData,
-    style: *const ComputedStyle,
-) -> HTMLOutputElement {
+fn output_element(input: &NodeConstructionData, style: *const ComputedStyle) -> HTMLOutputElement {
     let output = HTMLOutputElement {
         control: control_base(input, style, ElementType::kHTMLOutputElement),
     };
@@ -317,10 +305,7 @@ fn output_element(
 }
 
 // cpp: layoutng_forms/form_node_metadata.cc:141-178
-fn legend_element(
-    input: &NativeNodeConstructionData,
-    style: *const ComputedStyle,
-) -> HTMLLegendElement {
+fn legend_element(input: &NodeConstructionData, style: *const ComputedStyle) -> HTMLLegendElement {
     let legend = HTMLLegendElement {
         html: html_base(input, style, ElementType::kHTMLLegendElement, false),
     };
@@ -331,7 +316,7 @@ fn legend_element(
     legend
 }
 fn marquee_element(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> HTMLMarqueeElement {
     let marquee = HTMLMarqueeElement {
@@ -352,7 +337,7 @@ fn IsHorizontal(marquee: &HTMLMarqueeElement) -> bool {
         .is_none_or(|element| element.marquee_horizontal)
 }
 fn slider_thumb_element(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> SliderThumbElement {
     let thumb = SliderThumbElement {
@@ -367,7 +352,7 @@ fn slider_thumb_element(
     thumb
 }
 fn inner_editor_element(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> TextControlInnerEditorElement {
     let editor = TextControlInnerEditorElement {
@@ -391,7 +376,7 @@ fn inner_editor_element(
     editor
 }
 fn spin_button_element(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> SpinButtonElement {
     let button = SpinButtonElement {
@@ -419,7 +404,7 @@ pub fn IsSliderThumb(node: *const Node) -> bool {
 
 // cpp: layoutng_forms/form_node_metadata.cc:186-199
 pub fn CreateFormElementMetadata(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> *mut HTMLElement {
     let data = input.element.as_ref();
@@ -481,7 +466,7 @@ impl FormNodeMetadataExternal for FormNodeMetadataProvider {
         IsHorizontal(marquee)
     }
     fn CreateFormElementMetadata(
-        input: &NativeNodeConstructionData,
+        input: &NodeConstructionData,
         style: *const ComputedStyle,
     ) -> *mut HTMLElement {
         CreateFormElementMetadata(input, style)
@@ -494,7 +479,7 @@ impl FormNodeMetadataExternal for FormNodeMetadataProvider {
 // The callback stored in LayoutObjectFactorySet uses Element*, while the
 // source implementation returns the covariant HTMLElement*.
 pub fn CreateFormsMetadata(
-    input: &NativeNodeConstructionData,
+    input: &NodeConstructionData,
     style: *const ComputedStyle,
 ) -> *mut Element {
     CreateFormElementMetadata(input, style).cast()

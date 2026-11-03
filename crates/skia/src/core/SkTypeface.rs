@@ -1103,7 +1103,7 @@ unsafe fn coretext_decoder(
 ) -> Option<SkTypefaceRef> {
     unsafe {
         crate::src::ports::SkTypeface_mac_ct::SkTypeface_Mac::MakeFromStream(
-            crate::src::core::SkStream::TransferableStreamAsset::from_native_transferable(stream),
+            crate::src::core::SkStream::TransferableStreamAsset::from_transferable_stream(stream),
             args,
         )
     }

@@ -13,8 +13,8 @@ compile_error!("Alias requires actual selected C++ symbol/ABI binding; no metada
 
 // Source: base/debug/alias.h:117-119
 macro_rules! NO_CODE_FOLDING {
-    (@source $native_line:expr) => {
-        let line_number: core::ffi::c_int = $native_line;
+    (@source $line:expr) => {
+        let line_number: core::ffi::c_int = $line;
         unsafe {
             $crate::base::debug::alias::Alias(core::ptr::addr_of!(line_number).cast());
         }

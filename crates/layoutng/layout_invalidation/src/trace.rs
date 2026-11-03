@@ -1,9 +1,10 @@
-//! Package-owned names for native invalidation adapter work.
+//! Package-owned names for source invalidation adapter work.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TracePhase {
     CollectTreeFacts,
     EditingInvalidation,
+    ImageInvalidation,
     SelectionPaintInvalidation,
     CollectSubtree,
     PrepareSubtree,
@@ -25,6 +26,7 @@ impl TracePhase {
         match self {
             Self::CollectTreeFacts => "layout_invalidation.CollectTreeFacts",
             Self::EditingInvalidation => "layout_invalidation.EditingInvalidation",
+            Self::ImageInvalidation => "layout_invalidation.ImageInvalidation",
             Self::SelectionPaintInvalidation => "layout_invalidation.SelectionPaintInvalidation",
             Self::CollectSubtree => "layout_invalidation.CollectSubtree",
             Self::PrepareSubtree => "layout_invalidation.PrepareSubtree",

@@ -2,7 +2,7 @@
 
 //! Cascade and computed-style resolution.
 //!
-//! Resolve consumes retained match results and produces canonical native
+//! Resolve consumes retained match results and produces canonical computed style
 //! ComputedStyle values. It does not own parser, RuleSet, DOM traversal,
 //! invalidation, commit, or document lifecycle state.
 
@@ -82,6 +82,7 @@ pub mod font_builder;
 pub mod font_style_resolver;
 pub mod longhand_dispatch;
 pub mod matched_properties_cache;
+pub mod persistent_hash_trie;
 pub mod position_repeat_application;
 pub mod production_style_builder;
 pub mod selector_filter_parent_scope;

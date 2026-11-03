@@ -4,7 +4,7 @@ use core::{cell::UnsafeCell, marker::PhantomPinned, mem::MaybeUninit, pin::Pin};
 // Source: base/synchronization/lock_impl.h:45-122. Actual mutex stays at its final address.
 #[cfg(any(base_is_posix, base_is_fuchsia))]
 pub struct LockImpl {
-    pub(crate) native_handle_: UnsafeCell<MaybeUninit<libc::pthread_mutex_t>>,
+    pub(crate) handle_: UnsafeCell<MaybeUninit<libc::pthread_mutex_t>>,
     pub(crate) _pin: PhantomPinned,
 }
 #[cfg(any(base_is_posix, base_is_fuchsia))]
@@ -14,7 +14,7 @@ unsafe impl Sync for LockImpl {}
 #[cfg(any(base_is_posix, base_is_fuchsia))]
 impl LockImpl {
     pub(crate) unsafe fn native_handle(&self) -> *mut libc::pthread_mutex_t {
-        (*self.native_handle_.get()).as_mut_ptr()
+        (*self.handle_.get()).as_mut_ptr()
     }
     // Source: base/synchronization/lock_impl.h:125-138
     pub(crate) unsafe fn Lock(&self, tags: &LockMetricTagList) {

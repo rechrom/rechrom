@@ -18514,7 +18514,7 @@ impl ComputedStyleBuilderBase {
     }
 }
 
-// cpp: foundation/text/native/text_justify.h:14-19
+// cpp: foundation/text/source/text_justify.h:14-19
 fn decode_textjustify(bits: u32) -> TextJustify {
     match bits {
         0 => TextJustify::kAuto,
@@ -19533,7 +19533,7 @@ impl ComputedStyleBuilderBase {
     }
 }
 
-// cpp: foundation/text/native/unicode_bidi.h:31-38
+// cpp: foundation/text/source/unicode_bidi.h:31-38
 fn unicode_bidi_from_bits(bits: u32) -> UnicodeBidi {
     match bits {
         0 => UnicodeBidi::kNormal,
@@ -20033,7 +20033,7 @@ impl ComputedStyleBuilderBase {
         self.data_.set_visibility_bits(EVisibility::kVisible as u32);
     }
 }
-// cpp: foundation/text/native/writing_mode.h:44-53
+// cpp: foundation/text/source/writing_mode.h:44-53
 fn decode_writingmode(bits: u32) -> WritingMode {
     match bits {
         0 => WritingMode::kHorizontalTb,

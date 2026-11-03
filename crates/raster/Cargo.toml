@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 compositor_core = { package = "compositor", path = "../compositor" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+font_engine = { path = "../font_engine" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 paint = { path = "../paint" }
@@ -17,4 +18,3 @@ default = []
 artifact_test_support = []
 
 [dev-dependencies]
-font_engine = { path = "../font_engine" }

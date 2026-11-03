@@ -1,7 +1,9 @@
 #![allow(non_snake_case)]
 
 use cssom::CSSFontFaceRule;
+use font_engine::FontFeatureValue;
 use layoutng_assembly::internal::layout_input::FontUnicodeRange;
+use std::collections::BTreeMap;
 
 fn Unquote(text: &str) -> &str {
     let text = text.trim();
@@ -148,6 +150,43 @@ fn FontWeight(input: &str) -> Option<f64> {
     }
 }
 
+// cpp: core/css/font_face.cc:1120-1127
+// cpp: core/css/resolver/style_builder_converter.cc:676-705
+fn ParseFontFeatureSettings(input: &str) -> Option<Vec<FontFeatureValue>> {
+    let input = input.trim();
+    if input.eq_ignore_ascii_case("normal") {
+        return Some(Vec::new());
+    }
+    let mut features = BTreeMap::new();
+    for item in SplitTopLevelCommas(input) {
+        let item = item.trim();
+        let quote = item.as_bytes().first().copied()?;
+        if quote != b'\'' && quote != b'"' {
+            return None;
+        }
+        let end = item.as_bytes()[1..]
+            .iter()
+            .position(|&byte| byte == quote)?
+            + 1;
+        let tag = &item.as_bytes()[1..end];
+        if tag.len() != 4 || !tag.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+            return None;
+        }
+        let value = match item[end + 1..].trim().to_ascii_lowercase().as_str() {
+            "" | "on" => 1,
+            "off" => 0,
+            value => value.parse::<i32>().ok()?,
+        };
+        features.insert(u32::from_be_bytes(tag.try_into().ok()?), value as u32);
+    }
+    (!features.is_empty()).then(|| {
+        features
+            .into_iter()
+            .map(|(tag, value)| FontFeatureValue { tag, value })
+            .collect()
+    })
+}
+
 // cpp: browser/browser.cc:1114-1128
 fn SupportsFontSource(url: &str, format: &str) -> bool {
     if !format.is_empty() {
@@ -173,6 +212,7 @@ pub(crate) struct PendingFontFace {
     pub urls: Vec<String>,
     pub weight: f64,
     pub italic: bool,
+    pub font_feature_settings: Vec<FontFeatureValue>,
     pub unicode_ranges: Vec<FontUnicodeRange>,
 }
 
@@ -181,6 +221,7 @@ pub(crate) fn QueueFontFace(rule: &CSSFontFaceRule) -> Option<PendingFontFace> {
     let mut family = String::new();
     let mut sources = String::new();
     let mut unicode_ranges = String::new();
+    let mut font_feature_settings = Vec::new();
     let mut weight = 400.0;
     let mut italic = false;
     for d in &rule.declarations {
@@ -188,6 +229,11 @@ pub(crate) fn QueueFontFace(rule: &CSSFontFaceRule) -> Option<PendingFontFace> {
             "font-family" => family = Unquote(&d.value).to_owned(),
             "src" => sources = d.value.clone(),
             "unicode-range" => unicode_ranges = d.value.clone(),
+            "font-feature-settings" | "-webkit-font-feature-settings" => {
+                if let Some(settings) = ParseFontFeatureSettings(&d.value) {
+                    font_feature_settings = settings;
+                }
+            }
             "font-weight" => {
                 if let Some(v) = FontWeight(&d.value) {
                     weight = v
@@ -216,6 +262,7 @@ pub(crate) fn QueueFontFace(rule: &CSSFontFaceRule) -> Option<PendingFontFace> {
         urls,
         weight,
         italic,
+        font_feature_settings,
         unicode_ranges: ParseUnicodeRanges(&unicode_ranges),
     })
 }
@@ -247,5 +294,24 @@ mod tests {
         assert!(SupportsFontSource(&values[1].0, &values[1].1));
         assert!(SupportsFontSource("font.woff", "woff"));
         assert!(SupportsFontSource("font.woff", ""));
+    }
+
+    #[test]
+    fn parses_font_face_feature_settings_with_last_value_winning() {
+        assert_eq!(
+            ParseFontFeatureSettings("\"liga\" 0, 'kern' on, \"liga\" 3"),
+            Some(vec![
+                FontFeatureValue {
+                    tag: u32::from_be_bytes(*b"kern"),
+                    value: 1,
+                },
+                FontFeatureValue {
+                    tag: u32::from_be_bytes(*b"liga"),
+                    value: 3,
+                },
+            ])
+        );
+        assert_eq!(ParseFontFeatureSettings("normal"), Some(Vec::new()));
+        assert_eq!(ParseFontFeatureSettings("\"bad\" 1"), None);
     }
 }

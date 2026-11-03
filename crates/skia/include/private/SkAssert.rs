@@ -62,7 +62,7 @@ macro_rules! SK_ABORT {
         }
     }};
 
-    ($format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("SK_ABORT requires @source native_file_ptr,native_line; format,args")};
+    ($format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("SK_ABORT requires @source file_ptr,line; format,args")};
 }
 #[cfg(all(skia_use_default_abort, target_os = "windows"))]
 #[doc(hidden)]
@@ -93,7 +93,7 @@ macro_rules! SK_ABORT {
         }
     }};
 
-    ($message:expr $(,$argument:expr)* $(,)?)=>{compile_error!("SK_ABORT requires @source native_file_ptr,native_line; format,args")};
+    ($message:expr $(,$argument:expr)* $(,)?)=>{compile_error!("SK_ABORT requires @source file_ptr,line; format,args")};
 }
 
 // Source: include/private/SkAssert.h:91-111
@@ -101,14 +101,14 @@ macro_rules! SK_ABORT {
 // the single condition evaluation has failed, just as the native lambdas do.
 #[macro_export]
 macro_rules! SkASSERT_RELEASE {
-(@source $file:expr,$line:expr; @condition $native_condition:expr; $condition:expr $(,)?)=>{{
-    if !$condition {$crate::SK_ABORT!(@source $file,$line; "check(%s)",$native_condition);}
+(@source $file:expr,$line:expr; @condition $source_condition:expr; $condition:expr $(,)?)=>{{
+    if !$condition {$crate::SK_ABORT!(@source $file,$line; "check(%s)",$source_condition);}
 }};
 (@source $file:expr,$line:expr; $condition:expr $(,)?)=>{compile_error!("native assertion requires @condition original_cpp_expression_ptr; rust_bool")};($condition:expr $(,)?)=>{compile_error!("native assertion requires @source file,line; @condition original_cpp_expression_ptr; rust_bool")};}
 #[macro_export]
 macro_rules! SkASSERTF_RELEASE {
-(@source $file:expr,$line:expr; @condition $native_condition:expr; $condition:expr,$format:expr $(,$argument:expr)* $(,)?)=>{{
-    if !$condition {$crate::SK_ABORT!(@source $file,$line; concat!("assertf(%s): ",$format),$native_condition $(,$argument)*);}
+(@source $file:expr,$line:expr; @condition $source_condition:expr; $condition:expr,$format:expr $(,$argument:expr)* $(,)?)=>{{
+    if !$condition {$crate::SK_ABORT!(@source $file,$line; concat!("assertf(%s): ",$format),$source_condition $(,$argument)*);}
 }};
 (@source $file:expr,$line:expr; $condition:expr,$format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("native formatted assertion requires @condition original_cpp_expression_ptr; rust_bool,format,args")};($condition:expr,$format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("native formatted assertion requires @source file,line; @condition original_cpp_expression_ptr; rust_bool,format,args")};}
 
@@ -147,11 +147,11 @@ macro_rules! SkDEBUGFAILF {
 }
 #[cfg(sk_debug)]
 #[macro_export]
-macro_rules! SkAssertResult {(@source $file:expr,$line:expr; @condition $native_condition:expr; $condition:expr $(,)?)=>{$crate::SkASSERT!(@source $file,$line; @condition $native_condition; $condition)};(@source $file:expr,$line:expr; $condition:expr $(,)?)=>{$crate::SkASSERT!(@source $file,$line; $condition)};($condition:expr $(,)?)=>{$crate::SkASSERT!($condition)};}
+macro_rules! SkAssertResult {(@source $file:expr,$line:expr; @condition $source_condition:expr; $condition:expr $(,)?)=>{$crate::SkASSERT!(@source $file,$line; @condition $source_condition; $condition)};(@source $file:expr,$line:expr; $condition:expr $(,)?)=>{$crate::SkASSERT!(@source $file,$line; $condition)};($condition:expr $(,)?)=>{$crate::SkASSERT!($condition)};}
 #[cfg(not(sk_debug))]
 #[macro_export]
 macro_rules! SkAssertResult {
-    (@source $file:expr,$line:expr; @condition $native_condition:expr; $condition:expr $(,)?) => {{
+    (@source $file:expr,$line:expr; @condition $source_condition:expr; $condition:expr $(,)?) => {{
         if $condition {}
     }};
     (@source $file:expr,$line:expr; $condition:expr $(,)?) => {{
@@ -272,7 +272,7 @@ pub const FAST_FAIL_INVALID_ARG: u32 = 5;
 // compiler inline assembly also has its ordinary compiler memory barrier.
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
-pub unsafe fn native_fastfail(code: u32) -> ! {
+pub unsafe fn fastfail(code: u32) -> ! {
     #[cfg(target_arch = "x86")]
     unsafe {
         core::arch::asm!("int 0x29",in("ecx") code,options(noreturn,nostack));
@@ -303,7 +303,7 @@ pub unsafe fn native_fastfail(code: u32) -> ! {
 // Source: include/private/SkAssert.h:133-133
 #[cfg(sk_native_nonclang_msvc)]
 pub fn sk_fast_fail() -> ! {
-    unsafe { native_fastfail(FAST_FAIL_INVALID_ARG) }
+    unsafe { fastfail(FAST_FAIL_INVALID_ARG) }
 }
 // Source: include/private/SkAssert.h:134-134
 #[cfg(sk_native_nonclang_msvc)]

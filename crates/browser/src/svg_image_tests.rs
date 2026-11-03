@@ -16,7 +16,7 @@ const ANIMATED_SVG: &[u8] = br#"
 
 #[test]
 fn document_image_timeline_publishes_immutable_changed_records_only() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let mut host = crate::CreateBrowserConstraints(64, 32);
         host.device_pixel_ratio = 2.0;
@@ -78,7 +78,7 @@ fn document_image_timeline_publishes_immutable_changed_records_only() {
 
 #[test]
 fn document_image_container_is_part_of_the_published_snapshot() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let mut decoder = crate::CreateSVGImageDecoder(&assembly);
         let original = ContainerKey::new(64, 32, 1.0, 1.0);

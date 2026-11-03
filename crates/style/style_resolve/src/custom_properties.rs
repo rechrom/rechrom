@@ -13,12 +13,14 @@ use crate::{
             VariableArguments, VariableBlockEnd,
         },
     },
+    persistent_hash_trie::PersistentHashTrieMap,
     production_css_value::{self as values, CSSVariableData, PropertyValue, Value, VariableToken},
 };
-use foundation::{AtomicString, CSSPropertyID, CSSValueID, String, StringView};
+use foundation::{AtomicString, CSSPropertyID, CSSValueID, HashInts, String, StringView};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
     rc::Rc,
 };
 
@@ -189,12 +191,17 @@ pub fn RegisteredVariableData(value: &Value, original: &CSSVariableData) -> Rc<C
 pub struct CustomProperties {
     // Chromium StyleVariables shares immutable roots; writes detach only on
     // change. Preserve that contract in the production typed side-table owner.
-    pub values: Rc<HashMap<std::string::String, ComputedVariableValue>>,
-    pub registered_values: Rc<HashMap<std::string::String, Rc<Value>>>,
+    pub values: PersistentHashTrieMap<ComputedVariableValue>,
+    pub registered_values: PersistentHashTrieMap<Rc<Value>>,
     pub diagnostics: Vec<(std::string::String, VariableResolutionError)>,
     // cpp: style_cascade.cc:1470-1529 CascadeResolver::shorthand_cache_.
     shorthand_cache: RefCell<Option<(Rc<Value>, Vec<PropertyValue>)>>,
-    cache_hash: std::cell::Cell<Option<u32>>,
+    // cpp: style_variables.h:398-415. Chromium's persistent HashTrie updates
+    // both hashes when a leaf changes, making StyleVariables::GetHash O(1).
+    // Keep the same incremental owner beside the copy-on-write maps instead of
+    // rescanning every inherited custom property at each MPC lookup.
+    data_hash: u32,
+    registered_hash: u32,
 }
 impl std::fmt::Debug for CustomProperties {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -220,70 +227,50 @@ pub fn ComputedVariablesEquivalent(a: &ComputedVariableValue, b: &ComputedVariab
     }
 }
 impl CustomProperties {
-    // cpp: StyleInheritedVariables::GetHash / StyleVariables equality.
-    // A hash partitions the existing MPC; full equality below still decides
-    // hits, including taint and registered typed values. Map order is irrelevant.
-    pub fn CacheHash(&self) -> u32 {
-        use std::hash::{Hash, Hasher};
-        if let Some(hash) = self.cache_hash.get() {
-            return hash;
-        }
-        static PROFILE_HASH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let _trace = (*PROFILE_HASH.get_or_init(|| {
-            std::env::var_os("BROWSER_PROFILE_STYLE_VARIABLES").is_some_and(|value| value == "1")
-        }))
-        .then(|| {
-            let mut trace =
-                browser_tracing::span("style_resolve", "CustomProperties.HashInherited");
-            trace.set("variables", self.values.len() as f64);
-            trace.set("registered", self.registered_values.len() as f64);
-            trace
-        });
-        let mut hash = 0u32;
-        for (name, value) in self.values.iter() {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            name.hash(&mut h);
-            match value {
-                ComputedVariableValue::Data(data) => {
-                    0u8.hash(&mut h);
-                    data.original_text.hash(&mut h);
-                    data.features.hash(&mut h);
-                    data.is_animation_tainted.hash(&mut h);
-                    data.is_attr_tainted.hash(&mut h);
-                }
-                ComputedVariableValue::Invalid => 1u8.hash(&mut h),
-                ComputedVariableValue::Cyclic => 2u8.hash(&mut h),
+    fn DataHash(name: &str, value: &ComputedVariableValue) -> u32 {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hash);
+        match value {
+            ComputedVariableValue::Data(data) => {
+                0u8.hash(&mut hash);
+                data.original_text.hash(&mut hash);
+                data.features.hash(&mut hash);
+                data.is_animation_tainted.hash(&mut hash);
+                data.is_attr_tainted.hash(&mut hash);
             }
-            hash ^= h.finish() as u32;
+            ComputedVariableValue::Invalid => 1u8.hash(&mut hash),
+            ComputedVariableValue::Cyclic => 2u8.hash(&mut hash),
         }
-        for (name, value) in self.registered_values.iter() {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            name.hash(&mut h);
-            value.CssText().Utf8().hash(&mut h);
-            hash ^= (h.finish() as u32).rotate_left(1);
-        }
-        self.cache_hash.set(Some(hash));
-        hash
+        hash.finish() as u32
+    }
+
+    fn RegisteredHash(name: &str, value: &Value) -> u32 {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hash);
+        value.CssText().Utf8().hash(&mut hash);
+        hash.finish() as u32
+    }
+
+    // cpp: StyleInheritedVariables::GetHash / StyleVariables::GetHash.
+    // Full equality below still decides hits; this hash only partitions MPC.
+    pub fn CacheHash(&self) -> u32 {
+        HashInts(self.data_hash, self.registered_hash)
     }
 
     pub fn CacheEquivalent(&self, other: &Self) -> bool {
-        self.diagnostics == other.diagnostics
-            && (Rc::ptr_eq(&self.values, &other.values)
-                || self.values.len() == other.values.len()
-                    && self.values.iter().all(|(name, value)| {
-                        other
-                            .values
-                            .get(name)
-                            .is_some_and(|v| ComputedVariablesEquivalent(value, v))
-                    }))
-            && (Rc::ptr_eq(&self.registered_values, &other.registered_values)
-                || self.registered_values.len() == other.registered_values.len()
-                    && self.registered_values.iter().all(|(name, value)| {
-                        other
-                            .registered_values
-                            .get(name)
-                            .is_some_and(|v| Rc::ptr_eq(value, v) || value.as_ref() == v.as_ref())
-                    }))
+        // cpp: style_variables.cc:11-41. Chromium rejects unequal maps by
+        // their incrementally maintained hash before comparing roots. Its
+        // HashTrieNode equality then short-circuits every shared subtree.
+        self.CacheHash() == other.CacheHash()
+            && self.diagnostics == other.diagnostics
+            && self
+                .values
+                .equivalent_by(&other.values, ComputedVariablesEquivalent)
+            && self
+                .registered_values
+                .equivalent_by(&other.registered_values, |value, other| {
+                    Rc::ptr_eq(value, other) || value.as_ref() == other.as_ref()
+                })
     }
 
     // cpp: style_variables.h:99-165. Equality precedes copy-on-write, including
@@ -296,13 +283,16 @@ impl CustomProperties {
         {
             return;
         }
-        self.cache_hash.set(None);
-        Rc::make_mut(&mut self.values).insert(name, value);
+        if let Some(old) = self.values.get(&name) {
+            self.data_hash ^= Self::DataHash(&name, old);
+        }
+        self.data_hash ^= Self::DataHash(&name, &value);
+        self.values.insert(name, value);
     }
     pub fn RemoveData(&mut self, name: &str) {
-        if self.values.contains_key(name) {
-            self.cache_hash.set(None);
-            Rc::make_mut(&mut self.values).remove(name);
+        if let Some(old) = self.values.get(name) {
+            self.data_hash ^= Self::DataHash(name, old);
+            self.values.remove(name);
         }
     }
     pub fn SetRegistered(&mut self, name: std::string::String, value: Rc<Value>) {
@@ -313,13 +303,16 @@ impl CustomProperties {
         {
             return;
         }
-        self.cache_hash.set(None);
-        Rc::make_mut(&mut self.registered_values).insert(name, value);
+        if let Some(old) = self.registered_values.get(&name) {
+            self.registered_hash ^= Self::RegisteredHash(&name, old);
+        }
+        self.registered_hash ^= Self::RegisteredHash(&name, &value);
+        self.registered_values.insert(name, value);
     }
     pub fn RemoveRegistered(&mut self, name: &str) {
-        if self.registered_values.contains_key(name) {
-            self.cache_hash.set(None);
-            Rc::make_mut(&mut self.registered_values).remove(name);
+        if let Some(old) = self.registered_values.get(name) {
+            self.registered_hash ^= Self::RegisteredHash(name, old);
+            self.registered_values.remove(name);
         }
     }
     /// `winners` must contain the winning declaration for each custom name.
@@ -367,10 +360,15 @@ impl CustomProperties {
             crate::css_primitive_value::UnitType,
         ) -> Result<f64, VariableResolutionError>,
     ) -> Self {
-        let parent_values = parent.map_or_else(Rc::default, |p| p.values.clone());
+        let parent_values =
+            parent.map_or_else(PersistentHashTrieMap::default, |p| p.values.clone());
         let mut inherited = Self {
             values: parent_values.clone(),
-            registered_values: parent.map_or_else(Rc::default, |p| p.registered_values.clone()),
+            registered_values: parent.map_or_else(PersistentHashTrieMap::default, |p| {
+                p.registered_values.clone()
+            }),
+            data_hash: parent.map_or(0, |parent| parent.data_hash),
+            registered_hash: parent.map_or(0, |parent| parent.registered_hash),
             ..Default::default()
         };
         let mut initials = HashMap::new();
@@ -381,8 +379,15 @@ impl CustomProperties {
                 .keys()
                 .any(|name| registry.Registration(name).is_none())
             {
-                Rc::make_mut(&mut inherited.registered_values)
-                    .retain(|name, _| registry.Registration(name).is_some());
+                let removed = inherited
+                    .registered_values
+                    .keys()
+                    .filter(|name| registry.Registration(name).is_none())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for name in removed {
+                    inherited.RemoveRegistered(&name);
+                }
             }
             registry.VisitRegistrations(&mut |name, registration| {
                 let initial = registration.initial.and_then(|value| {
@@ -417,6 +422,8 @@ impl CustomProperties {
             parent_values,
             initials,
             registered_values: inherited.registered_values,
+            inherited_data_hash: inherited.data_hash,
+            registered_hash: inherited.registered_hash,
             context,
             attribute_stack: Vec::new(),
             inherited: inherited.values,
@@ -438,22 +445,13 @@ impl CustomProperties {
         for name in names {
             resolver.ResolveName(&name);
         }
-        // cpp: StyleVariables copy constructor copies roots and their hashes.
-        // Preserve the existing lazy hash when both inherited stores are still
-        // the exact parent owners. Registry resets may have detached either
-        // store, and the SetData calls below still invalidate on real changes.
-        let inherited_hash = parent
-            .filter(|parent| {
-                Rc::ptr_eq(&parent.values, &resolver.inherited)
-                    && Rc::ptr_eq(&parent.registered_values, &resolver.registered_values)
-            })
-            .and_then(|parent| parent.cache_hash.get());
         let mut result = Self {
             values: resolver.inherited,
             registered_values: resolver.registered_values,
             diagnostics: resolver.diagnostics,
             shorthand_cache: RefCell::default(),
-            cache_hash: std::cell::Cell::new(inherited_hash),
+            data_hash: resolver.inherited_data_hash,
+            registered_hash: resolver.registered_hash,
         };
         for (name, value) in resolver.computed {
             result.SetData(name, value);
@@ -502,6 +500,8 @@ impl CustomProperties {
             parent_values: self.values.clone(),
             initials: HashMap::new(),
             registered_values: self.registered_values.clone(),
+            inherited_data_hash: self.data_hash,
+            registered_hash: self.registered_hash,
             context,
             attribute_stack: Vec::new(),
             inherited: self.values.clone(),
@@ -521,12 +521,14 @@ struct VariableResolver<'env> {
         f64,
         crate::css_primitive_value::UnitType,
     ) -> Result<f64, VariableResolutionError>,
-    parent_values: Rc<HashMap<std::string::String, ComputedVariableValue>>,
+    parent_values: PersistentHashTrieMap<ComputedVariableValue>,
     initials: HashMap<std::string::String, ComputedVariableValue>,
-    registered_values: Rc<HashMap<std::string::String, Rc<Value>>>,
+    registered_values: PersistentHashTrieMap<Rc<Value>>,
+    inherited_data_hash: u32,
+    registered_hash: u32,
     // Attribute cycle nodes record the property stack position on entry.
     attribute_stack: Vec<(AtomicString, usize)>,
-    inherited: Rc<HashMap<std::string::String, ComputedVariableValue>>,
+    inherited: PersistentHashTrieMap<ComputedVariableValue>,
     specified: HashMap<std::string::String, Rc<Value>>,
     computed: HashMap<std::string::String, ComputedVariableValue>,
     stack: Vec<std::string::String>,
@@ -664,8 +666,13 @@ impl VariableResolver<'_> {
                             if !self.registered_values.get(name).is_some_and(|old| {
                                 Rc::ptr_eq(old, &typed) || old.as_ref() == typed.as_ref()
                             }) {
-                                Rc::make_mut(&mut self.registered_values)
-                                    .insert(name.to_owned(), typed);
+                                if let Some(old) = self.registered_values.get(name) {
+                                    self.registered_hash ^=
+                                        CustomProperties::RegisteredHash(name, old);
+                                }
+                                self.registered_hash ^=
+                                    CustomProperties::RegisteredHash(name, &typed);
+                                self.registered_values.insert(name.to_owned(), typed);
                             }
                             ComputedVariableValue::Data(data)
                         }
@@ -686,8 +693,9 @@ impl VariableResolver<'_> {
                     .cloned()
                     .unwrap_or(ComputedVariableValue::Invalid),
                 _ => {
-                    if self.registered_values.contains_key(name) {
-                        Rc::make_mut(&mut self.registered_values).remove(name);
+                    if let Some(old) = self.registered_values.get(name) {
+                        self.registered_hash ^= CustomProperties::RegisteredHash(name, old);
+                        self.registered_values.remove(name);
                     }
                     value
                 }
@@ -1204,22 +1212,14 @@ mod tests {
             "22px"
         );
         let inherited = CustomProperties::Compute(Some(&parent), std::iter::empty());
-        assert!(Rc::ptr_eq(&inherited.values, &parent.values));
-        assert!(Rc::ptr_eq(
-            &inherited.registered_values,
-            &parent.registered_values
-        ));
-        assert_eq!(inherited.cache_hash.get(), Some(parent_hash));
+        assert!(inherited.values.ptr_eq(&parent.values));
+        assert!(inherited
+            .registered_values
+            .ptr_eq(&parent.registered_values));
+        assert_eq!(inherited.CacheHash(), parent_hash);
         let unchanged = CustomProperties::Compute(Some(&parent), declarations("--x:12px;").iter());
-        assert_eq!(unchanged.cache_hash.get(), Some(parent_hash));
-        assert_eq!(
-            child.cache_hash.get(),
-            None,
-            "an actual override revokes the inherited hash"
-        );
-        let recomputed = child.clone();
-        recomputed.cache_hash.set(None);
-        assert_eq!(child.CacheHash(), recomputed.CacheHash());
+        assert_eq!(unchanged.CacheHash(), parent_hash);
+        assert_ne!(child.CacheHash(), parent_hash);
         assert_eq!(parent.CacheHash(), parent_hash);
     }
     #[test]

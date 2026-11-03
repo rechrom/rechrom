@@ -91,7 +91,7 @@ pub struct Entry<E, D = ()> {
     pub originating_element_computed_style: Option<ComputedStyleHandle>,
     pub element_type: E,
     pub last_used: u32,
-    /// Typed computed-style data retained outside the native style owner.
+    /// Typed computed-style data retained outside the computed style style owner.
     /// Eviction and weak-key cleanup release it with the source cache entry.
     pub additional_data: D,
 }

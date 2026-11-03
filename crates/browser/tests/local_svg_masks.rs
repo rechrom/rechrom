@@ -1,6 +1,6 @@
 //! Local SVG masks use scoped immutable resources, not image requests.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 use browser::page::Page;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
@@ -81,7 +81,7 @@ fn px(p: &[u32], x: usize, y: usize) -> [u8; 4] {
 const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="140" height="80"><mask id="left" mask-type="alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="60" height="60"><rect id="shape" x="10" y="10" width="20" height="40" fill="white"/></mask><mask id="unused"><rect x="70" y="10" width="20" height="30" fill="blue"/></mask><rect id="target" x="10" y="10" width="40" height="40" fill="red" mask="url(#left)"/><rect x="110" y="10" width="10" height="10" fill="green"/></svg>"##;
 #[test]
 fn local_mask_never_fetches_document_fragment() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (page, requests) = fixture(SVG);
         assert_eq!(&*requests.borrow(), &["https://local-mask.test/"]);
@@ -94,7 +94,13 @@ fn local_mask_never_fetches_document_fragment() {
                     .is_some_and(|a| a.value == "target")
             })
             .unwrap();
-        let style = unsafe { &*doc.ResolvedStyleFor(target).unwrap().native_style.Get() };
+        let style = unsafe {
+            &*doc
+                .ResolvedStyleFor(target)
+                .unwrap()
+                .computed_style_owner
+                .Get()
+        };
         let image = unsafe { &*style.MaskLayers().GetImage() };
         assert!(image.IsMaskSource());
         assert!(!image.IsImageResource());
@@ -104,7 +110,7 @@ fn local_mask_never_fetches_document_fragment() {
 }
 #[test]
 fn local_mask_pixels_and_hidden_definition() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (page, _) = fixture(SVG);
         let p = pixels(&page);
@@ -164,7 +170,7 @@ fn graph(page: &Page) -> std::sync::Arc<layoutng_assembly::internal::paint_input
 }
 #[test]
 fn canonical_css_overrides_presentation_and_child_geometry() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (mut p, _) = fixture(&format!(
             "<style>#target{{mask:none}}#shape{{width:30px;fill:black}}</style>{SVG}"
@@ -179,7 +185,7 @@ fn canonical_css_overrides_presentation_and_child_geometry() {
 }
 #[test]
 fn mask_type_mode_color_and_opacity_are_canonical() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (mut p, _) = fixture(&SVG.replace("fill=\"white\"", "fill=\"black\""));
         assert_eq!(px(&pixels(&p), 20, 20), [255, 0, 0, 255]);
@@ -196,7 +202,7 @@ fn mask_type_mode_color_and_opacity_are_canonical() {
 }
 #[test]
 fn mutation_retargets_resource_and_preserves_old_frames() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (mut p, _) = fixture(SVG);
         let old = p.CurrentFrame().unwrap().display_items.clone();
@@ -233,7 +239,7 @@ fn mutation_retargets_resource_and_preserves_old_frames() {
 }
 #[test]
 fn empty_missing_and_first_wrong_kind_stay_mask_slots() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (mut p, _) = fixture(SVG);
         inner(&mut p, "left", "");
@@ -249,7 +255,7 @@ fn empty_missing_and_first_wrong_kind_stay_mask_slots() {
 }
 #[test]
 fn local_url_identity_normalizes_fragments_and_same_document() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         for url in ["#%6ceft", "https://local-mask.test/#left"] {
             let (p, r) = fixture(&SVG.replace("url(#left)", &format!("url({url})")));
@@ -268,7 +274,7 @@ fn local_url_identity_normalizes_fragments_and_same_document() {
 }
 #[test]
 fn object_bounding_box_shape_masks_and_layer_composites() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let body = r##"<svg xmlns="http://www.w3.org/2000/svg" width="140" height="80"><mask id="left" maskContentUnits="objectBoundingBox" mask-type="alpha"><path d="M0 0H.5V1H0Z" fill="white"/></mask><rect id="target" x="10" y="10" width="40" height="40" fill="red" mask="url(#left)"/></svg>"##;
         let (mut p, _) = fixture(body);
@@ -292,7 +298,7 @@ fn object_bounding_box_shape_masks_and_layer_composites() {
 }
 #[test]
 fn unsupported_content_retains_explicit_resource_diagnostic() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         for replacement in [
             r#"<text x="10" y="20">x</text>"#,
@@ -320,7 +326,7 @@ fn unsupported_content_retains_explicit_resource_diagnostic() {
 }
 #[test]
 fn real_icon_mask_resource_preserves_interior_ink() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let icon = include_str!("fixtures/local_mask_icon.svg");
         let mask_start = icon.find("<mask ").unwrap();
@@ -369,7 +375,7 @@ fn find_fragment(
 }
 #[test]
 fn inherited_mask_reference_keeps_originating_scope_across_shadow_root() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
 
         use layoutng_assembly::layout_engine::{LayoutEngine, LayoutMutation};
@@ -490,7 +496,7 @@ fn inherited_mask_reference_keeps_originating_scope_across_shadow_root() {
 }
 #[test]
 fn mask_record_uses_canonical_stroke_fillrule_and_suppression() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let replacement = r#"<path id="ink" d="M10 10H40V40H10Z M20 20H30V30H20Z" fill="white" fill-rule="evenodd" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="bevel"/><rect width="80" height="80" style="display:none"/>"#;
         let (mut p, _) = fixture(&SVG.replace(
@@ -517,7 +523,7 @@ fn mask_record_uses_canonical_stroke_fillrule_and_suppression() {
 }
 #[test]
 fn unsupported_group_mask_fails_before_empty_bounds_culling() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let html = r##"<svg width="140" height="80"><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="80" height="80"><text>x</text></mask><g mask="url(#m)"><rect width="40" height="40" fill="red"/></g></svg>"##;
         let error = std::panic::catch_unwind(|| fixture(html))
@@ -530,7 +536,7 @@ fn unsupported_group_mask_fails_before_empty_bounds_culling() {
 }
 #[test]
 fn paint_only_mask_update_retains_viewport_and_old_artifact() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (mut p, _) = fixture(SVG);
         let old = p.CurrentFrame().unwrap().display_items.clone();
@@ -562,7 +568,7 @@ fn paint_only_mask_update_retains_viewport_and_old_artifact() {
 }
 #[test]
 fn external_stylesheet_fragment_uses_originating_document() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let(p,r)=fixture(&format!("<base href='https://different-base.test/'><link rel='stylesheet' href='https://stylesheet.test/fixture.css'>{}",SVG.replace("mask=\"url(#left)\"","mask=\"none\"")));
         assert_eq!(
@@ -578,7 +584,7 @@ fn external_stylesheet_fragment_uses_originating_document() {
 }
 #[test]
 fn local_shape_mask_equals_direct_geometry_fixture() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (p, _) = fixture(SVG);
         let (q, _) = fixture(
@@ -592,7 +598,7 @@ fn local_shape_mask_equals_direct_geometry_fixture() {
 }
 #[test]
 fn user_space_mask_survives_consumer_viewbox_transform() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (p, _) = fixture(&SVG.replace(
             "width=\"140\" height=\"80\"",
@@ -605,7 +611,7 @@ fn user_space_mask_survives_consumer_viewbox_transform() {
 
 #[test]
 fn existing_pattern_mask_reads_canonical_override() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let source = r##"<svg width="140" height="80"><defs><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="40" height="40" mask-type="alpha"><rect width="20" height="40" fill="white"/></mask><pattern id="p" patternUnits="userSpaceOnUse" width="40" height="40"><g id="group" mask="url(#m)"><rect width="40" height="40" fill="red"/></g></pattern></defs><rect id="painted" width="40" height="40" fill="url(#p)"/></svg>"##;
         let (mut p, r) = fixture(source);
@@ -666,7 +672,7 @@ fn existing_pattern_mask_reads_canonical_override() {
 }
 #[test]
 fn fetched_svg_document_keeps_local_mask_and_hidden_definition() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (p, _) = fixture(SVG);
         let (q, r) = fixture("<img src='fixture.svg' width='140' height='80'>");
@@ -701,7 +707,7 @@ fn fetched_svg_document_keeps_local_mask_and_hidden_definition() {
 }
 #[test]
 fn external_svg_mask_target_selection_is_explicitly_unsupported() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let error=std::panic::catch_unwind(||fixture("<div style='width:40px;height:40px;background:red;mask:url(fixture.svg#left)'></div>")).err().expect("external target must reject");
         let typed = error

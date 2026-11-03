@@ -146,7 +146,7 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn literal_units_replay_into_native_property_consumers() {
+    fn literal_units_replay_into_computed_style_property_consumers() {
         let source = Source::new(&[("size", "12"), ("fraction", ".25"), ("percent", "50")]);
         for (id, css, expected) in [
             (CSSPropertyID::kWidth, "attr(size px)", "12px"),

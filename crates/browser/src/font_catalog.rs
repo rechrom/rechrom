@@ -284,7 +284,7 @@ fn LoadAppleFontsWithReader(
         for (family, metrics_family) in [("demo", ""), ("Arial", "Arial")] {
             faces.push(FontFace {
                 family: family.into(),
-                native_family: "Arial".into(),
+                resolved_family: "Arial".into(),
                 metrics_family: metrics_family.into(),
                 bytes: arial.clone(),
                 fallback_role: FontFallbackRole::kText,
@@ -295,7 +295,7 @@ fn LoadAppleFontsWithReader(
     if let Ok(bytes) = ReadFont("/System/Library/Fonts/Supplemental/Tamil Sangam MN.ttc") {
         faces.push(FontFace {
             family: "tamil-fallback".into(),
-            native_family: "Tamil Sangam MN".into(),
+            resolved_family: "Tamil Sangam MN".into(),
             metrics_family: "Tamil Sangam MN".into(),
             bytes: bytes.into(),
             unicode_ranges: vec![FontUnicodeRange {
@@ -310,7 +310,7 @@ fn LoadAppleFontsWithReader(
     if let Ok(emoji) = ReadFont("/System/Library/Fonts/Apple Color Emoji.ttc") {
         faces.push(FontFace {
             family: "emoji-fallback".into(),
-            native_family: "Apple Color Emoji".into(),
+            resolved_family: "Apple Color Emoji".into(),
             metrics_family: "Apple Color Emoji".into(),
             bytes: emoji.into(),
             unicode_ranges: vec![
@@ -330,7 +330,7 @@ fn LoadAppleFontsWithReader(
     if let Ok(bytes) = ReadFont("/System/Library/Fonts/Apple Symbols.ttf") {
         faces.push(FontFace {
             family: "symbol-fallback".into(),
-            native_family: "Apple Symbols".into(),
+            resolved_family: "Apple Symbols".into(),
             metrics_family: "Apple Symbols".into(),
             bytes: bytes.into(),
             fallback_role: FontFallbackRole::kSymbol,
@@ -340,7 +340,7 @@ fn LoadAppleFontsWithReader(
     if let Ok(bytes) = ReadFont("/System/Library/Fonts/Supplemental/STIXTwoMath.otf") {
         faces.push(FontFace {
             family: "math".into(),
-            native_family: "STIX Two Math".into(),
+            resolved_family: "STIX Two Math".into(),
             metrics_family: "STIX Two Math".into(),
             bytes: bytes.into(),
             fallback_role: FontFallbackRole::kMath,
@@ -351,7 +351,7 @@ fn LoadAppleFontsWithReader(
         for (weight, axis_weight) in [(400.0, 400.0), (600.0, 600.0), (700.0, 600.0)] {
             faces.push(FontFace {
                 family: "cjk-fallback".into(),
-                native_family: "PingFang SC".into(),
+                resolved_family: "PingFang SC".into(),
                 metrics_family: "PingFang SC".into(),
                 weight,
                 face_index: 16,
@@ -374,7 +374,7 @@ fn LoadAppleFontsWithReader(
         ] {
             faces.push(FontFace {
                 family: "PingFang SC".into(),
-                native_family: "PingFang SC".into(),
+                resolved_family: "PingFang SC".into(),
                 metrics_family: "PingFang SC".into(),
                 weight,
                 face_index: 16,
@@ -392,7 +392,7 @@ fn LoadAppleFontsWithReader(
             for weight in [400.0, 500.0, 600.0, 700.0] {
                 faces.push(FontFace {
                     family: "PingFang SC".into(),
-                    native_family: ".SF NS".into(),
+                    resolved_family: ".SF NS".into(),
                     metrics_family: ".SF NS".into(),
                     weight,
                     bytes: sfns.clone(),
@@ -431,7 +431,7 @@ fn LoadAppleFontsWithReader(
         if let Ok(bytes) = ReadFont(path) {
             faces.push(FontFace {
                 family: "cjk-fallback".into(),
-                native_family: "Hiragino Sans".into(),
+                resolved_family: "Hiragino Sans".into(),
                 weight,
                 bytes: bytes.into(),
                 unicode_ranges: vec![range],
@@ -444,7 +444,7 @@ fn LoadAppleFontsWithReader(
     if let Ok(bytes) = ReadFont("/System/Library/Fonts/Helvetica.ttc") {
         faces.push(FontFace {
             family: "sans-serif".into(),
-            native_family: "Helvetica".into(),
+            resolved_family: "Helvetica".into(),
             metrics_family: "Helvetica".into(),
             bytes: bytes.into(),
             unicode_ranges: vec![FontUnicodeRange {
@@ -480,7 +480,7 @@ fn LoadAppleFontsWithReader(
         if let Ok(bytes) = ReadFont(path) {
             faces.push(FontFace {
                 family: "Verdana".into(),
-                native_family: "Verdana".into(),
+                resolved_family: "Verdana".into(),
                 metrics_family: "Verdana".into(),
                 weight,
                 italic,
@@ -495,7 +495,7 @@ fn LoadAppleFontsWithReader(
             for weight in [400.0, 500.0, 600.0, 700.0] {
                 faces.push(FontFace {
                     family: family.into(),
-                    native_family: ".SF NS".into(),
+                    resolved_family: ".SF NS".into(),
                     metrics_family: ".SF NS".into(),
                     weight,
                     bytes: sfns.clone(),
@@ -519,7 +519,7 @@ fn LoadAppleFontsWithReader(
         ] {
             faces.push(FontFace {
                 family: "serif".into(),
-                native_family: "Times".into(),
+                resolved_family: "Times".into(),
                 metrics_family: "Times".into(),
                 weight,
                 italic,
@@ -540,7 +540,7 @@ fn LoadAppleFontsWithReader(
         ] {
             faces.push(FontFace {
                 family: "monospace".into(),
-                native_family: "Menlo".into(),
+                resolved_family: "Menlo".into(),
                 metrics_family: "Menlo".into(),
                 weight,
                 italic,

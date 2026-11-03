@@ -16,13 +16,13 @@ fn node(owner: &dom::DOM, id: &str) -> usize {
         })
         .unwrap()
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(node(owner, id))
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
 }
@@ -68,22 +68,23 @@ fn svg_hints_survive_production_inheritance_cascade_and_mutation() {
     };
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media, &ua).unwrap();
-    assert!(native(&owner, "inherited").FillPaint().IsNone());
-    assert!(native(&owner, "inherited").StrokePaint().HasCurrentColor());
+    assert!(computed_style(&owner, "inherited").FillPaint().IsNone());
+    assert!(computed_style(&owner, "inherited")
+        .StrokePaint()
+        .HasCurrentColor());
     assert_eq!(
-        native(&owner, "inherited").StrokeWidth().length(),
+        computed_style(&owner, "inherited").StrokeWidth().length(),
         &Length::Fixed(2)
     );
-    let projected = &owner
-        .GetDocument()
-        .ResolvedStyleFor(node(&owner, "inherited"))
-        .unwrap()
-        .style
-        .paint;
-    assert!(projected.svg_fill.is_none());
-    assert_eq!(projected.svg_stroke.unwrap().red, 0x12 as f32 / 255.0);
     assert_eq!(
-        native(&owner, "author")
+        computed_style(&owner, "inherited")
+            .Color()
+            .GetColor()
+            .Param0(),
+        0x12 as f32
+    );
+    assert_eq!(
+        computed_style(&owner, "author")
             .FillPaint()
             .GetColor()
             .GetColor()
@@ -91,18 +92,20 @@ fn svg_hints_survive_production_inheritance_cascade_and_mutation() {
         255.0
     );
     assert_eq!(
-        native(&owner, "author").StrokeWidth().length(),
+        computed_style(&owner, "author").StrokeWidth().length(),
         &Length::Fixed(5)
     );
-    assert!(native(&owner, "invalid").FillPaint().IsNone());
-    assert!(native(&owner, "invalid").StrokePaint().HasCurrentColor());
-    assert!(native(&owner, "namespaced").FillPaint().IsNone());
+    assert!(computed_style(&owner, "invalid").FillPaint().IsNone());
+    assert!(computed_style(&owner, "invalid")
+        .StrokePaint()
+        .HasCurrentColor());
+    assert!(computed_style(&owner, "namespaced").FillPaint().IsNone());
     assert_eq!(
         owner.GetDocument().Node(node(&owner, "html")).Namespace(),
         DOMNamespace::kHTML
     );
     assert_eq!(
-        native(&owner, "html")
+        computed_style(&owner, "html")
             .FillPaint()
             .GetColor()
             .GetColor()
@@ -124,11 +127,11 @@ fn svg_hints_survive_production_inheritance_cascade_and_mutation() {
     );
     engine.Update(&mut owner, &media, &ua).unwrap();
     assert_eq!(
-        native(&owner, "inherited").StrokeWidth().length(),
+        computed_style(&owner, "inherited").StrokeWidth().length(),
         &Length::Fixed(7)
     );
     assert_eq!(
-        native(&owner, "author").StrokeWidth().length(),
+        computed_style(&owner, "author").StrokeWidth().length(),
         &Length::Fixed(5)
     );
     owner
@@ -136,7 +139,7 @@ fn svg_hints_survive_production_inheritance_cascade_and_mutation() {
         .RemoveAttributeDefault(group, "stroke-width");
     engine.Update(&mut owner, &media, &ua).unwrap();
     assert_eq!(
-        native(&owner, "inherited").StrokeWidth().length(),
+        computed_style(&owner, "inherited").StrokeWidth().length(),
         &Length::Fixed(1)
     );
 }

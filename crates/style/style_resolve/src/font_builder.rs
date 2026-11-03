@@ -59,7 +59,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 // The genuine Size/FamilyDescription nested types use backend construction.
-// Native generic-family/size bitfields and text-rendering setters now exist in
+// Canonical generic-family/size bitfields and text-rendering setters now exist in
 // font_engine; backend adapters and remaining typed interfaces act on
 // the existing FontDescription only; no parallel description/state is stored.
 // Every method is required, including real settings/font-size/font allocation

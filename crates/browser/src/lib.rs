@@ -30,8 +30,6 @@ mod form_submission;
 #[cfg(test)]
 mod incremental_style_tests;
 pub mod interaction_services;
-#[cfg(test)]
-mod native_test_thread;
 pub mod page;
 #[cfg(test)]
 mod page_parser_invalidation_tests;
@@ -46,11 +44,13 @@ mod svg_image_tests;
 pub mod system_font_provider;
 #[cfg(test)]
 mod table_layout_tests;
+#[cfg(test)]
+mod test_thread;
 mod text_transform;
 pub use persistent_layout::LayoutPersistentDocument;
 mod user_agent_styles;
 
-// Shared translated assembly; missing native package slots retain source
+// Shared translated assembly; missing source package slots retain source
 // capability errors, and are not replaced with generic boxes.
 pub fn CreateLayoutAssembly() -> LayoutAssembly {
     let mut assembly = LayoutAssembly::default();
@@ -194,6 +194,15 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
         .is_some()
         .then(std::time::Instant::now);
     let mut space = ConstraintSpace::default();
+    #[cfg(target_vendor = "apple")]
+    {
+        // Blink's SimpleFontData and HarfBuzzFace take metrics and advances
+        // from the same SkFont strike used by paint. Keep that host service
+        // behind the existing FontBackendFactory package boundary.
+        space.font_backend_factory = Some(std::sync::Arc::new(
+            raster::SkiaFontBackendFactory::default(),
+        ));
+    }
     space.available_size = Size {
         width: f64::from(width),
         height: f64::from(height),
@@ -489,7 +498,7 @@ mod tests {
 
     #[test]
     fn local_and_redirected_url_match_cpp_png_bytes() {
-        crate::native_test_thread::run(local_and_redirected_url_body);
+        crate::test_thread::run(local_and_redirected_url_body);
     }
     fn local_and_redirected_url_body() {
         svg_profile_exports_shape_fragments();

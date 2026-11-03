@@ -2698,7 +2698,7 @@ impl CSSSelectorParser {
     }
 
     /// Capability boundary for the persistent matcher. Stylesheet parsing does
-    /// not call this: all selectors are parsed by the native typed parser.
+    /// not call this: all selectors are parsed by the computed style typed parser.
     pub fn UnsupportedParsedFeature(selectors: &[CSSSelector]) -> Option<std::string::String> {
         fn unsupported(selectors: &[CSSSelector]) -> Option<std::string::String> {
             use PseudoType::*;

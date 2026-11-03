@@ -124,7 +124,7 @@ pub struct LayerContext<'a, B: MainLayerTypes> {
     hosts: Option<LayerHosts<'a, B>>,
     pub services: Option<&'a dyn MainLayerServices>,
     pub derived_services: Option<&'a B::DerivedServices>,
-    pub(crate) native_destruction_layer: Option<i32>,
+    pub(crate) destruction_layer: Option<i32>,
 }
 pub enum LayerHosts<'a, B: MainLayerTypes> {
     Read(&'a dyn MainLayerReadHosts<B>),
@@ -136,7 +136,7 @@ impl<'a, B: MainLayerTypes> LayerContext<'a, B> {
             hosts: Some(LayerHosts::Write(hosts)),
             services: Some(services),
             derived_services: None,
-            native_destruction_layer: None,
+            destruction_layer: None,
         }
     }
     pub fn new_read_only(
@@ -147,7 +147,7 @@ impl<'a, B: MainLayerTypes> LayerContext<'a, B> {
             hosts: Some(LayerHosts::Read(hosts)),
             services: Some(services),
             derived_services: None,
-            native_destruction_layer: None,
+            destruction_layer: None,
         }
     }
     pub(crate) fn DetachedForDestruction(id: i32) -> Self {
@@ -155,7 +155,7 @@ impl<'a, B: MainLayerTypes> LayerContext<'a, B> {
             hosts: None,
             services: None,
             derived_services: None,
-            native_destruction_layer: Some(id),
+            destruction_layer: Some(id),
         }
     }
     pub fn Host(&self, id: MainLayerHostId) -> &dyn MainLayerHostRead<B> {

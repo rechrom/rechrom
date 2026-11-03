@@ -34,7 +34,7 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         viewport,
         options.address.clone(),
         output,
-        DisplayTarget::Offscreen,
+        DisplayTarget::Offscreen { pixels: Vec::new() },
         Duration::from_secs_f64(1.0 / 60.0),
         None,
         crate::app::presentation_config(true),
@@ -81,6 +81,7 @@ fn pump_events(
     let _stop = StopEngine(commands);
     let deadline = exit_after.map(|duration| Instant::now() + duration);
     let mut frame_ready = false;
+    let mut terminal_page_error = None;
     let result = loop {
         let event = if let Some(deadline) = deadline {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -116,7 +117,12 @@ fn pump_events(
                 current_location = address;
             }
             UserEvent::Message(message) => eprintln!("page: {message}"),
-            UserEvent::PageError(error) => error.emit_stderr(),
+            UserEvent::PageError(error) => {
+                error.emit_stderr();
+                if error.terminal && terminal_page_error.is_none() {
+                    terminal_page_error = Some(error);
+                }
+            }
             UserEvent::Fatal(FatalError { source, message }) => {
                 eprintln!(
                     "rechrom-fatal\t{}",
@@ -138,7 +144,13 @@ fn pump_events(
         }
     };
     println!("headless-closed");
-    result
+    result.and_then(|()| {
+        if let Some(error) = terminal_page_error {
+            Err(io::Error::other(error.unavailable()))
+        } else {
+            Ok(())
+        }
+    })
 }
 
 #[cfg(test)]
@@ -164,8 +176,8 @@ mod tests {
     fn close_stops_engine_without_waiting_for_a_presented_frame() {
         let (events, receiver) = mpsc::channel();
         let (commands, command_receiver) = mpsc::channel();
-        // A terminal error belongs to this Page; it must not end the headless
-        // host or turn its exit status into a window-level fatal failure.
+        // A terminal Page failure remains observable until the host closes;
+        // headless smoke runs must not report success after logging a panic.
         events
             .send(UserEvent::PageError(crate::page_error::PageError {
                 document: (1, 7),
@@ -179,14 +191,18 @@ mod tests {
             }))
             .unwrap();
         events.send(UserEvent::CloseWindow).unwrap();
-        pump_events(
+        let error = pump_events(
             receiver,
             commands,
             viewport(1280, 800, 1.0),
             "about:blank".into(),
             None,
         )
-        .unwrap();
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Page 1/7 stopped (compositor): test Page failure"
+        );
         assert!(matches!(command_receiver.try_recv(), Ok(Command::Stop)));
     }
 

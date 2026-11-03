@@ -34,7 +34,7 @@ pub type PropertyValue = crate::css_property_value::CSSPropertyValue<ProductionC
 
 pub enum Unavailable {}
 
-// The parsed and native computed image values share one typed URL owner.
+// The parsed and computed style computed image values share one typed URL owner.
 pub use layoutng_style::css::css_url_data::{CSSUrlData, ProductionURL};
 
 // cpp: css_identifier_value.h:43-57; css_identifier_value.cc:30-42
@@ -187,7 +187,7 @@ pub struct CSSLightDarkValuePair {
 // Percentages remain typed CSS values so normalization happens at computed
 // value time. The production parser currently admits the default Oklab family
 // used by html.css; explicit interpolation spaces remain an honest parser
-// boundary until their native Color conversions are retained.
+// boundary until their computed style Color conversions are retained.
 pub struct CSSColorMixValue {
     pub color1: Rc<Value>,
     pub color2: Rc<Value>,
@@ -1714,7 +1714,7 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSBasicShapePolygonValue = crate::production_effects_value::CSSBasicShapePolygonValue;
     type CSSBasicShapeInsetValue = crate::production_effects_value::CSSBasicShapeInsetValue;
     type CSSBasicShapeRectValue = crate::production_effects_value::CSSBasicShapeRectValue;
-    type CSSBasicShapeXYWHValue = UnavailableCSSValue;
+    type CSSBasicShapeXYWHValue = crate::production_effects_value::CSSBasicShapeXYWHValue;
     type CSSPathValue = crate::production_effects_value::CSSPathValue;
     type CSSShapeValue = UnavailableCSSValue;
     type CSSImageValue = CSSImageValue;
@@ -2028,7 +2028,7 @@ pub fn grid_line_names(values: Vec<Rc<Value>>) -> Rc<Value> {
 
 // cpp: css_grid_auto_repeat_value.{h,cc}. Auto-repeat retains its keyword
 // independently from the repeated typed entries so computed conversion can
-// select the native auto-fill/auto-fit repeater without inspecting CSS text.
+// select the computed style auto-fill/auto-fit repeater without inspecting CSS text.
 pub struct CSSGridAutoRepeatValue {
     pub kind: CSSValueID,
     pub list: CSSValueList,
@@ -2154,7 +2154,7 @@ pub fn function(function_id: CSSValueID, arguments: Vec<Rc<Value>>) -> Rc<Value>
         },
     )))
 }
-// cpp: css_axis_value.cc:22-114. The native list retains typed primitive values.
+// cpp: css_axis_value.cc:22-114. The computed style list retains typed primitive values.
 pub struct CSSAxisValue {
     pub axis_name: CSSValueID,
     pub dimensions: CSSValueList,

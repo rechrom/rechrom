@@ -3,26 +3,7 @@
 use layoutng_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
 use paint_model::paint_clip_path::{PaintPath, PaintPathFillType};
 
-// Source: third_party/blink/renderer/core/paint/decoration_line_painter.h:24-31.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WaveDefinition {
-    pub wavelength: f32,
-    pub control_point_distance: f32,
-    pub phase: f32,
-}
-
-// Source: third_party/blink/renderer/core/paint/decoration_line_painter.cc:179-194.
-pub fn MakeWave(thickness: f32) -> WaveDefinition {
-    // std::max(1, NaN) preserves its first argument. Native round is ties away.
-    let clamped_thickness = if 1. < thickness { thickness } else { 1. };
-    let wavelength = 1. + 2. * (2. * clamped_thickness + 0.5).round();
-    let cp_distance = 0.5 + (3. * clamped_thickness + 0.5).round();
-    WaveDefinition {
-        wavelength,
-        control_point_distance: cp_distance,
-        phase: -wavelength,
-    }
-}
+pub use foundation::{MakeWave, WaveDefinition, WavyPaintRect, WavyPatternBounds};
 
 // Source: third_party/blink/renderer/core/paint/decoration_line_painter.cc:130-146.
 pub fn WavyCenterlinePath(wave: &WaveDefinition, total_width: f32, start: Offset) -> PaintPath {

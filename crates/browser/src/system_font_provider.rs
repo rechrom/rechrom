@@ -23,7 +23,7 @@ mod linux;
 #[path = "system_font_provider_macos.rs"]
 mod macos;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct HostFace {
     family: String,
     path: String,
@@ -79,6 +79,8 @@ impl BrowserSystemFontProvider {
             self.version = version;
             self.faces.clear();
             self.files.clear();
+            #[cfg(target_os = "macos")]
+            macos::ClearQueryCache();
             #[cfg(target_os = "linux")]
             {
                 self.platform = linux::LinuxFontHost::default();
@@ -268,7 +270,7 @@ impl SystemFontProvider for BrowserSystemFontProvider {
 fn Descriptor(host: &HostFace) -> FontFace {
     FontFace {
         family: host.family.clone(),
-        native_family: host.family.clone(),
+        resolved_family: host.family.clone(),
         metrics_family: host.family.clone(),
         weight: host.weight,
         italic: host.italic,
@@ -408,7 +410,7 @@ mod tests {
             provider.Register(Host(path.to_str().unwrap().into(), 0), Some("CSS Alias"));
         assert!(descriptor.face.bytes.is_empty());
         assert_eq!(descriptor.face.family, "CSS Alias");
-        assert_eq!(descriptor.face.native_family, "Selected");
+        assert_eq!(descriptor.face.resolved_family, "Selected");
         assert_eq!(descriptor.face.fallback_role, FontFallbackRole::kFamilyOnly);
         assert!(provider.files.is_empty());
         let alias = provider.Register(

@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Font palette ownership and two native internal booleans.
+//! Font palette ownership and two computed style internal booleans.
 #![allow(non_snake_case)]
 use super::*;
 use font_engine::fonts::font_palette::{FontPalette, KeywordPaletteName as K};

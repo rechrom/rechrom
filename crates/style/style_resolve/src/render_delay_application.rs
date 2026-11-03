@@ -167,7 +167,7 @@ mod tests {
         }
     }
     #[test]
-    fn production_render_delay_nested_mix_reaches_native_weights() {
+    fn production_render_delay_nested_mix_reaches_computed_style_weights() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(&mut b,None,"dynamic-range-limit:dynamic-range-limit-mix(standard 25%,dynamic-range-limit-mix(constrained 50%,no-limit 50%) 75%)");
@@ -217,7 +217,7 @@ mod tests {
         assert!(parsed[0].Value() == parsed[1].Value());
     }
     #[test]
-    fn production_render_delay_css_wide_inherit_native_and_cow() {
+    fn production_render_delay_css_wide_inherit_computed_style_and_cow() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = ComputedStyleBuilder::from_style(initial());
         apply(
@@ -347,7 +347,7 @@ mod tests {
         );
     }
     #[test]
-    fn hidden_flow_tolerance_native_application_css_wide_and_zoom() {
+    fn hidden_flow_tolerance_computed_style_application_css_wide_and_zoom() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         let id = CSSPropertyID::kFlowTolerance;

@@ -13,10 +13,10 @@ pub mod internal {
         pub mod assembly;
         pub mod control_theme_validation;
         pub mod font_from_selector;
+        pub mod input;
         pub mod layout_boundary;
-        pub mod native_input;
-        pub mod native_paint_style;
         pub mod node_metadata_input;
+        pub mod paint_style_export;
     }
     pub mod background_bleed_avoidance;
     pub mod baseline_utils;
@@ -127,6 +127,7 @@ pub mod internal {
     pub mod layout_text;
     pub mod layout_text_combine;
     pub mod layout_text_core;
+    pub mod layout_theme;
     pub mod layout_transform;
     pub mod layout_tree_invalidation;
     pub mod layout_utils;
@@ -134,9 +135,9 @@ pub mod internal {
     pub mod length_utils;
     pub mod line_clamp_data;
     pub mod motion_path_geometry;
-    pub mod native_scrollbar;
     pub mod paint_client_commit;
     pub mod paint_layer;
+    pub mod scrollbar;
     pub mod loader {
         pub mod fetch {
             pub mod resource_priority;
@@ -163,10 +164,10 @@ pub mod internal {
     pub mod pagination_utils;
     pub mod paint_input;
     pub mod positioned_float;
-    pub mod pre_paint_disable_side_effects_scope;
     pub mod pre_paint_subtree_walk_reasons;
     pub mod relative_utils;
     pub mod resolved_text_layout_attributes_iterator;
+    pub mod scroll_anchor;
     pub mod scroll_layout_scope;
     pub mod scroll_types;
     pub mod scrollable_overflow_calculator;
@@ -198,6 +199,7 @@ pub mod internal {
     pub mod table_layout_algorithm_types;
     pub mod table_node;
     pub mod text_combine_style_service;
+    pub mod text_decoration_offset;
     pub mod text_fit_scale;
     pub mod text_item_type;
     pub mod text_offset_range;
@@ -211,30 +213,31 @@ pub mod internal {
     pub mod variable_length_transform_result;
 }
 
-// The native cache lookup is compiled at the reciprocal LayoutNG assembly
+// The source cache lookup is compiled at the reciprocal LayoutNG assembly
 // boundary but physically owned by layout_reuse for profiler attribution.
-#[path = "../../layout_reuse/src/native_cache_lookup.rs"]
+#[path = "../../layout_reuse/src/cache_lookup.rs"]
 pub mod layout_reuse_package;
 
 // Completed-client tree traversal is compiled at the reciprocal assembly
 // boundary but physically owned by layout_commit for profiler attribution.
-#[path = "../../layout_commit/src/native_client_commit.rs"]
+#[path = "../../layout_commit/src/client_commit.rs"]
 pub mod layout_commit_package;
 
-// Native object indexing is compiled at the reciprocal assembly boundary but
+// Layout boundary object indexing is compiled at the reciprocal assembly but
 // physically owned by layout_fragment for profiler attribution.
-#[path = "../../layout_fragment/src/native_object_index.rs"]
-pub mod layout_fragment_native;
+#[path = "../../layout_fragment/src/layout_boundary_object_index.rs"]
+pub mod layout_fragment_object_index;
 
-// Native sticky-position refresh is compiled at the reciprocal assembly
+// Sticky-position refresh is compiled at the reciprocal assembly
 // boundary but physically owned by layout_fragment for profiler attribution.
-#[path = "../../layout_fragment/src/native_sticky_offsets.rs"]
-pub mod layout_fragment_native_sticky;
+#[path = "../../layout_fragment/src/paint_layer_scrollable_area_sticky_offsets.rs"]
+pub mod layout_fragment_sticky_offsets;
 
 pub mod layout_assembly;
 pub mod layout_boundary_support;
 pub mod layout_engine;
 mod layoutng_trace_bindings;
+pub mod style_projection;
 
 pub use internal::form_control_types::{AutofillState, FormControlType};
 pub use internal::layout_algorithm_set::LayoutAlgorithmSet;

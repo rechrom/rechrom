@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
 use foundation::{MakeGarbageCollected, To};
-use layoutng_assembly::internal::algorithm_entry::NativeAlgorithmEntry;
+use layoutng_assembly::internal::algorithm_entry::LayoutAlgorithmEntryFor;
 use layoutng_assembly::internal::form_control_types::FormControlType;
-use layoutng_assembly::internal::layout_input::{NativeNodeConstructionData, NodeKind};
+use layoutng_assembly::internal::layout_input::{NodeConstructionData, NodeKind};
 use layoutng_assembly::internal::layout_node_metadata::{Element, Node};
 use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_assembly::LayoutAssembly;
@@ -59,10 +59,7 @@ fn CreateFormsObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObje
 }
 
 // cpp: layoutng_forms/assembly.cc:45-49
-fn CreateFormsMetadata(
-    input: &NativeNodeConstructionData,
-    style: *const ComputedStyle,
-) -> *mut Element {
+fn CreateFormsMetadata(input: &NodeConstructionData, style: *const ComputedStyle) -> *mut Element {
     let _trace = browser_tracing::span("layout", "layout_algo_forms.CreateMetadata");
     CreateFormElementMetadata(input, style).cast()
 }
@@ -85,7 +82,7 @@ pub fn InstallFormsAlgorithm(assembly: &mut LayoutAssembly) {
     assembly.objects.fieldset_scroll_width = Some(FieldsetScrollWidth);
     assembly.objects.fieldset_scroll_height = Some(FieldsetScrollHeight);
     assembly.algorithms.fieldset =
-        NativeAlgorithmEntry::<FieldsetLayoutAlgorithm>("layout_algo_forms");
+        LayoutAlgorithmEntryFor::<FieldsetLayoutAlgorithm>("layout_algo_forms");
     assembly.algorithms.forms_support.intrinsic_inline_size = Some(ControlIntrinsicInlineSize);
     assembly.algorithms.forms_support.intrinsic_block_size = Some(ControlIntrinsicBlockSize);
 }

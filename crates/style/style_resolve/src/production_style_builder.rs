@@ -10,7 +10,7 @@ use crate::{
     properties::{css_property::CSSProperty, longhand_dispatch::*},
 };
 use font_engine::FontSelectionValue;
-use foundation::{CSSPropertyID, CSSValueID, Color, Length, LengthType};
+use foundation::{CSSPropertyID, CSSValueID, Color, IsHorizontalWritingMode, Length, LengthType};
 use layoutng_style::{
     css::style_color::StyleColor,
     style::{
@@ -188,7 +188,7 @@ pub fn ApplyWithColorSchemeSettingsAndRootStyle(
 type Result = std::result::Result<(), LonghandApplicationError>;
 
 /// A fetched image keeps the resource owner's existing identity and its real
-/// native StyleImage. Only the resource owner may supply this binding.
+/// computed style StyleImage. Only the resource owner may supply this binding.
 pub struct FetchedImageBinding {
     resource_id: Option<std::num::NonZeroU64>,
     image: std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
@@ -198,7 +198,7 @@ impl FetchedImageBinding {
     /// checked binding cannot turn a generated or pending object into a fetch.
     ///
     /// # Safety
-    /// `image` must point to a live GC allocation whose native subtype and
+    /// `image` must point to a live GC allocation whose computed style subtype and
     /// resource owner retain the supplied resource identity.
     pub unsafe fn FromResource(
         resource_id: std::num::NonZeroU64,
@@ -773,7 +773,7 @@ fn ResolveConicGradient(
     })
 }
 
-// cpp: css_to_style_map.cc:119-131. Shared typed image boundary for native fields.
+// cpp: css_to_style_map.cc:119-131. Shared typed image boundary for computed style fields.
 fn ResolveStyleImage(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -846,6 +846,7 @@ fn ResolveStyleImage(
                 foundation::MakeGarbageCollected(CSSLinearGradientValue::FromResolved(data));
             foundation::MakeGarbageCollected(StyleGeneratedImage::new(
                 generator.cast::<CSSImageGeneratorValue>(),
+                layoutng_style::css::css_to_length_conversion_data::ContainerSizes::default(),
             ))
             .cast::<StyleImage>()
         }
@@ -857,6 +858,7 @@ fn ResolveStyleImage(
                 foundation::MakeGarbageCollected(CSSRadialGradientValue::FromRadial(data));
             foundation::MakeGarbageCollected(StyleGeneratedImage::new(
                 generator.cast::<CSSImageGeneratorValue>(),
+                layoutng_style::css::css_to_length_conversion_data::ContainerSizes::default(),
             ))
             .cast::<StyleImage>()
         }
@@ -868,6 +870,7 @@ fn ResolveStyleImage(
                 foundation::MakeGarbageCollected(CSSConicGradientValue::FromConic(data));
             foundation::MakeGarbageCollected(StyleGeneratedImage::new(
                 generator.cast::<CSSImageGeneratorValue>(),
+                layoutng_style::css::css_to_length_conversion_data::ContainerSizes::default(),
             ))
             .cast::<StyleImage>()
         }
@@ -1056,6 +1059,69 @@ pub fn Pixels(
         UnitType::kLargeViewportHeight => media.large_viewport_height / 100.0,
         UnitType::kDynamicViewportWidth => media.dynamic_viewport_width / 100.0,
         UnitType::kDynamicViewportHeight => media.dynamic_viewport_height / 100.0,
+        // cpp: css_to_length_conversion_data.cc:532-557
+        // cpp: css_length_resolver.cc:119-143
+        // ContainerSizes is physical. Missing eligible axes use the small
+        // viewport, while cqi/cqb select between those physical axes using the
+        // target element's writing mode.
+        UnitType::kContainerWidth => {
+            media
+                .style_container_width
+                .unwrap_or(media.small_viewport_width)
+                / 100.0
+        }
+        UnitType::kContainerHeight => {
+            media
+                .style_container_height
+                .unwrap_or(media.small_viewport_height)
+                / 100.0
+        }
+        UnitType::kContainerInlineSize => {
+            let horizontal = media.style_writing_mode.is_none_or(IsHorizontalWritingMode);
+            (if horizontal {
+                media
+                    .style_container_width
+                    .unwrap_or(media.small_viewport_width)
+            } else {
+                media
+                    .style_container_height
+                    .unwrap_or(media.small_viewport_height)
+            }) / 100.0
+        }
+        UnitType::kContainerBlockSize => {
+            let horizontal = media.style_writing_mode.is_none_or(IsHorizontalWritingMode);
+            (if horizontal {
+                media
+                    .style_container_height
+                    .unwrap_or(media.small_viewport_height)
+            } else {
+                media
+                    .style_container_width
+                    .unwrap_or(media.small_viewport_width)
+            }) / 100.0
+        }
+        UnitType::kContainerMin => {
+            media
+                .style_container_width
+                .unwrap_or(media.small_viewport_width)
+                .min(
+                    media
+                        .style_container_height
+                        .unwrap_or(media.small_viewport_height),
+                )
+                / 100.0
+        }
+        UnitType::kContainerMax => {
+            media
+                .style_container_width
+                .unwrap_or(media.small_viewport_width)
+                .max(
+                    media
+                        .style_container_height
+                        .unwrap_or(media.small_viewport_height),
+                )
+                / 100.0
+        }
         UnitType::kNumber if value == 0.0 => 1.0,
         _ => return Err(LonghandApplicationError::Unsupported(id)),
     };
@@ -1217,7 +1283,7 @@ fn ConvertShadow(
             pixels *= b.EffectiveZoom() as f64;
         }
         // css_primitive_value.cc:355-360 ComputeLength<float>: ClampLength,
-        // then ClampTo<float>; keep extreme literals finite in native storage.
+        // then ClampTo<float>; keep extreme literals finite in computed style storage.
         let pixels = crate::css_value_clamping_utils::CSSValueClampingUtils::ClampLength(pixels);
         Ok(pixels.clamp(-(f32::MAX as f64), f32::MAX as f64) as f32)
     };
@@ -1376,7 +1442,7 @@ fn ApplyContainer(
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             // The current production cascade operates on document-root names.
-            // Native null scope is that domain; shadow TreeScope population and
+            // Canonical null scope is that domain; shadow TreeScope population and
             // StyleResolverState::SetHasTreeScopedReference remain collaborators.
             let names: HeapVector<Member<ScopedCSSName>> = names
                 .into_iter()
@@ -1796,7 +1862,7 @@ fn ResolveNumericMathList(
 }
 // StyleResolverState::UpdateLengthConversionData installs the current
 // FontSizeStyle's LineHeightSize before a winning declaration is converted.
-// Reconstruct that owner for the production native builder and preserve
+// Reconstruct that owner for the production computed style builder and preserve
 // Blink's dependency bits only after successful application. This is
 // value-generic: no UA selector or control type participates in conversion.
 pub fn Apply(
@@ -3006,7 +3072,7 @@ fn ConvertFontVariationSettings(
     Ok(std::sync::Arc::new(settings))
 }
 
-// cpp: platform/fonts/font_data.cc:33; computed_style_base.h:SetFont.
+// cpp: platform/fonts/font_data.cc:33; computed style_base.h:SetFont.
 // This document assembly runs before Layout's font-resolver scope. Its complete
 // FontDescription is installed in an actual Font; layout binds font data from
 // ConstraintSpace before using font metrics. No metric-dependent CSS unit is
@@ -3075,7 +3141,7 @@ mod content_remaining_tests {
         CloneContentData, ContentData, CounterContentData, QuoteContentData, TextContentData,
     };
     #[test]
-    fn content_typed_values_build_native_chain_and_survive_gc() {
+    fn content_typed_values_build_computed_style_chain_and_survive_gc() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut builder = ComputedStyleBuilder::from_style(initial);
@@ -3199,7 +3265,7 @@ mod background_linear_image_production_tests {
         )
     }
     #[test]
-    fn generated_gradient_properties_reach_native_layers_and_preserve_dependency_errors() {
+    fn generated_gradient_properties_reach_computed_style_layers_and_preserve_dependency_errors() {
         use layoutng_style::style::generated_gradient_image::{
             CSSLinearGradientValue, GeneratedGradientData,
         };
@@ -3394,7 +3460,7 @@ mod shadow_properties_production_tests {
         )
     }
     #[test]
-    fn shadow_properties_store_native_defaults_components_inheritance_and_gc() {
+    fn shadow_properties_store_computed_style_defaults_components_inheritance_and_gc() {
         use layoutng_style::style::shadow_data::ShadowStyle;
         let heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
@@ -3547,7 +3613,7 @@ mod overflow_outline_production_tests {
         }
     }
     #[test]
-    fn production_container_name_type_reach_native_style_and_inherit() {
+    fn production_container_name_type_reach_computed_style_style_and_inherit() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);
@@ -3593,7 +3659,7 @@ mod overflow_outline_production_tests {
         assert_eq!(child.ContainerType(), 0);
     }
     #[test]
-    fn overflow_outline_integer_native_storage_initial_inherit_and_value() {
+    fn overflow_outline_integer_computed_style_storage_initial_inherit_and_value() {
         use foundation::{EBorderStyle, EOverflow, LayoutUnit};
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
@@ -3715,7 +3781,7 @@ mod font_settings_production_tests {
         }
     }
     #[test]
-    fn opentype_font_settings_reach_native_style_preserve_last_tags_and_inherit() {
+    fn opentype_font_settings_reach_computed_style_style_preserve_last_tags_and_inherit() {
         use font_engine::fonts::{font_description::Kerning, font_optical_sizing::OpticalSizing};
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };

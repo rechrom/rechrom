@@ -1,6 +1,6 @@
-//! Browser legacy RegExp statics observed through public native RegExp calls.
+//! Browser legacy RegExp statics observed through public built-in RegExp calls.
 //! Matching remains in QuickJS; this host service owns only the legacy record.
-use super::native::*;
+use super::adapter::*;
 use std::{cell::RefCell, rc::Rc};
 struct Accessor {
     state: Rc<RefCell<Vec<Value>>>,
@@ -85,8 +85,8 @@ impl HostCallable for Exec {
         Ok(result)
     }
 }
-struct NativeSource;
-impl HostCallable for NativeSource {
+struct Source;
+impl HostCallable for Source {
     fn call(
         &self,
         ctx: &mut Context,
@@ -170,12 +170,8 @@ pub(super) fn install(ctx: &mut Context) -> JsResult<()> {
     let function_proto = ctx.eval("Function.prototype")?;
     let key = PropKey::from_string(&ctx.intern("toString"));
     let original = ctx.get_property(&function_proto, &key)?;
-    let source = Value::Object(ctx.new_host_function(
-        Rc::new(NativeSource),
-        vec![original, exec],
-        "toString",
-        0,
-    ));
+    let source =
+        Value::Object(ctx.new_host_function(Rc::new(Source), vec![original, exec], "toString", 0));
     ctx.define_value(
         function_proto.as_object().unwrap(),
         "toString",

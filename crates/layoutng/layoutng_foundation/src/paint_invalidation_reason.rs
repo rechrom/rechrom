@@ -41,6 +41,46 @@ impl PaintInvalidationReason {
     pub const kMax: Self = Self::kUncacheable;
 }
 
+// cpp: platform/graphics/paint_invalidation_reason.cc:16-72
+pub const fn PaintInvalidationReasonToString(reason: PaintInvalidationReason) -> &'static str {
+    use PaintInvalidationReason::*;
+    match reason {
+        kNone => "none",
+        kIncremental => "incremental",
+        kHitTest => "hit testing change",
+        kStyle => "style change",
+        kOutline => "outline",
+        kImage => "image",
+        kBackplate => "backplate",
+        kBackground => "background",
+        kSelection => "selection",
+        kCaret => "caret",
+        kLayout => "geometry",
+        kAppeared => "appeared",
+        kDisappeared => "disappeared",
+        kScrollControl => "scroll control",
+        kSubtree => "subtree",
+        kSVGResource => "SVG resource change",
+        kDocumentMarker => "DocumentMarker change",
+        kJustCreated => "just created",
+        kReordered => "reordered",
+        kChunkAppeared => "chunk appeared",
+        kChunkDisappeared => "chunk disappeared",
+        kChunkUncacheable => "chunk uncacheable",
+        kChunkReordered => "chunk reordered",
+        kPaintProperty => "paint property change",
+        kFullLayer => "full layer",
+        kUncacheable => "uncacheable",
+    }
+}
+
+// cpp: platform/graphics/paint_invalidation_reason.cc:74-76
+impl std::fmt::Display for PaintInvalidationReason {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str(PaintInvalidationReasonToString(*self))
+    }
+}
+
 // cpp: foundation/graphics_types/graphics/paint_invalidation_reason.h:80-83
 pub const fn IsFullPaintInvalidationReason(reason: PaintInvalidationReason) -> bool {
     (reason as u8) > (PaintInvalidationReason::kNonFullMax as u8)
@@ -88,5 +128,10 @@ mod tests {
         assert!(IsLayoutPaintInvalidationReason(
             PaintInvalidationReason::kIncremental
         ));
+        assert_eq!(PaintInvalidationReason::kLayout.to_string(), "geometry");
+        assert_eq!(
+            PaintInvalidationReasonToString(PaintInvalidationReason::kSVGResource),
+            "SVG resource change"
+        );
     }
 }

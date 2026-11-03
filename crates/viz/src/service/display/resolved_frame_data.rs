@@ -11,7 +11,7 @@ use compositor_core::adapter::{
     layer_tree_impl::ResourceId,
 };
 use compositor_core::runtime::frame::{QuadMaterial, RenderPassId};
-use compositor_core::{NativeCompositorFrame, NativeCompositorRenderPass};
+use compositor_core::{CompositorFrame, CompositorRenderPass};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     error::Error,
@@ -43,7 +43,7 @@ pub struct ResolvedQuadData {
 
 #[derive(Clone)]
 pub struct FixedPassData<'a> {
-    pub render_pass: Option<&'a NativeCompositorRenderPass>,
+    pub render_pass: Option<&'a CompositorRenderPass>,
     pub embed_count: usize,
     pub remapped_id: u64,
     pub render_pass_id: RenderPassId,
@@ -96,7 +96,7 @@ pub struct ResolvedPassData<'a> {
     previous_persistent_data_: PersistentPassData,
 }
 impl<'a> ResolvedPassData<'a> {
-    pub fn render_pass(&self) -> &'a NativeCompositorRenderPass {
+    pub fn render_pass(&self) -> &'a CompositorRenderPass {
         self.fixed_
             .render_pass
             .expect("render pass is set during aggregation")
@@ -135,7 +135,7 @@ impl<'a> ResolvedPassData<'a> {
         self.previous_persistent_data_ = self.current_persistent_data_.clone();
         self.current_persistent_data_ = PersistentPassData::default();
     }
-    pub fn SetCompositorRenderPass(&mut self, pass: &'a NativeCompositorRenderPass) {
+    pub fn SetCompositorRenderPass(&mut self, pass: &'a CompositorRenderPass) {
         assert_eq!(pass.id, self.fixed_.render_pass_id);
         self.fixed_.render_pass = Some(pass);
     }
@@ -438,7 +438,7 @@ impl<'a> ResolvedFrameData<'a> {
 }
 
 // Source: components/viz/service/display/resolved_frame_data.h:402-405
-pub fn ValidateFrame(frame: &NativeCompositorFrame) -> Result<(), FrameValidationError> {
+pub fn ValidateFrame(frame: &CompositorFrame) -> Result<(), FrameValidationError> {
     if frame.render_pass_list.is_empty() {
         return Err(FrameValidationError::MissingRenderPass);
     }

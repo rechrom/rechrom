@@ -48,7 +48,7 @@ impl PageClient for Client {
 }
 #[test]
 fn parsing_after_a_style_read_invalidates_page_styles_before_the_next_script() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let client = Rc::new(RefCell::new(Client::default()));
         let mut page = Page::Create(

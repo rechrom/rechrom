@@ -129,7 +129,7 @@ fn ListType<T: TokenStreamTokenizer>(
     if stream.Peek().FunctionId() == Some(CSSValueID::kSymbols) {
         return Err(unsupported(
             id,
-            "ConsumeCounterStyleSymbolsFunction runtime feature/native symbols collaborator",
+            "ConsumeCounterStyleSymbolsFunction runtime feature/computed_style symbols collaborator",
         ));
     }
     let value = CustomIdent(id, stream)?;

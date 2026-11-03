@@ -86,6 +86,81 @@ class Event {
 globalThis.Event = Event;
 __domInstall('Event', Event.prototype);
 Object.defineProperty(Event.prototype, 'composedPath', {enumerable:true});
+
+// Chromium: core/events/ui_event.{idl,cc} and mouse_event.{idl,cc}.
+// Constructed UI events keep their WebIDL-owned state in JavaScript; dispatch
+// still crosses the existing Event boundary and therefore preserves the same
+// target/path/default-action ownership as Event.
+class UIEvent extends Event {
+  constructor(type, options = {}) {
+    if (options == null) options = {};
+    super(type, options);
+    this.view = options.view === undefined ? null : options.view;
+    this.detail = options.detail === undefined ? 0 : Number(options.detail) | 0;
+    this.sourceCapabilities = options.sourceCapabilities === undefined ? null : options.sourceCapabilities;
+  }
+  initUIEvent(type, bubbles = false, cancelable = false, view = null, detail = 0) {
+    const state = eventStates.get(this);
+    if (state?.dispatching) return;
+    this.type = String(type); this.bubbles = !!bubbles; this.cancelable = !!cancelable;
+    this.view = view; this.detail = Number(detail) | 0;
+  }
+  get which() { return 0; }
+}
+globalThis.UIEvent = UIEvent;
+
+const modifierNames = new Map([
+  ['Alt','altKey'], ['AltGraph','modifierAltGraph'], ['CapsLock','modifierCapsLock'],
+  ['Control','ctrlKey'], ['Fn','modifierFn'], ['Meta','metaKey'],
+  ['NumLock','modifierNumLock'], ['ScrollLock','modifierScrollLock'],
+  ['Shift','shiftKey'], ['Symbol','modifierSymbol']
+]);
+class MouseEvent extends UIEvent {
+  constructor(type, options = {}) {
+    if (options == null) options = {};
+    super(type, options);
+    this.screenX = Number(options.screenX ?? 0); this.screenY = Number(options.screenY ?? 0);
+    this.clientX = Number(options.clientX ?? 0); this.clientY = Number(options.clientY ?? 0);
+    this.pageX = this.clientX + (this.view?.scrollX || 0);
+    this.pageY = this.clientY + (this.view?.scrollY || 0);
+    this.x = this.clientX; this.y = this.clientY;
+    this.offsetX = this.clientX; this.offsetY = this.clientY;
+    this.movementX = Number(options.movementX ?? 0) | 0;
+    this.movementY = Number(options.movementY ?? 0) | 0;
+    this.ctrlKey = !!options.ctrlKey; this.shiftKey = !!options.shiftKey;
+    this.altKey = !!options.altKey; this.metaKey = !!options.metaKey;
+    this.modifierAltGraph = !!options.modifierAltGraph;
+    this.modifierCapsLock = !!options.modifierCapsLock;
+    this.modifierFn = !!options.modifierFn; this.modifierNumLock = !!options.modifierNumLock;
+    this.modifierScrollLock = !!options.modifierScrollLock;
+    this.modifierSymbol = !!options.modifierSymbol;
+    this.button = Number(options.button ?? 0) << 16 >> 16;
+    this.buttons = Number(options.buttons ?? 0) & 0xffff;
+    this.relatedTarget = options.relatedTarget === undefined ? null : options.relatedTarget;
+    this.layerX = this.pageX | 0; this.layerY = this.pageY | 0;
+  }
+  get which() { return (this.button + 1) >>> 0; }
+  getModifierState(key) { const member = modifierNames.get(String(key)); return member ? !!this[member] : false; }
+  initMouseEvent(type, bubbles = false, cancelable = false, view = null, detail = 0,
+                 screenX = 0, screenY = 0, clientX = 0, clientY = 0,
+                 ctrlKey = false, altKey = false, shiftKey = false, metaKey = false,
+                 button = 0, relatedTarget = null) {
+    const state = eventStates.get(this);
+    if (state?.dispatching) return;
+    this.initUIEvent(type, bubbles, cancelable, view, detail);
+    this.screenX = Number(screenX); this.screenY = Number(screenY);
+    this.clientX = Number(clientX); this.clientY = Number(clientY);
+    this.pageX = this.clientX + (view?.scrollX || 0); this.pageY = this.clientY + (view?.scrollY || 0);
+    this.x = this.clientX; this.y = this.clientY; this.offsetX = this.clientX; this.offsetY = this.clientY;
+    this.ctrlKey = !!ctrlKey; this.altKey = !!altKey; this.shiftKey = !!shiftKey; this.metaKey = !!metaKey;
+    this.button = Number(button) << 16 >> 16; this.buttons = 0; this.relatedTarget = relatedTarget;
+    this.layerX = this.pageX | 0; this.layerY = this.pageY | 0;
+  }
+  get fromElement() { return this.type === 'mouseout' || this.type === 'mouseleave' ? this.target : this.relatedTarget; }
+  get toElement() { return this.type === 'mouseout' || this.type === 'mouseleave' ? this.relatedTarget : this.target; }
+}
+globalThis.MouseEvent = MouseEvent;
+
 __domWrap('__eventState', (event,target,current,phase,passive,native) => {
   const state=eventStates.get(event);
   if (!state) throw new TypeError('Invalid event dispatch');
@@ -200,6 +275,12 @@ function slotFlattenOption(options) {
 }
 class HTMLHeadingElement extends HTMLElement {
   constructor() { return constructHTMLElement(new.target, HTMLHeadingElement, 'h1'); }}
+// cpp: third_party/blink/renderer/core/html/html_div_element.idl
+class HTMLDivElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLDivElement, 'div'); }}
+// cpp: third_party/blink/renderer/core/html/html_li_element.{idl,cc}
+class HTMLLIElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLLIElement, 'li'); }}
 class HTMLAnchorElement extends HTMLElement {
   constructor() { return constructHTMLElement(new.target, HTMLAnchorElement, 'a'); }
   get href() { const value=this.getAttribute('href'); if(value===null)return ''; try{return new URL(value,document.URL).href;}catch{return value;} }
@@ -265,6 +346,12 @@ class ElementInternals {
 class CharacterData extends Node {}
 class Text extends CharacterData {}
 class Comment extends CharacterData {}
+// Chromium: core/dom/cdata_section.idl and processing_instruction.idl.
+// These interfaces are exposed on Window even in HTML documents.  XML-only
+// construction does not make their constructors optional: libraries use the
+// prototype objects while installing DOM polyfills.
+class CDATASection extends Text {}
+class ProcessingInstruction extends CharacterData {}
 const domTokenListState = new WeakMap(), domTokenLists = new WeakMap();
 class DOMTokenList {
   constructor() { throw new TypeError('Illegal constructor'); }
@@ -361,8 +448,9 @@ for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElemen
     HTMLSelectElement, HTMLOptionElement, HTMLLabelElement, HTMLDetailsElement, HTMLPreElement,
     HTMLDialogElement, HTMLScriptElement, HTMLStyleElement, HTMLLinkElement,
     HTMLMetaElement, HTMLIFrameElement, HTMLImageElement, HTMLCanvasElement, HTMLTemplateElement, HTMLSlotElement,
-    HTMLHeadingElement, HTMLAnchorElement, HTMLMediaElement, HTMLVideoElement, HTMLAudioElement,
-    Document, DocumentFragment, ShadowRoot, ElementInternals, CharacterData, Text, Comment, DOMTokenList, NodeList, HTMLCollection, HTMLOptionsCollection})) {
+    HTMLHeadingElement, HTMLDivElement, HTMLLIElement, HTMLAnchorElement, HTMLMediaElement, HTMLVideoElement, HTMLAudioElement,
+    Document, DocumentFragment, ShadowRoot, ElementInternals, CharacterData, Text, Comment,
+    CDATASection, ProcessingInstruction, DOMTokenList, NodeList, HTMLCollection, HTMLOptionsCollection})) {
   Object.defineProperty(globalThis, name, {value:cls, writable:true, configurable:true});
   Object.defineProperty(cls.prototype, Symbol.toStringTag, {value:name, configurable:true});
   install(name, cls.prototype);
@@ -413,6 +501,9 @@ for (const member of ['nodeType','nodeName','ownerDocument','parentNode','childN
   nativeAttribute(Node, member);
 for (const member of ['nodeValue','textContent']) nativeAttribute(Node, member, nullableString, {reactions:true});
 nativeAttribute(CharacterData, 'data', nullToEmptyString);
+nativeAttribute(ProcessingInstruction, 'target');
+Object.defineProperty(ProcessingInstruction.prototype, 'sheet', {configurable:true, enumerable:true,
+  get() { requireInterface(this, 'ProcessingInstruction'); return null; }});
 for (const member of ['tagName','localName','namespaceURI']) nativeAttribute(Element, member);
 for (const member of ['id','className']) nativeAttribute(Element, member, attributeDOMString, {reactions:true});
 for (const cls of [Element, ShadowRoot]) nativeAttribute(cls, 'innerHTML', nullToEmptyString, {reactions:true});
@@ -555,7 +646,19 @@ Image.prototype=HTMLImageElement.prototype;
 Object.defineProperty(Image.prototype,'constructor',{value:Image,writable:true,configurable:true});
 globalThis.Image=Image;
 for (const name of ['appendChild', 'insertBefore', 'removeChild', 'cloneNode'])
-  Node.prototype[name] = function(...args) { return invoke(this, name, ...args); };
+  Node.prototype[name] = function(...args) {
+    try {
+      return invoke(this, name, ...args);
+    } catch (error) {
+      // ContainerNode::RemoveChild reports NotFoundError when oldChild is no
+      // longer a direct child. The native mutation boundary carries the DOM
+      // validation result without panicking the page thread; restore the Web
+      // IDL exception class at this wrapper boundary.
+      if (name === 'removeChild' && error instanceof TypeError && error.message === 'child is not in parent')
+        throw new DOMException('The node to be removed is not a child of this node.', 'NotFoundError');
+      throw error;
+    }
+  };
 for (const name of ['createElement','createElementNS','createTextNode','createComment','createDocumentFragment'])
   Document.prototype[name] = function(...args) { return invoke(this, name, ...args.map(x => x == null ? x : String(x))); };
 // Blink Document::importNode: Web IDL conversion belongs here; the native DOM
@@ -581,6 +684,32 @@ Document.prototype.writeln = function(...text) { invoke(this, 'write', text.map(
 // cross the JavaScript/host boundary once per ancestor.
 Node.prototype.contains = function(other) { return invoke(this, 'contains', other); };
 Node.prototype.hasChildNodes = function() { return this.firstChild !== null; };
+// cpp: third_party/blink/renderer/core/dom/node.cc:1379-1394
+// Normalize every descendant container, then merge adjacent Text siblings and
+// remove empty Text nodes. Use the ordinary mutation surface so custom-element
+// reactions and MutationObserver records retain their existing task boundary.
+Node.prototype.normalize = function() {
+  requireInterface(this, 'Node');
+  let child = this.firstChild;
+  while (child) {
+    if (child.nodeType === 3) {
+      let next = child.nextSibling;
+      while (next?.nodeType === 3) {
+        child.data += next.data;
+        this.removeChild(next);
+        next = child.nextSibling;
+      }
+      if (child.data === '') {
+        next = child.nextSibling;
+        this.removeChild(child);
+        child = next;
+      } else child = child.nextSibling;
+    } else {
+      child.normalize();
+      child = child.nextSibling;
+    }
+  }
+};
 Node.prototype.getRootNode = function(options = {}) {
   if (options !== null && typeof options !== 'object' && typeof options !== 'function')
     throw new TypeError('GetRootNodeOptions must be an object');
@@ -830,6 +959,8 @@ Object.defineProperty(Element.prototype, 'style', {get() {
     get(target, key) { if (key in target || typeof key !== 'string') return target[key];
       if (key === 'cssText') return node.getAttribute('style') || '';
       return invoke(node, 'getStyle', cssName(key)); },
+    has(target, key) { if (key in target) return true;
+      return typeof key === 'string' && invoke(node, 'hasStyle', cssName(key)); },
     set(_, key, value) { if (key === 'cssText') node.setAttribute('style', String(value));
       else invoke(node, 'setStyle', cssName(key), String(value ?? ''), ''); return true; }
   })); } return styles.get(this);

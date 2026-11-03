@@ -1,9 +1,9 @@
 //! Actual Chromium printf growth algorithm on the original native std::string.
 //! Formatting and va_list/errno SDK operations use genuine primitive bindings.
-#[cfg(not(sk_native_ostream_abi_configured))]
+#[cfg(not(sk_ostream_abi_configured))]
 compile_error!("Actual native std::string/ostream ABI metadata must be supplied before Chromium StringAppendV logging can instantiate");
-use crate::interop::native_ostream::{
-    rechrom_native_errno_address, rechrom_native_vspanprintf, NativeStdString, StdStringStorage,
+use crate::interop::ostream::{
+    rechrom_native_errno_address, rechrom_native_vspanprintf, StdString, StdStringStorage,
 };
 use core::{
     ffi::{c_int, VaList},
@@ -31,9 +31,9 @@ impl ScopedClearLastError {
         #[cfg(windows)]
         {
             let last_system_error =
-                unsafe { crate::interop::native_ostream::rechrom_native_get_last_error() };
+                unsafe { crate::interop::ostream::rechrom_native_get_last_error() };
             unsafe {
-                crate::interop::native_ostream::rechrom_native_set_last_error(0);
+                crate::interop::ostream::rechrom_native_set_last_error(0);
             }
             Self {
                 last_errno,
@@ -51,7 +51,7 @@ impl Drop for ScopedClearLastError {
         unsafe {
             // Source: base/scoped_clear_last_error_win.cc:16-18
             #[cfg(windows)]
-            crate::interop::native_ostream::rechrom_native_set_last_error(self.last_system_error);
+            crate::interop::ostream::rechrom_native_set_last_error(self.last_system_error);
             // Native base destructor follows derived destructor.
             *errno_ptr() = self.last_errno;
         }
@@ -76,12 +76,12 @@ unsafe fn VSpanPrintf(buffer: &mut [u8], format: *const u8, args: &VaList<'_>) -
 /// Native by-value std::string return maps to its caller's actual pinned return
 /// slot. S supplies genuine exact native ABI storage; format/args obey printf.
 pub unsafe fn StringPrintV_at<S: StdStringStorage>(
-    out: *mut NativeStdString<S>,
+    out: *mut StdString<S>,
     format: *const u8,
     ap: &VaList<'_>,
 ) {
     unsafe {
-        NativeStdString::<S>::initialize_empty_at_assuming_native_abi(out);
+        StdString::<S>::initialize_empty_at_assuming_native_abi(out);
     }
     unsafe {
         StringAppendV(Pin::new_unchecked(&mut *out), format, ap);
@@ -93,7 +93,7 @@ pub unsafe fn StringPrintV_at<S: StdStringStorage>(
 /// remain live. ap is borrowed from the caller's existing cursor: each clone is
 /// actual va_copy and is explicitly dropped (va_end) at the original source line.
 pub unsafe fn StringAppendV<S: StdStringStorage>(
-    mut dst: Pin<&mut NativeStdString<S>>,
+    mut dst: Pin<&mut StdString<S>>,
     format: *const u8,
     ap: &VaList<'_>,
 ) {
@@ -192,8 +192,8 @@ unsafe fn log_size_warning() {
 
 // The following are genuine fixed FormatSpec instantiations, not a variadic
 // substitute for Absl's general compile-time typed StringPrintf template.
-#[cfg(sk_native_ostream_abi_configured)]
-use crate::interop::native_ostream::ConfiguredStdString;
+#[cfg(sk_ostream_abi_configured)]
+use crate::interop::ostream::ConfiguredStdString;
 unsafe extern "C" {
     fn rechrom_absl_hex8_at(out: *mut core::ffi::c_void, value: u32);
     fn rechrom_absl_system_hex_at(out: *mut core::ffi::c_void, value: core::ffi::c_ulong);
@@ -211,35 +211,35 @@ unsafe extern "C" {
         len: usize,
     );
 }
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 pub unsafe fn StringPrintfHex8_at(out: *mut ConfiguredStdString, value: u32) {
     unsafe {
-        rechrom_absl_hex8_at(ConfiguredStdString::native_return_slot(out), value);
+        rechrom_absl_hex8_at(ConfiguredStdString::return_slot(out), value);
     }
 }
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 pub unsafe fn StringPrintfSystemHex_at(out: *mut ConfiguredStdString, value: core::ffi::c_ulong) {
     unsafe {
-        rechrom_absl_system_hex_at(ConfiguredStdString::native_return_slot(out), value);
+        rechrom_absl_system_hex_at(ConfiguredStdString::return_slot(out), value);
     }
 }
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 pub unsafe fn StringPrintfSystemError_at(
     out: *mut ConfiguredStdString,
     last: core::ffi::c_ulong,
     value: core::ffi::c_ulong,
 ) {
     unsafe {
-        rechrom_absl_system_error_at(ConfiguredStdString::native_return_slot(out), last, value);
+        rechrom_absl_system_error_at(ConfiguredStdString::return_slot(out), last, value);
     }
 }
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 pub unsafe fn StringPrintfSystemDecimal_at(out: *mut ConfiguredStdString, value: c_int) {
     unsafe {
-        rechrom_absl_system_decimal_at(ConfiguredStdString::native_return_slot(out), value);
+        rechrom_absl_system_decimal_at(ConfiguredStdString::return_slot(out), value);
     }
 }
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 pub unsafe fn BuildCrashStringFormat_at(
     out: *mut ConfiguredStdString,
     file: *const u8,
@@ -248,7 +248,7 @@ pub unsafe fn BuildCrashStringFormat_at(
 ) {
     unsafe {
         rechrom_absl_crash_string_at(
-            ConfiguredStdString::native_return_slot(out),
+            ConfiguredStdString::return_slot(out),
             file,
             line,
             message.as_ptr(),

@@ -21,14 +21,15 @@ pub(crate) fn SelectCursor(document: &Document, hit: Option<u64>) -> Cursor {
     let Some(index) = element else {
         return Cursor::kDefault;
     };
-    let style = document.ResolvedStyleFor(index).map(|s| &s.style);
-    let cursor = style.map_or(Cursor::kAuto, |s| s.paint.cursor);
+    let style = document
+        .ResolvedStyleFor(index)
+        .and_then(|style| style.ComputedStyle());
+    let cursor = style.map_or(Cursor::kAuto, |style| style.Cursor());
     if cursor != Cursor::kAuto {
         return cursor;
     }
-    let vertical = style.is_some_and(|s| {
-        s.writing_mode != layoutng_assembly::internal::layout_input::WritingMode::kHorizontalTb
-    });
+    let vertical =
+        style.is_some_and(|style| style.GetWritingMode() != foundation::WritingMode::kHorizontalTb);
     let mut editable = false;
     let mut ancestor = Some(index);
     while let Some(i) = ancestor {

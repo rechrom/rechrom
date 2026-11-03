@@ -1,4 +1,4 @@
-//! Native DOM reference changes, independent of JS engine or GC placement.
+//! Chromium DOM reference changes, independent of JS engine or GC placement.
 //! cpp: Node::Trace, ContainerNode::Trace, Element::Trace, ShadowRoot::Trace.
 use std::{cell::RefCell, rc::Weak};
 

@@ -15,8 +15,8 @@ use super::glyph::Glyph;
 use super::glyph_metrics_map::GlyphMetricsMap;
 use super::shaping::han_kerning::FontData as HanKerningFontData;
 use super::shaping::ng_shape_cache::NGShapeCache;
-use crate::text::native::layout_locale::LayoutLocale;
-use crate::text::native::opentype_font::{FontMetric, OpenTypeFont};
+use crate::text::implementation::layout_locale::LayoutLocale;
+use crate::text::implementation::opentype_font::{FontMetric, OpenTypeFont};
 use foundation::gfx::{PointF, SizeF};
 use foundation::{
     LayoutUnit, MakeGarbageCollected, Member, RectF, TextDirection, Traceable, Visitor,

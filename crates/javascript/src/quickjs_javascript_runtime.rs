@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::javascript_runtime::*;
+#[path = "quickjs_adapter.rs"]
+mod adapter;
 #[path = "quickjs_module_worker.rs"]
 mod module_worker;
-#[path = "quickjs_native.rs"]
-mod native;
-pub use native::Value as JsValue;
-use native::*;
+pub use adapter::Value as JsValue;
+use adapter::*;
 
 #[path = "quickjs_console.rs"]
 mod console;
@@ -113,7 +113,7 @@ struct PreparedClassicScript {
 }
 pub struct QuickJsJavaScriptRuntime {
     realms: Vec<JavaScriptRealm>,
-    native_stack_budget: usize,
+    stack_budget: usize,
     compilation_executor: Option<std::sync::Arc<dyn executor::Executor>>,
     module_worker: Option<module_worker::Worker>,
     module_worker_unavailable: bool,
@@ -130,7 +130,7 @@ impl Default for QuickJsJavaScriptRuntime {
     fn default() -> Self {
         Self {
             realms: Vec::new(),
-            native_stack_budget: 1024 * 1024,
+            stack_budget: 1024 * 1024,
             compilation_executor: Some(executor::inline()),
             module_worker: None,
             module_worker_unavailable: false,
@@ -143,18 +143,18 @@ impl QuickJsJavaScriptRuntime {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Configure the embedding's native stack allowance through QuickJS's
+    /// Configure the embedding's maximum stack size through QuickJS's
     /// public API. The caller must leave room for the host's own stack frames
     /// and select a budget below the actual stack available on its thread.
     /// The default remains 1 MiB for threads whose stack size is unknown.
-    pub fn with_native_stack_budget(bytes: usize) -> Self {
+    pub fn with_max_stack_size(bytes: usize) -> Self {
         assert!(
             bytes > 0,
-            "a native stack budget must retain overflow protection"
+            "the maximum stack size must retain overflow protection"
         );
         Self {
             realms: Vec::new(),
-            native_stack_budget: bytes,
+            stack_budget: bytes,
             compilation_executor: Some(executor::inline()),
             module_worker: None,
             module_worker_unavailable: false,
@@ -335,7 +335,7 @@ fn host_result(
     state: &Rc<RefCell<State>>,
     result: HostResult,
 ) -> JsResult<Value> {
-    let _native_roots = SynchronizeHostGraph(ctx, state)?;
+    let _host_roots = SynchronizeHostGraph(ctx, state)?;
     if let Some(e) = result.exception {
         Err(error(ctx, e))
     } else {
@@ -411,7 +411,7 @@ impl HostCallable for HostFunction {
                 if answer.handled || answer.exception.is_some() {
                     host_result(ctx, state, answer)
                 } else {
-                    let _native_roots = SynchronizeHostGraph(ctx, state)?;
+                    let _host_roots = SynchronizeHostGraph(ctx, state)?;
                     Ok(state
                         .borrow()
                         .fallbacks
@@ -437,7 +437,7 @@ impl HostCallable for HostFunction {
                         arguments: &[host_value],
                     },
                 );
-                let _native_roots = SynchronizeHostGraph(ctx, state)?;
+                let _host_roots = SynchronizeHostGraph(ctx, state)?;
                 if let Some(e) = answer.exception {
                     return Err(error(ctx, e));
                 }
@@ -447,7 +447,7 @@ impl HostCallable for HostFunction {
                 Ok(Value::Undefined)
             }
             Action::Get(id) | Action::Set(id) | Action::Has(id) => {
-                let mut _native_roots = Vec::new();
+                let mut _host_roots = Vec::new();
                 let target = args.first().cloned().unwrap_or(Value::Undefined);
                 let key = args.get(1).cloned().unwrap_or(Value::Undefined);
                 let set = matches!(self.action, Action::Set(_));
@@ -478,7 +478,7 @@ impl HostCallable for HostFunction {
                             arguments: values,
                         },
                     );
-                    _native_roots.extend(SynchronizeHostGraph(ctx, state)?);
+                    _host_roots.extend(SynchronizeHostGraph(ctx, state)?);
                     if let Some(e) = answer.exception {
                         return Err(error(ctx, e));
                     }
@@ -562,11 +562,11 @@ fn install_prototype(
 }
 
 fn to_js(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue) -> JsResult<Value> {
-    let _native_roots = SynchronizeHostGraph(ctx, state)?;
+    let _host_roots = SynchronizeHostGraph(ctx, state)?;
     to_js_value(ctx, state, value)
 }
 
-// The caller holds the synchronized native roots across the whole conversion.
+// The caller holds the synchronized host roots across the whole conversion.
 // Recursive records and callback arguments must not poll the host per object.
 fn to_js_value(
     ctx: &mut Context,
@@ -599,7 +599,7 @@ fn to_js_value(
                 .ok_or_else(|| ctx.type_error("Function belongs to another engine"))?,
         ),
         HostValue::Method(m) => {
-            // A bound native method retains its receiver through engine-marked
+            // A bound host method retains its receiver through engine-marked
             // captures, even if the caller stores the method separately.
             let capture = state
                 .borrow()
@@ -632,15 +632,12 @@ fn to_js_value(
                 return Ok(Value::Object(object));
             }
             let managed = state.borrow().host_graph.Manages(o.id);
-            // A native cell is already an ordinary traced object. Surface it
+            // A host cell is already an ordinary traced object. Surface it
             // directly as the wrapper target instead of creating a second
             // object and a cycle for every Node (DOMDataStore inline storage).
-            let mut native_cells = Vec::new();
+            let mut cells = Vec::new();
             let target = if managed {
-                state
-                    .borrow_mut()
-                    .host_graph
-                    .Cell(ctx, o.id, &mut native_cells)?
+                state.borrow_mut().host_graph.Cell(ctx, o.id, &mut cells)?
             } else {
                 ctx.new_object()
             };
@@ -649,7 +646,7 @@ fn to_js_value(
             let object = if ordinary {
                 // Ordinary host wrappers resolve installed/author descriptors
                 // directly in the engine, as Blink's V8 instance templates do.
-                // Identity and the native interface brand remain in the same
+                // Identity and the host interface brand remain in the same
                 // realm-local registry; neither depends on the prototype.
                 target.clone()
             } else {
@@ -819,7 +816,7 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
     fn CreateRealm(&mut self, host: Rc<RefCell<dyn JavaScriptHostBindings>>) -> JavaScriptRealm {
         let profiling = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
         let realm_started = profiling.then(std::time::Instant::now);
-        let mut context = Context::with_native_stack_budget(self.native_stack_budget);
+        let mut context = Context::with_max_stack_size(self.stack_budget);
         if let Some(start) = realm_started {
             eprintln!(
                 "javascript-realm-profile phase=context ms={:.3}",
@@ -934,11 +931,11 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
             worker.set_wake(self.module_compilation_wake.clone());
             self.module_worker = Some(worker);
         }
-        let worker = self.module_worker.as_ref().unwrap().begin_classic(
-            source,
-            name,
-            self.native_stack_budget,
-        );
+        let worker =
+            self.module_worker
+                .as_ref()
+                .unwrap()
+                .begin_classic(source, name, self.stack_budget);
         self.prepared_classic_scripts.push(PreparedClassicScript {
             realm: realm.clone(),
             worker,
@@ -975,7 +972,7 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         let boundary = bridge_profile::Measurement::start();
         let answer = realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
-                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                let _host_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
                     Ok(roots) => roots,
                     Err(error) => return result(&mut r.context, Err(error), name),
                 };
@@ -1021,7 +1018,7 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         }
         realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
-                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                let _host_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
                     Ok(roots) => roots,
                     Err(error) => return result(&mut r.context, Err(error), name),
                 };
@@ -1086,11 +1083,11 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
             worker.set_wake(self.module_compilation_wake.clone());
             self.module_worker = Some(worker);
         }
-        let worker =
-            self.module_worker
-                .as_ref()
-                .unwrap()
-                .begin(source, name, self.native_stack_budget);
+        let worker = self
+            .module_worker
+            .as_ref()
+            .unwrap()
+            .begin(source, name, self.stack_budget);
         Some(JavaScriptModuleCompilationJob::new(
             QuickJsModuleCompilationJob {
                 realm: realm.clone(),
@@ -1199,7 +1196,7 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         };
         realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
-                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                let _host_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
                     Ok(roots) => roots,
                     Err(error) => return result(&mut r.context, Err(error), name),
                 };
@@ -1243,7 +1240,7 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         }
         realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
-                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                let _host_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
                     Ok(roots) => roots,
                     Err(error) => return result(&mut r.context, Err(error), name),
                 };
@@ -1345,12 +1342,12 @@ fn call(
     trace.set("argc", arguments.len() as f64);
     let boundary = bridge_profile::Measurement::start();
     let value = (|| {
-        let _native_roots = SynchronizeHostGraph(ctx, state)?;
+        let _host_roots = SynchronizeHostGraph(ctx, state)?;
         let function = callback
             .Implementation::<JsObject>()
             .ok_or_else(|| ctx.type_error("Invalid callback"))?;
-        // Pin the native receiver before argument allocation can collect a
-        // just-popped native reaction/event task's former root.
+        // Pin the host receiver before argument allocation can collect a
+        // just-popped host reaction/event task's former root.
         let receiver = to_js_value(ctx, state, receiver)?;
         let args = arguments
             .iter()
@@ -1364,7 +1361,7 @@ fn call(
 }
 
 fn clone_value(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue) -> HostResult {
-    let _native_roots = match SynchronizeHostGraph(ctx, state) {
+    let _host_roots = match SynchronizeHostGraph(ctx, state) {
         Ok(roots) => roots,
         Err(error) => {
             return HostResult {
@@ -1382,7 +1379,7 @@ fn clone_value(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue)
     }
     let answer = (|| {
         let input = to_js_value(ctx, state, value)?;
-        let proxy_check = Value::Object(ctx.new_native_function(is_proxy, "", 1, 0));
+        let proxy_check = Value::Object(ctx.new_callback_function(is_proxy, "", 1, 0));
         // Copy the handle out before executing JS: getters may reenter Clone.
         let cached = state.borrow().clone_copier.clone();
         let copier = match cached {
@@ -1426,7 +1423,7 @@ fn enqueue(ctx: &mut Context, callback: &JavaScriptFunction) -> HostResult {
 }
 fn checkpoint(ctx: &mut Context, state: &Rc<RefCell<State>>) {
     let hooks = state.borrow().hooks.clone();
-    let _native_roots = match SynchronizeHostGraph(ctx, state) {
+    let _host_roots = match SynchronizeHostGraph(ctx, state) {
         Ok(roots) => roots,
         Err(error) => {
             let reported = exception(ctx, &error, "");
@@ -1552,7 +1549,7 @@ impl JavaScriptHostRuntime for HostRuntime<'_> {
         call(self.context, self.state, callback, receiver, args)
     }
     fn ToString(&mut self, value: &HostValue) -> HostResult {
-        let _native_roots = match SynchronizeHostGraph(self.context, self.state) {
+        let _host_roots = match SynchronizeHostGraph(self.context, self.state) {
             Ok(roots) => roots,
             Err(error) => {
                 return HostResult {
@@ -1893,6 +1890,8 @@ mod tests {
                 Intl.NumberFormat.supportedLocalesOf(['en', 'de-DE', 'zh-CN', 'zz-ZZ']),
                 new Intl.NumberFormat('de-DE', {minimumFractionDigits:2, maximumFractionDigits:2}).format(1234.5),
                 new Intl.NumberFormat('en', {maximumFractionDigits:0}).format(-1.5),
+                new Intl.NumberFormat('de-DE', {minimumFractionDigits:2, maximumFractionDigits:2}).formatToParts(1234.5).map(({type,value}) => [type,value]),
+                new Intl.NumberFormat('en').formatToParts(-Infinity).map(({type,value}) => [type,value]),
                 new Intl.DateTimeFormat('en-US', {timeZone:'UTC'}).format(Date.UTC(2026,9,15)),
                 new Intl.PluralRules('ar').select(2),
                 new Intl.PluralRules('en', {type:'ordinal'}).select(2),
@@ -1908,7 +1907,38 @@ mod tests {
                 .as_string()
                 .unwrap()
                 .to_string_lossy(),
-            r#"[["en","de-DE","zh-CN"],"1.234,50","-2","10/15/2026","two","two","other"]"#
+            r#"[["en","de-DE","zh-CN"],"1.234,50","-2",[["integer","1"],["group","."],["integer","234"],["decimal",","],["fraction","50"]],[["minusSign","-"],["infinity","∞"]],"10/15/2026","two","two","other"]"#
+        );
+    }
+
+    #[test]
+    fn intl_segmenter_exposes_utf16_segments_and_word_status() {
+        let mut runtime = QuickJsJavaScriptRuntime::new();
+        let realm = runtime.CreateRealm(Rc::new(RefCell::new(EmptyHost)));
+        let result = runtime.Evaluate(
+            &realm,
+            r#"
+                const graphemes = [...new Intl.Segmenter('en').segment('A🇺🇸e\u0301')];
+                const words = [...new Intl.Segmenter('en', {granularity:'word'}).segment('Hi, 42!')];
+                JSON.stringify([
+                    graphemes.map(x => [x.segment, x.index]),
+                    words.map(x => [x.segment, x.index, x.isWordLike]),
+                    new Intl.Segmenter().segment('a😀b').containing(2).segment,
+                    new Intl.Segmenter('de', {granularity:'sentence'}).resolvedOptions()
+                ])
+            "#,
+            "intl-segmenter.js",
+        );
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        assert_eq!(
+            result
+                .value
+                .Implementation::<JsValue>()
+                .unwrap()
+                .as_string()
+                .unwrap()
+                .to_string_lossy(),
+            r#"[[["A",0],["🇺🇸",1],["é",5]],[["Hi",0,true],[",",2,false],[" ",3,false],["42",4,true],["!",6,false]],"😀",{"locale":"de","granularity":"sentence"}]"#
         );
     }
 
@@ -2784,12 +2814,12 @@ mod wrapper_identity_tests {
                 let scope = SynchronizeHostGraph(&mut r.context, &r.state).unwrap();
                 assert!(
                     weak.upgrade().is_some(),
-                    "former native root died before callback/return conversion"
+                    "former host root died before callback/return conversion"
                 );
                 drop(scope);
                 assert!(
                     weak.upgrade().is_none(),
-                    "former native root survived its conversion scope"
+                    "former host root survived its conversion scope"
                 );
                 source.0.borrow_mut().extend([
                     C::Root {
@@ -2819,12 +2849,12 @@ mod wrapper_identity_tests {
                 let scope = SynchronizeHostGraph(&mut r.context, &r.state).unwrap();
                 assert!(
                     weak.upgrade().is_some(),
-                    "removed native edge died before return conversion"
+                    "removed host edge died before return conversion"
                 );
                 drop(scope);
                 assert!(
                     weak.upgrade().is_none(),
-                    "removed native edge survived its conversion scope"
+                    "removed host edge survived its conversion scope"
                 );
             })
             .unwrap();
@@ -2980,7 +3010,7 @@ mod background_module_tests {
     }
     #[test]
     fn background_module_preserves_compile_only_import_meta_and_microtask_order() {
-        let mut runtime = QuickJsJavaScriptRuntime::with_native_stack_budget(8 * 1024 * 1024);
+        let mut runtime = QuickJsJavaScriptRuntime::with_max_stack_size(8 * 1024 * 1024);
         let realm = runtime.CreateRealm(Rc::new(RefCell::new(EmptyHost)));
         assert!(runtime
             .Evaluate(

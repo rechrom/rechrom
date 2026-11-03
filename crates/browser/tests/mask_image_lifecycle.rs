@@ -1,6 +1,6 @@
 //! Mask URL resource lifecycle through the real document/Style/Layout/Paint pipeline.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -178,7 +178,7 @@ const RED: [u8; 4] = [255, 0, 0, 255];
 
 #[test]
 fn unavailable_mask_is_hidden_without_a_fake_resource() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for outcome in [
             Outcome::Pending,
@@ -206,8 +206,8 @@ fn unavailable_mask_is_hidden_without_a_fake_resource() {
     });
 }
 #[test]
-fn pending_mask_load_reveals_and_retains_native_object_and_old_artifact() {
-    native_test_thread::run(|| {
+fn pending_mask_load_reveals_and_retains_source_object_and_old_artifact() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut page, outcome) = fixture("url(fixture.svg)", "add", Outcome::Pending, false);
         let object = native(&page) as *const LayoutObject;
@@ -249,7 +249,7 @@ fn pending_mask_load_reveals_and_retains_native_object_and_old_artifact() {
 }
 #[test]
 fn pending_layer_suppresses_other_loaded_layers_until_failure() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut page, outcome) = fixture(
             "linear-gradient(black,black),url(fixture.svg)",
@@ -268,7 +268,7 @@ fn pending_layer_suppresses_other_loaded_layers_until_failure() {
 }
 #[test]
 fn pseudo_mask_failure_updates_the_actual_style_consumer() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut page, outcome) = fixture(
             "linear-gradient(black,black),url(fixture.svg)",
@@ -284,8 +284,8 @@ fn pseudo_mask_failure_updates_the_actual_style_consumer() {
 }
 
 #[test]
-fn non_renderable_slots_keep_native_layer_position_and_compositing() {
-    native_test_thread::run(|| {
+fn non_renderable_slots_keep_source_layer_position_and_compositing() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         // Chromium skips a failed/none source before selecting its operator.
         // A renderable upper source still keeps its operation when the native

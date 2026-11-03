@@ -130,7 +130,7 @@ pub enum WheelRailsMode {
 /// boot-relative event timestamp. The effective WheelEvent.phase still drives
 /// host dispatch; momentum identity must also survive coalescing.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NativeWheelMetadata {
+pub struct WheelMetadata {
     pub timestamp_seconds: f64,
     pub phase: u64,
     pub momentum_phase: u64,
@@ -141,8 +141,15 @@ pub struct WheelEvent {
     /// runs; its default scroll is synchronized through main-frame deltas.
     pub compositor_owned: bool,
     pub phase: WheelPhase,
+    /// WebMouseWheelEvent::has_synthetic_phase. The host phase handler sets
+    /// this when it adds Begin/Changed/End around a phase-less wheel stream.
+    pub has_synthetic_phase: bool,
     pub rails_mode: WheelRailsMode,
-    pub native: Option<NativeWheelMetadata>,
+    pub native: Option<WheelMetadata>,
+    /// Monotonic event time captured at the platform input boundary. Keeping
+    /// this with the sample prevents queueing and impl-thread batching from
+    /// changing the velocity seen by Chromium's elastic scroll controller.
+    pub timestamp: Option<std::time::Instant>,
     pub delta_units: ScrollGranularity,
     pub position: Offset,
     pub delta: Offset,
@@ -171,6 +178,7 @@ impl WheelEvent {
             && self.modifiers == next.modifiers
             && self.delta_units == next.delta_units
             && self.phase == next.phase
+            && self.has_synthetic_phase == next.has_synthetic_phase
             && self.rails_mode == next.rails_mode
             && match (self.native, next.native) {
                 (Some(a), Some(b)) => a.phase == b.phase && a.momentum_phase == b.momentum_phase,

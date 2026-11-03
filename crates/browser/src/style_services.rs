@@ -143,6 +143,8 @@ pub(crate) fn MediaValuesForLayout(
 ) -> MediaValuesCachedData {
     let width = constraints.available_size.width;
     let height = constraints.available_size.height;
+    let scrollbar_theme = constraints.scrollbar_theme.as_ref();
+    let viewport = constraints.viewport.as_ref();
     MediaValuesCachedData {
         viewport_width: width,
         viewport_height: height,
@@ -170,6 +172,13 @@ pub(crate) fn MediaValuesForLayout(
         preferred_color_scheme,
         forced_colors,
         scripting: Scripting::kEnabled,
+        scrollbar_theme_auto_thickness: scrollbar_theme.map_or(0, |theme| theme.auto_thickness),
+        scrollbar_theme_thin_thickness: scrollbar_theme.map_or(0, |theme| theme.thin_thickness),
+        scrollbar_theme_uses_overlay_scrollbars: scrollbar_theme
+            .is_some_and(|theme| theme.uses_overlay_scrollbars),
+        visual_viewport_supplies_scrollbars: viewport
+            .is_some_and(|viewport| viewport.visual_viewport_supplies_scrollbars),
+        hide_scrollbars: viewport.is_some_and(|viewport| viewport.hide_scrollbars),
         ..Default::default()
     }
 }
@@ -585,12 +594,12 @@ pub(crate) fn CreateStyleBindingsHost(
             let sheets = user_agent.ForDocument(owner.GetDocument());
             engine
                 .borrow_mut()
-                .Update(&mut owner, &environment, sheets)
+                .Update(&mut *owner, &environment, sheets)
                 .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));
             if let Some(node) = owner.GetDocument().FindNodeById(id) {
                 engine
                     .borrow_mut()
-                    .EnsureComputedStyle(&mut owner, &environment, sheets, node)
+                    .EnsureComputedStyle(&mut *owner, &environment, sheets, node)
                     .unwrap_or_else(|error| panic!("computed style ensure failed: {error}"));
             }
             heap_scope.DeferCollection();
@@ -769,7 +778,7 @@ mod measurement_tests {
     use webapi::dom_bindings::DOMJavaScriptBindings;
     #[test]
     fn live_javascript_metrics_and_client_rects_match_cpp_after_mutations() {
-        crate::native_test_thread::run(live_measurement_body);
+        crate::test_thread::run(live_measurement_body);
     }
     fn live_measurement_body() {
         let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(include_str!(

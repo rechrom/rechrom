@@ -31,7 +31,7 @@ resident Chromium objects into package trait calls, but do not own the
 iteration, selection, phase-order, or fallback policy. This keeps downstream
 imports stable while making Cargo ownership and package-level compilation
 expose accidental reverse dependencies. The external command/effect protocol and
-`NativeCompositorFrameSubmission` remain facade-owned boundary names.
+`CompositorFrameSubmission` remain facade-owned boundary names.
 
 | Package | Owns | Primary performance evidence |
 | --- | --- | --- |

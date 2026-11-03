@@ -1,6 +1,6 @@
 //! Native SVG no-layer ownership must survive the Layout to Paint boundary.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -10,6 +10,7 @@ use layoutng_assembly::{
         layout_input::FontFace, layout_object::LayoutObject,
         layout_pass_scope::LayoutObjectFactoryScope,
     },
+    layout_engine::PaintFragmentCursor,
 };
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
@@ -122,19 +123,23 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     panic!("missing native layout object {name}")
 }
 
-fn find_fragment(node: &FragmentPaintData, wanted: u64) -> Option<&FragmentPaintData> {
-    if node.node_id == wanted {
+fn find_fragment(node: PaintFragmentCursor<'_>, wanted: u64) -> Option<PaintFragmentCursor<'_>> {
+    if node.PaintData().node_id == wanted {
         Some(node)
     } else {
-        node.children
-            .iter()
+        node.Children()
+            .into_iter()
             .find_map(|child| find_fragment(child, wanted))
     }
 }
 
 fn fragment<'a>(page: &'a Page, name: &str) -> &'a FragmentPaintData {
-    find_fragment(&page.CurrentFrame().unwrap().fragments, id(page, name))
-        .unwrap_or_else(|| panic!("missing published fragment {name}"))
+    find_fragment(
+        PaintFragmentCursor::FromHandle(&page.CurrentFrame().unwrap().fragments),
+        id(page, name),
+    )
+    .map(PaintFragmentCursor::PaintData)
+    .unwrap_or_else(|| panic!("missing published fragment {name}"))
 }
 
 fn set_attribute(page: &mut Page, name: &str, attribute: &str, value: &str) {
@@ -166,14 +171,14 @@ fn pixels(page: &Page, artifact: &std::sync::Arc<PaintArtifact>) -> Vec<u32> {
 }
 
 #[test]
-fn native_svg_no_layer_keeps_sibling_paint_order_and_old_frames() {
-    native_test_thread::run(|| {
+fn svg_no_layer_keeps_sibling_paint_order_and_old_frames() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(GRAPHIC);
         for name in ["group", "back", "front"] {
             assert!(native(&page, name).IsSVGChild());
             let f = fragment(&page, name);
-            assert!(f.paint.paint_layer_state_is_native);
+            assert!(f.paint.paint_layer_state_is_authoritative);
             assert_eq!(
                 f.paint.paint_layer_client_id, 0,
                 "SVG descendant has no native layer"
@@ -207,7 +212,7 @@ fn native_svg_no_layer_keeps_sibling_paint_order_and_old_frames() {
 
 #[test]
 fn fetched_svg_keeps_transformed_shapes_in_document_order() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let p = page_fixture(r#"<img id="image" src="fixture.svg">"#, Some(GRAPHIC));
         let actual = pixels(&p, &p.CurrentFrame().unwrap().display_items);
@@ -220,23 +225,24 @@ fn fetched_svg_keeps_transformed_shapes_in_document_order() {
 }
 
 #[test]
-fn native_svg_mask_keeps_the_existing_shared_recording_scope() {
-    native_test_thread::run(|| {
+fn svg_mask_is_owned_by_the_svg_paint_scope_without_a_css_layer() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             r#"<svg width="80" height="80"><svg id="masked" width="60" height="60" style="mask-image:linear-gradient(black,black)"><rect width="40" height="40" fill="red"/></svg></svg>"#,
         );
         let masked = fragment(&page, "masked");
         assert!(native(&page, "masked").IsSVGChild());
-        assert!(masked.paint.paint_layer_state_is_native);
+        assert!(masked.paint.paint_layer_state_is_authoritative);
         assert_eq!(masked.paint.paint_layer_client_id, 0);
         assert!(!masked.paint.style.mask_images.is_empty());
-        // Mask drawing is still owned by PaintLayerPainter in the existing
-        // adapter. Keep the same shared classification consumed by Interaction
-        // until source SVG mask effect scopes no longer need a synthetic layer.
         let classification = paint::paint_order::ClassifyFragmentPaintLayer(masked, false, false);
-        assert!(classification.is_paint_layer && classification.is_stacking_context);
+        assert!(!classification.is_paint_layer);
         let artifact = &page.CurrentFrame().unwrap().display_items;
+        assert!(artifact.display_items.iter().any(|item| {
+            item.id.client_id == masked.paint.display_item_client_id
+                && item.id.r#type == paint::display_item_id::DisplayItemIdType::kSVGMask
+        }));
         assert!(artifact.items.iter().any(|item| {
             item.node_id == id(&page, "masked")
                 && item.r#type == paint::paint_engine::DisplayItemType::kSaveLayerDstIn

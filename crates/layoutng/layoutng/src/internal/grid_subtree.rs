@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_algo_grid/src/native_grid_subtree.rs"]
-mod layout_algo_grid_native_grid_subtree;
+#[path = "../../../layout_algo_grid/src/grid_subtree.rs"]
+mod layout_algo_grid_grid_subtree;
 
-pub use layout_algo_grid_native_grid_subtree::*;
+pub use layout_algo_grid_grid_subtree::*;

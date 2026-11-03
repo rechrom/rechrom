@@ -10,7 +10,7 @@
 //! metrics-only CountFilterUse 75-126 plus calls 209-210,224, and pure debug
 //! checks 199,225,281,310. All remaining production cc:44-357 maps: enum/function
 //! selection, percent/number/angle defaults and clamping, reference URL/resource
-//! identity plus old filter reuse, native operation creation and list append
+//! identity plus old filter reuse, computed style operation creation and list append
 //! order, blur/drop-shadow conversion and offscreen initialization/URL rejection.
 //! Existing FilterOperations/FilterOperation subclasses/ShadowData/CSSValue and
 //! StyleResolverState are reused. Only absent reference-filter/resource and value/
@@ -40,8 +40,8 @@ type List<B> = <<B as StyleResolverStateBackend>::ValueDispatch as CSSValueDispa
 type URI<B> = <<B as StyleResolverStateBackend>::ValueDispatch as CSSValueDispatch>::CSSURIValue;
 
 /// Required CSSValue/StyleBuilderConverter/CSSToLengthConversionData and missing
-/// native ReferenceFilterOperation owner methods. The list/numeric decisions,
-/// old-style filter reuse and creation of existing native CSS classes stay Rust.
+/// computed style ReferenceFilterOperation owner methods. The list/numeric decisions,
+/// old-style filter reuse and creation of existing computed style CSS classes stay Rust.
 pub trait FilterOperationResolverBackend: StyleResolverStateBackend {
     type Filter;
     fn FilterListValues(&self, value: &List<Self>) -> Vec<Rc<ResolverValue<Self>>>;
@@ -261,7 +261,7 @@ impl<B: FilterOperationResolverBackend> FilterOperationResolver<B> {
             }
             _ => unreachable!("invalid CSS filter function"),
         };
-        // Native derived operation classes use repr(C), base offset zero, and
+        // Canonical derived operation classes use repr(C), base offset zero, and
         // their registered concrete allocation owns tracing/destruction.
         operations.OperationsMut().push(Member::from_ptr(pointer));
     }

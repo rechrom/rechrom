@@ -71,7 +71,7 @@ fn dump_search_geometry() {
                 let n = document.Node(current);
                 wanted.push(n.Id());
                 let s = document.ResolvedStyleFor(current).unwrap();
-                let native = unsafe { &*s.native_style.Get() };
+                let native = unsafe { &*s.computed_style_owner.Get() };
                 let primary = unsafe { &*native.GetFont() }.PrimaryFont();
                 let font = if primary.is_null() {
                     None

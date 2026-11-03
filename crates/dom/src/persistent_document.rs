@@ -3,11 +3,11 @@
 use crate::error::{invalid_argument, logic_error};
 use crate::ImageResourceMetadata;
 use cssom::{CSSDeclaration, CSSOMAdoptionError, CSSOMEvent, CSSOMMutation, CSSStyleSheet, CSSOM};
-use font_engine::text::native::bidi_paragraph::BidiParagraph;
+use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
 use foundation::Persistent;
 use foundation::{StringView, TextDirection};
-use layoutng_assembly::internal::layout_input::{ComputedStyle, Offset};
-use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
+use layoutng_assembly::internal::layout_input::Offset;
+use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
@@ -395,6 +395,21 @@ impl DOMPartNamesMap {
 // cpp: dom/document.h:43-77
 // Stable arena indices stand in for stable C++ node addresses. No Rust reference
 // to an arena element is retained across allocation or reparenting.
+#[derive(Clone, Default)]
+struct ElementStyleSlot {
+    style: Option<std::sync::Arc<ResolvedNodeStyle>>,
+    resources: ResolvedStyleResources,
+}
+
+impl std::fmt::Debug for ElementStyleSlot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ElementStyleSlot")
+            .field("has_style", &self.style.is_some())
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DOMNode {
     id: u64,
@@ -404,6 +419,11 @@ pub struct DOMNode {
     data: String,
     attributes: Vec<DOMAttribute>,
     inline_style: RefCell<Option<cssom::CSSInlineStyle>>,
+    // Chromium stores the canonical ComputedStyle on Element. Keep the same
+    // element-local lifetime and O(1) arena lookup instead of a document-wide
+    // NodeId hash table. The Arc roots the immutable boundary record while
+    // Layout retains the canonical traced ComputedStyle owner inside it.
+    resolved_style: ElementStyleSlot,
     owner_document_handle: Option<DOMOwnerHandle>,
     parent: Option<usize>,
     children: Vec<usize>,
@@ -494,6 +514,7 @@ pub enum PseudoContent {
         natural_width: Option<f64>,
         natural_height: Option<f64>,
         resolution_scale: f64,
+        known_to_be_opaque: bool,
     },
 }
 
@@ -520,6 +541,7 @@ impl PartialEq for PseudoContent {
                     natural_width: a_width,
                     natural_height: a_height,
                     resolution_scale: a_scale,
+                    known_to_be_opaque: a_opaque,
                 },
                 Self::Image {
                     resource_id: b_id,
@@ -527,6 +549,7 @@ impl PartialEq for PseudoContent {
                     natural_width: b_width,
                     natural_height: b_height,
                     resolution_scale: b_scale,
+                    known_to_be_opaque: b_opaque,
                 },
             ) => {
                 a_id == b_id
@@ -534,6 +557,7 @@ impl PartialEq for PseudoContent {
                     && a_width == b_width
                     && a_height == b_height
                     && a_scale == b_scale
+                    && a_opaque == b_opaque
             }
             _ => false,
         }
@@ -542,9 +566,8 @@ impl PartialEq for PseudoContent {
 
 #[derive(Clone)]
 pub struct PseudoElement {
-    pub style: ComputedStyle,
-    /// Owns the immutable Chromium style referenced by `style.native_style`.
-    pub native_style: Persistent<NativeComputedStyle>,
+    /// Owns the immutable Chromium style used by DOM, Layout and Paint.
+    pub computed_style_owner: Persistent<StyleComputedStyle>,
     pub text: String,
     /// Ordered non-alt generated content. Chromium creates one anonymous
     /// layout child per ContentData node; `text` remains the concatenated view
@@ -552,15 +575,14 @@ pub struct PseudoElement {
     pub content: Vec<PseudoContent>,
     pub display_contents: bool,
     /// A generated ::before/::after whose computed display is list-item owns
-    /// its own ::marker pseudo. The box keeps the public projection while its
-    /// native style owns the matching cached pseudo style.
+    /// its own ::marker pseudo. The box and the cached pseudo style share the
+    /// same canonical Chromium style owner.
     pub marker: Option<Box<PseudoElement>>,
 }
 
 impl PartialEq for PseudoElement {
     fn eq(&self, other: &Self) -> bool {
-        self.style == other.style
-            && self.native_style.Get() == other.native_style.Get()
+        self.computed_style_owner.Get() == other.computed_style_owner.Get()
             && self.text == other.text
             && self.content == other.content
             && self.display_contents == other.display_contents
@@ -571,8 +593,7 @@ impl PartialEq for PseudoElement {
 impl Default for PseudoElement {
     fn default() -> Self {
         Self {
-            style: ComputedStyle::default(),
-            native_style: Persistent::default(),
+            computed_style_owner: Persistent::default(),
             text: String::new(),
             content: Vec::new(),
             display_contents: false,
@@ -583,9 +604,10 @@ impl Default for PseudoElement {
 
 impl PseudoElement {
     fn SamePaintInput(&self, other: &Self) -> bool {
-        let native_equal = match (unsafe { self.native_style.Get().as_ref() }, unsafe {
-            other.native_style.Get().as_ref()
-        }) {
+        let equal = match (
+            unsafe { self.computed_style_owner.Get().as_ref() },
+            unsafe { other.computed_style_owner.Get().as_ref() },
+        ) {
             (Some(a), Some(b)) => {
                 layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
                     a, b,
@@ -594,9 +616,7 @@ impl PseudoElement {
             (None, None) => true,
             _ => false,
         };
-        native_equal
-            && self.style.LayoutEquivalent(&other.style)
-            && self.style.paint == other.style.paint
+        equal
             && self.text == other.text
             && self.content == other.content
             && self.display_contents == other.display_contents
@@ -606,18 +626,15 @@ impl PseudoElement {
                 _ => false,
             }
     }
-    pub fn SetNativeStyle(&mut self, native_style: Persistent<NativeComputedStyle>) {
-        self.style.native_style = native_style.Get();
-        self.native_style = native_style;
+    pub fn SetComputedStyleOwner(&mut self, owner: Persistent<StyleComputedStyle>) {
+        self.computed_style_owner = owner;
     }
 }
 
 #[derive(Clone)]
 pub struct ResolvedNodeStyle {
-    pub style: ComputedStyle,
     /// Roots the immutable Chromium style used by the live LayoutObject tree.
-    /// `style.native_style` is a borrowed pointer into this owner.
-    pub native_style: Persistent<NativeComputedStyle>,
+    pub computed_style_owner: Persistent<StyleComputedStyle>,
     pub generates_box: bool,
     pub own_generates_box: bool,
     pub own_display_contents: bool,
@@ -628,7 +645,7 @@ pub struct ResolvedNodeStyle {
     pub has_explicit_inheritance: Option<bool>,
     // Blink resolves pending StyleImages while producing ComputedStyle. Keep
     // the corresponding immutable dependency list with that resolved result;
-    // resource discovery must not re-walk every native style field on each
+    // resource discovery must not re-walk every canonical style field on each
     // rendering opportunity.
     referenced_style_image_sources: std::sync::Arc<[String]>,
     pub before: Option<PseudoElement>,
@@ -636,15 +653,23 @@ pub struct ResolvedNodeStyle {
     pub first_letter: Option<PseudoElement>,
     pub placeholder: Option<PseudoElement>,
     /// Generated list marker style owned by the originating list item. The
-    /// native object is also cached on `native_style` under kPseudoIdMarker;
-    /// this projection is the retained DOM-to-layout edge.
+    /// same canonical object is cached on the originating style under
+    /// kPseudoIdMarker and is borrowed by Layout during attachment.
     pub marker: Option<PseudoElement>,
+}
+
+#[derive(Clone, Default, PartialEq)]
+pub struct ResolvedStyleResources {
+    pub svg_mask_resource:
+        Option<std::sync::Arc<layoutng_assembly::internal::paint_input::SvgMaskGraph>>,
+    pub svg_fill_server: Option<layoutng_assembly::internal::paint_input::SvgPaintServer>,
+    pub svg_stroke_server: Option<layoutng_assembly::internal::paint_input::SvgPaintServer>,
+    pub svg_markers: Vec<layoutng_assembly::internal::paint_input::SvgMarkerInstance>,
 }
 
 impl PartialEq for ResolvedNodeStyle {
     fn eq(&self, other: &Self) -> bool {
-        self.style == other.style
-            && self.native_style.Get() == other.native_style.Get()
+        self.computed_style_owner.Get() == other.computed_style_owner.Get()
             && self.generates_box == other.generates_box
             && self.own_generates_box == other.own_generates_box
             && self.own_display_contents == other.own_display_contents
@@ -663,8 +688,7 @@ impl PartialEq for ResolvedNodeStyle {
 impl Default for ResolvedNodeStyle {
     fn default() -> Self {
         Self {
-            style: ComputedStyle::default(),
-            native_style: Persistent::default(),
+            computed_style_owner: Persistent::default(),
             generates_box: true,
             own_generates_box: true,
             own_display_contents: false,
@@ -682,13 +706,17 @@ impl Default for ResolvedNodeStyle {
 }
 
 impl ResolvedNodeStyle {
-    pub fn SetNativeStyle(&mut self, native_style: Persistent<NativeComputedStyle>) {
-        self.style.native_style = native_style.Get();
-        self.native_style = native_style;
+    /// Borrow the canonical Chromium style rooted by this element.
+    pub fn ComputedStyle(&self) -> Option<&StyleComputedStyle> {
+        unsafe { self.computed_style_owner.Get().as_ref() }
+    }
+
+    pub fn SetComputedStyleOwner(&mut self, owner: Persistent<StyleComputedStyle>) {
+        self.computed_style_owner = owner;
         self.referenced_style_image_sources = Default::default();
     }
 
-    /// URLs referenced by the canonical native computed style, including
+    /// URLs referenced by the canonical computed style, including
     /// generated-content pseudos. Resource loading consumes this dependency
     /// view without re-parsing CSS or flattening StyleImage into DOM state.
     pub fn ReferencedStyleImageSources(&self) -> &[String] {
@@ -696,11 +724,14 @@ impl ResolvedNodeStyle {
     }
 
     fn RefreshReferencedStyleImageSources(&mut self) {
+        if self.computed_style_owner.Get().is_null() {
+            return;
+        }
         self.referenced_style_image_sources = StyleImageSources(self).into();
     }
 }
 
-fn NativeStyleImageSources(style: &NativeComputedStyle, output: &mut Vec<String>) {
+fn CollectStyleImageSources(style: &StyleComputedStyle, output: &mut Vec<String>) {
     use layoutng_style::style::{
         content_data::ImageContentData, fill_layer::FillLayer, style_fetched_image::FetchedImage,
         style_image::StyleImage,
@@ -754,15 +785,15 @@ fn NativeStyleImageSources(style: &NativeComputedStyle, output: &mut Vec<String>
 fn StyleImageSources(style: &ResolvedNodeStyle) -> Vec<String> {
     let mut output = Vec::new();
     fn append_pseudo(pseudo: &PseudoElement, output: &mut Vec<String>) {
-        if let Some(native) = unsafe { pseudo.native_style.Get().as_ref() } {
-            NativeStyleImageSources(native, output);
+        if let Some(source) = unsafe { pseudo.computed_style_owner.Get().as_ref() } {
+            CollectStyleImageSources(source, output);
         }
         if let Some(marker) = pseudo.marker.as_deref() {
             append_pseudo(marker, output);
         }
     }
-    if let Some(native) = unsafe { style.native_style.Get().as_ref() } {
-        NativeStyleImageSources(native, &mut output);
+    if let Some(source) = unsafe { style.computed_style_owner.Get().as_ref() } {
+        CollectStyleImageSources(source, &mut output);
     }
     for pseudo in style
         .before
@@ -799,6 +830,11 @@ enum ImageResourceState {
 pub struct PersistentDocument {
     document_url: String,
     arena: Vec<DOMNode>,
+    // cpp: TreeScope::elements_by_id_. Connected document and shadow tree
+    // scopes own the live ID membership. Duplicate IDs remain an unordered
+    // set here; the uncommon ordered query walks only to order those matches,
+    // as Blink's TreeOrderedMap does lazily.
+    tree_scope_elements_by_id: HashMap<usize, HashMap<String, HashSet<usize>>>,
     node_reference_observers: crate::node_references::NodeReferenceObservers,
     // HTML input/button identities are stable across attribute/type changes.
     // Notifications still check live type, form and connectedness.
@@ -904,6 +940,14 @@ pub struct PersistentDocument {
     // needs it to apply image-set resolution only to bitmap images, matching
     // StyleFetchedImage::ApplyImageResolution without depending on Decode.
     document_image_resource_ids: HashSet<u64>,
+    /// Image::MaybeAnimated resource fact. Kept beside the resource catalog so
+    /// LayoutImage invalidation can defer animated repaints without querying
+    /// the paint/compositor snapshot.
+    maybe_animated_image_resource_ids: HashSet<u64>,
+    content_dpr_by_image_resource_id: HashMap<u64, f64>,
+    // core/frame/UseCounter is sticky document state. LayoutImage reports the
+    // two image features through exact resource-client and paint facts below.
+    use_counter: crate::use_counter::UseCounter,
     responsive_image_selections: HashMap<usize, ResponsiveImageSelection>,
     // HTMLImageLoader/ImageResourceContent client relation. Attribute and
     // responsive candidate changes retain the exact <img> consumers so
@@ -913,7 +957,6 @@ pub struct PersistentDocument {
     // owner because it survives source reselection but is reset by removal.
     responsive_image_auto_sizes: HashMap<usize, f64>,
     scroll_offsets: HashMap<u64, Offset>,
-    resolved_styles: HashMap<u64, std::sync::Arc<ResolvedNodeStyle>>,
     // StyleFetchedImage::AddClient/RemoveClient: only resolved CSS consumers
     // need their background/mask resource IDs refreshed on image completion.
     style_image_consumers: HashMap<String, BTreeSet<usize>>,
@@ -964,6 +1007,7 @@ impl PersistentDocument {
     fn new() -> Self {
         let mut document = Self {
             arena: Vec::new(),
+            tree_scope_elements_by_id: HashMap::new(),
             node_reference_observers: Vec::new(),
             form_observer_elements: Some(Vec::new()),
             arena_id: NEXT_ARENA_ID.fetch_add(1, Ordering::Relaxed),
@@ -1015,11 +1059,13 @@ impl PersistentDocument {
             ownerless_style_sheet_scopes: HashMap::new(),
             image_resources: HashMap::new(),
             document_image_resource_ids: HashSet::new(),
+            maybe_animated_image_resource_ids: HashSet::new(),
+            content_dpr_by_image_resource_id: HashMap::new(),
+            use_counter: Default::default(),
             responsive_image_selections: HashMap::new(),
             replaced_image_consumers: HashMap::new(),
             responsive_image_auto_sizes: HashMap::new(),
             scroll_offsets: HashMap::new(),
-            resolved_styles: HashMap::new(),
             style_image_consumers: HashMap::new(),
             style_state: Default::default(),
             control_checked_state: HashMap::new(),
@@ -1479,7 +1525,43 @@ impl PersistentDocument {
         (!negative || parsed == 0).then_some(parsed)
     }
 
-    pub(crate) fn FindElementByIdInTreeScope(&self, element: usize, id: &str) -> Option<usize> {
+    pub fn TreeScopeContainsMultipleElementsWithId(&self, scope: usize, id: &str) -> bool {
+        !id.is_empty()
+            && self
+                .tree_scope_elements_by_id
+                .get(&scope)
+                .and_then(|ids| ids.get(id))
+                .is_some_and(|elements| elements.len() > 1)
+    }
+
+    pub fn ElementsByIdInTreeScope(&self, scope: usize, id: &str) -> Vec<usize> {
+        let Some(elements) = self
+            .tree_scope_elements_by_id
+            .get(&scope)
+            .and_then(|ids| ids.get(id))
+            .filter(|elements| !elements.is_empty())
+        else {
+            return Vec::new();
+        };
+        if elements.len() == 1 {
+            return elements.iter().copied().collect();
+        }
+        let mut ordered = Vec::with_capacity(elements.len());
+        let mut pending = vec![scope];
+        while let Some(node) = pending.pop() {
+            if elements.contains(&node) {
+                ordered.push(node);
+            }
+            pending.extend(self.arena[node].children.iter().rev().copied());
+        }
+        ordered
+    }
+
+    pub fn FindElementByIdInTreeScope(&self, element: usize, id: &str) -> Option<usize> {
+        let scope = self.TreeScopeRoot(element);
+        if scope == self.root || self.shadow_hosts.contains_key(&scope) {
+            return self.ElementsByIdInTreeScope(scope, id).into_iter().next();
+        }
         fn find(document: &PersistentDocument, node: usize, id: &str) -> Option<usize> {
             if document.arena[node].node_type == DOMNodeType::kElement
                 && document.arena[node]
@@ -1493,7 +1575,7 @@ impl PersistentDocument {
                 .iter()
                 .find_map(|&child| find(document, child, id))
         }
-        find(self, self.TreeScopeRoot(element), id)
+        find(self, scope, id)
     }
 
     fn IsLabelableElement(&self, element: usize) -> bool {
@@ -1719,6 +1801,7 @@ impl PersistentDocument {
             data,
             attributes,
             inline_style: RefCell::new(None),
+            resolved_style: Default::default(),
             owner_document_handle,
             parent: None,
             children: Vec::new(),
@@ -2966,6 +3049,90 @@ impl PersistentDocument {
         root
     }
 
+    fn RegisteredTreeScope(&self, node: usize) -> Option<usize> {
+        let scope = self.TreeScopeRoot(node);
+        (scope == self.root || self.shadow_hosts.contains_key(&scope)).then_some(scope)
+    }
+
+    fn AddElementById(&mut self, scope: usize, id: &str, element: usize) {
+        if id.is_empty() {
+            return;
+        }
+        self.tree_scope_elements_by_id
+            .entry(scope)
+            .or_default()
+            .entry(id.to_owned())
+            .or_default()
+            .insert(element);
+    }
+
+    fn RemoveElementById(&mut self, scope: usize, id: &str, element: usize) {
+        let mut remove_id = false;
+        if let Some(elements) = self
+            .tree_scope_elements_by_id
+            .get_mut(&scope)
+            .and_then(|ids| ids.get_mut(id))
+        {
+            elements.remove(&element);
+            remove_id = elements.is_empty();
+        }
+        if remove_id {
+            let ids = self
+                .tree_scope_elements_by_id
+                .get_mut(&scope)
+                .expect("registered TreeScope ID owner");
+            ids.remove(id);
+            if ids.is_empty() {
+                self.tree_scope_elements_by_id.remove(&scope);
+            }
+        }
+    }
+
+    fn UpdateSubtreeIdsInTreeScope(&mut self, root: usize, scope: usize, add: bool) {
+        let arena = &self.arena;
+        let scopes = &mut self.tree_scope_elements_by_id;
+        let ids = scopes.entry(scope).or_default();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            if let Some(id) = (arena[node].node_type == DOMNodeType::kElement)
+                .then(|| arena[node].FindAttribute("id"))
+                .flatten()
+                .map(|attribute| attribute.value.as_str())
+                .filter(|id| !id.is_empty())
+            {
+                if add {
+                    ids.entry(id.to_owned()).or_default().insert(node);
+                } else if let Some(elements) = ids.get_mut(id) {
+                    elements.remove(&node);
+                }
+            }
+            pending.extend_from_slice(&arena[node].children);
+        }
+        if !add {
+            ids.retain(|_, elements| !elements.is_empty());
+            if ids.is_empty() {
+                scopes.remove(&scope);
+            }
+        }
+    }
+
+    fn UpdateElementIdInTreeScope(
+        &mut self,
+        element: usize,
+        old_id: Option<&str>,
+        new_id: Option<&str>,
+    ) {
+        let Some(scope) = self.RegisteredTreeScope(element) else {
+            return;
+        };
+        if let Some(id) = old_id {
+            self.RemoveElementById(scope, id, element);
+        }
+        if let Some(id) = new_id {
+            self.AddElementById(scope, id, element);
+        }
+    }
+
     pub fn ContainingShadowRoot(&self, node: usize) -> Option<usize> {
         let root = self.TreeScopeRoot(node);
         self.shadow_hosts.contains_key(&root).then_some(root)
@@ -3064,8 +3231,8 @@ impl PersistentDocument {
         if !self.style_state.all_dirty
             && self.arena[node].node_type == DOMNodeType::kElement
             && self.ResolvedStyleFor(node).is_none_or(|style| {
-                unsafe { style.native_style.Get().as_ref() }
-                    .is_some_and(|native| native.IsEnsuredInDisplayNone())
+                unsafe { style.computed_style_owner.Get().as_ref() }
+                    .is_some_and(|source| source.IsEnsuredInDisplayNone())
                     || (!style.generates_box && !style.display_contents)
             })
         {
@@ -3449,7 +3616,7 @@ impl PersistentDocument {
     }
 
     /// Blink HTMLSlotElement::FlattenedAssignedNodes / CollectFlattenedAssignedNodes.
-    /// Assignment and fallback are resolved in their native owner, never in a
+    /// Assignment and fallback are resolved in their source owner, never in a
     /// script wrapper or a second layout-specific distribution algorithm.
     pub fn FlattenedAssignedNodes(&self, slot: usize) -> Vec<usize> {
         if !self.IsSlotSupportingAssignment(slot) {
@@ -3738,6 +3905,7 @@ impl PersistentDocument {
         let Some(parent) = self.arena[child].parent else {
             return;
         };
+        let old_scope = self.RegisteredTreeScope(child);
         self.CustomElementSubtreeWillBeRemoved(child);
         // HTMLSelectElement::OptionRemoved runs while OwnerSelectElement is
         // still observable. Capture associations that this detach breaks;
@@ -3811,6 +3979,9 @@ impl PersistentDocument {
                 .flatten(),
         };
         self.arena[parent].children.remove(position);
+        if let Some(scope) = old_scope {
+            self.UpdateSubtreeIdsInTreeScope(child, scope, false);
+        }
         self.arena[child].parent = None;
         self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Child {
             parent: self.arena[parent].id,
@@ -3830,6 +4001,7 @@ impl PersistentDocument {
         let mut detached = vec![child];
         while let Some(node) = detached.pop() {
             let id = self.arena[node].id;
+            self.SetReplacedImageConsumerConnected(node, false);
             self.modal_dialogs.remove(&id);
             self.open_popovers.remove(&id);
             self.top_layer_elements.retain(|candidate| *candidate != id);
@@ -3883,6 +4055,9 @@ impl PersistentDocument {
             .flatten();
         self.arena[parent].children.push(child);
         self.arena[child].parent = Some(parent);
+        if let Some(scope) = self.RegisteredTreeScope(child) {
+            self.UpdateSubtreeIdsInTreeScope(child, scope, true);
+        }
         self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Child {
             parent: self.arena[parent].id,
             child: self.arena[child].id,
@@ -3903,6 +4078,7 @@ impl PersistentDocument {
         if let Some(owner) = owner {
             self.AdoptNodeByHandle(child, owner);
         }
+        self.UpdateReplacedImageConsumerConnectivity(child, true);
         self.CustomElementSubtreeInserted(child);
     }
 
@@ -3948,6 +4124,9 @@ impl PersistentDocument {
         };
         self.arena[parent].children.insert(position, child);
         self.arena[child].parent = Some(parent);
+        if let Some(scope) = self.RegisteredTreeScope(child) {
+            self.UpdateSubtreeIdsInTreeScope(child, scope, true);
+        }
         self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Child {
             parent: self.arena[parent].id,
             child: self.arena[child].id,
@@ -3977,6 +4156,7 @@ impl PersistentDocument {
         if let Some(owner) = owner {
             self.AdoptNodeByHandle(child, owner);
         }
+        self.UpdateReplacedImageConsumerConnectivity(child, true);
         self.CustomElementSubtreeInserted(child);
     }
 
@@ -4117,6 +4297,21 @@ impl PersistentDocument {
         if !changed {
             return;
         }
+        let id_changed = attribute.namespace_uri.is_empty() && attribute.local_name == "id";
+        let old_tree_scope_id = id_changed
+            .then(|| existing.map(|index| self.arena[element].attributes[index].value.clone()))
+            .flatten();
+        let new_tree_scope_id = id_changed.then(|| attribute.value.clone());
+        let image_map_paint_owner_may_change = attribute.namespace_uri.is_empty()
+            && ((self.arena[element].IsElement("area", DOMNamespace::kHTML)
+                && matches!(attribute.local_name.as_str(), "shape" | "coords"))
+                || (self.arena[element].IsElement("map", DOMNamespace::kHTML)
+                    && matches!(attribute.local_name.as_str(), "name" | "id"))
+                || (self.arena[element].IsElement("img", DOMNamespace::kHTML)
+                    && attribute.local_name == "usemap"));
+        let image_map_paint_owners_before = image_map_paint_owner_may_change
+            .then(|| self.ImageMapPaintOwnersForElementMutation(element))
+            .unwrap_or_default();
         let old_replaced_image_source = (attribute.namespace_uri.is_empty()
             && attribute.local_name == "src"
             && self.arena[element].IsHTMLElement("img"))
@@ -4196,6 +4391,21 @@ impl PersistentDocument {
             self.arena[element].attributes[index] = attribute;
         } else {
             self.arena[element].attributes.push(attribute);
+        }
+        if id_changed {
+            self.UpdateElementIdInTreeScope(
+                element,
+                old_tree_scope_id.as_deref(),
+                new_tree_scope_id.as_deref(),
+            );
+        }
+        if image_map_paint_owner_may_change {
+            let image_map_paint_owners_after = self.ImageMapPaintOwnersForElementMutation(element);
+            self.RecordImageMapPaintOwnerChanges(
+                image_map_paint_owners_before
+                    .into_iter()
+                    .chain(image_map_paint_owners_after),
+            );
         }
         self.SyncReplacedImageConsumer(element, old_replaced_image_source.as_deref());
         if self.arena[element].IsElement("option", DOMNamespace::kHTML) {
@@ -4291,6 +4501,23 @@ impl PersistentDocument {
         if namespace_uri.is_empty() && local_name == "style" {
             self.arena[element].inline_style.get_mut().take();
         }
+        let removed_tree_scope_id = (namespace_uri.is_empty() && local_name == "id")
+            .then(|| {
+                self.arena[element]
+                    .FindAttribute("id")
+                    .map(|attribute| attribute.value.clone())
+            })
+            .flatten();
+        let image_map_paint_owner_may_change = namespace_uri.is_empty()
+            && ((self.arena[element].IsElement("area", DOMNamespace::kHTML)
+                && matches!(local_name, "shape" | "coords"))
+                || (self.arena[element].IsElement("map", DOMNamespace::kHTML)
+                    && matches!(local_name, "name" | "id"))
+                || (self.arena[element].IsElement("img", DOMNamespace::kHTML)
+                    && local_name == "usemap"));
+        let image_map_paint_owners_before = image_map_paint_owner_may_change
+            .then(|| self.ImageMapPaintOwnersForElementMutation(element))
+            .unwrap_or_default();
         let old_replaced_image_source = (namespace_uri.is_empty()
             && local_name == "src"
             && self.arena[element].IsHTMLElement("img"))
@@ -4362,6 +4589,17 @@ impl PersistentDocument {
         self.arena[element].attributes.retain(|attribute| {
             attribute.local_name != local_name || attribute.namespace_uri != namespace_uri
         });
+        if let Some(id) = removed_tree_scope_id.as_deref() {
+            self.UpdateElementIdInTreeScope(element, Some(id), None);
+        }
+        if image_map_paint_owner_may_change {
+            let image_map_paint_owners_after = self.ImageMapPaintOwnersForElementMutation(element);
+            self.RecordImageMapPaintOwnerChanges(
+                image_map_paint_owners_before
+                    .into_iter()
+                    .chain(image_map_paint_owners_after),
+            );
+        }
         self.SyncReplacedImageConsumer(element, old_replaced_image_source.as_deref());
         // Removal restores the same owner defaults as HTMLStyleElement's
         // ParseAttribute with a null new value.
@@ -4873,7 +5111,7 @@ impl PersistentDocument {
     }
 
     // cpp: listed_element.cc form-owner reset algorithm. This compact owner
-    // covers native listed controls; form-associated custom elements need
+    // covers source listed controls; form-associated custom elements need
     // their own ElementInternals producer before they can enter this path.
     fn FormOwner(&self, control: usize) -> Option<usize> {
         if let Some(id) = self.arena[control]
@@ -5420,7 +5658,7 @@ impl PersistentDocument {
         let changed = previous != value;
         self.control_value_state.insert(self.arena[node].id, value);
         // cpp: HTMLTextAreaElement::SetValueCommon (603-643). An equal value
-        // preserves native geometry; actual editor/suggestion changes revoke
+        // preserves source geometry; actual editor/suggestion changes revoke
         // it here, at the DOM owner, before Document projects lifecycle effects.
         if changed || had_suggested_value || autofill_changed {
             self.RecordLayoutGeometryChange(node);
@@ -5518,11 +5756,120 @@ impl PersistentDocument {
         let index = id as usize - 1;
         (self.arena[index].id == id).then_some(index)
     }
+
+    // cpp: html_map_element.cc:61-76; html_area_element.cc:193-198.
+    // The map owns the association, and the first matching HTML image in
+    // document order is authoritative when several images name one map.
+    fn ImageMapAncestorForArea(&self, area: usize) -> Option<usize> {
+        if !self.arena[area].IsElement("area", DOMNamespace::kHTML) {
+            return None;
+        }
+        let mut ancestor = self.arena[area].Parent();
+        while let Some(index) = ancestor {
+            if self.arena[index].IsElement("map", DOMNamespace::kHTML) {
+                return Some(index);
+            }
+            ancestor = self.arena[index].Parent();
+        }
+        None
+    }
+
+    fn FirstImageElementForMap(&self, map: usize) -> Option<usize> {
+        if !self.arena[map].IsElement("map", DOMNamespace::kHTML) {
+            return None;
+        }
+        let map_name = self.arena[map]
+            .FindAttribute("name")
+            .map(|attribute| attribute.value.as_str());
+        let map_id = self.arena[map]
+            .FindAttribute("id")
+            .map(|attribute| attribute.value.as_str());
+        fn find(
+            document: &PersistentDocument,
+            node: usize,
+            map_name: Option<&str>,
+            map_id: Option<&str>,
+        ) -> Option<usize> {
+            let candidate = &document.arena[node];
+            if candidate.IsElement("img", DOMNamespace::kHTML)
+                && candidate
+                    .FindAttribute("usemap")
+                    .and_then(|attribute| attribute.value.strip_prefix('#'))
+                    .filter(|name| !name.is_empty())
+                    .is_some_and(|name| Some(name) == map_name || Some(name) == map_id)
+            {
+                return Some(node);
+            }
+            candidate
+                .Children()
+                .iter()
+                .find_map(|&child| find(document, child, map_name, map_id))
+        }
+        find(self, self.TreeScopeRoot(map), map_name, map_id)
+    }
+
+    /// Return the LayoutImage input owner for an associated HTMLAreaElement.
+    /// The returned id belongs to the image, never to the display:none area.
+    pub fn ImageMapImageForAreaId(&self, area_id: u64) -> Option<u64> {
+        let area = self.FindNodeById(area_id)?;
+        let map = self.ImageMapAncestorForArea(area)?;
+        self.FirstImageElementForMap(map)
+            .map(|image| self.arena[image].Id())
+    }
+
+    fn ImageMapPaintOwnersForElementMutation(&self, element: usize) -> Vec<Option<u64>> {
+        if self.arena[element].IsElement("area", DOMNamespace::kHTML) {
+            return vec![self.ImageMapImageForAreaId(self.arena[element].Id())];
+        }
+        if self.arena[element].IsElement("map", DOMNamespace::kHTML)
+            || self.arena[element].IsElement("img", DOMNamespace::kHTML)
+        {
+            // Changing a map's name/id or an image's usemap can promote a
+            // different image to HTMLMapElement::ImageElement(). Capture all
+            // current first-image owners on both sides of the mutation.
+            return self
+                .arena
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.IsElement("map", DOMNamespace::kHTML))
+                .map(|(map, _)| {
+                    self.FirstImageElementForMap(map)
+                        .map(|image| self.arena[image].Id())
+                })
+                .collect();
+        }
+        Vec::new()
+    }
+
+    pub fn InvalidateImageMapPaintOwnerForAreaId(&mut self, area_id: u64) {
+        let owner = self.ImageMapImageForAreaId(area_id);
+        self.RecordImageMapPaintOwnerChanges([owner]);
+    }
+
+    fn RecordImageMapPaintOwnerChanges(&mut self, owners: impl IntoIterator<Item = Option<u64>>) {
+        let mut changed = false;
+        for owner in owners.into_iter().flatten() {
+            changed |= self.style_state.paint_style_nodes.insert(owner);
+        }
+        if changed {
+            self.style_state
+                .impact
+                .Merge(crate::style_state::StyleUpdateImpact {
+                    paint: true,
+                    ..Default::default()
+                });
+        }
+    }
     pub fn TakeAllChildren(&mut self, source: usize, destination: usize) {
         let children = self.arena[source].children.clone();
         for child in children {
             self.AppendChild(destination, child);
         }
+    }
+
+    pub fn NeedsStyleSheetParsing(&self, node_id: u64) -> bool {
+        !self.style_state.parsed_style_elements.contains(&node_id)
+            || self.style_state.dirty_style_elements.contains(&node_id)
     }
 
     // cpp: dom/document.h:134-141
@@ -5790,7 +6137,7 @@ impl PersistentDocument {
                 }
             }
         }
-        if let Some(new_source) = new_source {
+        if let Some(new_source) = new_source.filter(|_| self.IsConnectedToDocument(node)) {
             self.replaced_image_consumers
                 .entry(new_source)
                 .or_default()
@@ -5798,7 +6145,46 @@ impl PersistentDocument {
         }
     }
 
+    // cpp: core/layout/layout_image.cc:67-73. LayoutImageResource::Shutdown
+    // removes the resource observer when the layout image detaches. Keep the
+    // same exact client ownership at the DOM/image-loader boundary, and put it
+    // back when an existing subtree is reattached.
+    fn SetReplacedImageConsumerConnected(&mut self, node: usize, connected: bool) {
+        if !self.arena[node].IsHTMLElement("img") {
+            return;
+        }
+        let Some(source) = self.CurrentImageSource(node).map(str::to_owned) else {
+            return;
+        };
+        if connected {
+            self.replaced_image_consumers
+                .entry(source)
+                .or_default()
+                .insert(node);
+        } else if let Some(consumers) = self.replaced_image_consumers.get_mut(&source) {
+            consumers.remove(&node);
+            if consumers.is_empty() {
+                self.replaced_image_consumers.remove(&source);
+            }
+        }
+    }
+
+    fn UpdateReplacedImageConsumerConnectivity(&mut self, root: usize, connected: bool) {
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            self.SetReplacedImageConsumerConnected(node, connected);
+            if let Some(shadow_root) = self.ShadowRoot(node) {
+                pending.push(shadow_root);
+            }
+            pending.extend_from_slice(&self.arena[node].children);
+        }
+    }
+
     fn InvalidateImageResourceConsumers(&mut self, source: &str) {
+        // cpp: core/layout/layout_image.cc:139-153. Resource notification is
+        // admitted only for the retained LayoutImage which still observes the
+        // exact completing resource. CSS decoration consumers take their
+        // independent immutable StyleImage refresh path below.
         // Completion changes resource state and intrinsic geometry, not
         // selector matching across the entire document. Immutable style-image
         // snapshots must be refreshed only for their actual consumers;
@@ -5821,6 +6207,21 @@ impl PersistentDocument {
             .get(source)
             .map(|consumers| consumers.iter().copied().collect::<Vec<_>>())
             .unwrap_or_default();
+        // cpp: core/layout/layout_image.cc:175-183. This notification is the
+        // translated LayoutImage::ImageChanged admission point: count only if
+        // a still-connected LayoutImage observes this exact resource and the
+        // completing response carried Content-DPR.
+        if !replaced_consumers.is_empty()
+            && self.ImageResourceFor(source).is_some_and(|resource| {
+                self.ImageResourceContentDPR(resource.id).is_some()
+                    && replaced_consumers.iter().any(|&index| {
+                        self.IsConnectedToDocument(index)
+                            && self.CurrentImageSource(index) == Some(source)
+                    })
+            })
+        {
+            self.CountUse(crate::use_counter::WebFeature::kClientHintsContentDPR);
+        }
         for index in replaced_consumers {
             if self.IsConnectedToDocument(index)
                 && self.CurrentImageSource(index) == Some(source)
@@ -5837,9 +6238,9 @@ impl PersistentDocument {
         if self.ImageResourceFor(&source).is_some() {
             invalid_argument("image source must be unique");
         }
-        self.InvalidateImageResourceConsumers(&source);
         self.image_resources
-            .insert(source, ImageResourceState::Loaded(metadata));
+            .insert(source.clone(), ImageResourceState::Loaded(metadata));
+        self.InvalidateImageResourceConsumers(&source);
     }
     pub fn SetImageResourceFailed(&mut self, source: String) -> bool {
         // This completes a pending binding. Repeated failures are idempotent,
@@ -5874,6 +6275,57 @@ impl PersistentDocument {
     }
     pub fn ImageResourceIsDocument(&self, id: u64) -> bool {
         self.document_image_resource_ids.contains(&id)
+    }
+    pub fn SetImageResourceMaybeAnimated(&mut self, id: u64, maybe_animated: bool) {
+        if maybe_animated {
+            self.maybe_animated_image_resource_ids.insert(id);
+        } else {
+            self.maybe_animated_image_resource_ids.remove(&id);
+        }
+    }
+    pub fn ImageResourceMaybeAnimated(&self, id: u64) -> bool {
+        self.maybe_animated_image_resource_ids.contains(&id)
+    }
+    pub fn SetImageResourceContentDPR(&mut self, id: u64, content_dpr: Option<f64>) {
+        if let Some(content_dpr) = content_dpr {
+            self.content_dpr_by_image_resource_id
+                .insert(id, content_dpr);
+        } else {
+            self.content_dpr_by_image_resource_id.remove(&id);
+        }
+    }
+    pub fn ImageResourceContentDPR(&self, id: u64) -> Option<f64> {
+        self.content_dpr_by_image_resource_id.get(&id).copied()
+    }
+    /// ImageResourceContent::NumberOfObservers() > 2 for an animated image is
+    /// equivalent here to more than one live LayoutImage consumer: the loader
+    /// and first LayoutImage form Blink's baseline two observers.
+    ///
+    /// cpp: core/layout/layout_image.cc:305-313
+    pub fn ImageResourceUsedByMultipleReplacedImages(&self, id: u64) -> bool {
+        self.image_resources.iter().any(|(source, state)| {
+            matches!(state, ImageResourceState::Loaded(metadata) if metadata.id == id)
+                && self
+                    .replaced_image_consumers
+                    .get(source)
+                    .is_some_and(|consumers| {
+                        consumers
+                            .iter()
+                            .filter(|&&index| {
+                                self.IsConnectedToDocument(index)
+                                    && self.CurrentImageSource(index) == Some(source.as_str())
+                            })
+                            .take(2)
+                            .count()
+                            > 1
+                    })
+        })
+    }
+    pub fn CountUse(&mut self, feature: crate::use_counter::WebFeature) {
+        self.use_counter.Count(feature);
+    }
+    pub fn IsUseCounted(&self, feature: crate::use_counter::WebFeature) -> bool {
+        self.use_counter.IsCounted(feature)
     }
     pub fn ResponsiveImageSelectionFor(&self, node: usize) -> Option<&ResponsiveImageSelection> {
         self.responsive_image_selections.get(&node)
@@ -5962,16 +6414,25 @@ impl PersistentDocument {
     // cpp: dom/document.h:197-199
     // cpp: dom/document.cc:351-364
     pub fn ResolvedStyleFor(&self, node: usize) -> Option<&ResolvedNodeStyle> {
-        self.resolved_styles
-            .get(&self.arena[node].id)
+        self.arena[node]
+            .resolved_style
+            .style
+            .as_ref()
             .map(std::sync::Arc::as_ref)
+    }
+    pub fn ResolvedStyleResourcesFor(&self, node: usize) -> &ResolvedStyleResources {
+        &self.arena[node].resolved_style.resources
     }
     /// Borrow the canonical resolved output without traversing allocation
     /// history or materializing a second style collection.
     pub fn ResolvedStyles(&self) -> impl Iterator<Item = (usize, &ResolvedNodeStyle)> {
-        self.resolved_styles
-            .iter()
-            .filter_map(|(&id, style)| self.FindNodeById(id).map(|node| (node, style.as_ref())))
+        self.arena.iter().enumerate().filter_map(|(node, record)| {
+            record
+                .resolved_style
+                .style
+                .as_ref()
+                .map(|style| (node, style.as_ref()))
+        })
     }
     /// Compatibility entry for a full style invalidation. Keep old values for
     /// comparison and sharing; style reads update before exposing current data.
@@ -5999,6 +6460,58 @@ impl PersistentDocument {
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+    }
+
+    /// Mark only styles whose computed values consumed font metrics.
+    ///
+    /// Chromium's font-update invalidation walks the styled subtree and gives
+    /// these elements a local style change; ordinary font-family users keep
+    /// their computed style and pick up the completed face during Layout.
+    /// This is materially narrower than `InvalidateAllStyles()` for a document
+    /// with a small number of `ch`/`ex`/`cap`/`ic` or `font-size-adjust`
+    /// consumers.
+    // cpp: core/dom/node.cc:1488-1515
+    // cpp: core/dom/element.cc:11249-11263
+    // cpp: core/css/style_engine.cc:1342-1362
+    pub fn InvalidateStylesForFontMetrics(&mut self) -> usize {
+        fn pseudo_depends_on_font_metrics(pseudo: &PseudoElement) -> bool {
+            unsafe { pseudo.computed_style_owner.Get().as_ref() }
+                .is_some_and(StyleComputedStyle::DependsOnFontMetrics)
+                || pseudo
+                    .marker
+                    .as_deref()
+                    .is_some_and(pseudo_depends_on_font_metrics)
+        }
+
+        fn style_depends_on_font_metrics(style: &ResolvedNodeStyle) -> bool {
+            unsafe { style.computed_style_owner.Get().as_ref() }
+                .is_some_and(StyleComputedStyle::DependsOnFontMetrics)
+                || [
+                    &style.before,
+                    &style.after,
+                    &style.first_letter,
+                    &style.placeholder,
+                    &style.marker,
+                ]
+                .into_iter()
+                .flatten()
+                .any(pseudo_depends_on_font_metrics)
+        }
+
+        if self.style_state.all_dirty {
+            return 0;
+        }
+        let nodes = self
+            .ResolvedStyles()
+            .filter_map(|(node, style)| style_depends_on_font_metrics(style).then_some(node))
+            .collect::<Vec<_>>();
+        for &node in &nodes {
+            // Font completion does not change selector inputs. Match Blink's
+            // kLocalStyleChange instead of publishing sibling/descendant
+            // selector sensitivity through the ordinary DOM mutation helper.
+            self.RecordStyleChange(crate::style_state::StyleChange::Node(node));
+        }
+        nodes.len()
     }
     // cpp: StyleEngine::ShouldSkipInvalidationFor / Node::SetNeedsStyleRecalc.
     // Detached preparation keeps DOM/selector data current, but cannot dirty
@@ -6369,10 +6882,10 @@ impl PersistentDocument {
         self.RecordStyleChange(crate::style_state::StyleChange::Defined(node));
     }
     pub fn ResolvedStyleHandle(&self, node: usize) -> Option<std::sync::Arc<ResolvedNodeStyle>> {
-        self.resolved_styles.get(&self.arena[node].id).cloned()
+        self.arena[node].resolved_style.style.clone()
     }
     /// Resolved-style owners with pending image dependencies. The source list
-    /// preserves native ComputedStyle field order; callers may place owners in
+    /// preserves source ComputedStyle field order; callers may place owners in
     /// shadow-including document order without scanning unrelated DOM nodes.
     pub fn ReferencedStyleImageConsumers(&self) -> Vec<(usize, std::sync::Arc<[String]>)> {
         let mut nodes = BTreeSet::new();
@@ -6429,12 +6942,12 @@ impl PersistentDocument {
         }
         // EnsureComputedStyle caches hidden query results. They have no layout
         // or paint client and must not start resource loads or invalidate frames.
-        if unsafe { style.native_style.Get().as_ref() }
-            .is_some_and(|native| native.IsEnsuredInDisplayNone())
+        if unsafe { style.computed_style_owner.Get().as_ref() }
+            .is_some_and(|source| source.IsEnsuredInDisplayNone())
         {
             debug_assert!(!style.generates_box);
-            self.resolved_styles
-                .insert(self.arena[node].id, std::sync::Arc::new(style));
+            self.arena[node].resolved_style.resources = Default::default();
+            self.arena[node].resolved_style.style = Some(std::sync::Arc::new(style));
             return;
         }
         style.RefreshReferencedStyleImageSources();
@@ -6492,8 +7005,18 @@ impl PersistentDocument {
                     .insert(node);
             }
         }
-        self.resolved_styles
-            .insert(self.arena[node].id, std::sync::Arc::new(style));
+        self.arena[node].resolved_style.resources = Default::default();
+        self.arena[node].resolved_style.style = Some(std::sync::Arc::new(style));
+    }
+    pub fn SetResolvedStyleResources(&mut self, node: usize, resources: ResolvedStyleResources) {
+        if self.arena[node].resolved_style.resources == resources {
+            return;
+        }
+        self.arena[node].resolved_style.resources = resources;
+        self.style_state
+            .paint_style_nodes
+            .insert(self.arena[node].id);
+        self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
     }
     /// Style's normal lifecycle can publish absence of computed style, just as
     /// Element::SetComputedStyle(nullptr) does for display:none subtrees.
@@ -6501,10 +7024,11 @@ impl PersistentDocument {
         let Some(old) = self.ResolvedStyleFor(node) else {
             return;
         };
-        if unsafe { old.native_style.Get().as_ref() }
+        if unsafe { old.computed_style_owner.Get().as_ref() }
             .is_some_and(|style| style.IsEnsuredInDisplayNone())
         {
-            self.resolved_styles.remove(&self.arena[node].id);
+            self.arena[node].resolved_style.style = None;
+            self.arena[node].resolved_style.resources = Default::default();
             return;
         }
         // Style recalc clears a suppressed subtree parent-first. Once an
@@ -6545,9 +7069,10 @@ impl PersistentDocument {
         self.RemoveResolvedStyle(node);
     }
     fn RemoveResolvedStyle(&mut self, node: usize) {
-        let Some(style) = self.resolved_styles.remove(&self.arena[node].id) else {
+        let Some(style) = self.arena[node].resolved_style.style.take() else {
             return;
         };
+        self.arena[node].resolved_style.resources = Default::default();
         self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
         if self.IsSVGResourceStyleNode(node) {
             self.svg_resource_style_revision = self.svg_resource_style_revision.saturating_add(1);
@@ -6594,7 +7119,7 @@ impl PersistentDocument {
             arena_slot_capacity_bytes: self.arena.capacity() * std::mem::size_of::<DOMNode>(),
         }
     }
-    /// Subscribe to this arena's native reference writes. The stream moves
+    /// Subscribe to this arena's source reference writes. The stream moves
     /// with parser document swaps; no consumer borrows DOM during GC.
     pub fn SubscribeNodeReferences(&mut self) -> Rc<crate::node_references::NodeReferenceQueue> {
         use crate::node_references::{NodeReferenceChange as C, NodeReferenceQueue};
@@ -6659,6 +7184,27 @@ impl PersistentDocument {
 pub struct DOM {
     document: PersistentDocument,
 }
+
+/// The live document used by style resolution.
+///
+/// This is the whole boundary: Style receives the canonical document arena by
+/// reference, without receiving the surrounding DOM owner or a copied view.
+pub trait StyleDocument {
+    fn DocumentForStyleMut(&mut self) -> &mut PersistentDocument;
+}
+
+impl StyleDocument for PersistentDocument {
+    fn DocumentForStyleMut(&mut self) -> &mut PersistentDocument {
+        self
+    }
+}
+
+impl StyleDocument for DOM {
+    fn DocumentForStyleMut(&mut self) -> &mut PersistentDocument {
+        &mut self.document
+    }
+}
+
 impl Default for DOM {
     fn default() -> Self {
         Self::new()
@@ -6846,21 +7392,6 @@ mod task_ownership_tests {
     #[test]
     fn image_completion_tracks_current_style_and_pseudo_consumers() {
         use crate::style_state::StyleChange;
-        use layoutng_assembly::internal::paint_input::{BackgroundImageLayer, PaintMaskLayer};
-        fn image(source: &str) -> BackgroundImageLayer {
-            BackgroundImageLayer {
-                source_url: source.into(),
-                ..Default::default()
-            }
-        }
-        fn pseudo(source: &str) -> PseudoElement {
-            let mut pseudo = PseudoElement::default();
-            pseudo.style.paint.mask_images.push(PaintMaskLayer {
-                image: image(source),
-                ..Default::default()
-            });
-            pseudo
-        }
         fn reset(document: &mut PersistentDocument) {
             let state = document.StyleStateMut();
             state.all_dirty = false;
@@ -6877,18 +7408,15 @@ mod task_ownership_tests {
         }
         document.AppendChild(parent, second);
         let mut style = ResolvedNodeStyle::default();
-        style.style.paint.background_images.push(image("shared"));
-        style.style.paint.mask_images.push(PaintMaskLayer {
-            image: image("shared"),
-            ..Default::default()
-        });
-        style.before = Some(pseudo("before"));
-        style.after = Some(pseudo("after"));
-        style.first_letter = Some(pseudo("first-letter"));
-        style.placeholder = Some(pseudo("placeholder"));
+        style.referenced_style_image_sources =
+            ["shared", "before", "after", "first-letter", "placeholder"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+                .into();
         document.SetResolvedStyle(first, style);
         let mut style = ResolvedNodeStyle::default();
-        style.style.paint.background_images.push(image("shared"));
+        style.referenced_style_image_sources = vec!["shared".to_owned()].into();
         document.SetResolvedStyle(second, style);
         document.SetResolvedStyle(unrelated, Default::default());
         reset(&mut document);
@@ -6909,11 +7437,7 @@ mod task_ownership_tests {
             );
         }
         let mut replacement = ResolvedNodeStyle::default();
-        replacement
-            .style
-            .paint
-            .background_images
-            .push(image("replacement"));
+        replacement.referenced_style_image_sources = vec!["replacement".to_owned()].into();
         document.SetResolvedStyle(first, replacement);
         assert_eq!(
             document.style_image_consumers.get("shared"),
@@ -6938,7 +7462,6 @@ mod task_ownership_tests {
     #[test]
     fn image_failure_updates_only_consumers_and_preserves_terminal_state() {
         use crate::style_state::StyleChange;
-        use layoutng_assembly::internal::paint_input::{BackgroundImageLayer, PaintMaskLayer};
         fn reset(document: &mut PersistentDocument) {
             let state = document.StyleStateMut();
             state.all_dirty = false;
@@ -6951,16 +7474,8 @@ mod task_ownership_tests {
         for node in [consumer, unrelated] {
             document.AppendChild(document.Root(), node);
         }
-        let mut pseudo = PseudoElement::default();
-        pseudo.style.paint.mask_images.push(PaintMaskLayer {
-            image: BackgroundImageLayer {
-                source_url: "mask.svg#icon".into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
         let mut style = ResolvedNodeStyle::default();
-        style.before = Some(pseudo);
+        style.referenced_style_image_sources = vec!["mask.svg#icon".to_owned()].into();
         document.SetResolvedStyle(consumer, style);
         document.SetResolvedStyle(unrelated, Default::default());
         reset(&mut document);
@@ -7020,6 +7535,36 @@ mod task_ownership_tests {
     }
 
     #[test]
+    fn replaced_image_resource_client_follows_subtree_connectivity() {
+        let mut document = PersistentDocument::new();
+        let image = document.CreateElement(
+            DOMNamespace::kHTML,
+            "img".into(),
+            vec![DOMAttribute {
+                local_name: "src".into(),
+                value: "hero.png".into(),
+                ..Default::default()
+            }],
+        );
+        assert!(!document.replaced_image_consumers.contains_key("hero.png"));
+
+        document.AppendChild(document.Root(), image);
+        assert_eq!(
+            document.replaced_image_consumers.get("hero.png"),
+            Some(&BTreeSet::from([image]))
+        );
+
+        document.Remove(image);
+        assert!(!document.replaced_image_consumers.contains_key("hero.png"));
+
+        document.AppendChild(document.Root(), image);
+        assert_eq!(
+            document.replaced_image_consumers.get("hero.png"),
+            Some(&BTreeSet::from([image]))
+        );
+    }
+
+    #[test]
     fn script_task_restores_the_same_dom_on_unwind() {
         let owner = Rc::new(RefCell::new(DOM::new()));
         let mut tree = PersistentDocument::new();
@@ -7057,6 +7602,70 @@ mod task_ownership_tests {
 #[cfg(test)]
 mod collection_membership_epoch_tests {
     use super::*;
+
+    fn id(value: &str) -> DOMAttribute {
+        DOMAttribute {
+            local_name: "id".into(),
+            value: value.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tree_scope_id_index_tracks_order_renames_moves_and_shadow_scope() {
+        let mut document = PersistentDocument::new();
+        let root = document.Root();
+        let first = document.CreateElement(DOMNamespace::kHTML, "div".into(), vec![id("same")]);
+        let second = document.CreateElement(DOMNamespace::kHTML, "div".into(), vec![id("same")]);
+        document.AppendChild(root, first);
+        document.AppendChild(root, second);
+        assert_eq!(
+            document.ElementsByIdInTreeScope(root, "same"),
+            vec![first, second]
+        );
+        assert!(document.TreeScopeContainsMultipleElementsWithId(root, "same"));
+
+        document.InsertBefore(root, second, first);
+        assert_eq!(
+            document.ElementsByIdInTreeScope(root, "same"),
+            vec![second, first]
+        );
+        document.SetAttribute(second, id("renamed"));
+        assert_eq!(
+            document.FindElementByIdInTreeScope(root, "same"),
+            Some(first)
+        );
+        assert_eq!(
+            document.FindElementByIdInTreeScope(root, "renamed"),
+            Some(second)
+        );
+
+        document.Remove(first);
+        assert_eq!(document.FindElementByIdInTreeScope(root, "same"), None);
+        document.AppendChild(root, first);
+        assert_eq!(
+            document.FindElementByIdInTreeScope(root, "same"),
+            Some(first)
+        );
+        document.RemoveAttributeDefault(first, "id");
+        assert_eq!(document.FindElementByIdInTreeScope(root, "same"), None);
+
+        let host = document.CreateElementDefault(DOMNamespace::kHTML, "div".into());
+        document.AppendChild(root, host);
+        let shadow = document.AttachShadowRoot(host, DOMShadowRootMode::kOpen);
+        let shadow_child =
+            document.CreateElement(DOMNamespace::kHTML, "span".into(), vec![id("renamed")]);
+        document.AppendChild(shadow, shadow_child);
+        assert_eq!(
+            document.FindElementByIdInTreeScope(root, "renamed"),
+            Some(second)
+        );
+        assert_eq!(
+            document.FindElementByIdInTreeScope(shadow, "renamed"),
+            Some(shadow_child)
+        );
+    }
+
     #[test]
     fn membership_epoch_covers_direct_tree_attributes_clone_and_whole_node_replacement() {
         let mut d = PersistentDocument::new();

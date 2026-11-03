@@ -25,7 +25,7 @@ const U_EA_FULLWIDTH: i32 = 3;
 const U_EA_WIDE: i32 = 5;
 const K_LEFT_CORNER_BRACKET: i32 = 0x300C;
 
-use icu_bidi::native as icu_api;
+use icu_bidi::ubidi_ffi as icu_api;
 
 // cpp: font_engine/fonts/shaping/harfbuzz_shaper.cc:273-281
 pub fn ScriptShortName(script: UScriptCode) -> Option<&'static str> {

@@ -1,7 +1,7 @@
 //! Skia execution backend for the source-mapped Renderer management core.
 //! The current implementation uses host-readable surfaces. Allocation, Canvas playback
 //! and output pixels stay here; traversal and damage decisions stay in Renderer.
-mod native;
+mod render_target;
 mod translated_adapter;
 mod components {
     pub(crate) mod viz {
@@ -14,4 +14,4 @@ mod components {
 }
 
 pub use components::viz::service::display::translated_software_renderer::TranslatedSoftwareRenderer as RendererSkiaBackend;
-pub use native::{PixelFormat, RenderTarget};
+pub use render_target::{HostPixelStorage, PixelFormat, PixelStorage, RenderTarget};

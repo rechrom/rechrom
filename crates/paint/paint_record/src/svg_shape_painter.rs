@@ -12,17 +12,17 @@ use layoutng_assembly::internal::paint_input::{
     SvgPaintServerReferenceBox, SvgStrokeLineCap, SvgStrokeLineJoin,
 };
 
-use crate::display_item_id::DisplayItemIdType;
-use crate::drawing_recorder::DrawingRecorder;
 use crate::geometry_mapper::MapRectToRoot;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::paint_info::PaintInfo;
 use crate::paint_shader_resolver::ResolvePaintShaderForBounds;
 use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::svg_model_object_painter::SVGDrawingRecorder;
 use crate::PaintRect;
 
-// cpp: paint/svg_shape_painter.cc:13-27
+// Resolved snapshot consumed by the translated SVGObjectPainter/StrokeData
+// responsibilities in SVGShapePainter::PaintShape.
 struct ShapePaintStyle {
     fill: Option<Color>,
     stroke: Option<Color>,
@@ -41,17 +41,14 @@ struct ShapePaintStyle {
     antialias: bool,
 }
 
-// cpp: paint/svg_shape_painter.cc:29-32
 fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-// cpp: paint/svg_shape_painter.cc:34-36
 fn Finite(point: Offset) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
 
-// cpp: paint/svg_shape_painter.cc:38-44
 fn ValidateTransform(transform: &TransformMatrix, message: &str) {
     for value in transform.values {
         if !value.is_finite() {
@@ -60,7 +57,6 @@ fn ValidateTransform(transform: &TransformMatrix, message: &str) {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:46-50
 fn ValidateColor(color: Color) {
     if !color.red.is_finite()
         || !color.green.is_finite()
@@ -71,7 +67,6 @@ fn ValidateColor(color: Color) {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:52-96
 fn ValidateShape(shape: &SvgShapeData) {
     if !Finite(shape.bounds_offset)
         || !shape.bounds_width.is_finite()
@@ -125,7 +120,6 @@ fn ValidateShape(shape: &SvgShapeData) {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:98-112
 fn ValidateStyle(style: &ShapePaintStyle) {
     if !style.stroke_width.is_finite()
         || style.stroke_width < 0.0
@@ -148,7 +142,6 @@ fn ValidateStyle(style: &ShapePaintStyle) {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:114-145
 fn ResolvePath(input: &[PaintPathCommand], origin: Offset) -> Vec<PaintPathCommand> {
     let mut output = Vec::with_capacity(input.len());
     for mut command in input.iter().cloned() {
@@ -174,7 +167,6 @@ fn ResolvePath(input: &[PaintPathCommand], origin: Offset) -> Vec<PaintPathComma
     output
 }
 
-// cpp: paint/svg_shape_painter.cc:147-182
 fn RoundedRectanglePath(shape: &SvgShapeData, origin: Offset) -> Vec<PaintPathCommand> {
     let left = origin.x + shape.bounds_offset.x;
     let top = origin.y + shape.bounds_offset.y;
@@ -274,7 +266,6 @@ fn RoundedRectanglePath(shape: &SvgShapeData, origin: Offset) -> Vec<PaintPathCo
     ]
 }
 
-// cpp: paint/svg_shape_painter.cc:184-190
 fn FillType(geometry: SvgShapeGeometry) -> DisplayItemType {
     match geometry {
         SvgShapeGeometry::kRectangle => DisplayItemType::kDrawRect,
@@ -283,7 +274,6 @@ fn FillType(geometry: SvgShapeGeometry) -> DisplayItemType {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:192-198
 fn StrokeType(geometry: SvgShapeGeometry) -> DisplayItemType {
     match geometry {
         SvgShapeGeometry::kRectangle => DisplayItemType::kStrokeRect,
@@ -292,7 +282,6 @@ fn StrokeType(geometry: SvgShapeGeometry) -> DisplayItemType {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:200-214
 fn MainStyle(style: &PaintStyleData) -> ShapePaintStyle {
     ShapePaintStyle {
         fill: style.svg_fill,
@@ -313,7 +302,6 @@ fn MainStyle(style: &PaintStyleData) -> ShapePaintStyle {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:216-230
 fn MarkerStyle(primitive: &SvgMarkerPrimitive) -> ShapePaintStyle {
     ShapePaintStyle {
         fill: primitive.fill,
@@ -334,7 +322,10 @@ fn MarkerStyle(primitive: &SvgMarkerPrimitive) -> ShapePaintStyle {
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:232-327
+// Source: core/paint/svg_shape_painter.cc:98-216,221-251. The source Layout
+// boundary has already resolved ComputedStyle, paint servers and StrokeData
+// into this immutable input; recording retains the same fill/stroke order,
+// geometry kind, winding rule and non-scaling-stroke marker.
 fn BuildShapeItems(
     node: &PaintTreeNode<'_>,
     shape: &SvgShapeData,
@@ -492,7 +483,6 @@ fn BuildShapeItems(
     items
 }
 
-// cpp: paint/svg_shape_painter.cc:329-334
 fn AppendItems(
     context: &RefCell<PaintContext<'_>>,
     node: &PaintTreeNode<'_>,
@@ -503,7 +493,9 @@ fn AppendItems(
     }
 }
 
-// cpp: paint/svg_shape_painter.cc:336-415
+// Source: core/paint/svg_shape_painter.cc:256-323. Marker selection and
+// resource layout are resolved by Layout; Paint keeps the source transform,
+// overflow clip, context-paint snapshot and nested record boundaries.
 fn PaintMarkers(
     node: &PaintTreeNode<'_>,
     context: &RefCell<PaintContext<'_>>,
@@ -657,20 +649,20 @@ fn PaintMarkers(
     }
 }
 
-// cpp: paint/svg_shape_painter.h:7-19
+// Source: core/paint/svg_shape_painter.h:20-41.
 pub struct SVGShapePainter<'n, 'f, 'c, 'o> {
     node: &'n PaintTreeNode<'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
-    // cpp: paint/svg_shape_painter.h:9-10
+    // Source: core/paint/svg_shape_painter.h:24-25.
     pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
-    // cpp: paint/svg_shape_painter.h:12
-    // cpp: paint/svg_shape_painter.cc:419-443
+    // Source: core/paint/svg_shape_painter.h:27;
+    // core/paint/svg_shape_painter.cc:43-96.
     pub fn Paint(&self, paint_info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
@@ -689,29 +681,9 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
         }
         let style = &*fragment.paint.style;
         let shape_style = MainStyle(style);
-        // SVGShapePainter::Paint (.cc:85) owns one SVGDrawingRecorder for
-        // PaintShape; fill, stroke and markers are operations in that record.
-        // SVGDrawingRecorder's exact visual overflow is not exposed here.
-        let stroke_outset = if shape_style.stroke.is_some() || shape_style.stroke_server.is_some() {
-            shape_style.stroke_width * 0.5
-        } else {
-            0.0
-        };
-        let visual_rect = PaintRect {
-            x: self.node.paint_offset.x + shape.bounds_offset.x - stroke_outset,
-            y: self.node.paint_offset.y + shape.bounds_offset.y - stroke_outset,
-            width: shape.bounds_width + 2.0 * stroke_outset,
-            height: shape.bounds_height + 2.0 * stroke_outset,
-        };
         let in_drawing = self.context.borrow().InDrawingRecorder();
-        let _drawing = (!in_drawing).then(|| {
-            DrawingRecorder::new(
-                self.context,
-                self.node,
-                DisplayItemIdType::PaintPhaseToDrawingType(paint_info.phase),
-                visual_rect,
-            )
-        });
+        let _drawing = (!in_drawing)
+            .then(|| SVGDrawingRecorder::for_phase(self.context, self.node, paint_info.phase));
         for component in style.svg_paint_order {
             match component {
                 SvgPaintComponent::kFill => AppendItems(

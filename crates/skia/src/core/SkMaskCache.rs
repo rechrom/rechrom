@@ -125,7 +125,7 @@ unsafe impl Rec for RRectBlurRec {
     // Source: src/core/SkMaskCache.cpp:66-66
     // Adapted budget: native layout overhead is retained; Rust host allocation layout differs.
     fn bytesUsed(&self) -> usize {
-        native_record_overhead(60) + self.fValue.as_ref().unwrap().fData.size()
+        record_overhead(60) + self.fValue.as_ref().unwrap().fData.size()
     }
     // Source: src/core/SkMaskCache.cpp:67-67
     fn getCategory(&self) -> *const std::ffi::c_char {
@@ -340,7 +340,7 @@ unsafe impl Rec for RectsBlurRec {
     // Source: src/core/SkMaskCache.cpp:154-154
     // Adapted budget: native layout overhead is retained; Rust host allocation layout differs.
     fn bytesUsed(&self) -> usize {
-        native_record_overhead(40) + self.fValue.as_ref().unwrap().fData.size()
+        record_overhead(40) + self.fValue.as_ref().unwrap().fData.size()
     }
     // Source: src/core/SkMaskCache.cpp:155-155
     fn getCategory(&self) -> *const std::ffi::c_char {
@@ -448,7 +448,7 @@ pub unsafe fn AddRects(
 // (including key/member alignment) remains pending; pointer width alone is insufficient.
 // This does not claim host heap bytes or ABI equivalence.
 #[cfg(target_pointer_width = "64")]
-fn native_record_overhead(key_payload: usize) -> usize {
+fn record_overhead(key_payload: usize) -> usize {
     let ptr = std::mem::size_of::<usize>();
     let align = |n: usize| (n + ptr - 1) & !(ptr - 1);
     let base_rec = 3 * ptr;

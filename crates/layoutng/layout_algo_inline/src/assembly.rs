@@ -4,8 +4,9 @@
 // linked in the shared LayoutNG/inline assembly before enabling this module.
 #![allow(non_snake_case)]
 
-use foundation::{MakeGarbageCollected, To, WritingMode};
+use foundation::{MakeGarbageCollected, PhysicalRect, To, WritingMode};
 use layout_fragment::break_token::BreakToken;
+use layout_fragment::inline_cursor::InlineCursor;
 use layout_fragment::layout_result::LayoutResult;
 use layoutng::internal::algorithm_forward::InlineChildLayoutContext;
 use layoutng::internal::column_spanner_path::ColumnSpannerPath;
@@ -19,12 +20,15 @@ use layoutng::internal::layout_object::LayoutObject;
 use layoutng::internal::layout_text::LayoutText;
 use layoutng::internal::layout_text_combine::LayoutTextCombine;
 use layoutng::internal::min_max_sizes::MinMaxSizesResult;
-use layoutng::internal::text_combine_style_service::AdjustStyleForTextCombine;
+use layoutng::internal::text_combine_style_service::{
+    AdjustStyleForCombinedText, AdjustStyleForTextCombine,
+};
 use layoutng::layout_assembly::LayoutAssembly;
 use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 
 use crate::layout_br::LayoutBR;
 use crate::layout_ruby_as_block::LayoutRubyAsBlock;
+use crate::layout_text::layout_text_is_selected;
 use crate::layout_word_break::LayoutWordBreak;
 use crate::text_combine_tree::InsertInlineTextChild;
 
@@ -113,6 +117,28 @@ fn UpdateAnonymousTextCombineStyle(child: &mut LayoutObject, builder: &mut Compu
     unsafe { AdjustStyleForTextCombine(builder) };
 }
 
+// cpp: core/css/resolver/style_adjuster.cc:414-431
+fn AdjustCombinedTextStyle(builder: &mut ComputedStyleBuilder) {
+    unsafe { AdjustStyleForCombinedText(builder) };
+}
+
+fn IsTextFragmentSelected(text: &LayoutText) -> bool {
+    debug_assert!(text.IsTextFragment());
+    layout_text_is_selected(text)
+}
+
+fn AdjustTextCombineBoundingBox(object: &LayoutObject, rect: &PhysicalRect) -> PhysicalRect {
+    debug_assert!(object.IsLayoutTextCombine());
+    unsafe { &*To::<LayoutTextCombine>(object) }.AdjustRectForBoundingBox(rect)
+}
+
+fn RecalcTextCombineContentsInkOverflow(object: &LayoutObject, cursor: *const ()) -> PhysicalRect {
+    debug_assert!(object.IsLayoutTextCombine());
+    debug_assert!(!cursor.is_null());
+    unsafe { &*To::<LayoutTextCombine>(object) }
+        .RecalcContentsInkOverflow(unsafe { &*cursor.cast::<InlineCursor>() })
+}
+
 // cpp: layoutng_inline/assembly.h:4-4
 // cpp: layoutng_inline/assembly.cc:95-112
 pub fn InstallInlineAlgorithm(assembly: &mut LayoutAssembly) {
@@ -125,6 +151,11 @@ pub fn InstallInlineAlgorithm(assembly: &mut LayoutAssembly) {
     assembly.objects.inline_word_break = Some(CreateWordBreakObject);
     assembly.objects.update_inline_style = Some(UpdateInlineStyle);
     assembly.objects.update_anonymous_text_combine_style = Some(UpdateAnonymousTextCombineStyle);
+    assembly.objects.adjust_combined_text_style = Some(AdjustCombinedTextStyle);
+    assembly.objects.is_text_fragment_selected = Some(IsTextFragmentSelected);
+    assembly.objects.adjust_text_combine_bounding_box = Some(AdjustTextCombineBoundingBox);
+    assembly.objects.recalc_text_combine_contents_ink_overflow =
+        Some(RecalcTextCombineContentsInkOverflow);
     assembly.algorithms.inline_support.is_block_level = Some(|node| {
         node.PrepareLayoutIfNeeded();
         let block = unsafe { &*node.GetLayoutBlockFlow() };

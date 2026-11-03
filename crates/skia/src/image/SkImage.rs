@@ -581,7 +581,7 @@ impl dyn SkImage + '_ {
         sampling: &crate::include::core::SkSamplingOptions::SkSamplingOptions,
         hint: CachingHint,
     ) -> Result<bool, crate::RasterError> {
-        // Native162 GPU directContext lookup is outside this selected CPU API;
+        // 162 GPU directContext lookup is outside this selected CPU API;
         // real CPU read/getROPixels hooks carry the same original caching hint.
         if self.width() == dst.width() && self.height() == dst.height() {
             return unsafe { self.readPixels(dst, 0, 0, hint) };

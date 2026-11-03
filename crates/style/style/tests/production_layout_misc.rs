@@ -1,5 +1,6 @@
 use foundation::{
-    CSSPropertyID, EAspectRatioType, String, TextDirection, WritingDirectionMode, WritingMode,
+    CSSPropertyID, EAspectRatioType, EClear, String, TextDirection, WritingDirectionMode,
+    WritingMode,
 };
 use layoutng_style::style::{computed_style::ComputedStyle, computed_style_constants::Containment};
 use style::{
@@ -12,7 +13,7 @@ use style::{
     StyleEngine,
 };
 
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let document = owner.GetDocument();
     let index = (0..document.NodeCount())
         .find(|&i| {
@@ -22,7 +23,13 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*document.ResolvedStyleFor(index).unwrap().native_style.Get() }
+    unsafe {
+        &*document
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn update(owner: &mut dom::DOM) {
     let mut engine = StyleEngine::new(owner);
@@ -37,14 +44,51 @@ fn update(owner: &mut dom::DOM) {
 }
 
 #[test]
-fn native_layout_initial_inherit_and_typed_math_values() {
+fn br_clear_presentation_hint_uses_the_normal_cascade_and_updates_in_place() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<br id=all clear=all><br id=left clear=left><br id=author clear=right style='clear:left'>",
+    );
+    let all = (0..owner.GetDocument().NodeCount())
+        .find(|&index| {
+            owner
+                .GetDocument()
+                .Node(index)
+                .FindAttribute("id")
+                .is_some_and(|attribute| attribute.value == "all")
+        })
+        .unwrap();
+    let mut engine = StyleEngine::new(&owner);
+    engine
+        .Update(&mut owner, &MediaValuesCachedData::default(), &[])
+        .unwrap();
+    assert_eq!(computed_style(&owner, "all").Clear(), EClear::kBoth);
+    assert_eq!(computed_style(&owner, "left").Clear(), EClear::kLeft);
+    assert_eq!(computed_style(&owner, "author").Clear(), EClear::kLeft);
+
+    owner.GetDocumentMut().SetAttribute(
+        all,
+        dom::persistent_document::DOMAttribute {
+            local_name: "clear".into(),
+            value: "right".into(),
+            ..Default::default()
+        },
+    );
+    engine
+        .Update(&mut owner, &MediaValuesCachedData::default(), &[])
+        .unwrap();
+    assert_eq!(computed_style(&owner, "all").Clear(), EClear::kRight);
+}
+
+#[test]
+fn layout_initial_inherit_and_typed_math_values() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='aspect-ratio:auto calc(12 / 2) / 4;column-count:calc(2 + 2.5);column-width:calc(10px + 2px);column-height:30px;contain:paint layout size;contain-intrinsic-size:auto calc(8px + 2px) auto none;orphans:calc(2 + 2);widows:99999'><div id=c style='aspect-ratio:inherit;column-count:inherit;column-width:inherit;column-height:inherit;contain:inherit;contain-intrinsic-size:inherit;orphans:inherit;widows:inherit'></div><div id=i style='aspect-ratio:initial;column-count:initial;column-width:initial;column-height:initial;contain:initial;contain-intrinsic-size:initial;orphans:initial;widows:initial'></div></div>");
     update(&mut owner);
     let (p, c, i) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
     );
     assert_eq!(
         p.AspectRatio().GetTypeForComputedStyle(),
@@ -90,15 +134,15 @@ fn native_layout_initial_inherit_and_typed_math_values() {
 }
 
 #[test]
-fn columns_expands_height_and_wrap_and_auto_restores_native_flags() {
+fn columns_expands_height_and_wrap_and_auto_restores_computed_style_flags() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=a style='column-wrap:wrap;columns:3 20px / calc(25px * 2)'></div><div id=b style='column-count:4;column-width:10px;column-height:15px;column-wrap:nowrap;columns:auto auto'></div><div id=c style='columns:0 2'></div><div id=d style='columns:calc(3 + 1) 12px'></div>");
     update(&mut owner);
     let (a, b, c, d) = (
-        native(&owner, "a"),
-        native(&owner, "b"),
-        native(&owner, "c"),
-        native(&owner, "d"),
+        computed_style(&owner, "a"),
+        computed_style(&owner, "b"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "d"),
     );
     assert_eq!(
         (a.ColumnCount(), a.ColumnWidth(), a.ColumnHeight()),
@@ -144,11 +188,11 @@ fn intrinsic_logical_fields_follow_all_writing_modes_and_cascade_order() {
     let mut owner = html::html_parser::ParseHTML("<div id=v style='writing-mode:vertical-rl;contain-intrinsic-size:1px 2px;contain-intrinsic-inline-size:auto 30px;contain-intrinsic-block-size:40px'></div><div id=h style='contain-intrinsic-size:auto 7px'></div><div id=s style='contain:strict'></div><div id=n style='contain:content'></div><div id=z style='aspect-ratio:0 / 2'></div><div id=o style='column-count:99999;column-width:1e100px;contain-intrinsic-width:1e100px'></div>");
     update(&mut owner);
     let (v, h, s, n, z) = (
-        native(&owner, "v"),
-        native(&owner, "h"),
-        native(&owner, "s"),
-        native(&owner, "n"),
-        native(&owner, "z"),
+        computed_style(&owner, "v"),
+        computed_style(&owner, "h"),
+        computed_style(&owner, "s"),
+        computed_style(&owner, "n"),
+        computed_style(&owner, "z"),
     );
     assert_eq!(
         v.ContainIntrinsicWidth()
@@ -175,7 +219,7 @@ fn intrinsic_logical_fields_follow_all_writing_modes_and_cascade_order() {
         EAspectRatioType::kRatio
     );
     assert!(z.AspectRatio().IsAuto());
-    let o = native(&owner, "o");
+    let o = computed_style(&owner, "o");
     assert_eq!(o.ColumnCount(), u16::MAX);
     assert_eq!(o.ColumnWidth(), f32::MAX);
     assert_eq!(
@@ -245,7 +289,7 @@ fn invalid_layout_grammar_and_unavailable_math_are_typed() {
 }
 
 #[test]
-fn invalid_declarations_preserve_valid_native_values() {
+fn invalid_declarations_preserve_valid_computed_style_values() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=x style='aspect-ratio:4/3;aspect-ratio:2 / -1;column-count:3;column-count:0;column-width:8px;column-width:-1px;contain:paint;contain:paint paint;contain-intrinsic-width:auto 10px;contain-intrinsic-width:auto;orphans:3;orphans:0'></div>");
     let mut engine = StyleEngine::new(&mut owner);
@@ -257,7 +301,7 @@ fn invalid_declarations_preserve_valid_native_values() {
         "{:?}",
         engine.Diagnostics()
     );
-    let x = native(&owner, "x");
+    let x = computed_style(&owner, "x");
     assert_eq!(
         x.AspectRatio().GetRatio(),
         foundation::gfx::SizeF::new(4.0, 3.0)

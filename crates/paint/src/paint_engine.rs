@@ -7,38 +7,45 @@ use std::sync::Arc;
 
 use layoutng_assembly::fragment_tree::PaintResources;
 pub use layoutng_assembly::fragment_tree::RasterEffectOutset;
-use layoutng_assembly::internal::layout_input::{Offset, Size};
 
 pub use layoutng_assembly::internal::paint_input::{
     PaintCornerRadii, PaintFilterOperation, PaintMaskComposite, PaintMaskMode, PaintShader,
-    SvgPatternCommand, SvgStrokeLineCap, SvgStrokeLineJoin,
+    PaintShaderKind, SvgPatternCommand, SvgPatternData, SvgPatternImage, SvgStrokeLineCap,
+    SvgStrokeLineJoin,
 };
 
 pub use paint_model::PaintPhase;
 
+pub use paint_record::paint_context::PaintContext;
 pub use paint_record::PaintOpType as DisplayItemType;
 
 pub use paint_model::PaintRect;
 
-use paint_record::PaintRecording;
 pub use paint_record::{
-    CaretGeometry, CaretPosition, DisplayItem, DisplayItemList, DisplayMaskLayer,
-    EditingPaintState, RecordedDisplayItem, RecordedDisplayItemKind, ScrollbarDisplayItemData,
+    CaretGeometry, CaretPosition, DecorationPaintPass, DisplayItem, DisplayItemList,
+    DisplayMaskLayer, EditingPaintState, ForeignLayer, ForeignLayerDisplayItemData,
+    ForeignLayerSize, NewForeignLayerDisplayItem, RecordForeignLayer, RecordedDisplayItem,
+    RecordedDisplayItemKind, ScrollbarDisplayItemData,
 };
+use paint_record::{PaintControllerPersistentData, PaintRecording};
 
 // Public producer analysis also serves canonical PaintRecords downstream.
-pub use crate::paint_context::CalculateRectKnownToBeOpaqueForRecord;
 pub use image_resource::{
-    downcast_document_paint_record, ContainerKey as DocumentImageContainerKey, PaintImageContent,
-    PaintImageId as NativePaintImageId, PaintImageMetadataUnavailable as ImageMetadataUnavailable,
+    downcast_document_paint_record, ContainerKey as DocumentImageContainerKey,
+    ImageDecodingMode as PaintImageDecodingMode, PaintImageAnimationMetadata, PaintImageContent,
+    PaintImageId as PaintImageResourceId,
+    PaintImageMetadataUnavailable as ImageMetadataUnavailable,
 };
-pub use layoutng_assembly::internal::layout_input::PaintImage as NativePaintImage;
+pub use layoutng_assembly::internal::layout_input::PaintImage as LayoutPaintImage;
+pub use paint_record::drawing_display_item::CalculateRectKnownToBeOpaqueForRecord;
 
 pub use crate::display_item_id::DisplayItemId as PaintChunkId;
 pub use paint_chunk::{
     PaintChunk, PaintChunkBackgroundColorInfo, PaintChunkCompositorData, PaintChunks,
     PaintFrameToken, PaintHitTestData, PaintHitTestOpaqueness, PaintLayerSelectionData,
-    PaintSelectionBound, PaintSelectionBoundType, PaintTrackedElementRect,
+    PaintRegionCaptureData, PaintSelectionBound, PaintSelectionBoundType, PaintTrackedElementRect,
+    PaintTrackedElementRects, PaintTrackedElementRelativeRect, PaintTrackedElementSubRect,
+    PaintTrackedElementSubRectType,
 };
 
 pub use paint_commit::{
@@ -76,7 +83,7 @@ fn document_image_container_proof_uses_the_artifacts_own_catalog() {
         }]
         .into(),
         resources: Some(Arc::new(PaintResources {
-            images: vec![NativePaintImage {
+            images: vec![LayoutPaintImage {
                 id: 7,
                 document_container_key: Some(initial.clone()),
                 content: PaintImageContent::Document(Arc::new(
@@ -112,19 +119,24 @@ fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
             ..Default::default()
         }]
         .into(),
-        chunks: vec![PaintChunk::default()],
+        chunks: vec![PaintChunk::default()].into(),
         ..Default::default()
     });
     let mut scrolling = old.clone();
     let updated = Arc::make_mut(&mut scrolling);
     // This ownership test models a new property snapshot only; it invokes no
-    // native identity, layout or recording algorithm.
+    // source identity, layout or recording algorithm.
     Arc::make_mut(&mut updated.chunks[0].properties.transform)
         .matrix
         .values[13] = -12.0;
     assert!(
         Arc::ptr_eq(&old.items, &scrolling.items),
         "property changes share the immutable PaintRecord operations"
+    );
+    assert!(old.display_items.PtrEq(&scrolling.display_items));
+    assert!(
+        !old.chunks.PtrEq(&scrolling.chunks),
+        "only the changed chunk directory detaches"
     );
     assert_eq!(old.chunks[0].properties.transform.matrix.values[13], 0.0);
     assert_eq!(
@@ -162,12 +174,10 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         is_cacheable: true,
         is_tombstone: false,
         paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
-        image_content_revisions: Vec::new(),
-        scrollbar_needs_update_display: None,
         scrollbar: None,
+        foreign_layer: None,
         kind: RecordedDisplayItemKind::Drawing,
         id: Default::default(),
-        client_visual_rect: draw.rect,
         visual_rect: draw.rect,
         visual_rect_is_accurate: true,
         draws_content: true,
@@ -204,14 +214,14 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
     });
     let old = Arc::new(PaintArtifact {
         items: items.clone(),
-        display_items: vec![display],
+        display_items: vec![display].into(),
         resources: Some(resources),
         image_dependencies: dependencies,
         recording_revision: 99,
         ..Default::default()
     });
     let mut engine = PaintEngine::new();
-    engine.paint_result = Some(old.clone());
+    engine.persistent_data.AdoptPaintArtifact(old.clone());
     let next_record: Arc<dyn image_resource::DocumentPaintRecord> = Arc::new(2u8);
     let frame = Arc::new(DocumentImageFrame {
         animation_info: image_resource::PaintImageAnimationInfo::confirmed_static(),
@@ -244,6 +254,8 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         }
     );
     assert!(Arc::ptr_eq(&old.items, &next.items));
+    assert!(old.display_items.PtrEq(&next.display_items));
+    assert!(old.chunks.PtrEq(&next.chunks));
     assert_eq!(old.recording_revision, next.recording_revision);
     assert_eq!(old.resources.as_ref().unwrap().images[0].revision, 1);
     assert_eq!(next.resources.as_ref().unwrap().images[0].revision, 2);
@@ -256,37 +268,16 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         .expect("the committed immutable revision subsumes its queued invalidation");
     assert!(subsumed.damaged_records.is_empty());
 }
-use crate::paint_context::PaintContext;
 use crate::paint_layer_painter::PaintLayerPainter;
 use crate::pre_paint_tree_walk::{PaintFragmentSource, PrePaintTreeWalk};
 use std::cell::RefCell;
 use std::collections::HashSet;
-pub fn NativeFragmentClientRectsByNode(
-    root: layoutng_assembly::layout_engine::NativePaintFragmentCursor<'_>,
+pub fn FragmentClientRectsByNode(
+    root: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
 ) -> std::collections::HashMap<u64, Vec<PaintRect>> {
-    crate::client_rects::CollectNativeFragmentClientRects(root)
+    crate::client_rects::CollectFragmentClientRects(root)
 }
 
-// cpp: paint/paint_engine.cc:33-54
-fn SameReplayResources(a: &PaintResources, b: &PaintResources) -> bool {
-    if a.device_pixel_ratio != b.device_pixel_ratio
-        || a.preferred_color_scheme != b.preferred_color_scheme
-        || a.layout_zoom_factor != b.layout_zoom_factor
-        || a.viewport != b.viewport
-        || a.fonts.len() != b.fonts.len()
-        || a.images.len() != b.images.len()
-    {
-        return false;
-    }
-    let same_fonts = a.fonts.ptr_eq(&b.fonts)
-        || a.fonts
-            .iter()
-            .zip(&b.fonts)
-            .all(|(left, right)| left.face_index == right.face_index && left.bytes == right.bytes);
-    same_fonts && a.images == b.images
-}
-
-// cpp: paint/paint_engine.cc:56-91
 fn ValidateReplayResources(resources: Option<&PaintResources>) {
     let Some(resources) = resources else {
         return;
@@ -331,48 +322,23 @@ fn ValidateReplayResources(resources: Option<&PaintResources>) {
     }
 }
 
-// cpp: paint/paint_engine.cc:93-112
-fn ValidateResourceCatalog(
-    fragment: PaintFragmentSource<'_>,
-    catalog: Option<&PaintResources>,
-    validated_catalogs: &mut HashSet<*const PaintResources>,
-) {
-    if let Some(candidate) = fragment.paint.resources.as_deref() {
-        let pointer = candidate as *const PaintResources;
-        if !validated_catalogs.contains(&pointer) {
-            if catalog.is_none_or(|root| !SameReplayResources(candidate, root)) {
-                panic!("all FragmentPaintData paint data must use the root replay resources");
-            }
-            validated_catalogs.insert(pointer);
-        }
-    }
-    for child in fragment.Children() {
-        ValidateResourceCatalog(child, catalog, validated_catalogs);
-    }
-}
 fn RecordPaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: PaintFragmentSource<'_>,
+    source_lease: layoutng_assembly::layout_engine::PaintFragmentLease,
     editing: EditingPaintState,
-    item_capacity: usize,
-    display_item_capacity: usize,
-    chunk_capacity: usize,
     previous: Option<Arc<PaintArtifact>>,
-) -> (PaintRecording, crate::performance::PaintPerformanceSnapshot) {
+    previous_subsequences: paint_record::SubsequencesData,
+) -> (
+    PaintRecording,
+    paint_record::SubsequencesData,
+    crate::performance::PaintPerformanceSnapshot,
+) {
     let mut trace = browser_tracing::span("paint", "Paint.RecordPaint");
     ValidateReplayResources(fragments.paint.resources.as_deref());
-    let mut validated_catalogs = HashSet::new();
-    if let Some(catalog) = fragments.paint.resources.as_deref() {
-        validated_catalogs.insert(catalog as *const PaintResources);
-    }
-    ValidateResourceCatalog(
-        fragments,
-        fragments.paint.resources.as_deref(),
-        &mut validated_catalogs,
-    );
     let paint_tree = {
         let mut trace = browser_tracing::span("prepaint", "PrePaint.Walk");
-        let tree = pre_paint.Walk(fragments);
+        let tree = pre_paint.Walk(fragments, source_lease);
         let stats = pre_paint.stats;
         trace.set("computed_nodes", stats.computed_nodes as f64);
         trace.set("reused_nodes", stats.reused_nodes as f64);
@@ -380,7 +346,6 @@ fn RecordPaint(
             "invalidation_only_nodes",
             stats.invalidation_only_nodes as f64,
         );
-        trace.set("geometry_only_nodes", stats.geometry_only_nodes as f64);
         trace.set(
             "same_geometry_rebuilds",
             stats.same_geometry_rebuilds as f64,
@@ -403,120 +368,52 @@ fn RecordPaint(
     };
     let mut output = PaintRecording::default();
     output.compositor_viewport = pre_paint.ExportCompositorViewport(&fragments);
-    Arc::make_mut(&mut output.items).reserve(item_capacity);
-    output.display_items.reserve(display_item_capacity);
-    output.chunks.reserve(chunk_capacity);
     output.resources = fragments.paint.resources.clone();
-    // Resolve caret ownership through Layout's native fragment links. The
+    // Resolve caret ownership through Layout's source fragment links. The
     // resident PaintTree stores derived paint state, never source topology.
     fn caret_owner(
         node: PaintFragmentSource<'_>,
         id: u64,
-    ) -> Option<layoutng_assembly::layout_engine::NativePaintFragmentCursor<'_>> {
+    ) -> Option<layoutng_assembly::layout_engine::PaintFragmentCursor<'_>> {
         if node.node_id == id && node.paint.text_control_caret_metrics.is_some() {
-            return Some(node.Native());
+            return Some(node.Cursor());
         }
         node.Children()
             .into_iter()
             .find_map(|child| caret_owner(child, id))
     }
-    let caret_local_rect = editing.caret.and_then(|state| {
-        layoutng_assembly::caret::geometry::TextControlCaretRect(
-            caret_owner(fragments, state.node_id)?,
+    let caret_geometry = editing.caret.and_then(|state| {
+        let owner = caret_owner(fragments, state.node_id)?;
+        // core/layout/inline/caret_rect.cc:426-430 keeps the insertion caret
+        // as a bar while an IME composition is active.
+        let shape = if state.composition.is_some() {
+            layoutng_assembly::internal::caret_rect::CaretShape::kBar
+        } else {
+            owner.paint.style.caret_shape()
+        };
+        let rect = layoutng_assembly::caret::geometry::TextControlCaretRect(
+            owner,
             state.offset,
             state.empty,
-        )
+            shape,
+        )?;
+        Some((rect, shape))
     });
-    // Chromium keeps ShapeResult on FragmentItem and asks it for range
-    // geometry only while painting an active selection/composition. Resolve
-    // those few ranges through the live native cursors before PrePaint retains
-    // its derived tree; ordinary resize publishes no per-character arrays.
-    fn editing_text_range_rects(
-        node: PaintFragmentSource<'_>,
-        editing: EditingPaintState,
-        output: &mut Vec<(
-            u64,
-            (u32, u32),
-            layoutng_assembly::caret::geometry::LocalCaretRect,
-        )>,
-    ) {
-        if matches!(
-            node.kind,
-            layoutng_assembly::fragment_tree::FragmentKind::kText
-                | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
-        ) {
-            let mut ranges = Vec::with_capacity(2);
-            if let Some(caret) = editing
-                .caret
-                .filter(|caret| node.paint.text_control_host == Some(caret.node_id))
-            {
-                if let Some(range) = caret.selection {
-                    ranges.push(range);
-                }
-                if let Some(range) = caret.composition {
-                    ranges.push(range);
-                }
-            } else if node.paint.text_control_host.is_none() && !node.paint.style.user_select_none {
-                if let Some(selection) = editing
-                    .document_selection
-                    .filter(|selection| !selection.Collapsed())
-                {
-                    let (start, end) = selection.Ordered();
-                    let order = node.paint.logical_tree_order;
-                    if order >= start.tree_order && order <= end.tree_order {
-                        if let (Some(mut range_start), Some(mut range_end)) =
-                            (node.text_start, node.text_end)
-                        {
-                            if order == start.tree_order {
-                                range_start = range_start.max(start.offset);
-                            }
-                            if order == end.tree_order {
-                                range_end = range_end.min(end.offset);
-                            }
-                            if range_start < range_end {
-                                ranges.push((range_start, range_end));
-                            }
-                        }
-                    }
-                }
-            }
-            for range in ranges {
-                if let Some(rect) = node.Native().TextRangeRect(range.0, range.1) {
-                    output.push((
-                        node.fragment_instance_id,
-                        range,
-                        layoutng_assembly::caret::geometry::LocalCaretRect {
-                            offset: Offset {
-                                x: rect.x,
-                                y: rect.y,
-                            },
-                            size: Size {
-                                width: rect.width,
-                                height: rect.height,
-                            },
-                        },
-                    ));
-                }
-            }
-        }
-        for child in node.Children() {
-            editing_text_range_rects(child, editing, output);
-        }
+    let mut paint_context = PaintContext::WithEditingAndPersistentCache(
+        &mut output,
+        editing,
+        previous,
+        previous_subsequences,
+    );
+    // RecordPaint's root cursor is the documentElement Layout result. Preserve
+    // its exact computed opacity as the document-global Paint Timing fact used
+    // by every nested PaintLayerPainter scope.
+    paint_context.SetDocumentElementIsInvisible(fragments.paint.style.opacity() == 0.0);
+    paint_context.BindTextSources(fragments.Cursor());
+    if let Some((rect, shape)) = caret_geometry {
+        paint_context.caret_local_rect = Some(rect);
+        paint_context.caret_shape = Some(shape);
     }
-    let mut text_range_rects = Vec::new();
-    if editing
-        .caret
-        .is_some_and(|caret| caret.selection.is_some() || caret.composition.is_some())
-        || editing
-            .document_selection
-            .is_some_and(|selection| !selection.Collapsed())
-    {
-        editing_text_range_rects(fragments, editing, &mut text_range_rects);
-    }
-    let mut paint_context = PaintContext::WithEditingAndCache(&mut output, editing, previous);
-    paint_context.BindNativeTextSources(fragments.Native());
-    paint_context.caret_local_rect = caret_local_rect;
-    paint_context.text_range_rects = text_range_rects;
     let context = RefCell::new(paint_context);
     context
         .borrow_mut()
@@ -533,51 +430,43 @@ fn RecordPaint(
         trace.set("skipped_hidden", walk.skipped_hidden as f64);
         trace.set("skipped_phase", walk.skipped_phase as f64);
     }
-    {
+    let subsequences = {
         let _trace = browser_tracing::span("paint_chunk", "PaintChunk.Finish");
-        context.borrow_mut().Finish();
-    }
+        context.borrow_mut().Finish()
+    };
     trace.set(
         "cached_display_items",
-        context.borrow().cached_display_items as f64,
+        context.borrow().CacheMetrics().reused as f64,
     );
-    trace.set("cache_candidates", context.borrow().cache_candidates as f64);
-    trace.set("cache_attempts", context.borrow().cache_attempts as f64);
+    trace.set(
+        "cache_candidates",
+        context.borrow().CacheMetrics().candidates as f64,
+    );
+    trace.set(
+        "cache_attempts",
+        context.borrow().CacheMetrics().attempts as f64,
+    );
     trace.set(
         "cache_rejected_uncacheable",
-        context.borrow().cache_rejected_uncacheable as f64,
+        context.borrow().CacheMetrics().rejected_uncacheable as f64,
     );
     trace.set(
         "cache_rejected_just_created",
-        context.borrow().cache_rejected_just_created as f64,
+        context.borrow().CacheMetrics().rejected_just_created as f64,
     );
     trace.set(
         "cache_rejected_invalid",
-        context.borrow().cache_rejected_invalid as f64,
-    );
-    trace.set(
-        "cache_rejected_geometry",
-        context.borrow().cache_rejected_geometry as f64,
+        context.borrow().CacheMetrics().rejected_invalid as f64,
     );
     trace.set(
         "cache_rejected_missing_id",
-        context.borrow().cache_rejected_missing_id as f64,
+        context.borrow().CacheMetrics().rejected_missing_id as f64,
     );
     trace.set(
         "cache_rejected_missing_previous",
-        context.borrow().cache_rejected_missing_previous as f64,
+        context.borrow().CacheMetrics().rejected_missing_previous as f64,
     );
-    let reuse = paint_reuse::PaintReuseMetrics {
-        candidates: context.borrow().cache_candidates,
-        attempts: context.borrow().cache_attempts,
-        reused: context.borrow().cached_display_items,
-        rejected_uncacheable: context.borrow().cache_rejected_uncacheable,
-        rejected_just_created: context.borrow().cache_rejected_just_created,
-        rejected_invalid: context.borrow().cache_rejected_invalid,
-        rejected_geometry: context.borrow().cache_rejected_geometry,
-        rejected_missing_id: context.borrow().cache_rejected_missing_id,
-        rejected_missing_previous: context.borrow().cache_rejected_missing_previous,
-    };
+    let reuse = context.borrow().CacheMetrics();
     let walk = context.borrow().walk_metrics;
     browser_tracing::instant(
         "paint_reuse",
@@ -588,12 +477,50 @@ fn RecordPaint(
             ("reused", reuse.reused as f64),
             ("hit_rate", reuse.hit_rate()),
             ("invalid", reuse.rejected_invalid as f64),
-            ("geometry", reuse.rejected_geometry as f64),
             ("missing_id", reuse.rejected_missing_id as f64),
             ("missing_previous", reuse.rejected_missing_previous as f64),
         ],
     );
     drop(context);
+    // Source: PaintController::CommitNewDisplayItems,
+    // PaintController::AppendSubsequenceByMoving and ObjectPaintProperties.
+    // Cached source objects keep pointers to nodes that Chromium updates in
+    // place. Publish their immutable Rust equivalents against this pass's
+    // current owner slots, including wrapper ancestry and transform sidecars.
+    if reuse.reused != 0
+        || output
+            .chunks
+            .iter()
+            .any(|chunk| chunk.is_moved_from_cached_subsequence)
+    {
+        let _trace = browser_tracing::span("paint_commit", "PaintCommit.RebindPropertyStates");
+        let mut rebinder = paint_model::paint_property_tree::ArtifactPropertyStateRebinder::new(
+            &pre_paint.property_node_store,
+        );
+        for chunk in &mut output.chunks {
+            // Current/home chunks can share an owner node whose immutable
+            // payload still points at an earlier ancestor revision, while the
+            // layer also contains a moved/guest chunk. Canonicalize both sides
+            // of that ancestry comparison in this publication pass.
+            rebinder.RebindState(&mut chunk.properties);
+            if let Some(scroll_translation) = chunk
+                .compositor
+                .as_mut()
+                .and_then(|data| data.hit_test_data.as_mut())
+                .and_then(|data| data.scroll_translation.as_mut())
+            {
+                *scroll_translation = rebinder.RebindTransform(scroll_translation);
+            }
+        }
+        // Individual cached drawings are moved without a moved-subsequence
+        // marker. Their DisplayItem-owned scroll translation still observes
+        // ObjectPaintProperties in place in Chromium.
+        for item in &mut output.display_items {
+            if let Some(scroll_translation) = item.scroll_translation.as_mut() {
+                *scroll_translation = rebinder.RebindTransform(scroll_translation);
+            }
+        }
+    }
     let record = paint_record::PaintRecordMetrics {
         paint_ops: output.items.len(),
         display_items: output.display_items.len(),
@@ -635,17 +562,17 @@ fn RecordPaint(
     if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
         let stats = pre_paint.stats;
         eprintln!(
-            "prepaint-update computed_nodes={} reused_nodes={} invalidation_only_nodes={} geometry_only_nodes={} skipped_subtrees={} post_walk={}",
+            "prepaint-update computed_nodes={} reused_nodes={} invalidation_only_nodes={} skipped_subtrees={} post_walk={}",
             stats.computed_nodes,
             stats.reused_nodes,
             stats.invalidation_only_nodes,
-            stats.geometry_only_nodes,
             stats.skipped_subtrees,
             stats.post_walk
         );
     }
     (
         output,
+        subsequences,
         crate::performance::PaintPerformanceSnapshot {
             prepaint: pre_paint.stats,
             walk,
@@ -667,7 +594,7 @@ pub struct PaintEngine {
     pre_paint: PrePaintTreeWalk,
     retained_scroll_state: Option<crate::scroll_paint_update::RetainedScrollPaintState>,
     retained_scroll_state_initialized: bool,
-    paint_result: Option<Arc<PaintArtifact>>,
+    persistent_data: PaintControllerPersistentData,
     performance: crate::performance::PaintPerformanceSnapshot,
     animation_targeted_nodes: Vec<u64>,
 }
@@ -698,27 +625,28 @@ impl PaintEngine {
         editing: EditingPaintState,
     ) {
         let _trace = browser_tracing::span("paint", "PaintEngine.Paint");
-        let layout_result = PaintFragmentSource::FromNative(layout_output.PaintCursor());
-        let previous = self.paint_result.clone();
-        let capacities = previous.as_ref().map_or((0, 0, 0), |old| {
-            (old.items.len(), old.display_items.len(), old.chunks.len())
-        });
-        self.pre_paint.SetRetainedNativeOwnerLifetimes(false);
-        let (result, performance) = RecordPaint(
+        let layout_result = PaintFragmentSource::FromCursor(layout_output.PaintCursor());
+        let source_lease = layout_output.PaintLease();
+        let previous = self.persistent_data.GetPaintArtifact().cloned();
+        let previous_subsequences = self.persistent_data.GetSubsequences().clone();
+        self.pre_paint.SetRetainedOwnerLifetimes(false);
+        let (result, subsequences, performance) = RecordPaint(
             &mut self.pre_paint,
             layout_result,
+            source_lease,
             editing,
-            capacities.0,
-            capacities.1,
-            capacities.2,
             previous,
+            previous_subsequences,
         );
         if self.pre_paint.stats.post_walk || self.retained_scroll_state.is_none() {
             self.retained_scroll_state = None;
             self.retained_scroll_state_initialized = false;
         }
         self.performance = performance;
-        self.paint_result = Some(paint_commit::CommitArtifact(result));
+        self.persistent_data.CommitNewDisplayItemsWithSubsequences(
+            paint_commit::CommitArtifact(result),
+            subsequences,
+        );
     }
 
     pub fn GetPrePaintUpdateStats(&self) -> crate::pre_paint_tree_walk::PrePaintUpdateStats {
@@ -726,7 +654,7 @@ impl PaintEngine {
     }
 
     pub fn GetPaintResult(&self) -> Option<&Arc<PaintArtifact>> {
-        self.paint_result.as_ref()
+        self.persistent_data.GetPaintArtifact()
     }
 
     pub fn GetPerformanceSnapshot(&self) -> crate::performance::PaintPerformanceSnapshot {
@@ -739,7 +667,7 @@ impl PaintEngine {
     /// compositor damage only records that sample changed pixels.
     pub fn UpdatePaintResources(&mut self, resources: Arc<PaintResources>) -> bool {
         ValidateReplayResources(Some(&resources));
-        let Some(artifact) = self.paint_result.as_mut() else {
+        let Some(artifact) = self.persistent_data.GetPaintArtifactMut() else {
             return false;
         };
         if artifact
@@ -758,7 +686,7 @@ impl PaintEngine {
     /// display items remain shared; the retained dependency index identifies
     /// exactly which paint clients LayerTile must invalidate.
     pub fn ApplyMutation(&mut self, mutation: PaintMutation) -> Option<PaintMutationResult> {
-        let artifact = self.paint_result.as_mut()?;
+        let artifact = self.persistent_data.GetPaintArtifactMut()?;
         let artifact = Arc::make_mut(artifact);
         artifact.ApplyResourceMutation(mutation)
     }
@@ -771,7 +699,7 @@ impl PaintEngine {
         artifact: Arc<PaintArtifact>,
         update: PaintResourceUpdate,
     ) -> Option<Arc<PaintArtifact>> {
-        self.paint_result = Some(artifact);
+        self.persistent_data.AdoptPaintArtifact(artifact);
         match update {
             PaintResourceUpdate::Snapshot(resources) => {
                 self.UpdatePaintResources(resources).then_some(())?;
@@ -782,7 +710,7 @@ impl PaintEngine {
                 }
             }
         }
-        self.paint_result.clone()
+        self.persistent_data.GetPaintArtifact().cloned()
     }
 
     /// Complete Paint-owned client validation and publish an immutable output.
@@ -791,31 +719,29 @@ impl PaintEngine {
     pub fn CommitPaintResult(&mut self) -> PaintOutput {
         let mut trace = browser_tracing::span("paint_commit", "PaintCommit.Publish");
         let artifact = Arc::make_mut(
-            self.paint_result
-                .as_mut()
+            self.persistent_data
+                .GetPaintArtifactMut()
                 .expect("Paint must complete before commit"),
         );
-        let clients = paint_commit::CollectClientIds(
-            artifact.display_items.iter().map(|item| item.id),
-            artifact.chunks.iter().map(|chunk| chunk.id),
-        );
+        let clients = crate::PaintController::ValidateForCommittedPaint(artifact);
         self.performance.commit = paint_commit::PaintCommitMetrics {
             clients: clients.len(),
             recording_revision: artifact.recording_revision,
         };
         trace.set("clients", clients.len() as f64);
         trace.set("recording_revision", artifact.recording_revision as f64);
-        // cpp: platform/graphics/paint/paint_controller.cc:141-143
-        for chunk in &mut artifact.chunks {
-            chunk.client_is_just_created = false;
-        }
         self.pre_paint.CommitClients(clients.iter().copied());
         PaintOutput::new(
-            self.paint_result
-                .as_ref()
+            self.persistent_data
+                .GetPaintArtifact()
                 .expect("committed Paint result")
                 .clone(),
-            layoutng_assembly::layout_engine::PaintClientCommit::FromClientSet(clients),
+            layoutng_assembly::layout_engine::PaintClientCommit::FromClientSetAndDelayedInvalidations(
+                clients,
+                self.pre_paint
+                    .PendingDelayedPaintInvalidations()
+                    .clone(),
+            ),
         )
     }
 
@@ -823,10 +749,10 @@ impl PaintEngine {
     /// This prevents Engine/Page sharing alone from causing a deep copy.
     #[doc(hidden)]
     pub fn AdoptPaintResult(&mut self, artifact: Arc<PaintArtifact>) {
-        self.paint_result = Some(artifact);
+        self.persistent_data.AdoptPaintArtifact(artifact);
     }
 
-    /// Requires the native retained-geometry proof from Page, just as the
+    /// Requires the source retained-geometry proof from Page, just as the
     /// existing scroll update path. A rejection leaves the artifact unchanged.
     #[doc(hidden)]
     pub fn TryUpdateScrollProperties(
@@ -838,15 +764,15 @@ impl PaintEngine {
     > {
         let mut trace = browser_tracing::span("paint", "PaintEngine.TryUpdateScrollProperties");
         trace.set("records_reused", 0.0);
-        let Some(artifact) = self.paint_result.as_mut() else {
+        let Some(artifact) = self.persistent_data.GetPaintArtifactMut() else {
             return Err(crate::scroll_paint_update::ScrollPaintInvalidation::MissingCoverage);
         };
         trace.set("artifact_strong_count", Arc::strong_count(artifact) as f64);
-        // Native scroll refresh versions the changed nodes and ancestor paths.
+        // Chromium scroll refresh versions the changed nodes and ancestor paths.
         // Keep the resident tree as the old geometry/context baseline: the
         // next ordinary Walk must compare it, not force unrelated subtrees.
         let result = crate::scroll_paint_update::TryUpdateScrollPropertiesWithPrePaint(
-            PaintFragmentSource::FromNative(layout_output.PaintCursor()),
+            PaintFragmentSource::FromCursor(layout_output.PaintCursor()),
             Arc::make_mut(artifact),
             &mut self.pre_paint,
             &mut self.retained_scroll_state,

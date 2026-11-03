@@ -7,7 +7,7 @@ use foundation::{
 };
 use layoutng_assembly::block_break_token::BlockBreakToken;
 use layoutng_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layoutng_assembly::internal::algorithm_entry::NativeAlgorithm;
+use layoutng_assembly::internal::algorithm_entry::LayoutAlgorithmImplementation;
 use layoutng_assembly::internal::block_node::BlockNode;
 use layoutng_assembly::internal::break_appeal::kBreakAppealPerfect;
 use layoutng_assembly::internal::constraint_space::{AutoSizeBehavior, ConstraintSpace};
@@ -627,7 +627,7 @@ impl FieldsetLayoutAlgorithm {
 }
 
 // cpp: layoutng_forms/fieldset_layout_algorithm.h:18-26
-impl NativeAlgorithm for FieldsetLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for FieldsetLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_forms.FieldsetLayout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_forms.FieldsetMeasure";
 

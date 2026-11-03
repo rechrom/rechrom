@@ -259,6 +259,7 @@ impl DocumentLoader {
             });
         }
         self.Parser()?;
+        let needed_input_at_start = self.needs_input;
         let mut made_progress = !self.needs_input && !self.parser.as_ref().unwrap().IsPaused();
         let mut body_budget_exhausted = false;
         let parser_paused = self.parser.as_ref().unwrap().IsPaused();
@@ -356,12 +357,24 @@ impl DocumentLoader {
             PARSER_TIME_BUDGET,
         );
         self.needs_input = result.status == HTMLParserStatus::kNeedMoreInput;
+        // ResumeParsingAfterPause schedules another tokenizer pump in Blink.
+        // Our parser can consume its resident input after a blocking script and
+        // only then discover that it needs the next stream chunk.  That chunk
+        // may already be queued, so its edge-triggered wake has already fired.
+        // Post one recheck turn for this false -> true transition.  If the
+        // stream is still empty that turn stops normally and the producer's
+        // next wake owns further progress.
+        let parser_input_recheck = !needed_input_at_start
+            && self.needs_input
+            && !self.body_finished
+            && self.stream.is_some();
         if result.status == HTMLParserStatus::kFinished {
             self.status = DocumentLoaderStatus::kFinished;
         }
         if result.status == HTMLParserStatus::kYielded
             || preload_work_pending
             || (body_budget_exhausted && (self.needs_input || allow_paused_read))
+            || parser_input_recheck
         {
             if let Some(wake) = &self.wake {
                 wake();
@@ -376,12 +389,14 @@ impl DocumentLoader {
         trace.set("body_finished", self.body_finished as u8 as f64);
         trace.set("made_progress", made_progress as u8 as f64);
         trace.set("needs_input", self.needs_input as u8 as f64);
+        trace.set("parser_input_recheck", parser_input_recheck as u8 as f64);
         Ok(DocumentLoadProgress {
             body_finished: self.body_finished,
             made_progress,
             parser_made_progress: made_progress && !parser_paused,
             immediate_work_pending: result.status == HTMLParserStatus::kYielded
                 || preload_work_pending
+                || parser_input_recheck
                 || ((self.needs_input || allow_paused_read)
                     && body_budget_exhausted
                     && self.parser.as_ref().unwrap().BufferedInputCharacters()

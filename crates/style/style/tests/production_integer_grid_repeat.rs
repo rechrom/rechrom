@@ -105,7 +105,7 @@ fn repeat_parser_rejects_bad_counts_and_nested_repeat() {
 }
 
 #[test]
-fn repeat_count_clamps_to_the_native_track_limit_without_expanding_sizes() {
+fn repeat_count_clamps_to_the_computed_style_track_limit_without_expanding_sizes() {
     let parsed = ParseProperty(
         P::kGridTemplateColumns,
         &foundation::String::from("repeat(999999999,1fr 20px 30px)"),
@@ -125,7 +125,7 @@ fn repeat_count_clamps_to_the_native_track_limit_without_expanding_sizes() {
 }
 
 #[test]
-fn repeat_native_named_lines_and_ordered_flags_use_expanded_indices() {
+fn repeat_computed_style_named_lines_and_ordered_flags_use_expanded_indices() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=g style='grid-template-columns:[outer] 5px repeat(2,[a] minmax(0,1fr) [b] 10px [end]) [tail] 7px'></div>");
     let mut engine = StyleEngine::new(&owner);
@@ -145,8 +145,8 @@ fn repeat_native_named_lines_and_ordered_flags_use_expanded_indices() {
                 .is_some_and(|a| a.value == "g")
         })
         .unwrap();
-    let native = unsafe { &*doc.ResolvedStyleFor(i).unwrap().native_style.Get() };
-    let columns = unsafe { &*native.SpecifiedGridTemplateColumns().Get() };
+    let computed_style = unsafe { &*doc.ResolvedStyleFor(i).unwrap().computed_style_owner.Get() };
+    let columns = unsafe { &*computed_style.SpecifiedGridTemplateColumns().Get() };
     let tracks = columns.GetTrackList();
     assert_eq!(tracks.TrackCountWithoutAutoRepeat(), 6);
     assert_eq!(tracks.RepeaterCount(), 3);

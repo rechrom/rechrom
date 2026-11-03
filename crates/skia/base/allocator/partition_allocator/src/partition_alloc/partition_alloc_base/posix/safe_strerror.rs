@@ -8,7 +8,7 @@ unsafe extern "C" {
         pa_strerror_r_symbol = "__gnu_strerror_r",
         link_name = "__gnu_strerror_r"
     )]
-    fn native_strerror_r(err: c_int, buf: *mut c_char, len: usize) -> *mut c_char;
+    fn strerror_r(err: c_int, buf: *mut c_char, len: usize) -> *mut c_char;
 }
 #[cfg(pa_strerror_r_abi = "posix")]
 unsafe extern "C" {
@@ -17,7 +17,7 @@ unsafe extern "C" {
         pa_strerror_r_symbol = "__xpg_strerror_r",
         link_name = "__xpg_strerror_r"
     )]
-    fn native_strerror_r(err: c_int, buf: *mut c_char, len: usize) -> c_int;
+    fn strerror_r(err: c_int, buf: *mut c_char, len: usize) -> c_int;
 }
 #[cfg(not(any(pa_strerror_r_abi = "gnu", pa_strerror_r_abi = "posix")))]
 compile_error!("actual native strerror_r overload ABI input required");
@@ -73,8 +73,8 @@ pub unsafe fn safe_strerror_r(err: c_int, buf: *mut c_char, len: usize) {
         return;
     }
     #[cfg(pa_strerror_r_abi = "gnu")]
-    wrap_gnu(native_strerror_r, err, buf, len);
+    wrap_gnu(strerror_r, err, buf, len);
     #[cfg(pa_strerror_r_abi = "posix")]
-    wrap_posix(native_strerror_r, err, buf, len);
+    wrap_posix(strerror_r, err, buf, len);
 }
 // Native std::string safe_strerror(int) is not needed by PA LogMessage and requires the real stdlib owner binding.

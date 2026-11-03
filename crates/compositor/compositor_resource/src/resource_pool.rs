@@ -1396,7 +1396,7 @@ impl<B: ResourcePoolTypes> Drop for ResourcePool<B> {
 // This pinned revision only declares this unused private method: resource_pool.cc
 // has neither definition nor caller. Preserve its signature without inventing an
 // algorithm or providing a callable stand-in on the canonical ResourcePool.
-trait NativeHasEvictableResourcesDeclaration {
+trait HasEvictableResourcesDeclaration {
     fn HasEvictableResources(&self) -> bool;
 }
 // Source: cc/resources/resource_pool.h:323-325

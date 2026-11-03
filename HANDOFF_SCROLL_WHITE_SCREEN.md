@@ -18,7 +18,7 @@ https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Grid_layout/Basic_concep
 Canonical input fixture:
 
 ```text
-apps/rechrom/fixtures/native_trackpad_scroll.jsonl
+apps/rechrom/fixtures/trackpad_scroll.jsonl
 ```
 
 ## Confirmed failures and fixes so far
@@ -167,7 +167,7 @@ Native replay command:
 
 ```bash
 /private/tmp/scroll_capture rechrom 8698 \
-  apps/rechrom/fixtures/native_trackpad_scroll.jsonl \
+  apps/rechrom/fixtures/trackpad_scroll.jsonl \
   /private/tmp/rechrom-runtime-diag-1 0
 ```
 

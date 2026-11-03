@@ -9,7 +9,7 @@ pub enum LayoutCacheDecisionReason {
     GeometryCheck,
 }
 
-/// Native geometry adapter for the size-based layout-cache policy. The core
+/// Chromium geometry adapter for the size-based layout-cache policy. The core
 /// assembly supplies the coupled calculations; this package owns their order
 /// and all early-hit/early-miss decisions.
 pub trait LayoutCacheDecisionBackend {
@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn uncertain_size_delegates_to_native_geometry() {
+    fn uncertain_size_delegates_to_source_geometry() {
         let mut decision = Decision {
             sizes_equal: false,
             size_may_change: true,

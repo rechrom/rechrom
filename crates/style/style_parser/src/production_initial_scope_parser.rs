@@ -14,15 +14,15 @@
 // css_primitive_value.cc:377-384; numeric_literal_value.cc:142-149;
 // css_math_function_value.cc:99-114,190-204.
 // Shared subtotal effective194 / mapped160 / omitted27 / remaining7.
-// Existing native source: style_initial_letter.h:13-50/.cc:12-51,
+// Existing computed style source: style_initial_letter.h:13-50/.cc:12-51,
 // scroll_marker_group.h:13-46; style_trigger_scope.h:12 aliases StyleNameScope.
-// Existing native subtotal effective72 / mapped72 / omitted0 / remaining0.
+// Existing computed style subtotal effective72 / mapped72 / omitted0 / remaining0.
 // Selected total effective414 / mapped373 / omitted29 / remaining12.
 // Omitted: nonselected integer ranges/AllowPercent, number percentage paths,
 // nonselected mathematical ranges, NOTREACHED/unreachable converter fallbacks.
 // Remaining: custom:8790 alternate disabled flag; generated:14695,17777
 // disabled Exposure; utils:1761-1762 test-only ident(); converter:2410
-// mathematical size<1 native DCHECK and :2429 undefined out-of-int sink;
+// mathematical size<1 computed style DCHECK and :2429 undefined out-of-int sink;
 // :2290,2293,2369,2373,2375 scoped population/HasTreeScopedReference owner.
 // Shared extended math expression parser, GC, CSSOM serialization and layout
 // runtime bodies are outside this selected source audit; partial != complete.

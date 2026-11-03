@@ -105,21 +105,21 @@ impl PartialEq for StyleInitialLetter {
 
 // The layoutng input translator calls these four source-owned constructors.
 #[unsafe(no_mangle)]
-pub extern "Rust" fn NativeInitialLetterOmitted(size: f32) -> StyleInitialLetter {
+pub extern "Rust" fn InitialLetterOmitted(size: f32) -> StyleInitialLetter {
     StyleInitialLetter::with_size(size)
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn NativeInitialLetterInteger(size: f32, sink: i32) -> StyleInitialLetter {
+pub extern "Rust" fn InitialLetterInteger(size: f32, sink: i32) -> StyleInitialLetter {
     StyleInitialLetter::with_sink(size, sink)
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn NativeInitialLetterDrop(size: f32) -> StyleInitialLetter {
+pub extern "Rust" fn InitialLetterDrop(size: f32) -> StyleInitialLetter {
     StyleInitialLetter::Drop(size)
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn NativeInitialLetterRaise(size: f32) -> StyleInitialLetter {
+pub extern "Rust" fn InitialLetterRaise(size: f32) -> StyleInitialLetter {
     StyleInitialLetter::Raise(size)
 }

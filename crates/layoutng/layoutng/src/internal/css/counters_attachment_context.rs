@@ -7,7 +7,7 @@ use crate::internal::layout_node_metadata::{Element, Node};
 use crate::internal::layout_object::LayoutObject;
 
 // Bodies of the non-inline members are outside the selected production set.
-// Typed links keep the native counter-attachment behavior at its owner.
+// Typed links keep the source counter-attachment behavior at its owner.
 unsafe extern "Rust" {
     fn CountersAttachmentContextNew() -> CountersAttachmentContext;
     fn CountersAttachmentContextDeepClone(

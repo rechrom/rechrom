@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Generated text Apply* and StyleBuilderConverter native storage branches.
+//! Generated text Apply* and StyleBuilderConverter computed style storage branches.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{
@@ -59,7 +59,7 @@ fn ConvertFlags(
 }
 
 // CSSPrimitiveValue::ConvertToLength / ConvertLengthOrAuto. Preserve mixed
-// length-percentage math as native calculated Length through the shared tree.
+// length-percentage math as computed style calculated Length through the shared tree.
 pub(super) fn ConvertLength(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -367,7 +367,7 @@ mod text_properties_production_tests {
     }
 
     #[test]
-    fn text_properties_production_values_shorthand_and_native_math() {
+    fn text_properties_production_values_shorthand_and_computed_style_math() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);

@@ -7,7 +7,7 @@ use font_engine::fonts::shaping::shape_options::ShapeOptions;
 use font_engine::fonts::shaping::shape_result::{OffsetWithSpacing, ShapeResult};
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use font_engine::fonts::shaping::text_spacing_trim::ShouldTrimStartOfParagraph;
-use font_engine::text::native::character::Character;
+use font_engine::text::implementation::character::Character;
 use font_engine::{Font, HarfBuzzShaper, ShapeResultSpacing};
 use foundation::{
     DynamicTo, LayoutUnit, Length, MakeGarbageCollected, Member, RuntimeEnabledFeatures,

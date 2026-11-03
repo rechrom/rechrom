@@ -5544,7 +5544,7 @@ impl StateValue for bool {
 }
 
 // Source: checked_math_impl.h:99-354. Native per-pair template instantiations.
-use super::native_overflow_builtins::BuiltinTriple;
+use super::overflow_builtins::BuiltinTriple;
 use super::safe_math_shared_impl::{CheckedAddFastOp, CheckedMulFastOp, CheckedSubFastOp};
 #[cfg(target_pointer_width = "32")]
 impl<V: Numeric> CheckedBinary<i8, V> for i8

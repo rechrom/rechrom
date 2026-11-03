@@ -2811,7 +2811,7 @@ impl CheckedNumeric<usize> {
 // Always a const block: invalid ValueOrDie remains a compile-time error,
 // while the ordinary runtime ValueOrDie still invokes the real native handler.
 #[macro_export]
-macro_rules! NativeCheckedValueOrDieConst {
+macro_rules! CheckedValueOrDieConst {
     ($t:ty,$value:expr) => {
         const {
             let value: $crate::base::numerics::checked_math::CheckedNumeric<$t> = $value;

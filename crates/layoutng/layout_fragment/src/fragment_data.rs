@@ -1,7 +1,4 @@
-use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
-
-use crate::fragment_tree::FragmentPaintData;
 
 use layoutng::internal::paint_layer::PaintLayer;
 
@@ -55,10 +52,6 @@ impl FragmentDataRareData {
 pub struct FragmentData {
     pub(crate) paint_offset_: PhysicalOffset,
     pub(crate) rare_data_: Member<FragmentDataRareData>,
-    // Fragment-local Paint input attached to Chromium's native FragmentData
-    // owner. This value never owns child topology; traversal continues through
-    // PhysicalFragment/FragmentItem links.
-    paint_input_: UnsafeCell<Option<Box<FragmentPaintData>>>,
     #[cfg(debug_assertions)]
     is_first_: bool,
 }
@@ -68,7 +61,6 @@ impl Default for FragmentData {
         Self {
             paint_offset_: PhysicalOffset::default(),
             rare_data_: Member::default(),
-            paint_input_: UnsafeCell::new(None),
             #[cfg(debug_assertions)]
             is_first_: false,
         }
@@ -81,13 +73,19 @@ impl FragmentData {
     pub fn Layer(&self) -> *mut PaintLayer {
         self.AssertIsFirst();
         let rare = self.rare_data_.Get();
-        if rare.is_null() { std::ptr::null_mut() } else { unsafe { &*rare }.layer.Get() }
+        if rare.is_null() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { &*rare }.layer.Get()
+        }
     }
 
     // cpp: core/paint/fragment_data.cc:25-32,49-53
     pub fn SetLayer(&mut self, layer: *mut PaintLayer) {
         self.AssertIsFirst();
-        if self.rare_data_.Get().is_null() && layer.is_null() { return; }
+        if self.rare_data_.Get().is_null() && layer.is_null() {
+            return;
+        }
         let rare = self.EnsureRareData();
         let previous = rare.layer.Get();
         if !previous.is_null() && previous != layer {
@@ -136,36 +134,6 @@ impl FragmentData {
     // cpp: layoutng_fragment_tree/fragment_data.h:37
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.rare_data_);
-    }
-
-    /// Replace only this native fragment occurrence's Paint input. Child
-    /// ownership is deliberately stripped: Blink's FragmentData does not own
-    /// a second fragment tree.
-    pub fn SetPaintInput(&self, mut input: FragmentPaintData) {
-        input.inline_geometry.clear();
-        let slot = unsafe { &mut *self.paint_input_.get() };
-        if let Some(current) = slot.as_mut() {
-            **current = input;
-        } else {
-            *slot = Some(Box::new(input));
-        }
-    }
-
-    /// Exclude this native fragment occurrence from the current CullRect
-    /// projection. Descendant inputs may stay resident: a missing ancestor
-    /// input keeps the whole subtree out of paint traversal until repopulated.
-    pub fn ClearPaintInput(&self) {
-        *unsafe { &mut *self.paint_input_.get() } = None;
-    }
-
-    pub fn PaintInput(&self) -> Option<&FragmentPaintData> {
-        unsafe { &*self.paint_input_.get() }.as_deref()
-    }
-
-    /// The caller must hold exclusive access to the owning LayoutResult for
-    /// the complete mutation and must not retain the returned reference.
-    pub unsafe fn PaintInputMut(&self) -> Option<&mut FragmentPaintData> {
-        unsafe { &mut *self.paint_input_.get() }.as_deref_mut()
     }
 
     // cpp: layoutng_fragment_tree/fragment_data.h:40-44

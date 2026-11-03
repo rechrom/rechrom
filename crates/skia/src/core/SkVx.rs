@@ -13,7 +13,7 @@ use std::arch::aarch64::*;
 // witness. Its [Marker; 0] member contributes alignment and no occupied bytes.
 // Requires the crate's generic_const_exprs language feature. The bounds below
 // are the compile-time native N/power-of-two and element-layout requirements.
-pub struct NativeAlignment<const BYTES: usize>;
+pub struct Alignment<const BYTES: usize>;
 pub trait AlignmentWitness {
     type Marker: Copy;
 }
@@ -22,7 +22,7 @@ macro_rules! alignment_witness {
         #[repr(align($bytes))]
         #[derive(Clone, Copy)]
         pub struct $name;
-        impl AlignmentWitness for NativeAlignment<$bytes> {
+        impl AlignmentWitness for Alignment<$bytes> {
             type Marker = $name;
         }
     };
@@ -69,25 +69,25 @@ pub const fn pair_requirement(n: usize, size: usize, align: usize) -> bool {
 pub const fn half_requirement(n: usize) -> bool {
     n > 1 && (n & (n - 1)) == 0
 }
-pub struct NativeRequirement<const VALID: bool>;
-pub trait NativeRequirementMet {}
-impl NativeRequirementMet for NativeRequirement<true> {}
+pub struct Requirement<const VALID: bool>;
+pub trait RequirementMet {}
+impl RequirementMet for Requirement<true> {}
 // Rust stores the same contiguous N lanes in one aligned object. This is
 // layout-equivalent to the native recursive lo/hi representation; half views
 // below project the two exact native subobject ranges without recursively
 // asking the trait solver to normalize Vec<N/2, T>.
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct NativeFlatStorage<T, const N: usize, A> {
+pub struct FlatStorage<T, const N: usize, A> {
     lanes: [T; N],
     alignment: [A; 0],
 }
-pub trait NativeStorageAccess<T, const N: usize> {
+pub trait StorageAccess<T, const N: usize> {
     fn from_array(values: [T; N]) -> Self;
     fn lanes(&self) -> &[T; N];
     fn lanes_mut(&mut self) -> &mut [T; N];
 }
-impl<T, const N: usize, A> NativeStorageAccess<T, N> for NativeFlatStorage<T, N, A> {
+impl<T, const N: usize, A> StorageAccess<T, N> for FlatStorage<T, N, A> {
     fn from_array(values: [T; N]) -> Self {
         Self {
             lanes: values,
@@ -102,51 +102,50 @@ impl<T, const N: usize, A> NativeStorageAccess<T, N> for NativeFlatStorage<T, N,
     }
 }
 
-pub trait NativeLayout<const N: usize>: Sized + Copy {
+pub trait Layout<const N: usize>: Sized + Copy {
     type Storage;
     fn into_storage(values: [Self; N]) -> Self::Storage;
     fn lanes(storage: &Self::Storage) -> &[Self; N];
     fn lanes_mut(storage: &mut Self::Storage) -> &mut [Self; N];
 }
-impl<T: Copy, const N: usize> NativeLayout<N> for T
+impl<T: Copy, const N: usize> Layout<N> for T
 where
     [(); N * core::mem::size_of::<T>()]:,
-    NativeRequirement<{ N > 0 }>: NativeRequirementMet,
-    NativeRequirement<{ (N & (N - 1)) == 0 }>: NativeRequirementMet,
-    NativeRequirement<{ core::mem::size_of::<T>() >= core::mem::align_of::<T>() }>:
-        NativeRequirementMet,
-    NativeAlignment<{ N * core::mem::size_of::<T>() }>: AlignmentWitness,
+    Requirement<{ N > 0 }>: RequirementMet,
+    Requirement<{ (N & (N - 1)) == 0 }>: RequirementMet,
+    Requirement<{ core::mem::size_of::<T>() >= core::mem::align_of::<T>() }>: RequirementMet,
+    Alignment<{ N * core::mem::size_of::<T>() }>: AlignmentWitness,
 {
-    type Storage = NativeFlatStorage<
+    type Storage = FlatStorage<
         T,
         N,
-        <NativeAlignment<{ N * core::mem::size_of::<T>() }> as AlignmentWitness>::Marker,
+        <Alignment<{ N * core::mem::size_of::<T>() }> as AlignmentWitness>::Marker,
     >;
     fn into_storage(values: [Self; N]) -> Self::Storage {
-        NativeStorageAccess::from_array(values)
+        StorageAccess::from_array(values)
     }
     fn lanes(s: &Self::Storage) -> &[Self; N] {
-        NativeStorageAccess::lanes(s)
+        StorageAccess::lanes(s)
     }
     fn lanes_mut(s: &mut Self::Storage) -> &mut [Self; N] {
-        NativeStorageAccess::lanes_mut(s)
+        StorageAccess::lanes_mut(s)
     }
 }
 mod layout_sealed {
     pub trait Supported<const N: usize> {}
 }
-impl<T: Copy, const N: usize> layout_sealed::Supported<N> for T where T: NativeLayout<N> {}
+impl<T: Copy, const N: usize> layout_sealed::Supported<N> for T where T: Layout<N> {}
 // Source: src/core/SkVx.h:85-88
 // Source: src/core/SkVx.h:125-127
 // Source: src/core/SkVx.h:176-178
 #[repr(transparent)]
-pub struct Vec<const N: usize, T: NativeLayout<N>> {
+pub struct Vec<const N: usize, T: Layout<N>> {
     storage: T::Storage,
 }
 // Copy is a property of the actual owned storage, never an unconditional
 // promise for generic T. Clone invokes each lane's genuine Clone operation.
-impl<const N: usize, T: NativeLayout<N> + Copy> Copy for Vec<N, T> where T::Storage: Copy {}
-impl<const N: usize, T: NativeLayout<N> + Clone> Clone for Vec<N, T> {
+impl<const N: usize, T: Layout<N> + Copy> Copy for Vec<N, T> where T::Storage: Copy {}
+impl<const N: usize, T: Layout<N> + Clone> Clone for Vec<N, T> {
     fn clone(&self) -> Self {
         Self::from_array(core::array::from_fn(|i| self.as_array()[i].clone()))
     }
@@ -157,7 +156,7 @@ impl<const N: usize, T: NativeLayout<N> + Clone> Clone for Vec<N, T> {
 // Source: src/core/SkVx.h:220-220
 // T's real value-initialization/default operation is required independently of
 // the layout. No all-zero bit pattern or invented Clone is imposed on owners.
-const impl<const N: usize, T: NativeLayout<N> + Default> Default for Vec<N, T>
+const impl<const N: usize, T: Layout<N> + Default> Default for Vec<N, T>
 where
     T::Storage: [const] Default,
 {
@@ -167,7 +166,7 @@ where
         }
     }
 }
-impl<const N: usize, T: NativeLayout<N>> Vec<N, T> {
+impl<const N: usize, T: Layout<N>> Vec<N, T> {
     // Moving the initialized array transfers each original T exactly once into
     // its actual recursive owned fields; ManuallyDrop prevents a second drop.
     pub fn from_array(values: [T; N]) -> Self {
@@ -212,19 +211,19 @@ impl<const N: usize, T: NativeLayout<N>> Vec<N, T> {
         }
     }
 }
-impl<const N: usize, T: NativeLayout<N> + Clone> Vec<N, T> {
+impl<const N: usize, T: Layout<N> + Clone> Vec<N, T> {
     // Source: src/core/SkVx.h:96-96
     pub fn splat(value: T) -> Self {
         Self::from_array(core::array::from_fn(|_| value.clone()))
     }
 }
-impl<const N: usize, T: NativeLayout<N>> core::ops::Deref for Vec<N, T> {
+impl<const N: usize, T: Layout<N>> core::ops::Deref for Vec<N, T> {
     type Target = [T; N];
     fn deref(&self) -> &Self::Target {
         self.as_array()
     }
 }
-impl<const N: usize, T: NativeLayout<N>> core::ops::DerefMut for Vec<N, T> {
+impl<const N: usize, T: Layout<N>> core::ops::DerefMut for Vec<N, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_array_mut()
     }
@@ -232,7 +231,7 @@ impl<const N: usize, T: NativeLayout<N>> core::ops::DerefMut for Vec<N, T> {
 // Source: src/core/SkVx.h:120-120
 // Source: src/core/SkVx.h:173-173
 // Source: src/core/SkVx.h:213-213
-pub trait NativeHalf<const N: usize>: NativeLayout<N> {
+pub trait VectorHalf<const N: usize>: Layout<N> {
     type Half;
     fn low(storage: &Self::Storage) -> &Self::Half;
     fn high(storage: &Self::Storage) -> &Self::Half;
@@ -242,31 +241,31 @@ pub trait NativeHalf<const N: usize>: NativeLayout<N> {
 // Source: src/core/SkVx.h:120-120
 // Source: src/core/SkVx.h:173-173
 // Source: src/core/SkVx.h:213-213
-impl<T, const N: usize> NativeHalf<N> for T
+impl<T, const N: usize> VectorHalf<N> for T
 where
-    NativeRequirement<{ half_requirement(N) }>: NativeRequirementMet,
-    T: NativeLayout<N> + NativeLayout<{ N / 2 }>,
+    Requirement<{ half_requirement(N) }>: RequirementMet,
+    T: Layout<N> + Layout<{ N / 2 }>,
 {
     type Half = Vec<{ N / 2 }, T>;
-    fn low(s: &<Self as NativeLayout<N>>::Storage) -> &Self::Half {
-        unsafe { &*<T as NativeLayout<N>>::lanes(s).as_ptr().cast() }
+    fn low(s: &<Self as Layout<N>>::Storage) -> &Self::Half {
+        unsafe { &*<T as Layout<N>>::lanes(s).as_ptr().cast() }
     }
-    fn high(s: &<Self as NativeLayout<N>>::Storage) -> &Self::Half {
-        unsafe { &*<T as NativeLayout<N>>::lanes(s).as_ptr().add(N / 2).cast() }
+    fn high(s: &<Self as Layout<N>>::Storage) -> &Self::Half {
+        unsafe { &*<T as Layout<N>>::lanes(s).as_ptr().add(N / 2).cast() }
     }
-    fn low_mut(s: &mut <Self as NativeLayout<N>>::Storage) -> &mut Self::Half {
-        unsafe { &mut *<T as NativeLayout<N>>::lanes_mut(s).as_mut_ptr().cast() }
+    fn low_mut(s: &mut <Self as Layout<N>>::Storage) -> &mut Self::Half {
+        unsafe { &mut *<T as Layout<N>>::lanes_mut(s).as_mut_ptr().cast() }
     }
-    fn high_mut(s: &mut <Self as NativeLayout<N>>::Storage) -> &mut Self::Half {
+    fn high_mut(s: &mut <Self as Layout<N>>::Storage) -> &mut Self::Half {
         unsafe {
-            &mut *<T as NativeLayout<N>>::lanes_mut(s)
+            &mut *<T as Layout<N>>::lanes_mut(s)
                 .as_mut_ptr()
                 .add(N / 2)
                 .cast()
         }
     }
 }
-impl<const N: usize, T: NativeHalf<N>> Vec<N, T> {
+impl<const N: usize, T: VectorHalf<N>> Vec<N, T> {
     pub fn lo(&self) -> &T::Half {
         T::low(&self.storage)
     }
@@ -280,7 +279,7 @@ impl<const N: usize, T: NativeHalf<N>> Vec<N, T> {
         T::high_mut(&mut self.storage)
     }
 }
-impl<const N: usize, T: NativeLayout<N> + ZeroLane> Vec<N, T> {
+impl<const N: usize, T: Layout<N> + ZeroLane> Vec<N, T> {
     // Source: src/core/SkVx.h:100-107
     // Source: src/core/SkVx.h:136-143
     // Source: src/core/SkVx.h:183-190
@@ -295,7 +294,7 @@ impl<const N: usize, T: NativeLayout<N> + ZeroLane> Vec<N, T> {
         Self::from_array(vals)
     }
 }
-impl<const N: usize, T: NativeLayout<N>> Vec<N, T> {
+impl<const N: usize, T: Layout<N>> Vec<N, T> {
     // Source: src/core/SkVx.h:112-114
     // Source: src/core/SkVx.h:148-150
     // Source: src/core/SkVx.h:195-197
@@ -309,13 +308,13 @@ impl<const N: usize, T: NativeLayout<N>> Vec<N, T> {
         &mut self.as_array_mut()[i as usize]
     }
 }
-impl<const N: usize, T: NativeLayout<N> + Clone> Vec<N, T> {
+impl<const N: usize, T: Layout<N> + Clone> Vec<N, T> {
     // Source: src/core/SkVx.h:109-109
     pub fn lane(&self, i: i32) -> T {
         self.as_array()[i as usize].clone()
     }
 }
-impl<T: NativeLayout<1>> Vec<1, T> {
+impl<T: Layout<1>> Vec<1, T> {
     // Source: src/core/SkVx.h:218-218
     pub fn from_value(value: T) -> Self {
         Self::from_array([value])
@@ -324,12 +323,12 @@ impl<T: NativeLayout<1>> Vec<1, T> {
         &mut self.as_array_mut()[0]
     }
 }
-impl<T: NativeLayout<1> + Clone> Vec<1, T> {
+impl<T: Layout<1> + Clone> Vec<1, T> {
     pub fn val(&self) -> T {
         self.as_array()[0].clone()
     }
 }
-impl<T: NativeLayout<2>> Vec<2, T> {
+impl<T: Layout<2>> Vec<2, T> {
     // Source: src/core/SkVx.h:181-181
     pub fn from_xy(x: T, y: T) -> Self {
         Self::from_array([x, y])
@@ -342,7 +341,7 @@ impl<T: NativeLayout<2>> Vec<2, T> {
         &mut self.as_array_mut()[1]
     }
 }
-impl<T: NativeLayout<2> + Clone> Vec<2, T> {
+impl<T: Layout<2> + Clone> Vec<2, T> {
     // Source: src/core/SkVx.h:205-206
     pub fn x(&self) -> T {
         self.as_array()[0].clone()
@@ -355,13 +354,13 @@ impl<T: NativeLayout<2> + Clone> Vec<2, T> {
         Self::from_array([self.y(), self.x()])
     }
 }
-impl<T: NativeLayout<2> + NativeLayout<4> + Clone> Vec<2, T> {
+impl<T: Layout<2> + Layout<4> + Clone> Vec<2, T> {
     // Source: src/core/SkVx.h:210-210
     pub fn xyxy(&self) -> Vec<4, T> {
         Vec::<4, T>::from_array([self.x(), self.y(), self.x(), self.y()])
     }
 }
-impl<T: NativeLayout<4>> Vec<4, T> {
+impl<T: Layout<4>> Vec<4, T> {
     // Source: src/core/SkVx.h:131-131
     pub fn from_xyzw(x: T, y: T, z: T, w: T) -> Self {
         Self::from_array([x, y, z, w])
@@ -380,7 +379,7 @@ impl<T: NativeLayout<4>> Vec<4, T> {
         &mut self.as_array_mut()[3]
     }
 }
-impl<T: NativeLayout<4> + Clone> Vec<4, T> {
+impl<T: Layout<4> + Clone> Vec<4, T> {
     // Source: src/core/SkVx.h:164-167
     pub fn x(&self) -> T {
         self.as_array()[0].clone()
@@ -402,7 +401,7 @@ impl<T: NativeLayout<4> + Clone> Vec<4, T> {
         Self::from_array([self.z(), self.w(), self.x(), self.y()])
     }
 }
-impl<T: NativeHalf<4, Half = Vec<2, T>> + NativeLayout<2>> Vec<4, T> {
+impl<T: VectorHalf<4, Half = Vec<2, T>> + Layout<2>> Vec<4, T> {
     // Source: src/core/SkVx.h:155-156
     pub fn xy_mut(&mut self) -> &mut Vec<2, T> {
         self.lo_mut()
@@ -411,7 +410,7 @@ impl<T: NativeHalf<4, Half = Vec<2, T>> + NativeLayout<2>> Vec<4, T> {
         self.hi_mut()
     }
 }
-impl<T: NativeHalf<4, Half = Vec<2, T>> + NativeLayout<2> + Clone> Vec<4, T> {
+impl<T: VectorHalf<4, Half = Vec<2, T>> + Layout<2> + Clone> Vec<4, T> {
     // Source: src/core/SkVx.h:132-134
     pub fn from_xy_z_w(xy: Vec<2, T>, z: T, w: T) -> Self {
         Self::from_array([xy.x(), xy.y(), z, w])

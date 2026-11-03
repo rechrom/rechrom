@@ -175,7 +175,7 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn env_lookup_uses_typed_data_and_native_property_consumer() {
+    fn env_lookup_uses_typed_data_and_computed_style_property_consumer() {
         let source = Rc::new(Source::default());
         source.set("safe-area-inset-top", &[], "17px");
         let state = Rc::new(State::default());

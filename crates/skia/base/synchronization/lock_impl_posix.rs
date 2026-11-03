@@ -15,7 +15,7 @@ impl LockImpl {
     // Caller provides final-address, exclusive uninitialized storage and must not move it thereafter.
     pub(crate) unsafe fn init_at(out: *mut Self) {
         out.write(Self {
-            native_handle_: core::cell::UnsafeCell::new(MaybeUninit::uninit()),
+            handle_: core::cell::UnsafeCell::new(MaybeUninit::uninit()),
             _pin: core::marker::PhantomPinned,
         });
         let mut mta = MaybeUninit::<libc::pthread_mutexattr_t>::uninit();

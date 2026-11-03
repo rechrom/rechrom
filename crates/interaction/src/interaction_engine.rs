@@ -14,8 +14,12 @@ use dom::{
 use layoutng_assembly::{
     editing_state::{DocumentSelection, DocumentSelectionPosition, SelectionState},
     fragment_tree::FragmentPaintData,
-    internal::layout_input::{Display, Offset},
-    layout_engine::NativePaintFragmentCursor,
+    internal::layout_input::{Display, Edges, FloatSide, NodeKind, Offset, Overflow},
+    layout_engine::PaintFragmentCursor,
+};
+use paint::{
+    contoured_border_geometry::{PointIntersectsRoundedRect, ResolveCornerRadii},
+    PaintRect,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -45,20 +49,20 @@ pub enum InteractionOutput {
 pub type InteractionOutputEmitter = Rc<dyn Fn(InteractionOutput)>;
 
 #[derive(Clone, Copy)]
-pub struct InteractionFragmentSource<'a>(NativePaintFragmentCursor<'a>);
+pub struct InteractionFragmentSource<'a>(PaintFragmentCursor<'a>);
 
 impl<'a> InteractionFragmentSource<'a> {
     pub(crate) fn Children(self) -> Vec<Self> {
         self.0.Children().into_iter().map(Self).collect()
     }
 
-    pub(crate) fn Native(self) -> NativePaintFragmentCursor<'a> {
+    pub(crate) fn Cursor(self) -> PaintFragmentCursor<'a> {
         self.0
     }
 }
 
-impl<'a> From<NativePaintFragmentCursor<'a>> for InteractionFragmentSource<'a> {
-    fn from(value: NativePaintFragmentCursor<'a>) -> Self {
+impl<'a> From<PaintFragmentCursor<'a>> for InteractionFragmentSource<'a> {
+    fn from(value: PaintFragmentCursor<'a>) -> Self {
         Self(value)
     }
 }
@@ -142,40 +146,192 @@ fn LocalPoint(
 fn ChildOrigin(fragment: &FragmentPaintData, absolute: Offset) -> Offset {
     if fragment.paint.establishes_paint_state {
         Offset {
-            x: absolute.x - fragment.paint.scroll_offset.x,
-            y: absolute.y - fragment.paint.scroll_offset.y,
+            x: absolute.x - fragment.paint.hit_test_scrolled_content_offset.x,
+            y: absolute.y - fragment.paint.hit_test_scrolled_content_offset.y,
         }
     } else {
         absolute
     }
 }
+
+// Chromium: core/paint/box_fragment_painter.cc:2297-2314,2336-2349,3000-3009
+// and core/layout/layout_replaced.cc:118-127,145-166,173-185. Interaction
+// consumes the retained physical fragment rather than invoking NodeAtPoint,
+// but every CSS box uses the same contoured inner/outer border gates. CSS
+// border-shape and non-round corner-shape remain explicit unsupported inputs.
+fn RoundBorderRadiiForSize(
+    fragment: &FragmentPaintData,
+    size: layoutng_assembly::internal::layout_input::Size,
+    inset: Edges,
+) -> Option<layoutng_assembly::internal::paint_input::PaintCornerRadii> {
+    if fragment.paint.style.border_shape_unsupported {
+        panic!("unsupported CSS border-shape hit-test path");
+    }
+    let radii = ResolveCornerRadii(
+        &fragment.paint.style,
+        &fragment.paint.border_sides,
+        size,
+        inset,
+    );
+    if !radii.HasRadius() {
+        return None;
+    }
+    if fragment
+        .paint
+        .style
+        .border_corner_curvatures
+        .0
+        .iter()
+        .any(|curvature| *curvature != 2.0)
+    {
+        panic!("unsupported non-round corner-shape hit-test path");
+    }
+    Some(radii)
+}
+
+fn ContouredBorderContainsAt(
+    fragment: &FragmentPaintData,
+    size: layoutng_assembly::internal::layout_input::Size,
+    point: Offset,
+    absolute: Offset,
+) -> bool {
+    let rect = PaintRect {
+        x: absolute.x,
+        y: absolute.y,
+        width: size.width,
+        height: size.height,
+    };
+    let Some(radii) = RoundBorderRadiiForSize(fragment, size, Edges::default()) else {
+        return point.x >= rect.x
+            && point.y >= rect.y
+            && point.x < rect.x + rect.width
+            && point.y < rect.y + rect.height;
+    };
+    PointIntersectsRoundedRect(point, rect, &radii)
+}
+
+fn OuterBorderContains(fragment: &FragmentPaintData, point: Offset, absolute: Offset) -> bool {
+    let Some(radii) = RoundBorderRadiiForSize(fragment, fragment.size, Edges::default()) else {
+        return true;
+    };
+    PointIntersectsRoundedRect(
+        point,
+        PaintRect {
+            x: absolute.x,
+            y: absolute.y,
+            width: fragment.size.width,
+            height: fragment.size.height,
+        },
+        &radii,
+    )
+}
+
+fn InnerBorderContains(fragment: &FragmentPaintData, point: Offset, absolute: Offset) -> bool {
+    let border = fragment.paint.border;
+    let Some(radii) = RoundBorderRadiiForSize(fragment, fragment.size, border) else {
+        return true;
+    };
+    PointIntersectsRoundedRect(
+        point,
+        PaintRect {
+            x: absolute.x + border.left,
+            y: absolute.y + border.top,
+            width: (fragment.size.width - border.left - border.right).max(0.0),
+            height: (fragment.size.height - border.top - border.bottom).max(0.0),
+        },
+        &radii,
+    )
+}
+
+// Chromium: core/paint/box_fragment_painter.cc:2535-2547. A line item uses
+// the containing box's style for both contoured-border checks. The first
+// check places the containing box geometry at the line item's self-ink origin;
+// the second resolves the same style against the line bounds themselves.
+fn LineSelfBordersContain(
+    fragment: &FragmentPaintData,
+    containing_box: Option<&FragmentPaintData>,
+    point: Offset,
+    absolute: Offset,
+) -> bool {
+    if fragment.kind != layoutng_assembly::fragment_tree::FragmentKind::kLine {
+        return true;
+    }
+    let Some(containing_box) = containing_box else {
+        return true;
+    };
+    let overflow_origin = fragment
+        .paint
+        .self_ink_overflow
+        .map_or(absolute, |overflow| Offset {
+            x: absolute.x + overflow.offset.x,
+            y: absolute.y + overflow.offset.y,
+        });
+    ContouredBorderContainsAt(containing_box, containing_box.size, point, overflow_origin)
+        && ContouredBorderContainsAt(containing_box, fragment.size, point, absolute)
+}
+
 fn HitGeometry(
     fragment: &FragmentPaintData,
     point: Offset,
     parent: Offset,
-) -> Option<(Offset, Offset, bool)> {
-    if fragment.paint.hidden || fragment.paint.svg_hidden_container {
-        return None;
-    }
-    let (point, absolute) = LocalPoint(fragment, point, parent)?;
-    let inside = point.x >= absolute.x
-        && point.y >= absolute.y
-        && point.x < absolute.x + fragment.size.width
-        && point.y < absolute.y + fragment.size.height;
-    use layoutng_assembly::internal::layout_input::Overflow;
-    if (!inside && fragment.paint.scroll_container.is_some())
-        || (matches!(
-            fragment.paint.overflow_x,
-            Overflow::kHidden | Overflow::kClip | Overflow::kScroll | Overflow::kAuto
-        ) && (point.x < absolute.x || point.x >= absolute.x + fragment.size.width))
-        || (matches!(
-            fragment.paint.overflow_y,
-            Overflow::kHidden | Overflow::kClip | Overflow::kScroll | Overflow::kAuto
-        ) && (point.y < absolute.y || point.y >= absolute.y + fragment.size.height))
+) -> Option<(Offset, Offset, bool, bool)> {
+    // Chromium: core/paint/box_fragment_painter.cc:2261-2271. The same
+    // canonical fragmentation policy gates both paint and NodeAtPoint; a
+    // repeated non-first monolithic fragment cannot contribute descendants or
+    // become a hit target through this package's flattened traversal.
+    if fragment.paint.hidden
+        || fragment.paint.svg_hidden_container
+        || !fragment.paint.CanPaintFragmentOccurrence()
     {
         return None;
     }
-    Some((point, absolute, inside))
+    let (point, absolute) = LocalPoint(fragment, point, parent)?;
+    if fragment.kind == layoutng_assembly::fragment_tree::FragmentKind::kLine {
+        if let Some(overflow) = fragment.paint.ink_overflow {
+            let left = absolute.x + overflow.offset.x;
+            let top = absolute.y + overflow.offset.y;
+            if point.x < left
+                || point.y < top
+                || point.x >= left + overflow.size.width
+                || point.y >= top + overflow.size.height
+            {
+                return None;
+            }
+        }
+        if !OuterBorderContains(fragment, point, absolute) {
+            return None;
+        }
+    }
+    let hit_bounds = fragment.paint.text_hit_test_bounds.unwrap_or(
+        layoutng_assembly::fragment_tree::FragmentPaintRect {
+            offset: Offset::default(),
+            size: fragment.size,
+        },
+    );
+    let hit_left = absolute.x + hit_bounds.offset.x;
+    let hit_top = absolute.y + hit_bounds.offset.y;
+    let inside = point.x >= hit_left
+        && point.y >= hit_top
+        && point.x < hit_left + hit_bounds.size.width
+        && point.y < hit_top + hit_bounds.size.height;
+    let outside_overflow_clip = fragment.paint.hit_test_overflow_clip.is_some_and(|clip| {
+        let left = absolute.x + clip.offset.x;
+        let top = absolute.y + clip.offset.y;
+        point.x < left
+            || point.y < top
+            || point.x >= left + clip.size.width
+            || point.y >= top + clip.size.height
+    });
+    if !inside && outside_overflow_clip {
+        return None;
+    }
+    // BoxFragmentPainter::NodeAtPoint: rectangular overflow, display lock and
+    // the inner contoured border suppress descendants, not the box's own hit.
+    let children_clipped = fragment.paint.child_paint_blocked_by_display_lock
+        || outside_overflow_clip
+        || (fragment.paint.hit_test_overflow_clip.is_some()
+            && !InnerBorderContains(fragment, point, absolute));
+    Some((point, absolute, inside, children_clipped))
 }
 
 fn HitsScrollbar(fragment: &FragmentPaintData, point: Offset, absolute: Offset) -> bool {
@@ -216,6 +372,73 @@ fn ScrollbarHitTarget(
     .then_some(fragment.node_id)
 }
 
+// Chromium: core/paint/box_fragment_painter.cc:2352-2361. Table rows and
+// sections participate in descendant hit testing, but are not ordinary event
+// targets themselves. Visual-overflow/occlusion testing is a separate request
+// kind and does not enter this event-targeting path.
+fn CanHitTestSelf(fragment: &FragmentPaintData) -> bool {
+    if fragment.kind == layoutng_assembly::fragment_tree::FragmentKind::kLine
+        && matches!(fragment.paint.source_kind, NodeKind::kSvgText)
+    {
+        return false;
+    }
+    if matches!(fragment.paint.source_kind, NodeKind::kSvgText) {
+        return fragment.paint.style.pointer_events_bounding_box;
+    }
+    !matches!(
+        fragment.paint.display,
+        Display::kTableRow
+            | Display::kTableSection
+            | Display::kTableHeaderGroup
+            | Display::kTableFooterGroup
+    )
+}
+
+// Chromium: core/paint/box_fragment_painter.cc:2427-2444. LayoutView has no
+// DOM node of its own. When its box is the hit, use the document element only
+// when that element is represented by a direct physical child fragment.
+fn ViewHitTarget(document: &Document, fragment: InteractionFragmentSource<'_>) -> Option<u64> {
+    if !fragment.paint.is_layout_view {
+        return None;
+    }
+    let element_id = document
+        .Node(document.Root())
+        .Children()
+        .iter()
+        .copied()
+        .find(|&child| document.Node(child).Type() == DOMNodeType::kElement)
+        .map(|element| document.Node(element).Id())?;
+    fragment
+        .Children()
+        .iter()
+        .any(|child| child.node_id == element_id)
+        .then_some(element_id)
+}
+
+fn SelfHitTarget(
+    document: &Document,
+    fragment: InteractionFragmentSource<'_>,
+    containing_box: Option<&FragmentPaintData>,
+    inside: bool,
+    point: Offset,
+    absolute: Offset,
+) -> Option<u64> {
+    if !inside
+        || !CanHitTestSelf(&fragment)
+        || fragment.paint.style.pointer_events_none
+        || !fragment.paint.style.visible
+        || !LineSelfBordersContain(&fragment, containing_box, point, absolute)
+        || !OuterBorderContains(&fragment, point, absolute)
+    {
+        return None;
+    }
+    ViewHitTarget(document, fragment).or_else(|| {
+        document
+            .FindNodeById(fragment.node_id)
+            .map(|_| fragment.node_id)
+    })
+}
+
 #[derive(Clone, Copy)]
 struct HitLayer<'a> {
     fragment: InteractionFragmentSource<'a>,
@@ -233,7 +456,8 @@ fn ChildrenAreFlexOrGridItems(fragment: &FragmentPaintData) -> bool {
 }
 
 // PaintLayerPainter flattens non-stacking layers into their nearest stacking
-// context and stable-sorts the result by stacking level. Preserve the physical
+// context and stable-sorts the result by Chromium's three paint-order groups.
+// Preserve the physical
 // geometry path with each candidate so hit testing can walk that order in
 // reverse without teaching interaction how paint layers are classified.
 fn CollectHitLayers<'a>(
@@ -243,9 +467,12 @@ fn CollectHitLayers<'a>(
     root_point: Offset,
     output: &mut Vec<HitLayer<'a>>,
 ) {
-    let Some((point, absolute, _)) = HitGeometry(&fragment, point, parent) else {
+    let Some((point, absolute, _, children_clipped)) = HitGeometry(&fragment, point, parent) else {
         return;
     };
+    if children_clipped {
+        return;
+    }
     let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(&fragment);
     for child in fragment.Children() {
         let (child_point, child_parent) = if child.paint.fixed_to_view {
@@ -274,6 +501,153 @@ fn CollectHitLayers<'a>(
     }
 }
 
+// Chromium: core/paint/box_fragment_painter.cc:2446-2468,2586-2629,
+// 2671-2774,2801-2998. The native code exposes four HitTestPhase calls;
+// interaction has one point-event API, so it consumes the same phase order
+// internally while the resident tree replaces InlineCursor overloads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EventHitPhase {
+    Foreground,
+    Float,
+    BlockBackground,
+}
+
+fn IsSvgHitObject(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::kSvgGroup
+            | NodeKind::kSvgHiddenContainer
+            | NodeKind::kSvgResourceClipper
+            | NodeKind::kSvgResourceMasker
+            | NodeKind::kSvgForeignObject
+            | NodeKind::kSvgText
+            | NodeKind::kSvgInline
+            | NodeKind::kSvgTSpan
+            | NodeKind::kSvgTextPath
+            | NodeKind::kSvgShape
+            | NodeKind::kSvgViewportContainer
+    )
+}
+
+fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
+    if matches!(
+        fragment.kind,
+        layoutng_assembly::fragment_tree::FragmentKind::kText
+            | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
+            | layoutng_assembly::fragment_tree::FragmentKind::kLine
+    ) || fragment.paint.is_layout_inline
+        || fragment.paint.box_fragment_is_inline_box
+        || fragment.paint.replaced_content.is_some()
+        || IsSvgHitObject(fragment.paint.source_kind)
+    {
+        EventHitPhase::Foreground
+    } else {
+        EventHitPhase::BlockBackground
+    }
+}
+
+fn HitTestNormalFlowPhase(
+    document: &Document,
+    fragment: InteractionFragmentSource<'_>,
+    point: Offset,
+    parent: Offset,
+    root_point: Offset,
+    include_self: bool,
+    phase: EventHitPhase,
+    containing_box: Option<&FragmentPaintData>,
+) -> Option<u64> {
+    let (point, absolute, inside, children_clipped) = HitGeometry(&fragment, point, parent)?;
+    // Overflow controls are painted after this subtree. Give their owner the
+    // same frontmost hit priority, especially for overlay scrollbars which
+    // otherwise dispatch through to covered links and controls.
+    if phase == EventHitPhase::Foreground {
+        if let Some(target) = ScrollbarHitTarget(document, &fragment, point, absolute) {
+            return Some(target);
+        }
+    }
+    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(&fragment);
+    if !children_clipped {
+        for child in fragment.Children().into_iter().rev() {
+            if paint::paint_order::ClassifyFragmentPaintLayer(
+                &child,
+                false,
+                children_are_flex_or_grid_items,
+            )
+            .is_paint_layer
+            {
+                continue;
+            }
+            let child_is_float = child.paint.floating != FloatSide::kNone;
+            let child_is_atomic = child.paint.painted_atomically;
+            let (child_point, child_parent) = if child.paint.fixed_to_view {
+                (root_point, Offset::default())
+            } else {
+                (point, ChildOrigin(&fragment, absolute))
+            };
+            let target = match phase {
+                EventHitPhase::Foreground if child_is_float => None,
+                EventHitPhase::Foreground if child_is_atomic => HitTestNormalFlow(
+                    document,
+                    child,
+                    child_point,
+                    child_parent,
+                    root_point,
+                    true,
+                    Some(&fragment),
+                ),
+                EventHitPhase::Foreground => HitTestNormalFlowPhase(
+                    document,
+                    child,
+                    child_point,
+                    child_parent,
+                    root_point,
+                    true,
+                    phase,
+                    Some(&fragment),
+                ),
+                EventHitPhase::Float if child_is_float => HitTestNormalFlow(
+                    document,
+                    child,
+                    child_point,
+                    child_parent,
+                    root_point,
+                    true,
+                    Some(&fragment),
+                ),
+                EventHitPhase::Float if !child_is_atomic => HitTestNormalFlowPhase(
+                    document,
+                    child,
+                    child_point,
+                    child_parent,
+                    root_point,
+                    true,
+                    phase,
+                    Some(&fragment),
+                ),
+                EventHitPhase::BlockBackground if !child_is_float && !child_is_atomic => {
+                    HitTestNormalFlowPhase(
+                        document,
+                        child,
+                        child_point,
+                        child_parent,
+                        root_point,
+                        true,
+                        phase,
+                        Some(&fragment),
+                    )
+                }
+                _ => None,
+            };
+            if target.is_some() {
+                return target;
+            }
+        }
+    }
+    (include_self && SelfHitPhase(&fragment) == phase)
+        .then(|| SelfHitTarget(document, fragment, containing_box, inside, point, absolute))
+        .flatten()
+}
+
 fn HitTestNormalFlow(
     document: &Document,
     fragment: InteractionFragmentSource<'_>,
@@ -281,42 +655,27 @@ fn HitTestNormalFlow(
     parent: Offset,
     root_point: Offset,
     include_self: bool,
+    containing_box: Option<&FragmentPaintData>,
 ) -> Option<u64> {
-    let (point, absolute, inside) = HitGeometry(&fragment, point, parent)?;
-    // Overflow controls are painted after this subtree. Give their owner the
-    // same frontmost hit priority, especially for overlay scrollbars which
-    // otherwise dispatch through to covered links and controls.
-    if let Some(target) = ScrollbarHitTarget(document, &fragment, point, absolute) {
-        return Some(target);
-    }
-    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(&fragment);
-    for child in fragment.Children().into_iter().rev() {
-        if paint::paint_order::ClassifyFragmentPaintLayer(
-            &child,
-            false,
-            children_are_flex_or_grid_items,
-        )
-        .is_paint_layer
-        {
-            continue;
-        }
-        let (child_point, child_parent) = if child.paint.fixed_to_view {
-            (root_point, Offset::default())
-        } else {
-            (point, ChildOrigin(&fragment, absolute))
-        };
-        if let Some(target) =
-            HitTestNormalFlow(document, child, child_point, child_parent, root_point, true)
-        {
+    for phase in [
+        EventHitPhase::Foreground,
+        EventHitPhase::Float,
+        EventHitPhase::BlockBackground,
+    ] {
+        if let Some(target) = HitTestNormalFlowPhase(
+            document,
+            fragment,
+            point,
+            parent,
+            root_point,
+            include_self,
+            phase,
+            containing_box,
+        ) {
             return Some(target);
         }
     }
-    (include_self
-        && inside
-        && !fragment.paint.style.pointer_events_none
-        && fragment.paint.style.visible
-        && document.FindNodeById(fragment.node_id).is_some())
-    .then_some(fragment.node_id)
+    None
 }
 
 fn HitTestPaintLayer(document: &Document, layer: &HitLayer<'_>, root_point: Offset) -> Option<u64> {
@@ -336,6 +695,7 @@ fn HitTestPaintLayer(document: &Document, layer: &HitLayer<'_>, root_point: Offs
             layer.parent,
             root_point,
             true,
+            None,
         )
     }
 }
@@ -347,22 +707,55 @@ fn HitTestStackingContext(
     parent: Offset,
     root_point: Offset,
 ) -> Option<u64> {
-    let (local_point, absolute, inside) = HitGeometry(&fragment, point, parent)?;
+    let (local_point, absolute, inside, _) = HitGeometry(&fragment, point, parent)?;
     if let Some(target) = ScrollbarHitTarget(document, &fragment, local_point, absolute) {
         return Some(target);
     }
     let mut layers = Vec::new();
     CollectHitLayers(fragment, point, parent, root_point, &mut layers);
-    // Stable sorting preserves physical order for equal z-index, matching
-    // PaintLayerPainter::CollectLayerChildren. Hit test consumes it backwards.
-    layers.sort_by_key(|layer| layer.classification.stacking_level);
-    let negative_count = layers.partition_point(|layer| layer.classification.stacking_level < 0);
-    for layer in layers[negative_count..].iter().rev() {
+    // Stable sorting preserves physical order inside normal flow and for equal
+    // z-index, matching PaintLayerPaintOrderIterator. Hit testing consumes the
+    // positive-stacked group first, then normal flow, then negative stacked.
+    layers.sort_by_key(|layer| {
+        let c = layer.classification;
+        if layer.fragment.paint.is_overscroll_area_parent {
+            (3, 0)
+        } else if !c.is_stacked {
+            (1, 0)
+        } else if c.stacking_level < 0 {
+            (0, c.stacking_level)
+        } else {
+            (2, c.stacking_level)
+        }
+    });
+    let negative_count = layers.partition_point(|layer| {
+        layer.classification.is_stacked && layer.classification.stacking_level < 0
+    });
+    let normal_count =
+        layers[negative_count..].partition_point(|layer| !layer.classification.is_stacked);
+    let positive_start = negative_count + normal_count;
+    let overscroll_start =
+        layers.partition_point(|layer| !layer.fragment.paint.is_overscroll_area_parent);
+    // Paint appends overscroll-area parents in reverse chaining order, so the
+    // inverse hit-test walk consumes this stored group forward.
+    for layer in &layers[overscroll_start..] {
         if let Some(target) = HitTestPaintLayer(document, layer, root_point) {
             return Some(target);
         }
     }
-    if let Some(target) = HitTestNormalFlow(document, fragment, point, parent, root_point, false) {
+    for layer in layers[positive_start..overscroll_start].iter().rev() {
+        if let Some(target) = HitTestPaintLayer(document, layer, root_point) {
+            return Some(target);
+        }
+    }
+    for layer in layers[negative_count..positive_start].iter().rev() {
+        if let Some(target) = HitTestPaintLayer(document, layer, root_point) {
+            return Some(target);
+        }
+    }
+    if let Some(target) =
+        HitTestNormalFlow(document, fragment, point, parent, root_point, false, None)
+    {
         return Some(target);
     }
     for layer in layers[..negative_count].iter().rev() {
@@ -370,11 +763,7 @@ fn HitTestStackingContext(
             return Some(target);
         }
     }
-    (inside
-        && !fragment.paint.style.pointer_events_none
-        && fragment.paint.style.visible
-        && document.FindNodeById(fragment.node_id).is_some())
-    .then_some(fragment.node_id)
+    SelfHitTarget(document, fragment, None, inside, local_point, absolute)
 }
 
 fn HitTest(
@@ -432,7 +821,9 @@ fn TextPositionAtPoint(
         require_inside: bool,
         best: &mut Option<(f64, f64, DocumentSelectionPosition)>,
     ) {
-        let Some((point, absolute, inside)) = HitGeometry(&fragment, point, parent) else {
+        let Some((point, absolute, inside, children_clipped)) =
+            HitGeometry(&fragment, point, parent)
+        else {
             return;
         };
         if matches!(
@@ -451,9 +842,9 @@ fn TextPositionAtPoint(
                 x: point.x - absolute.x,
                 y: point.y - absolute.y,
             };
-            if let Some(offset) = fragment.Native().TextOffsetForPoint(local) {
+            if let Some(offset) = fragment.Cursor().TextOffsetForPoint(local) {
                 let x = fragment
-                    .Native()
+                    .Cursor()
                     .TextInlinePosition(offset)
                     .unwrap_or(local.x);
                 let dx = (absolute.x + x - point.x).abs();
@@ -469,6 +860,9 @@ fn TextPositionAtPoint(
                     *best = Some((dy, dx, candidate));
                 }
             }
+        }
+        if children_clipped {
+            return;
         }
         for child in fragment.Children().into_iter().rev() {
             let (child_point, child_parent) = if child.paint.fixed_to_view {
@@ -1076,7 +1470,7 @@ impl<'a> Interaction<'a> {
             let empty =
                 ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
             let offset = layoutng_assembly::caret::geometry::TextControlOffsetForPoint(
-                owner.Native(),
+                owner.Cursor(),
                 local,
                 empty,
             );
@@ -1095,7 +1489,7 @@ impl<'a> Interaction<'a> {
             let empty =
                 ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
             let offset = layoutng_assembly::caret::geometry::TextControlOffsetForPoint(
-                owner.Native(),
+                owner.Cursor(),
                 local,
                 empty,
             );
@@ -1122,6 +1516,228 @@ impl<'a> Interaction<'a> {
 #[cfg(test)]
 mod output_tests {
     use super::*;
+
+    fn rounded_replaced_fragment() -> FragmentPaintData {
+        let mut fragment = FragmentPaintData::default();
+        fragment.size = layoutng_assembly::internal::layout_input::Size {
+            width: 100.0,
+            height: 100.0,
+        };
+        fragment.paint.replaced_content = Some(Default::default());
+        fragment.paint.style.border_radius = 20.0;
+        fragment
+    }
+
+    #[test]
+    fn box_border_radius_clips_self_and_overflow_children() {
+        let mut fragment = rounded_replaced_fragment();
+        let corner = Offset { x: 1.0, y: 1.0 };
+        let body = Offset { x: 20.0, y: 20.0 };
+        assert!(!OuterBorderContains(&fragment, corner, Offset::default()));
+        assert!(OuterBorderContains(&fragment, body, Offset::default()));
+
+        // With overflow clipping, descendants use the inner contoured border.
+        fragment.paint.border = Edges {
+            top: 5.0,
+            right: 5.0,
+            bottom: 5.0,
+            left: 5.0,
+        };
+        fragment.paint.overflow_x = Overflow::kHidden;
+        fragment.paint.hit_test_overflow_clip =
+            Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
+                offset: Offset { x: 5.0, y: 5.0 },
+                size: layoutng_assembly::internal::layout_input::Size {
+                    width: 90.0,
+                    height: 90.0,
+                },
+            });
+        let corner_geometry = HitGeometry(&fragment, corner, Offset::default()).unwrap();
+        assert!(corner_geometry.3);
+        assert!(!OuterBorderContains(&fragment, corner, Offset::default()));
+        let border_point = Offset { x: 3.0, y: 20.0 };
+        assert!(
+            HitGeometry(&fragment, border_point, Offset::default())
+                .unwrap()
+                .3
+        );
+        assert!(OuterBorderContains(
+            &fragment,
+            border_point,
+            Offset::default()
+        ));
+        assert!(!HitGeometry(&fragment, body, Offset::default()).unwrap().3);
+    }
+
+    #[test]
+    fn ordinary_box_radius_uses_box_fragment_painter_gate() {
+        let mut fragment = rounded_replaced_fragment();
+        fragment.paint.replaced_content = None;
+        assert!(!OuterBorderContains(
+            &fragment,
+            Offset { x: 1.0, y: 1.0 },
+            Offset::default()
+        ));
+    }
+
+    #[test]
+    fn replaced_display_lock_skips_children_without_suppressing_self_geometry() {
+        let mut fragment = rounded_replaced_fragment();
+        fragment.paint.child_paint_blocked_by_display_lock = true;
+        let geometry =
+            HitGeometry(&fragment, Offset { x: 50.0, y: 50.0 }, Offset::default()).unwrap();
+        assert!(geometry.2);
+        assert!(geometry.3);
+        assert!(OuterBorderContains(
+            &fragment,
+            Offset { x: 50.0, y: 50.0 },
+            Offset::default()
+        ));
+    }
+
+    #[test]
+    fn child_origin_uses_source_pixel_snapped_scroll_offset() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.establishes_paint_state = true;
+        fragment.paint.scroll_offset = Offset { x: 10.75, y: 20.25 };
+        fragment.paint.hit_test_scrolled_content_offset = Offset { x: 11.0, y: 20.0 };
+        assert_eq!(
+            ChildOrigin(&fragment, Offset { x: 100.0, y: 200.0 }),
+            Offset { x: 89.0, y: 180.0 }
+        );
+    }
+
+    #[test]
+    fn text_hit_geometry_uses_source_item_bounds_instead_of_fragment_size() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kText;
+        fragment.size = layoutng_assembly::internal::layout_input::Size {
+            width: 100.0,
+            height: 20.0,
+        };
+        fragment.paint.text_hit_test_bounds =
+            Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
+                offset: Offset { x: 10.0, y: 2.0 },
+                size: layoutng_assembly::internal::layout_input::Size {
+                    width: 20.0,
+                    height: 10.0,
+                },
+            });
+        assert!(
+            !HitGeometry(&fragment, Offset { x: 5.0, y: 5.0 }, Offset::default())
+                .unwrap()
+                .2
+        );
+        assert!(
+            HitGeometry(&fragment, Offset { x: 15.0, y: 5.0 }, Offset::default())
+                .unwrap()
+                .2
+        );
+    }
+
+    #[test]
+    fn line_hit_geometry_enters_only_source_ink_and_svg_line_has_no_self_target() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kLine;
+        fragment.size = layoutng_assembly::internal::layout_input::Size {
+            width: 100.0,
+            height: 20.0,
+        };
+        fragment.paint.ink_overflow = Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
+            offset: Offset { x: 20.0, y: 0.0 },
+            size: layoutng_assembly::internal::layout_input::Size {
+                width: 10.0,
+                height: 20.0,
+            },
+        });
+        assert!(HitGeometry(&fragment, Offset { x: 5.0, y: 5.0 }, Offset::default()).is_none());
+        assert!(HitGeometry(&fragment, Offset { x: 25.0, y: 5.0 }, Offset::default()).is_some());
+
+        fragment.paint.source_kind = NodeKind::kSvgText;
+        fragment.paint.style.pointer_events_bounding_box = true;
+        assert!(!CanHitTestSelf(&fragment));
+    }
+
+    #[test]
+    fn line_self_hit_uses_containing_box_border_geometry() {
+        let mut containing = rounded_replaced_fragment();
+        containing.size = layoutng_assembly::internal::layout_input::Size {
+            width: 100.0,
+            height: 40.0,
+        };
+        let mut line = FragmentPaintData::default();
+        line.kind = layoutng_assembly::fragment_tree::FragmentKind::kLine;
+        line.size = layoutng_assembly::internal::layout_input::Size {
+            width: 100.0,
+            height: 40.0,
+        };
+        line.paint.self_ink_overflow = Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
+            offset: Offset::default(),
+            size: line.size,
+        });
+
+        assert!(!LineSelfBordersContain(
+            &line,
+            Some(&containing),
+            Offset { x: 1.0, y: 1.0 },
+            Offset::default(),
+        ));
+        assert!(LineSelfBordersContain(
+            &line,
+            Some(&containing),
+            Offset { x: 20.0, y: 20.0 },
+            Offset::default(),
+        ));
+
+        // The line itself has no radius; changing that cannot replace the
+        // containing box's style in the source path.
+        line.paint.style.border_radius = 0.0;
+        assert!(!LineSelfBordersContain(
+            &line,
+            Some(&containing),
+            Offset { x: 1.0, y: 1.0 },
+            Offset::default(),
+        ));
+    }
+
+    #[test]
+    fn event_hit_phase_matches_fragment_painter_phase_ownership() {
+        let mut fragment = FragmentPaintData::default();
+        assert_eq!(SelfHitPhase(&fragment), EventHitPhase::BlockBackground);
+
+        fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kText;
+        assert_eq!(SelfHitPhase(&fragment), EventHitPhase::Foreground);
+
+        fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kBox;
+        fragment.paint.floating = FloatSide::kLeft;
+        assert_eq!(SelfHitPhase(&fragment), EventHitPhase::BlockBackground);
+
+        fragment.paint.replaced_content = Some(Default::default());
+        assert_eq!(SelfHitPhase(&fragment), EventHitPhase::Foreground);
+    }
+
+    #[test]
+    fn fragment_occurrence_and_table_part_gate_hit_testing() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.size = layoutng_assembly::internal::layout_input::Size {
+            width: 100.0,
+            height: 100.0,
+        };
+        fragment.paint.is_first_for_node = false;
+        fragment.paint.can_paint_multiple_fragments = false;
+        assert!(HitGeometry(&fragment, Offset { x: 10.0, y: 10.0 }, Offset::default(),).is_none());
+
+        fragment.paint.can_paint_multiple_fragments = true;
+        fragment.paint.display = Display::kTableRow;
+        assert!(HitGeometry(&fragment, Offset { x: 10.0, y: 10.0 }, Offset::default(),).is_some());
+        assert!(!CanHitTestSelf(&fragment));
+
+        fragment.paint.display = Display::kBlock;
+        fragment.paint.source_kind = NodeKind::kSvgText;
+        assert!(!CanHitTestSelf(&fragment));
+        fragment.paint.style.pointer_events_bounding_box = true;
+        assert!(CanHitTestSelf(&fragment));
+    }
 
     #[test]
     fn form_submission_is_a_typed_effect() {

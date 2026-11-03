@@ -66,7 +66,7 @@ unsafe fn js_error_constructor(
         let proto1 = if magic < 0 {
             *(*realm).class_proto.add(JS_CLASS_ERROR as usize)
         } else {
-            (*realm).native_error_proto[magic as usize]
+            (*realm).error_proto[magic as usize]
         };
         proto = JS_DupValue(ctx, proto1);
     }
@@ -185,7 +185,7 @@ unsafe fn js_error_isError(
 unsafe fn js_aggregate_error_constructor(ctx: *mut JSContext, errors: JSValueConst) -> JSValue {
     let obj = JS_NewObjectProtoClass(
         ctx,
-        (*ctx).native_error_proto[JS_AGGREGATE_ERROR as usize],
+        (*ctx).error_proto[JS_AGGREGATE_ERROR as usize],
         JS_CLASS_ERROR,
     );
     if JS_IsException(obj) != 0 {

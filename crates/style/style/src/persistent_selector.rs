@@ -205,25 +205,36 @@ fn AttributeNameMatches(data: &DOMAttribute, name: &QualifiedName, ignore_case: 
 #[derive(Default)]
 struct PersistentElementFilters {
     ancestor: Rc<RefCell<SelectorFilter>>,
-    subjects: HashMap<usize, (u64, u32)>,
-    subtrees: HashMap<usize, (u64, u32)>,
-    identifiers: HashMap<usize, (u64, Rc<Vec<u32>>)>,
-    classes: HashMap<usize, (u64, Rc<[AtomicString]>)>,
+    subjects: Vec<Option<(u64, u32)>>,
+    subtrees: Vec<Option<(u64, u32)>>,
+    identifiers: Vec<Option<(u64, Rc<Vec<u32>>)>>,
+    classes: Vec<Option<(u64, Rc<[AtomicString]>)>>,
     // Blink's Attribute stores atomized names and values in ElementData. The
     // compact DOM boundary keeps UTF-8 strings, so retain their exact atoms in
     // the document-owned selector cache instead of re-entering the global atom
     // table for every RuleData candidate.
     attribute_atoms: HashMap<String, AtomicString>,
     empty_classes: Rc<[AtomicString]>,
-    local_name_atoms: HashMap<usize, AtomicString>,
-    id_atoms: HashMap<usize, (u64, AtomicString)>,
+    local_name_atoms: Vec<Option<AtomicString>>,
+    id_atoms: Vec<Option<(u64, AtomicString)>>,
     ancestor_revision: Option<(DOMOwnerHandle, u64)>,
+}
+
+fn NodeCacheGet<T>(cache: &[Option<T>], index: usize) -> Option<&T> {
+    cache.get(index).and_then(Option::as_ref)
+}
+
+fn NodeCacheInsert<T>(cache: &mut Vec<Option<T>>, index: usize, value: T) {
+    if cache.len() <= index {
+        cache.resize_with(index + 1, || None);
+    }
+    cache[index] = Some(value);
 }
 pub(crate) struct PersistentSelectorBackend<'d> {
     document: &'d Document,
     ancestor: Rc<RefCell<SelectorFilter>>,
     filters: Rc<RefCell<PersistentElementFilters>>,
-    nodes: Rc<RefCell<HashMap<usize, Rc<usize>>>>,
+    nodes: Rc<RefCell<Vec<Option<Rc<usize>>>>>,
     interaction: UserInteractionState,
     spatial_navigation_policy: SpatialNavigationPolicy,
     forced: HashMap<u64, Vec<PseudoType>>,
@@ -247,7 +258,7 @@ impl<'d> PersistentSelectorBackend<'d> {
         subject_flags: Rc<RefCell<HashMap<usize, crate::resolver::match_flags::MatchFlags>>>,
         sibling_has_flags: Rc<RefCell<HashMap<usize, u8>>>,
         container_flags: Rc<RefCell<HashMap<usize, Vec<ContainerInvalidationFlag>>>>,
-        nodes: Rc<RefCell<HashMap<usize, Rc<usize>>>>,
+        nodes: Rc<RefCell<Vec<Option<Rc<usize>>>>>,
         interaction: UserInteractionState,
         spatial_navigation_policy: SpatialNavigationPolicy,
         forced: HashMap<u64, Vec<PseudoType>>,
@@ -282,11 +293,11 @@ impl<'d> PersistentSelectorBackend<'d> {
             index < self.document.NodeCount(),
             "selector node belongs to the document"
         );
-        self.nodes
-            .borrow_mut()
-            .entry(index)
-            .or_insert_with(|| Rc::new(index))
-            .clone()
+        let mut nodes = self.nodes.borrow_mut();
+        if nodes.len() <= index {
+            nodes.resize_with(index + 1, || None);
+        }
+        nodes[index].get_or_insert_with(|| Rc::new(index)).clone()
     }
 
     pub(crate) fn document(&self) -> &'d Document {
@@ -374,14 +385,6 @@ impl<'d> PersistentSelectorBackend<'d> {
             .next()
             .map(|&v| self.handle(v))
     }
-    fn descendants(&self, index: usize, out: &mut Vec<Rc<usize>>) {
-        for &child in self.document.Node(index).Children() {
-            if let Some(e) = self.element(child) {
-                out.push(e);
-            }
-            self.descendants(child, out);
-        }
-    }
     fn class_contains(&self, index: usize, class: &AtomicString) -> bool {
         let classes = self.ClassNamesForElement(index);
         classes.iter().any(|candidate| {
@@ -428,12 +431,8 @@ impl<'d> PersistentSelectorBackend<'d> {
     }
     pub(crate) fn ElementSubjectFilter(&self, index: usize) -> u32 {
         let revision = self.document.SelectorFilterRevisions(index).0;
-        if let Some((_, bits)) = self
-            .filters
-            .borrow()
-            .subjects
-            .get(&index)
-            .filter(|(key, _)| *key == revision)
+        if let Some((_, bits)) =
+            NodeCacheGet(&self.filters.borrow().subjects, index).filter(|(key, _)| *key == revision)
         {
             return *bits;
         }
@@ -458,10 +457,11 @@ impl<'d> PersistentSelectorBackend<'d> {
                 bits |= FilterForAttribute(&name);
             }
         }
-        self.filters
-            .borrow_mut()
-            .subjects
-            .insert(index, (revision, bits));
+        NodeCacheInsert(
+            &mut self.filters.borrow_mut().subjects,
+            index,
+            (revision, bits),
+        );
         bits
     }
     fn bloom(&self, index: usize) -> u32 {
@@ -470,12 +470,8 @@ impl<'d> PersistentSelectorBackend<'d> {
         // changes through parents. The DOM supplies that affected path through
         // revisions, so clean branches keep their existing style-owned bloom.
         let revision = self.document.SelectorFilterRevisions(index).1;
-        if let Some((_, bits)) = self
-            .filters
-            .borrow()
-            .subtrees
-            .get(&index)
-            .filter(|(key, _)| *key == revision)
+        if let Some((_, bits)) =
+            NodeCacheGet(&self.filters.borrow().subtrees, index).filter(|(key, _)| *key == revision)
         {
             return *bits;
         }
@@ -484,10 +480,11 @@ impl<'d> PersistentSelectorBackend<'d> {
         for &child in self.document.Node(index).Children() {
             bits |= self.bloom(child);
         }
-        self.filters
-            .borrow_mut()
-            .subtrees
-            .insert(index, (revision, bits));
+        NodeCacheInsert(
+            &mut self.filters.borrow_mut().subtrees,
+            index,
+            (revision, bits),
+        );
         bits
     }
     // cpp: SelectorFilter::PushAllParentsOf/PushAncestors/PushParent.
@@ -535,12 +532,8 @@ impl<'d> PersistentSelectorBackend<'d> {
     // Typed attribute revisions revoke only that element's retained facts.
     pub(crate) fn ClassNamesForElement(&self, index: usize) -> Rc<[AtomicString]> {
         let revision = self.document.SelectorFilterRevisions(index).0;
-        if let Some((_, classes)) = self
-            .filters
-            .borrow()
-            .classes
-            .get(&index)
-            .filter(|(key, _)| *key == revision)
+        if let Some((_, classes)) =
+            NodeCacheGet(&self.filters.borrow().classes, index).filter(|(key, _)| *key == revision)
         {
             return classes.clone();
         }
@@ -559,20 +552,17 @@ impl<'d> PersistentSelectorBackend<'d> {
                 .collect::<Vec<_>>()
                 .into()
         };
-        self.filters
-            .borrow_mut()
-            .classes
-            .insert(index, (revision, classes.clone()));
+        NodeCacheInsert(
+            &mut self.filters.borrow_mut().classes,
+            index,
+            (revision, classes.clone()),
+        );
         classes
     }
 
     fn ElementIdentifierHashes(&self, index: usize) -> Rc<Vec<u32>> {
         let revision = self.document.SelectorFilterRevisions(index).0;
-        if let Some((_, hashes)) = self
-            .filters
-            .borrow()
-            .identifiers
-            .get(&index)
+        if let Some((_, hashes)) = NodeCacheGet(&self.filters.borrow().identifiers, index)
             .filter(|(key, _)| *key == revision)
         {
             return hashes.clone();
@@ -603,10 +593,11 @@ impl<'d> PersistentSelectorBackend<'d> {
             }
         }
         let hashes = Rc::new(hashes);
-        self.filters
-            .borrow_mut()
-            .identifiers
-            .insert(index, (revision, hashes.clone()));
+        NodeCacheInsert(
+            &mut self.filters.borrow_mut().identifiers,
+            index,
+            (revision, hashes.clone()),
+        );
         hashes
     }
     fn tag_matches(&self, index: usize, name: &QualifiedName) -> bool {
@@ -703,16 +694,20 @@ impl SelectorQueryBackend for PersistentSelectorBackend<'_> {
         self.bloom(*e)
     }
     fn QueryContainsMultipleElementsWithId(&self, scope: &usize, id: &AtomicString) -> bool {
-        self.QueryAllElementsById(scope, id).len() > 1
+        self.document
+            .TreeScopeContainsMultipleElementsWithId(*scope, &id.Utf8())
     }
     fn QueryAllElementsById(&self, scope: &usize, id: &AtomicString) -> Vec<Rc<usize>> {
-        let mut out = vec![];
-        self.descendants(*scope, &mut out);
-        out.retain(|v| self.IdForStyleResolution(v) == *id);
-        out
+        self.document
+            .ElementsByIdInTreeScope(*scope, &id.Utf8())
+            .into_iter()
+            .map(|element| self.handle(element))
+            .collect()
     }
     fn QueryElementById(&self, scope: &usize, id: &AtomicString) -> Option<Rc<usize>> {
-        self.QueryAllElementsById(scope, id).into_iter().next()
+        self.document
+            .FindElementByIdInTreeScope(*scope, &id.Utf8())
+            .map(|element| self.handle(element))
     }
     fn EnterQueryHasCacheScope(&self, root: &usize) -> bool {
         self.query_depth.set(self.query_depth.get() + 1);
@@ -969,12 +964,8 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     }
     fn IdForStyleResolution(&self, e: &Self::Element) -> AtomicString {
         let revision = self.document.SelectorFilterRevisions(*e).0;
-        if let Some((_, value)) = self
-            .filters
-            .borrow()
-            .id_atoms
-            .get(e)
-            .filter(|(key, _)| *key == revision)
+        if let Some((_, value)) =
+            NodeCacheGet(&self.filters.borrow().id_atoms, *e).filter(|(key, _)| *key == revision)
         {
             return value.clone();
         }
@@ -990,10 +981,11 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
                 }
             })
             .unwrap_or_default();
-        self.filters
-            .borrow_mut()
-            .id_atoms
-            .insert(*e, (revision, value.clone()));
+        NodeCacheInsert(
+            &mut self.filters.borrow_mut().id_atoms,
+            *e,
+            (revision, value.clone()),
+        );
         value
     }
     fn ElementIs(&self, e: &Self::Element, class: ElementClass) -> bool {
@@ -1059,14 +1051,15 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         }
     }
     fn ElementLocalName(&self, e: &Self::Element) -> AtomicString {
-        if let Some(value) = self.filters.borrow().local_name_atoms.get(e) {
+        if let Some(value) = NodeCacheGet(&self.filters.borrow().local_name_atoms, *e) {
             return value.clone();
         }
         let value = AtomicString::from_str(self.document.Node(*e).Name());
-        self.filters
-            .borrow_mut()
-            .local_name_atoms
-            .insert(*e, value.clone());
+        NodeCacheInsert(
+            &mut self.filters.borrow_mut().local_name_atoms,
+            *e,
+            value.clone(),
+        );
         value
     }
     fn ElementNamespaceURI(&self, e: &Self::Element) -> AtomicString {
@@ -1319,8 +1312,8 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     fn ScrollbarHorizontal(&self, s: &Self::CustomScrollbar) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: ScrollbarHorizontal")
     }
-    fn ScrollbarNativeThemeHasButtons(&self, s: &Self::CustomScrollbar) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarNativeThemeHasButtons")
+    fn ScrollbarThemeHasButtons(&self, s: &Self::CustomScrollbar) -> bool {
+        panic!("Chromium DOM/runtime collaborator pending: ScrollbarThemeHasButtons")
     }
     fn ScrollbarCornerVisible(&self, s: &Self::CustomScrollbar) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: ScrollbarCornerVisible")
@@ -1937,7 +1930,7 @@ pub struct PersistentSelectorService {
     filters: Rc<RefCell<PersistentElementFilters>>,
     cache: SelectorQueryCache,
     owner: Option<(DOMOwnerHandle, CompatibilityMode)>,
-    nodes: Rc<RefCell<HashMap<usize, Rc<usize>>>>,
+    nodes: Rc<RefCell<Vec<Option<Rc<usize>>>>>,
     pub interaction: UserInteractionState,
     pub spatial_navigation_policy: SpatialNavigationPolicy,
     pub forced_pseudo_states: HashMap<u64, Vec<PseudoType>>,
@@ -1993,7 +1986,7 @@ impl PersistentSelectorService {
             self.owner = Some(owner);
             self.cache.Invalidate();
         }
-        // Native Node identity is needed only for visited elements. Sessions
+        // Canonical Node identity is needed only for visited elements. Sessions
         // share these stable handles without preallocating or copying an
         // arena-sized vector when unrelated detached nodes are created.
         // Local attributes and affected ancestor paths carry their own

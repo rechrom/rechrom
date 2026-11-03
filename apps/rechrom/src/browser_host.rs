@@ -40,12 +40,16 @@ struct Host {
     source: Arc<dyn BeginFrameSource>,
     frames: mpsc::Sender<window_runtime::Command>,
     events: Arc<dyn Fn(Document, Event) + Send + Sync>,
+    threads: browser::page::PageThreads,
     tabstrip: String,
     reload_loading: Option<bool>,
     drag_regions: Vec<crate::chrome::DragRegion>,
     wheel_input: crate::input::InputState,
+    toolbar_revision: u64,
 }
-/// Product composition supplies a separate executor for each Page domain.
+/// Product composition supplies process-wide execution services. Page state
+/// remains independent; only finite background work runs on these shared
+/// workers, as it does on Chromium's browser/renderer worker pools.
 fn page_threads() -> io::Result<browser::page::PageThreads> {
     let inline = std::env::var("RECHROM_EXECUTOR").as_deref() == Ok("inline");
     let (executor, compositor_executor, raster_executor): (
@@ -58,8 +62,7 @@ fn page_threads() -> io::Result<browser::page::PageThreads> {
     } else {
         // Match Chromium's scheduling boundary: impl input and frame
         // scheduling have a dedicated sequence, while raster playback uses a
-        // worker pool and decode/compile work has separate capacity. Keep the
-        // raster throughput previously available to each Page. The extra
+        // worker pool and decode/compile work has separate capacity. The extra
         // sequencing lane is reserved for input and frame scheduling.
         (
             Arc::new(executor::PoolExecutor::new(
@@ -67,10 +70,11 @@ fn page_threads() -> io::Result<browser::page::PageThreads> {
                 16 * 1024 * 1024,
                 2,
             )?),
-            Arc::new(executor::PoolExecutor::new(
+            Arc::new(executor::PoolExecutor::new_with_thread_initializer(
                 "page-compositor",
                 16 * 1024 * 1024,
                 1,
+                Arc::new(crate::engine::set_page_thread_presentation_priority),
             )?),
             Arc::new(executor::PoolExecutor::new(
                 "page-raster",
@@ -101,14 +105,14 @@ pub(crate) fn spawn(
     if !viewport.valid() {
         return Err(io::Error::other("invalid window viewport"));
     }
-    let native = if target.is_native() {
+    let frame_source = if target.is_window() {
         begin_frame_source::create(interval, display_id)?
     } else {
         begin_frame_source::create_offscreen(interval)?
     };
     let routes: page::FrameRoutes = Arc::new(Mutex::new(Default::default()));
     let ticks = routes.clone();
-    let compositor_source = native.GetFrameSource(1)?;
+    let compositor_source = frame_source.GetFrameSource(1)?;
     compositor_source.SetClient(Arc::new(move |frame| {
         let targets: Vec<_> = ticks
             .lock()
@@ -123,8 +127,15 @@ pub(crate) fn spawn(
     }))?;
     // Input is routed on receipt; compositor pulses and window draw deadlines
     // are separate phases of the common physical clock.
-    native.GetFrameSource(0)?.SetClient(Arc::new(|_| {}))?;
-    let frames = window_runtime::spawn(config, target, output.clone(), native.GetFrameSource(2)?)?;
+    frame_source
+        .GetFrameSource(0)?
+        .SetClient(Arc::new(|_| {}))?;
+    let frames = window_runtime::spawn(
+        config,
+        target,
+        output.clone(),
+        frame_source.GetFrameSource(2)?,
+    )?;
     let (sender, receiver) = mpsc::channel();
     let (messages, inbox) = mpsc::channel();
     let events_sender = messages.clone();
@@ -142,6 +153,9 @@ pub(crate) fn spawn(
             }
         })?;
     let source: Arc<dyn BeginFrameSource> = compositor_source;
+    // Creating these pools starts eleven OS threads. Do it once during browser
+    // startup, not once per navigation or popup.
+    let threads = page_threads()?;
     let toolbar = page::spawn(page::Params {
         document: (0, 0),
         url: "browser://toolbar".into(),
@@ -154,7 +168,7 @@ pub(crate) fn spawn(
             ..Default::default()
         },
         scripting: false,
-        threads: page_threads()?,
+        threads: threads.clone(),
         transparent: false,
         controls: true,
         source: source.clone(),
@@ -165,6 +179,10 @@ pub(crate) fn spawn(
     std::thread::Builder::new()
         .name("browser-host".into())
         .spawn(move || {
+            let _trace_scope = browser_tracing::scope(browser_tracing::Context {
+                target_id: 1,
+                ..Default::default()
+            });
             let mut host = Host {
                 viewport,
                 output,
@@ -179,10 +197,12 @@ pub(crate) fn spawn(
                 source,
                 frames,
                 events,
+                threads,
                 tabstrip: String::new(),
                 reload_loading: None,
                 drag_regions: vec![],
                 wheel_input: crate::input::InputState::default(),
+                toolbar_revision: 0,
             };
             if let Err(error) = host.navigate(
                 url_loader::URLRequest {
@@ -190,6 +210,7 @@ pub(crate) fn spawn(
                     ..Default::default()
                 },
                 true,
+                false,
             ) {
                 (host.output.notify)(UserEvent::Message(error.to_string()));
             }
@@ -252,13 +273,14 @@ impl Host {
         controls: bool,
         transparent: bool,
     ) -> io::Result<Handle> {
+        let _trace = browser_tracing::span("browser", "Host.CreatePage");
         page::spawn(page::Params {
             document,
             url,
             viewport: self.content_viewport(),
             request,
             scripting: !controls,
-            threads: page_threads()?,
+            threads: self.threads.clone(),
             controls,
             transparent,
             source: self.source.clone(),
@@ -309,6 +331,7 @@ impl Host {
                 placements,
                 live_documents,
                 metadata: self.drag_regions.clone(),
+                toolbar_revision: self.toolbar_revision,
             }),
         ));
         // Cross-thread frame delivery starts only after embedding metadata is
@@ -321,28 +344,41 @@ impl Host {
             popup.page.visible(true);
         }
     }
-    fn active_pages(&self) {
+    fn active_pages(&mut self) {
+        self.set_active_pages();
+        self.toolbar_revision = self
+            .toolbar_revision
+            .max(self.toolbar.patch(self.active_toolbar_patch()));
+    }
+    fn set_active_pages(&self) {
         self.toolbar
             .send(page::Command::Active(self.active && self.toolbar_focused));
         if let Some(page) = &self.tabs.active.page {
             page.send(page::Command::Active(self.active && !self.toolbar_focused));
         }
-        self.toolbar.patch(Patch::Attribute {
+    }
+    fn active_toolbar_patch(&self) -> Patch {
+        Patch::Attribute {
             id: "omnibox".into(),
             name: "class".into(),
             value: Some(if self.toolbar_focused { "focused" } else { "" }.into()),
-        });
+        }
     }
-    fn address(&self) {
-        self.toolbar.patch(Patch::Value {
+    fn address(&mut self) {
+        self.toolbar_revision = self.toolbar_revision.max(self.toolbar.patch(Patch::Value {
             id: "address".into(),
             value: self.tabs.active.location.clone(),
-        });
+        }));
     }
     fn refresh(&mut self) {
+        let patches = self.refresh_patches();
+        self.toolbar_revision = self.toolbar_revision.max(self.toolbar.patches(patches));
+    }
+    fn refresh_patches(&mut self) -> Vec<Patch> {
+        let mut patches = Vec::new();
         let html = crate::chrome::tab_strip(&self.tabs);
         if html != self.tabstrip {
-            self.toolbar.patch(Patch::Attribute {
+            patches.push(Patch::Attribute {
                 id: "tabs".into(),
                 name: "style".into(),
                 value: Some(format!(
@@ -350,7 +386,7 @@ impl Host {
                     self.tabs.ordered().len() * 238 - 6
                 )),
             });
-            self.toolbar.patch(Patch::Html {
+            patches.push(Patch::Html {
                 id: "tabs".into(),
                 value: html.clone(),
             });
@@ -363,22 +399,51 @@ impl Host {
                 self.tabs.active.history_index + 1 < self.tabs.active.history.len(),
             ),
         ] {
-            self.toolbar.patch(Patch::Attribute {
+            patches.push(Patch::Attribute {
                 id: id.into(),
                 name: "disabled".into(),
                 value: (!enabled).then(String::new),
             });
         }
-        let loading = self.tabs.active.page.as_ref().is_some_and(|p| p.loading);
+        let loading = self.tabs.active.loading;
         if self.reload_loading != Some(loading) {
             self.reload_loading = Some(loading);
-            self.toolbar.patch(Patch::Html {
+            patches.push(Patch::Html {
                 id: "reload".into(),
                 value: crate::chrome::reload_icon(loading).into(),
             });
         }
+        patches
     }
-    fn navigate(&mut self, mut request: url_loader::URLRequest, record: bool) -> io::Result<()> {
+    /// Commit the browser-owned state for one user action as one toolbar
+    /// mutation batch. The toolbar Page still runs its normal lifecycle, but
+    /// the root scene no longer waits through several intermediate toolbar
+    /// frames before it can expose an already-ready tab Surface.
+    fn sync_toolbar(&mut self, include_address: bool, focus_address: bool) {
+        self.set_active_pages();
+        let mut patches = vec![self.active_toolbar_patch()];
+        if include_address {
+            patches.push(Patch::Value {
+                id: "address".into(),
+                value: self.tabs.active.location.clone(),
+            });
+        }
+        patches.extend(self.refresh_patches());
+        if focus_address {
+            patches.push(Patch::Focus {
+                id: "address".into(),
+                select_all: true,
+            });
+        }
+        self.toolbar_revision = self.toolbar_revision.max(self.toolbar.patches(patches));
+    }
+    fn navigate(
+        &mut self,
+        mut request: url_loader::URLRequest,
+        record: bool,
+        focus_address: bool,
+    ) -> io::Result<()> {
+        let _trace = browser_tracing::span("browser", "Host.Navigate");
         let location = crate::options::normalize_address(&request.url)?;
         request.url = match location.as_str() {
             "about:home" => crate::engine::data_url(crate::engine::HOME),
@@ -386,6 +451,25 @@ impl Host {
             _ => location.clone(),
         };
         let generation = self.tabs.active.document_generation + 1;
+
+        // Browser chrome commits the pending navigation before renderer/Page
+        // creation. This keeps the omnibox and tab strip responsive even when
+        // the new document needs threads, a runtime, or network setup.
+        self.tabs.active.location = location.clone();
+        self.tabs.active.title = location_title(&location);
+        self.tabs.active.loading = true;
+        if record {
+            let tab = &mut self.tabs.active;
+            tab.history.truncate(tab.history_index + 1);
+            tab.history.push(location.clone());
+            tab.history_index = tab.history.len() - 1;
+        }
+        self.popup = None;
+        self.toolbar_focused = focus_address;
+        self.sync_toolbar(true, focus_address);
+        self.scene();
+        (self.output.notify)(UserEvent::Location(location.clone()));
+
         let page = self.make_page(
             (self.tabs.active.id, generation),
             request,
@@ -396,21 +480,8 @@ impl Host {
         self.tabs.active.document_generation = generation;
         self.tabs.active.page = Some(page);
         self.tabs.active.viewport = Some(self.viewport);
-        self.tabs.active.location = location.clone();
-        self.tabs.active.title = location_title(&location);
-        if record {
-            let tab = &mut self.tabs.active;
-            tab.history.truncate(tab.history_index + 1);
-            tab.history.push(location.clone());
-            tab.history_index = tab.history.len() - 1;
-        }
-        self.popup = None;
-        self.toolbar_focused = false;
-        self.active_pages();
-        self.address();
-        self.refresh();
+        self.set_active_pages();
         self.scene();
-        (self.output.notify)(UserEvent::Location(location));
         Ok(())
     }
     fn show(&mut self) {
@@ -423,12 +494,9 @@ impl Host {
                     Instant::now(),
                 ));
             }
-            page.visible(true);
         }
         self.tabs.active.viewport = Some(self.viewport);
-        self.active_pages();
-        self.address();
-        self.refresh();
+        self.sync_toolbar(true, false);
         self.scene();
         (self.output.notify)(UserEvent::Location(self.tabs.active.location.clone()));
     }
@@ -439,6 +507,7 @@ impl Host {
         }
     }
     fn activate(&mut self, id: u64) {
+        let _trace = browser_tracing::span("browser", "Host.ActivateTab");
         if id == self.tabs.active.id {
             return;
         }
@@ -449,14 +518,11 @@ impl Host {
         }
     }
     fn new_tab(&mut self, request: url_loader::URLRequest, focus: bool) -> io::Result<()> {
+        let _trace = browser_tracing::span("browser", "Host.NewTab");
         crate::options::normalize_address(&request.url)?;
         self.hide();
         self.tabs.add();
-        self.navigate(request, true)?;
-        if focus {
-            self.focus_address();
-        }
-        Ok(())
+        self.navigate(request, true, focus)
     }
     fn close(&mut self, id: u64) {
         if self.tabs.is_only(id) {
@@ -481,6 +547,7 @@ impl Host {
                     ..Default::default()
                 },
                 false,
+                false,
             )?;
         }
         Ok(())
@@ -489,10 +556,10 @@ impl Host {
         self.popup = None;
         self.toolbar_focused = true;
         self.active_pages();
-        self.toolbar.patch(Patch::Focus {
+        self.toolbar_revision = self.toolbar_revision.max(self.toolbar.patch(Patch::Focus {
             id: "address".into(),
             select_all: true,
-        });
+        }));
         self.scene();
     }
     fn popup(&mut self, kind: &str) -> io::Result<()> {
@@ -552,7 +619,7 @@ impl Host {
         match id {
             "back" => self.history(-1),
             "forward" => self.history(1),
-            "reload" if self.tabs.active.page.as_ref().is_some_and(|p| p.loading) => {
+            "reload" if self.tabs.active.loading => {
                 if let Some(page) = &self.tabs.active.page {
                     page.send(page::Command::StopLoading);
                 }
@@ -564,6 +631,7 @@ impl Host {
                     ..Default::default()
                 },
                 false,
+                false,
             ),
             "home" => self.navigate(
                 url_loader::URLRequest {
@@ -571,6 +639,7 @@ impl Host {
                     ..Default::default()
                 },
                 true,
+                false,
             ),
             "newtab" => self.new_tab(
                 url_loader::URLRequest {
@@ -616,12 +685,14 @@ impl Host {
                     ..Default::default()
                 },
                 true,
+                false,
             ),
             Command::Reload => self.navigate(
                 url_loader::URLRequest {
                     url: self.tabs.active.location.clone(),
                     ..Default::default()
                 },
+                false,
                 false,
             ),
             Command::Back => self.history(-1),
@@ -658,6 +729,7 @@ impl Host {
                     self.scene();
                 }
                 self.active_pages();
+                self.scene();
                 Ok(())
             }
             Command::Resize(resize) => {
@@ -715,7 +787,7 @@ impl Host {
                 Ok(())
             }
             Command::Input(input) => self.input(input, Instant::now(), 1),
-            Command::NativeWheel(sample) => {
+            Command::Wheel(sample) => {
                 let (delta_x, delta_y) = match &sample.delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => {
                         (f64::from(*x), f64::from(*y))
@@ -724,28 +796,28 @@ impl Host {
                 };
                 browser_tracing::instant(
                     "input",
-                    "NativeWheelDispatched",
+                    "WheelDispatched",
                     &[
                         ("delta_x", delta_x),
                         ("delta_y", delta_y),
                         (
-                            "native_phase",
+                            "phase",
                             sample
-                                .native
+                                .macos_metadata
                                 .as_ref()
                                 .map_or(0.0, |event| event.phase as f64),
                         ),
                         (
                             "momentum_phase",
                             sample
-                                .native
+                                .macos_metadata
                                 .as_ref()
                                 .map_or(0.0, |event| event.momentum_phase as f64),
                         ),
                     ],
                 );
                 let queued_at = sample.observed_at;
-                for command in self.wheel_input.accept_native_wheel(sample, Instant::now()) {
+                for command in self.wheel_input.accept_wheel_sample(sample, Instant::now()) {
                     if let Command::Input(input) = command {
                         self.input(input, queued_at, 1)?;
                     }
@@ -843,6 +915,7 @@ impl Host {
                 if e.r#type == MouseEventType::kDown {
                     self.toolbar_focused = toolbar;
                     self.active_pages();
+                    self.scene();
                 }
                 if self.in_toolbar != toolbar {
                     let leave = InputEvent::Mouse(MouseEvent {
@@ -912,11 +985,10 @@ impl Host {
                         .find(|t| t.page.as_ref().is_some_and(|p| p.document == document))
                 };
                 if let Some(tab) = tab {
-                    if let Some(page) = &mut tab.page {
-                        page.loading = false;
-                    }
+                    tab.loading = false;
                     tab.title = "Page error".into();
                     self.refresh();
+                    self.scene();
                 }
             }
             return Ok(());
@@ -979,9 +1051,7 @@ impl Host {
                         .find(|t| t.id == document.0)
                         .unwrap()
                 };
-                if let Some(page) = &mut tab.page {
-                    page.loading = loading;
-                }
+                tab.loading = loading;
                 let changed = !tab.location.starts_with("about:")
                     && !url.starts_with("data:")
                     && !url.is_empty()
@@ -1000,17 +1070,32 @@ impl Host {
                     (self.output.notify)(UserEvent::Location(self.tabs.active.location.clone()));
                 }
                 self.refresh();
+                self.scene();
             }
             Event::Navigate(request) if !toolbar && !popup => {
                 if request.target.eq_ignore_ascii_case("_blank") {
                     self.new_tab(request.request, false)?;
                 } else if active {
-                    self.navigate(request.request, !request.replace_history)?;
+                    self.navigate(request.request, !request.replace_history, false)?;
                 } else {
                     // Navigation belongs to the originating tab even when a
                     // newer host input has already selected another one.
                     let location = crate::options::normalize_address(&request.request.url)?;
                     let generation = document.1 + 1;
+                    let record = !request.replace_history;
+                    if let Some(tab) = self.tabs.background.iter_mut().find(|t| t.id == document.0)
+                    {
+                        tab.location = location.clone();
+                        tab.title = location_title(&location);
+                        tab.loading = true;
+                        if record {
+                            tab.history.truncate(tab.history_index + 1);
+                            tab.history.push(location.clone());
+                            tab.history_index = tab.history.len() - 1;
+                        }
+                    }
+                    self.refresh();
+                    self.scene();
                     let page = self.make_page(
                         (document.0, generation),
                         request.request,
@@ -1024,15 +1109,7 @@ impl Host {
                     {
                         tab.page = Some(page);
                         tab.document_generation = generation;
-                        tab.location = location.clone();
-                        tab.title = location_title(&location);
-                        if !request.replace_history {
-                            tab.history.truncate(tab.history_index + 1);
-                            tab.history.push(location);
-                            tab.history_index = tab.history.len() - 1;
-                        }
                     }
-                    self.refresh();
                     self.scene();
                 }
             }
@@ -1071,6 +1148,7 @@ impl Host {
                             ..Default::default()
                         },
                         true,
+                        false,
                     )?;
                 } else if let Some(action) = action {
                     if popup {

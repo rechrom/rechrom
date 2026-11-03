@@ -146,7 +146,7 @@ pub trait StyleRuleImportSheet<B: StyleRuleImportBackend>: 'static {
 /// These methods are calls into external Chromium classes, not optional hooks.
 /// Fetch must perform the real CSSStyleSheetResource::Fetch, register its
 /// resource via client.SetResource, and may call NotifyFinished synchronously.
-/// Request and option constructors retain their native defaults (including the
+/// Request and option constructors retain their computed style defaults (including the
 /// below-range initiator position); setters modify exactly the named field.
 pub trait StyleRuleImportBackend: Sized + 'static {
     type Platform: CSSParserContextPlatform;
@@ -289,7 +289,7 @@ impl<B: StyleRuleImportBackend> ImportedStyleSheetClient<B> {
         }
     }
     /// Called by the resource backend when ResourceClient is associated. The
-    /// backend retains its native AddClient/NotifyFinished ordering.
+    /// backend retains its computed style AddClient/NotifyFinished ordering.
     pub fn SetResource(&self, resource: Rc<B::Resource>) {
         self.Dispose();
         *self.resource.borrow_mut() = Some(resource);

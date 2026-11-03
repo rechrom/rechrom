@@ -37,11 +37,11 @@ pub trait InputDelegateForCompositor<H: InputHandlerTypes> {
         next_bmf: bool,
     );
     // Source: cc/input/compositor_input_interfaces.h:57-59.
-    fn TickAnimations(&mut self, monotonic_time: TimeTicks);
+    fn TickAnimations<C: InputHost<H> + ?Sized>(&mut self, host: &mut C, monotonic_time: TimeTicks);
     // Source: cc/input/compositor_input_interfaces.h:60-61.
     fn WillShutdown(&mut self);
     // Source: cc/input/compositor_input_interfaces.h:62.
-    fn WillDraw(&mut self);
+    fn WillDraw<C: InputHost<H> + ?Sized>(&mut self, host: &mut C);
     // Source: cc/input/compositor_input_interfaces.h:63.
     fn WillBeginImplFrame<C: InputHost<H> + ?Sized>(&mut self, host: &mut C, args: &BeginFrameArgs);
     // Source: cc/input/compositor_input_interfaces.h:64.

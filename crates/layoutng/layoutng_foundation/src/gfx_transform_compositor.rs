@@ -1,5 +1,5 @@
 // Copyright 2026 The Chromium Authors. BSD-style license.
-// Pure gfx values required by canonical cc. This extends the existing native
+// Pure gfx values required by canonical cc. This extends the existing source
 // AxisTransform2d/Matrix44 representation; no compositor owner or policy lives
 // here. Relative Source paths refer to the pinned Chromium checkout.
 
@@ -53,7 +53,7 @@ fn gfx_swap_in_pairs(v: GfxDouble4) -> GfxDouble4 {
     GfxDouble4([v.0[1], v.0[0], v.0[3], v.0[2]])
 }
 // Source: ui/gfx/geometry/matrix44.cc:29-106
-// Lane operations preserve the native Double4 arithmetic/control-flow sequence;
+// Lane operations preserve the source Double4 arithmetic/control-flow sequence;
 // this is not an alternative Gaussian-elimination/inversion algorithm.
 fn gfx_inverse_double4_cols(matrix: [[f64; 4]; 4]) -> Option<[[f64; 4]; 4]> {
     let [a, b, c, d] = matrix;
@@ -364,6 +364,13 @@ impl Transform {
             Representation::Matrix44(m) => gfx_matrix_has_perspective(m),
         }
     }
+    // Source: ui/gfx/geometry/transform.cc:660-665 and matrix44.h:99-110.
+    pub fn Is2dTransform(&self) -> bool {
+        match &self.representation {
+            Representation::Axis2d { .. } => true,
+            Representation::Matrix44(m) => gfx_matrix_is_flat(m) && !gfx_matrix_has_perspective(m),
+        }
+    }
     // Source: ui/gfx/geometry/transform.cc:667-693
     pub fn To2dTranslation(&self) -> foundation_base::gfx_geometry::Vector2dF {
         foundation_base::gfx_geometry::Vector2dF::new(
@@ -403,6 +410,67 @@ impl Transform {
             1.
         };
         std::array::from_fn(|i| Self::clamp_float_geometry(p[i] * inverse_w))
+    }
+    // Source: ui/gfx/geometry/transform.cc:868-925.
+    pub fn ProjectPoint(
+        &self,
+        point: foundation_base::gfx_geometry::PointF,
+    ) -> foundation_base::gfx_geometry::PointF {
+        self.ProjectPointWithClamped(point, None)
+    }
+
+    pub fn ProjectPointWithClamped(
+        &self,
+        point: foundation_base::gfx_geometry::PointF,
+        mut clamped: Option<&mut bool>,
+    ) -> foundation_base::gfx_geometry::PointF {
+        use foundation_base::gfx_geometry::PointF;
+
+        if let Some(clamped) = clamped.as_mut() {
+            **clamped = false;
+        }
+        let Representation::Matrix44(matrix) = &self.representation else {
+            return self.map_point(point);
+        };
+
+        if !matrix[2][2].is_normal() {
+            if let Some(clamped) = clamped.as_mut() {
+                **clamped = true;
+            }
+            return PointF::default();
+        }
+
+        let x = f64::from(point.x());
+        let y = f64::from(point.y());
+        let z = -(matrix[0][2] * x + matrix[1][2] * y + matrix[3][2]) / matrix[2][2];
+        if !z.is_finite() {
+            if let Some(clamped) = clamped.as_mut() {
+                **clamped = true;
+            }
+            return PointF::default();
+        }
+
+        let projected = gfx_map_vector4(matrix, [x, y, z, 1.0]);
+        if projected[3] <= 0.0 {
+            if let Some(clamped) = clamped.as_mut() {
+                **clamped = true;
+            }
+            let big_number = f64::from(1_u32 << (f32::MANTISSA_DIGITS - 1));
+            return PointF::new(
+                big_number.copysign(projected[0]) as f32,
+                big_number.copysign(projected[1]) as f32,
+            );
+        }
+
+        let inverse_w = if projected[3] != 1.0 {
+            1.0 / projected[3]
+        } else {
+            1.0
+        };
+        PointF::new(
+            Self::clamp_float_geometry(projected[0] * inverse_w),
+            Self::clamp_float_geometry(projected[1] * inverse_w),
+        )
     }
     // Source: ui/gfx/geometry/transform.cc:726-741
     pub fn TransformVector4(&self, vector: &mut [f32; 4]) {

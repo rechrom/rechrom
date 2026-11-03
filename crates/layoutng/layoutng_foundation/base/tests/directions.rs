@@ -1,10 +1,10 @@
 use foundation::blink_geometry::geometry::{LogicalDirection, PhysicalDirection};
-use foundation::text::native::text_direction::{DirectionFromLevel, IsLtr, IsRtl};
-use foundation::text::native::writing_mode::{
+use foundation::text::primitives::text_direction::{DirectionFromLevel, IsLtr, IsRtl};
+use foundation::text::primitives::writing_mode::{
     IsFlippedBlocksWritingMode, IsFlippedLinesWritingMode, IsHorizontalTypographicMode,
     IsHorizontalWritingMode, IsParallelWritingMode, IsVerticalWritingMode, ToLineWritingMode,
 };
-use foundation::text::native::{TextDirection, WritingDirectionMode, WritingMode};
+use foundation::text::primitives::{TextDirection, WritingDirectionMode, WritingMode};
 
 #[test]
 fn enum_values_and_packing_match_cpp() {

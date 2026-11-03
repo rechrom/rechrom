@@ -1,4 +1,4 @@
-// C++: platform/fonts/font_palette.h and font_palette.cc:83-104. Native request
+// C++: platform/fonts/font_palette.h and font_palette.cc:83-104. Source request
 // ownership, inline accessors and equality; ToString/GetHash remain untranslated.
 use foundation::{AtomicString, Color, ColorSpace, HueInterpolationMethod};
 use std::sync::Arc;

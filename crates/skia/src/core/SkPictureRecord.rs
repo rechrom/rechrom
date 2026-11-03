@@ -32,7 +32,7 @@ fn PACK_8_24(small: u32, large: u32) -> u32 {
 // Source: src/core/SkPictureRecord.h:275-277
 #[derive(Default)]
 pub(crate) struct PathHash;
-impl super::SkTHash::NativeHash<SkPath> for PathHash {
+impl super::SkTHash::HashPolicy<SkPath> for PathHash {
     fn hash(&self, path: &SkPath) -> u32 {
         path.getGenerationID()
     }

@@ -102,7 +102,7 @@ impl<B: StyleBuilderBackend> StyleBuilder<B> {
         if is_inherit && !is_inherited_for_unset {
             state.StyleBuilderMut().SetHasExplicitInheritance();
             let parent = state.ParentStyle().expect("inherit has a parent style");
-            // The Persistent handle roots the actual native ComputedStyle for
+            // The Persistent handle roots the actual computed style ComputedStyle for
             // this access. This flag mutates the source's mutable cache bits.
             unsafe { &*parent.Get() }.SetChildHasExplicitInheritance();
         } else if is_unset {

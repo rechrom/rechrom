@@ -1263,7 +1263,7 @@ impl SkRasterPipelineOp {
 
 // Source: src/core/SkRasterPipelineOpList.h:12-57
 // Actual native macro expansion order; each element is a real function address.
-macro_rules! native_lowp_function_table {
+macro_rules! lowp_function_table {
     ($ns:ident,$erased:ty) => {
         [
             Some(unsafe {
@@ -1616,13 +1616,13 @@ macro_rules! native_lowp_function_table {
         ]
     };
 }
-pub(crate) use native_lowp_function_table;
+pub(crate) use lowp_function_table;
 
 // Source: src/core/SkRasterPipelineOpList.h:12-57
 // Source: src/core/SkRasterPipelineOpList.h:162-215
 // Source: src/core/SkRasterPipelineOpList.h:65-158
 // Actual native macro expansion order; each element is a real function address.
-macro_rules! native_highp_function_table {
+macro_rules! highp_function_table {
     ($ns:ident,$erased:ty) => {
         [
             Some(unsafe {
@@ -3423,4 +3423,4 @@ macro_rules! native_highp_function_table {
         ]
     };
 }
-pub(crate) use native_highp_function_table;
+pub(crate) use highp_function_table;

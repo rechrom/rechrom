@@ -2,5 +2,5 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_algo_block/src/native_layout_object_containers.rs"]
-mod layout_algo_block_native_layout_object_containers;
+#[path = "../../../layout_algo_block/src/layout_object_containers.rs"]
+mod layout_algo_block_layout_object_containers;

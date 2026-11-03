@@ -23,12 +23,14 @@ pub use shared_font_bytes::SharedFontBytes;
 pub mod text;
 pub mod text_shaper;
 
-pub use text::native::hyphenation::{Hyphenation, HyphenationBackend};
-pub use text::native::hyphenation_services::{
-    CurrentNativeHyphenationResolver, NativeHyphenationResolver, NativeHyphenationResolverScope,
+pub use text::implementation::hyphenation::{Hyphenation, HyphenationBackend};
+pub use text::implementation::hyphenation_services::{
+    CurrentHyphenationResolver, HyphenationResolver, HyphenationResolverScope,
 };
-pub use text::native::layout_locale::LayoutLocale;
-pub use text::native::opentype_font::{FontMetric, GlyphExtents, OpenTypeFont, OpenTypeVariation};
+pub use text::implementation::layout_locale::LayoutLocale;
+pub use text::implementation::opentype_font::{
+    FontMetric, GlyphExtents, OpenTypeFont, OpenTypeVariation,
+};
 pub use text_shaper::{ShapeRequest, ShapedGlyph, ShapedRun, TextDirection, TextShaper};
 
 pub use fonts::canvas_rotation_in_vertical::{

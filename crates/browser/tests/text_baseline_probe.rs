@@ -47,7 +47,7 @@ fn probe_text_baseline() {
             let Some(resolved) = document.ResolvedStyleFor(index) else {
                 continue;
             };
-            let native = unsafe { &*resolved.native_style.Get() };
+            let native = unsafe { &*resolved.computed_style_owner.Get() };
             let font = unsafe { &*native.GetFont() };
             let primary = font.PrimaryFont();
             if !primary.is_null() {

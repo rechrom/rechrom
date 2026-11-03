@@ -8,12 +8,12 @@ use style::{
     },
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let node = (0..d.NodeCount())
         .find(|&i| d.Node(i).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(node).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut engine = StyleEngine::new(owner);
@@ -44,7 +44,7 @@ fn styles(s: &ComputedStyle) -> [S; 4] {
 }
 
 #[test]
-fn all_logical_side_shorthands_map_to_native_for_every_writing_direction() {
+fn all_logical_side_shorthands_map_to_computed_style_for_every_writing_direction() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut markup = std::string::String::new();
     let cases = [
@@ -72,7 +72,7 @@ fn all_logical_side_shorthands_map_to_native_for_every_writing_direction() {
     ];
     let expected_styles = [S::kSolid, S::kDashed, S::kDotted, S::kDouble];
     for (i, (_, _, expected)) in cases.iter().enumerate() {
-        let s = native(&owner, &format!("n{i}"));
+        let s = computed_style(&owner, &format!("n{i}"));
         assert_eq!(specified(s), *expected, "case {i}");
         let actual_colors = [
             s.BorderTopColor(),
@@ -98,19 +98,19 @@ fn axis_and_single_side_resets_share_existing_border_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=a style='border-block-width:1px 2px;border-block-style:solid dashed;border-block-color:red blue;border-inline-width:3px 4px;border-inline-style:dotted double;border-inline-color:green black;border-block:red'></div><div id=b style='border-block:9px double black;border-inline:8px dashed blue;border-block:dotted;border-inline:green'></div><div id=c style='border-block:9px solid blue;border-block-start:red'></div>");
     update(&mut owner);
-    let a = native(&owner, "a");
+    let a = computed_style(&owner, "a");
     assert_eq!(specified(a), [3, 4, 3, 3]);
     assert_eq!(styles(a), [S::kNone, S::kDouble, S::kNone, S::kDotted]);
     assert_eq!(a.BorderTopColor().GetColor(), Color::FromRGB(255, 0, 0));
     assert_eq!(a.BorderBottomColor().GetColor(), Color::FromRGB(255, 0, 0));
     assert_eq!(a.BorderRightColor().GetColor(), Color::FromRGB(0, 0, 0));
-    let b = native(&owner, "b");
+    let b = computed_style(&owner, "b");
     assert_eq!(specified(b), [3, 3, 3, 3]);
     assert_eq!(styles(b), [S::kDotted, S::kNone, S::kDotted, S::kNone]);
     assert!(b.BorderTopColor().IsCurrentColor());
     assert!(b.BorderBottomColor().IsCurrentColor());
     assert_eq!(b.BorderLeftColor().GetColor(), Color::FromRGB(0, 128, 0));
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert_eq!(specified(c), [3, 3, 9, 3]);
     assert_eq!(c.BorderTopStyle(), S::kNone);
     assert_eq!(c.BorderBottomStyle(), S::kSolid);
@@ -119,20 +119,20 @@ fn axis_and_single_side_resets_share_existing_border_fields() {
 }
 
 #[test]
-fn logical_border_css_wide_inherits_and_initializes_native_physical_sides() {
+fn logical_border_css_wide_inherits_and_initializes_computed_style_physical_sides() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=p style='direction:rtl;writing-mode:vertical-rl;border-block:2px solid red;border-inline:4px double blue'><i id=c style='border-block:inherit;border-inline:inherit'></i><i id=r style='border-block:initial;border-inline:initial'></i><i id=u style='border-block:unset;border-inline:unset'></i><i id=s style='border-block-start:inherit;border-block-end:inherit;border-inline-start:inherit;border-inline-end:inherit'></i></div>");
     update(&mut owner);
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     for id in ["c", "s"] {
-        let s = native(&owner, id);
+        let s = computed_style(&owner, id);
         assert_eq!(specified(s), specified(p));
         assert_eq!(styles(s), styles(p));
         assert!(s.BorderRightColor() == p.BorderRightColor());
         assert!(s.BorderTopColor() == p.BorderTopColor());
     }
     for id in ["r", "u"] {
-        let s = native(&owner, id);
+        let s = computed_style(&owner, id);
         assert_eq!(specified(s), [3; 4]);
         assert_eq!(styles(s), [S::kNone; 4]);
         assert!(s.BorderRightColor().IsCurrentColor());
@@ -267,7 +267,7 @@ fn source_expansion_metadata_defaults_and_invalid_declarations_are_atomic() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=x style='border-block:5px solid red;border-block:1px 2px dashed blue;border-inline:7px dotted blue;border-inline-start:solid dashed'></div>");
     update(&mut owner);
-    let x = native(&owner, "x");
+    let x = computed_style(&owner, "x");
     assert_eq!(specified(x), [5, 7, 5, 7]);
     assert_eq!(styles(x), [S::kSolid, S::kDotted, S::kSolid, S::kDotted]);
 }

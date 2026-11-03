@@ -25,7 +25,6 @@ use super::default_anchor_data::*;
 use super::display_adjustment::*;
 use super::display_style::*;
 use super::fill_layer::*;
-use super::fill_layer_data::*;
 use super::filter_operations::*;
 use super::filter_operations_data::*;
 use super::flow_tolerance::*;

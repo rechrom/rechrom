@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native typed CSSQuadValue and CSSBorderImageSliceValue payloads.
+//! Canonical typed CSSQuadValue and CSSBorderImageSliceValue payloads.
 #![allow(non_snake_case)]
 use crate::{
     css_value::{CSSValuePayload, CSSValueRandom, CSSValueSubclass},

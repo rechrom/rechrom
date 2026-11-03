@@ -2,8 +2,8 @@
 
 //! Chromium Viz surface management, aggregation and display scheduling core.
 
+pub mod adapter;
 pub mod common;
-pub mod native;
 pub mod service;
 
 pub use service::display::display_scheduler::{

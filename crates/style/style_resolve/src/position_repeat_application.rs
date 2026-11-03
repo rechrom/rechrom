@@ -255,7 +255,7 @@ fn RepeatAxis(id: CSSPropertyID, value: &Value) -> Result<EFillRepeat> {
         _ => return Err(LonghandApplicationError::InvalidValue(id)),
     })
 }
-// css_to_style_map.cc:72-95,109-117,145-198. Preserve native enum tags.
+// css_to_style_map.cc:72-95,109-117,145-198. Preserve computed style enum tags.
 fn FillBox(id: CSSPropertyID, v: &Value) -> Result<EFillBox> {
     Ok(match Ident(id, v)? {
         CSSValueID::kBorder | CSSValueID::kBorderBox => EFillBox::kBorder,
@@ -487,7 +487,7 @@ fn Set(layer: &mut FillLayer, field: Field, value: &LayerValue) {
     }
 }
 // cpp: generated longhands.cc:3426-3482,3503-3559,3580-3629,
-// 10971-11020,18838-18894,18915-18971. Access*/EnsureNext use native COW/GC.
+// 10971-11020,18838-18894,18915-18971. Access*/EnsureNext use computed style COW/GC.
 fn ApplyLayers(
     b: &mut ComputedStyleBuilder,
     type_: EFillLayerType,
@@ -828,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn native_position_points_preserve_percentages_and_far_edge_calculations() {
+    fn position_points_preserve_percentages_and_far_edge_calculations() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(
@@ -928,7 +928,7 @@ mod tests {
         assert_eq!(unsafe { &*mask.Next() }.Repeat().y, EFillRepeat::kSpaceFill);
     }
     #[test]
-    fn initial_inheritance_and_copy_on_write_use_native_storage() {
+    fn initial_inheritance_and_copy_on_write_use_computed_style_storage() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut parent = ComputedStyleBuilder::from_style(initial());
         apply(

@@ -3,12 +3,12 @@
 // Source audit is scoped to the direct entrypoints, filter resolver, polygon
 // branch/value and geometry-box owner below. Nested math/color/image/length and
 // other BasicShape collaborator bodies are NOT included; pending ledger entries
-// cover them. Native polygon data is installed; GetPath is still unimplemented.
+// cover them. Canonical polygon data is installed; GetPath is still unimplemented.
 // Effective lines exclude comments/blanks/preprocessing/namespaces/using,
 // access labels and punctuation-only lines; count multiline statements by line.
 // Scope                         effective mapped omitted remaining
 // Parser entrypoints/helpers           298    237      10        51
-// Native application/converters        286    219      15        52
+// Canonical application/converters        286    219      15        52
 // Polygon value/geometry owner         108     88      20         0
 // Total selected scope                692    544      45       103
 // Parser: longhands_custom.cc:2276-2311,3386-3463,9266-9308;
@@ -26,7 +26,7 @@
 // converter:379-382,2757-2761; filter resolver:174-190,207-208,212-218.
 // Omitted: converter:362-365,373,385-386,2753,2780;
 // filter resolver:71,199,209-210,224-225,268 (metrics/diagnostics).
-// Value/native: css_basic_shape_values.h:108-156; .cc:237-327;
+// Value/computed style: css_basic_shape_values.h:108-156; .cc:237-327;
 // geometry_box_clip_path_operation.h:13-40. Omitted value .cc:240,
 // 255-275,322-327 (DCHECK, allocation capacity, Rc-managed ownership trace).
 // Stable defaults: CSSPolygonRounding, CSSShapeOutsidePathAndShapeSupport,
@@ -487,7 +487,7 @@ pub(super) fn Inset<T: TokenStreamTokenizer>(
 // cpp: css_parsing_utils.cc:650-684. Unlike inset(), rect() requires exactly
 // four edge coordinates and admits `auto` for any edge. Border radii use the
 // same `round <radii> [/ <radii>]` grammar as the other basic rectangles.
-fn Rect<T: TokenStreamTokenizer>(
+pub(super) fn Rect<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
@@ -530,6 +530,57 @@ fn Rect<T: TokenStreamTokenizer>(
     Ok(Rc::new(Value::new(CSSValuePayload::kBasicShapeRectClass(
         crate::production_effects_value::CSSBasicShapeRectValue {
             sides: std::array::from_fn(|index| sides[index].clone()),
+            radii,
+        },
+    ))))
+}
+
+// cpp: css_parsing_utils.cc:682-714. xywh() requires four lengths or
+// percentages; width and height are non-negative. Rounded corners use the
+// common basic-rectangle grammar.
+pub(super) fn Xywh<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let mut guard = RestoringBlockGuard::new(stream);
+    guard.ConsumeWhitespace();
+    let mut values = Vec::with_capacity(4);
+    for index in 0..4 {
+        if !CanStartLength(&mut guard) {
+            return Err(invalid(id));
+        }
+        values.push(LengthValue(id, &mut guard, mode, true, index >= 2)?);
+    }
+    let radii = if guard.Peek().Id() == kRound {
+        guard.ConsumeIncludingWhitespace();
+        let horizontal = RadiusList(id, &mut guard, mode)?;
+        let vertical = if guard.Peek().GetType() == kDelimiterToken
+            && guard.Peek().Delimiter() == b'/' as u16
+        {
+            guard.ConsumeIncludingWhitespace();
+            RadiusList(id, &mut guard, mode)?
+        } else {
+            horizontal.clone()
+        };
+        Some(std::array::from_fn(|index| {
+            [horizontal[index].clone(), vertical[index].clone()]
+        }))
+    } else {
+        None
+    };
+    if !guard.AtEnd() {
+        return Err(invalid(id));
+    }
+    guard.Release();
+    drop(guard);
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(CSSValuePayload::kBasicShapeXYWHClass(
+        crate::production_effects_value::CSSBasicShapeXYWHValue {
+            x: values[0].clone(),
+            y: values[1].clone(),
+            width: values[2].clone(),
+            height: values[3].clone(),
             radii,
         },
     ))))
@@ -597,7 +648,7 @@ fn Shape<
     } else if matches!(function, Some(kXywh | kShape)) {
         return Err(unsupported(
             id,
-            "BasicShape native Path/equality owner or typed shape subtype",
+            "BasicShape computed_style Path/equality owner or typed shape subtype",
         ));
     } else {
         None

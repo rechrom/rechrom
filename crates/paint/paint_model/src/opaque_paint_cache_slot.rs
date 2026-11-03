@@ -11,7 +11,7 @@ pub struct OpaquePaintCacheSlot {
     value: OnceLock<Arc<dyn Any + Send + Sync>>,
 }
 impl OpaquePaintCacheSlot {
-    /// The node has one native cache allocation. A different concrete type is
+    /// The node has one source cache allocation. A different concrete type is
     /// a programming error, never an invitation to replace a live cache slot.
     pub fn get_or_init<T: Any + Send + Sync>(&self, init: impl FnOnce() -> T) -> Arc<T> {
         Arc::clone(self.value.get_or_init(|| Arc::new(init())))

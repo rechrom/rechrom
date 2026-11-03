@@ -121,7 +121,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
                 phase: info.phase,
                 node_id: fragment.node_id,
                 rect,
-                color: fragment.paint.style.color,
+                color: fragment.paint.style.color(),
                 ..Default::default()
             },
             self.node,
@@ -202,7 +202,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
                     width: fragment.size.width,
                     height: fragment.size.height,
                 },
-                color: fragment.paint.style.color,
+                color: fragment.paint.style.color(),
                 font_face_index: input_run.font_face_index,
                 font_variations: input_run.font_variations.clone(),
                 font_size: input_run.font_size,

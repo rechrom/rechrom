@@ -1,6 +1,6 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native motion path Apply branches; unavailable vector Path/resource owner
-//! stays typed Unsupported. Rays use StyleRay's independent native geometry.
+//! Canonical motion path Apply branches; unavailable vector Path/resource owner
+//! stays typed Unsupported. Rays use StyleRay's independent computed style geometry.
 #![allow(non_snake_case)]
 use super::*;
 use crate::css_math_expression_node::CalculationResultCategory as C;
@@ -84,7 +84,7 @@ fn Rotate(
     Ok(rotation)
 }
 // style_builder_converter.cc:3461-3499 / basic_shape_functions.cc:567-581,
-// 723-731. CoordBox and Ray preserve real operation kinds and native owners.
+// 723-731. CoordBox and Ray preserve real operation kinds and computed style owners.
 fn Path(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
@@ -292,7 +292,7 @@ mod tests {
         assert!(b.OffsetPath().GetNonNull().is_none());
     }
     #[test]
-    fn production_motion_ray_real_native_geometry_defaults_and_typed_math() {
+    fn production_motion_ray_real_computed_style_geometry_defaults_and_typed_math() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(&mut b,None,"offset-path:ray(calc(0.25turn + 90deg) farthest-corner contain at right 10px bottom 20%) stroke-box");
@@ -331,7 +331,7 @@ mod tests {
         );
     }
     #[test]
-    fn production_motion_rotate_keywords_angle_math_native_and_css_wide() {
+    fn production_motion_rotate_keywords_angle_math_computed_style_and_css_wide() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         for (value, angle, type_) in [
@@ -356,7 +356,7 @@ mod tests {
         assert_eq!(child.OffsetRotate().r#type, OffsetRotationType::kAuto);
     }
     #[test]
-    fn production_motion_shorthand_order_resets_all_five_native_fields_and_inherits() {
+    fn production_motion_shorthand_order_resets_all_five_computed_style_fields_and_inherits() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(

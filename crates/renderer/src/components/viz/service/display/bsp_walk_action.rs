@@ -1,6 +1,6 @@
 use super::draw_polygon::DrawPolygon;
 use compositor_core::adapter::{geometry::Rect, property_tree::PropertyTreeTransform as _};
-use viz::common::quads::aggregated_render_pass::NativeTransform;
+use viz::common::quads::aggregated_render_pass::Transform;
 // Source: components/viz/service/display/bsp_walk_action.h:20-23
 // Rust capability dispatch replaces C++ virtual operator() inheritance.
 pub trait BspWalkAction {
@@ -10,7 +10,7 @@ pub trait BspWalkAction {
 // Private renderer capability keeps canonical quads in their owning pass; the
 // index handle resolves the original shared-state transform without copying it.
 pub(crate) trait PolygonDrawBackend {
-    fn polygon_transform(&self, original_ref: usize) -> &NativeTransform;
+    fn polygon_transform(&self, original_ref: usize) -> &Transform;
     fn do_draw_polygon(
         &mut self,
         item: &DrawPolygon,
@@ -40,7 +40,7 @@ impl<'a, B: PolygonDrawBackend> BspWalkActionDrawPolygon<'a, B> {
 impl<B: PolygonDrawBackend> BspWalkAction for BspWalkActionDrawPolygon<'_, B> {
     // Source: components/viz/service/display/bsp_walk_action.cc:25-40
     fn call(&mut self, item: &mut DrawPolygon) {
-        let mut inverse = NativeTransform::default();
+        let mut inverse = Transform::default();
         if !self
             .renderer
             .polygon_transform(item.original_ref)

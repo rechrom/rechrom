@@ -15,13 +15,13 @@ pub trait RoundedRectTransformBackend {
     fn IsRoundedRectValid(value: &RRectF) -> bool;
 }
 pub struct Transform<R: RoundedRectTransformBackend> {
-    native: foundation::gfx::Transform,
+    source: foundation::gfx::Transform,
     backend: PhantomData<fn() -> R>,
 }
 impl<R: RoundedRectTransformBackend> Clone for Transform<R> {
     fn clone(&self) -> Self {
         Self {
-            native: self.native.clone(),
+            source: self.source.clone(),
             backend: PhantomData,
         }
     }
@@ -29,45 +29,45 @@ impl<R: RoundedRectTransformBackend> Clone for Transform<R> {
 impl<R: RoundedRectTransformBackend> Default for Transform<R> {
     fn default() -> Self {
         Self {
-            native: Default::default(),
+            source: Default::default(),
             backend: PhantomData,
         }
     }
 }
 impl<R: RoundedRectTransformBackend> PartialEq for Transform<R> {
     fn eq(&self, rhs: &Self) -> bool {
-        self.native == rhs.native
+        self.source == rhs.source
     }
 }
 impl<R: RoundedRectTransformBackend> std::fmt::Debug for Transform<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.native.fmt(f)
+        self.source.fmt(f)
     }
 }
 impl<R: RoundedRectTransformBackend> Transform<R> {
     pub fn FromColMajor(matrix: &[f64; 16]) -> Self {
         Self {
-            native: foundation::gfx::Transform::ColMajor(matrix),
+            source: foundation::gfx::Transform::ColMajor(matrix),
             backend: PhantomData,
         }
     }
-    pub fn native(&self) -> &foundation::gfx::Transform {
-        &self.native
+    pub fn as_source(&self) -> &foundation::gfx::Transform {
+        &self.source
     }
-    pub fn native_mut(&mut self) -> &mut foundation::gfx::Transform {
-        &mut self.native
+    pub fn transform_mut(&mut self) -> &mut foundation::gfx::Transform {
+        &mut self.source
     }
-    fn GetInverseNative(&self, result: &mut Self) -> bool {
-        self.native.GetInverse(&mut result.native)
+    fn GetInverse(&self, result: &mut Self) -> bool {
+        self.source.GetInverse(&mut result.source)
     }
-    fn MapPointNative(&self, point: PointF) -> PointF {
+    fn MapPoint(&self, point: PointF) -> PointF {
         let p = self
-            .native
+            .source
             .MapPoint(foundation::gfx::PointF::new(point.x(), point.y()));
         PointF::new(p.x(), p.y())
     }
-    fn MapRectNative(&self, rect: RectF) -> RectF {
-        let r = self.native.MapRect(foundation::gfx::RectF::new(
+    fn MapRect(&self, rect: RectF) -> RectF {
+        let r = self.source.MapRect(foundation::gfx::RectF::new(
             foundation::gfx::PointF::new(rect.x(), rect.y()),
             foundation::gfx::SizeF::new(rect.width(), rect.height()),
         ));
@@ -75,7 +75,7 @@ impl<R: RoundedRectTransformBackend> Transform<R> {
     }
     fn FlattenedSkMatrix(&self) -> [f32; 9] {
         // Source: ui/gfx/geometry/skia_conversions.cc:122-128
-        let m = &self.native;
+        let m = &self.source;
         [
             m.rc(0, 0) as f32,
             m.rc(0, 1) as f32,
@@ -91,41 +91,41 @@ impl<R: RoundedRectTransformBackend> Transform<R> {
 }
 impl<R: RoundedRectTransformBackend> crate::adapter::geometry::Transform for Transform<R> {
     fn rc(&self, row: usize, column: usize) -> f64 {
-        self.native.rc(row, column)
+        self.source.rc(row, column)
     }
     fn TransformVector4(&self, vector: &mut [f32; 4]) {
-        self.native.TransformVector4(vector);
+        self.source.TransformVector4(vector);
     }
     fn IsIdentityOrIntegerTranslation(&self) -> bool {
-        self.native.IsIdentityOrIntegerTranslation()
+        self.source.IsIdentityOrIntegerTranslation()
     }
     fn IsIdentityOrTranslation(&self) -> bool {
-        self.native.IsIdentityOrTranslation()
+        self.source.IsIdentityOrTranslation()
     }
     fn IsScaleOrTranslation(&self) -> bool {
-        self.native.IsScaleOrTranslation()
+        self.source.IsScaleOrTranslation()
     }
     fn IsScale2d(&self) -> bool {
-        self.native.IsScale2d()
+        self.source.IsScale2d()
     }
     fn Preserves2dAxisAlignment(&self) -> bool {
-        self.native.Preserves2dAxisAlignment()
+        self.source.Preserves2dAxisAlignment()
     }
     fn IsFlat(&self) -> bool {
-        self.native.IsFlat()
+        self.source.IsFlat()
     }
     fn GetCheckedInverse(&self) -> Self {
         Self {
-            native: self.native.GetCheckedInverse(),
+            source: self.source.GetCheckedInverse(),
             backend: PhantomData,
         }
     }
     fn To2dTranslation(&self) -> Vector2dF {
-        let v = self.native.To2dTranslation();
+        let v = self.source.To2dTranslation();
         Vector2dF::new(v.x(), v.y())
     }
     fn To2dScale(&self) -> Vector2dF {
-        let v = self.native.To2dScale();
+        let v = self.source.To2dScale();
         Vector2dF::new(v.x(), v.y())
     }
 }
@@ -133,81 +133,81 @@ impl<R: RoundedRectTransformBackend> crate::adapter::property_types::PropertyTra
     for Transform<R>
 {
     fn IsInvertible(&self) -> bool {
-        self.native.IsInvertible()
+        self.source.IsInvertible()
     }
 }
 impl<R: RoundedRectTransformBackend> crate::adapter::property_tree::PropertyTreeTransform
     for Transform<R>
 {
     fn PostConcat(&mut self, other: &Self) {
-        self.native.PostConcat(&other.native);
+        self.source.PostConcat(&other.source);
     }
     fn PreConcat(&mut self, other: &Self) {
-        self.native.PreConcat(&other.native);
+        self.source.PreConcat(&other.source);
     }
     fn MultiplyAssign(&mut self, other: &Self) {
-        self.native.PreConcat(&other.native);
+        self.source.PreConcat(&other.source);
     }
     fn Flatten(&mut self) {
-        self.native.Flatten();
+        self.source.Flatten();
     }
     fn GetInverse(&self, result: &mut Self) -> bool {
-        self.GetInverseNative(result)
+        self.GetInverse(result)
     }
     fn Translate(&mut self, x: f32, y: f32) {
-        self.native.Translate(x, y);
+        self.source.Translate(x, y);
     }
     fn Translate3d(&mut self, x: f32, y: f32, z: f32) {
-        self.native.Translate3d(x, y, z);
+        self.source.Translate3d(x, y, z);
     }
     fn Scale(&mut self, x: f32, y: f32) {
-        self.native.Scale(x, y);
+        self.source.Scale(x, y);
     }
     fn PostTranslate(&mut self, offset: Vector2dF) {
-        self.native.PostTranslate(offset.x(), offset.y());
+        self.source.PostTranslate(offset.x(), offset.y());
     }
     fn MapPoint(&self, point: PointF) -> PointF {
-        self.MapPointNative(point)
+        self.MapPoint(point)
     }
     fn Round2dTranslationComponents(&mut self) {
-        self.native.Round2dTranslationComponents();
+        self.source.Round2dTranslationComponents();
     }
     fn IsApproximatelyIdentityOrTranslation(&self, tolerance: f32) -> bool {
-        self.native
+        self.source
             .IsApproximatelyIdentityOrTranslation(tolerance as f64)
     }
     fn IsApproximatelyIdentityOrIntegerTranslation(&self, tolerance: f32) -> bool {
-        self.native
+        self.source
             .IsApproximatelyIdentityOrIntegerTranslation(tolerance as f64)
     }
     fn RoundToIdentityOrIntegerTranslation(&mut self) {
-        self.native.RoundToIdentityOrIntegerTranslation();
+        self.source.RoundToIdentityOrIntegerTranslation();
     }
     fn IsBackFaceVisible(&self) -> bool {
-        self.native.IsBackFaceVisible()
+        self.source.IsBackFaceVisible()
     }
     fn ComputeTransform2dScaleComponents(&self, fallback: f32) -> Vector2dF {
-        let v = self.native.ComputeTransform2dScaleComponents(fallback);
+        let v = self.source.ComputeTransform2dScaleComponents(fallback);
         Vector2dF::new(v.x(), v.y())
     }
     fn IsPositiveScaleOrTranslation(&self) -> bool {
-        self.native.IsPositiveScaleOrTranslation()
+        self.source.IsPositiveScaleOrTranslation()
     }
     fn MapRect(&self, rect: RectF) -> RectF {
-        self.MapRectNative(rect)
+        self.MapRect(rect)
     }
     fn HasPerspective(&self) -> bool {
-        self.native.HasPerspective()
+        self.source.HasPerspective()
     }
     fn PostScale(&mut self, x: f32, y: f32) {
-        self.native.PostScale(x, y);
+        self.source.PostScale(x, y);
     }
 }
 impl<R: RoundedRectTransformBackend> compositor_draw::occlusion::OcclusionTransform
     for Transform<R>
 {
     fn InverseForOcclusion(&self, result: &mut Self) -> bool {
-        self.GetInverseNative(result)
+        self.GetInverse(result)
     }
     fn MapEnclosingClippedRect(
         &self,
@@ -222,29 +222,29 @@ impl<R: RoundedRectTransformBackend> compositor_draw::occlusion::OcclusionTransf
         crate::cc::base::math_util::MathUtil::ProjectEnclosingClippedRect(self, rect)
     }
     fn OcclusionTransformToString(&self) -> String {
-        format!("{:?}", self.native)
+        format!("{:?}", self.source)
     }
 }
 impl<R: RoundedRectTransformBackend> crate::adapter::occlusion::OcclusionTransform
     for Transform<R>
 {
     fn NonDegeneratePreserves2dAxisAlignment(&self) -> bool {
-        self.native.NonDegeneratePreserves2dAxisAlignment()
+        self.source.NonDegeneratePreserves2dAxisAlignment()
     }
     fn Multiply(&self, other: &Self) -> Self {
         let mut result = self.clone();
-        result.native.PreConcat(&other.native);
+        result.source.PreConcat(&other.source);
         result
     }
     fn ToString(&self) -> String {
-        format!("{:?}", self.native)
+        format!("{:?}", self.source)
     }
 }
 impl<R: RoundedRectTransformBackend> crate::adapter::scrollbar::ScrollbarTransform
     for Transform<R>
 {
     fn GetInverse(&self, result: &mut Self) -> bool {
-        self.GetInverseNative(result)
+        self.GetInverse(result)
     }
     fn ProjectPoint(
         &self,
@@ -272,12 +272,12 @@ impl<R: RoundedRectTransformBackend> crate::adapter::damage_context::DamageTrans
 impl<R: RoundedRectTransformBackend> crate::adapter::draw_property::DrawTransform for Transform<R> {
     fn InverseOrIdentity(&self) -> Self {
         Self {
-            native: self.native.InverseOrIdentity(),
+            source: self.source.InverseOrIdentity(),
             backend: PhantomData,
         }
     }
     fn MapRectInt(&self, rect: Rect) -> Rect {
-        crate::adapter::geometry::ToEnclosingRect(self.MapRectNative(RectF::from(rect)))
+        crate::adapter::geometry::ToEnclosingRect(self.MapRect(RectF::from(rect)))
     }
     fn ApplyMaskFilterInfo(&self, info: &mut MaskFilterInfo) {
         // Source: ui/gfx/geometry/mask_filter_info.cc:15-47
@@ -300,14 +300,14 @@ impl<R: RoundedRectTransformBackend> crate::adapter::draw_property::DrawTransfor
         info.rounded_corner_bounds = new_rect;
         if let Some(gradient) = info.gradient_mask.as_mut().filter(|g| !g.steps.is_empty()) {
             // Source: ui/gfx/geometry/linear_gradient.cc:52-64
-            if self.native.IsIdentityOrTranslation() {
+            if self.source.IsIdentityOrTranslation() {
                 return;
             }
             let radian = (gradient.angle as f32).to_radians();
             let y = -radian.sin();
             let x = radian.cos();
-            let origin = self.MapPointNative(PointF::default());
-            let end = self.MapPointNative(PointF::new(x, y));
+            let origin = self.MapPoint(PointF::default());
+            let end = self.MapPoint(PointF::new(x, y));
             let new_angle = (end.y() - origin.y())
                 .atan2(end.x() - origin.x())
                 .to_degrees();
@@ -319,7 +319,7 @@ impl<R: RoundedRectTransformBackend> crate::adapter::layer_tree_impl::LayerTreeT
     for Transform<R>
 {
     fn MapPoint3D(&self, point: Point3F) -> Point3F {
-        let p = self.native.MapPoint3d([point.x, point.y, point.z]);
+        let p = self.source.MapPoint3d([point.x, point.y, point.z]);
         Point3F {
             x: p[0],
             y: p[1],
@@ -331,23 +331,23 @@ impl<R: RoundedRectTransformBackend> crate::adapter::layer_impl::LayerImplTransf
     for Transform<R>
 {
     fn IsIdentity(&self) -> bool {
-        self.native.IsIdentity()
+        self.source.IsIdentity()
     }
 }
 impl<R: RoundedRectTransformBackend> crate::adapter::paint_chunks_to_cc_layer::ConversionTransform
     for Transform<R>
 {
     fn IsIdentity(&self) -> bool {
-        self.native.IsIdentity()
+        self.source.IsIdentity()
     }
     fn IsIdentityOr2dTranslation(&self) -> bool {
-        self.native.IsIdentityOrTranslation() && self.native.rc(2, 3) == 0.
+        self.source.IsIdentityOrTranslation() && self.source.rc(2, 3) == 0.
     }
     fn To2dTranslation(&self) -> Vector2dF {
-        let p = self.native.To2dTranslation();
+        let p = self.source.To2dTranslation();
         Vector2dF::new(p.x(), p.y())
     }
     fn MapPoint(&self, point: PointF) -> PointF {
-        self.MapPointNative(point)
+        self.MapPoint(point)
     }
 }

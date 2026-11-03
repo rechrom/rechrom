@@ -1015,7 +1015,7 @@ thread_local! {
 // interleave with mark/weak processing. After marking, only the fixed dead set
 // is swept; new allocations and changes to surviving objects belong to the next
 // collection. All finalizers finish before metadata/storage is released, since
-// native destructors can inspect other dead allocations.
+// source destructors can inspect other dead allocations.
 struct SweepState {
     dead: Vec<usize>,
     finalized: usize,
@@ -2107,7 +2107,7 @@ mod worklist_dispatch_lifecycle_tests {
         // This heap is intentionally isolated: the existing collector does not
         // recover its collecting flag after an uncaught Trace panic. Both these
         // types have no owned fields/resources, so thread teardown can deallocate
-        // their payloads without introducing leaked native resources.
+        // their payloads without introducing leaked source resources.
         struct Exploding {
             next: *const u8,
         }
@@ -2142,7 +2142,7 @@ mod worklist_dispatch_lifecycle_tests {
     }
 
     #[test]
-    fn sweep_reentry_preserves_metadata_until_all_native_destructors_finish() {
+    fn sweep_reentry_preserves_metadata_until_all_source_destructors_finish() {
         struct DestructorAttempts {
             peer: *mut u64,
             drops: Arc<AtomicUsize>,

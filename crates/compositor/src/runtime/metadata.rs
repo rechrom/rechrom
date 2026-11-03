@@ -116,7 +116,7 @@ impl<SR, SID, FD: Default, INK, TD, CB: Default, TR: Default, LI, ACK: Default>
     type MetadataAck = ACK;
 }
 /// Bind the root family to exactly the same native values as the output frame.
-pub trait NativeMetadataTypes:
+pub trait MetadataTypes:
     HostImplDTypes<TreesInVizTiming=TreesInVizTiming> + FrameMetadataValueTypes<
         MetadataSurfaceRange=<Self as LayerTreeTypes>::SurfaceRange,
         MetadataSurfaceId=<Self as crate::adapter::frame_data::FrameDataTypes>::SurfaceId,
@@ -232,7 +232,7 @@ impl<V: FrameMetadataValueTypes> HostImplFrameMetadata for CompositorFrameMetada
         self.content_color_usage
     }
 }
-impl<B: NativeMetadataTypes> HostCompositorFrameMetadata<B> for CompositorFrameMetadata<B> {
+impl<B: MetadataTypes> HostCompositorFrameMetadata<B> for CompositorFrameMetadata<B> {
     fn frame_token(&self) -> u32 {
         self.frame_token
     }

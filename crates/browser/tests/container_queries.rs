@@ -1,5 +1,5 @@
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use page_mutation::PageMutation;
@@ -55,8 +55,8 @@ fn find(
     }
 }
 #[test]
-fn native_content_box_publication_recalculates_rules_before_page_paint() {
-    native_test_thread::run(|| {
+fn content_box_publication_recalculates_rules_before_page_paint() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let assembly = browser::CreateLayoutAssembly();
         let mut page = Page::Create(

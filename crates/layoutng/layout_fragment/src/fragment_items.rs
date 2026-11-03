@@ -1,4 +1,4 @@
-use std::cell::{Cell, UnsafeCell};
+use std::cell::Cell;
 use std::ops::Index;
 
 use foundation::{
@@ -13,7 +13,6 @@ use layoutng::internal::layout_object::LayoutObject;
 use layoutng::internal::layout_text::LayoutText;
 
 use crate::fragment_item::{FragmentItem, FragmentItemType};
-use crate::fragment_tree::FragmentPaintData;
 use crate::fragment_items_builder::FragmentItemsBuilder;
 use crate::inline_cursor::InlineCursor;
 use crate::layout_result::LayoutResult;
@@ -127,10 +126,6 @@ pub struct FragmentItems {
     first_line_text_content_: String,
     size_of_earlier_fragments_: Cell<u32>,
     items_: HeapVector<FragmentItem>,
-    // One fragment-local Paint input per native item. This is a flat sidecar,
-    // not an exported topology; descendants are always followed through
-    // items_ and DescendantsCount().
-    paint_inputs_: UnsafeCell<Vec<Option<Box<FragmentPaintData>>>>,
 }
 
 impl Clone for FragmentItems {
@@ -142,9 +137,6 @@ impl Clone for FragmentItems {
             first_line_text_content_: self.first_line_text_content_.clone(),
             size_of_earlier_fragments_: Cell::new(self.size_of_earlier_fragments_.get()),
             items_: self.items_.clone(),
-            paint_inputs_: UnsafeCell::new(
-                (0..self.items_.len()).map(|_| None).collect(),
-            ),
         };
         for other_item in &self.items_ {
             let layout_text = DynamicTo::<LayoutText>(other_item.GetMutableLayoutObject());
@@ -184,7 +176,6 @@ impl FragmentItems {
             first_line_text_content_: first_line_text_content,
             size_of_earlier_fragments_: Cell::new(0),
             items_: items,
-            paint_inputs_: UnsafeCell::new((0..item_count).map(|_| None).collect()),
         }
     }
 
@@ -195,46 +186,6 @@ impl FragmentItems {
 
     pub fn Items(&self) -> &[FragmentItem] {
         &self.items_
-    }
-
-    pub fn SetPaintInput(&self, index: usize, mut input: FragmentPaintData) {
-        input.inline_geometry.clear();
-        let inputs = unsafe { &mut *self.paint_inputs_.get() };
-        assert_eq!(inputs.len(), self.items_.len());
-        let slot = inputs
-            .get_mut(index)
-            .expect("fragment paint input index is in range");
-        if let Some(current) = slot.as_mut() {
-            **current = input;
-        } else {
-            *slot = Some(Box::new(input));
-        }
-    }
-
-    /// Remove paint inputs which moved outside the current CullRect. The
-    /// FragmentItems remain LayoutNG's canonical geometry; only the transient
-    /// paint participation attached to those native items is discarded.
-    pub fn ClearPaintInputs(&self, range: std::ops::Range<usize>) {
-        let inputs = unsafe { &mut *self.paint_inputs_.get() };
-        assert_eq!(inputs.len(), self.items_.len());
-        let end = range.end.min(inputs.len());
-        for slot in &mut inputs[range.start.min(end)..end] {
-            *slot = None;
-        }
-    }
-
-    pub fn PaintInput(&self, index: usize) -> Option<&FragmentPaintData> {
-        unsafe { &*self.paint_inputs_.get() }
-            .get(index)
-            .and_then(Option::as_deref)
-    }
-
-    /// The caller must hold exclusive access to the owning LayoutResult for
-    /// the complete mutation and must not retain the returned reference.
-    pub unsafe fn PaintInputMut(&self, index: usize) -> Option<&mut FragmentPaintData> {
-        unsafe { &mut *self.paint_inputs_.get() }
-            .get_mut(index)
-            .and_then(Option::as_deref_mut)
     }
 
     pub fn Equals(&self, span: &[FragmentItem]) -> bool {
@@ -508,12 +459,16 @@ impl FragmentItems {
         *child_has_any_child_items = false;
         let mut descendant = layout_inline.FirstChild();
         while !descendant.is_null() {
-            let mut item_idx = u32::try_from(unsafe { &*descendant }.FirstInlineFragmentItemIndex())
-                .expect("fragment item index exceeds wtf_size_t");
+            let mut item_idx =
+                u32::try_from(unsafe { &*descendant }.FirstInlineFragmentItemIndex())
+                    .expect("fragment item index exceeds wtf_size_t");
             let next_descendant = if unsafe { &*descendant }.IsBox() || item_idx != 0 {
-                unsafe { &*descendant }.NextInPreOrderAfterChildren(layout_inline as *const LayoutInline as *const LayoutObject)
+                unsafe { &*descendant }.NextInPreOrderAfterChildren(
+                    layout_inline as *const LayoutInline as *const LayoutObject,
+                )
             } else {
-                unsafe { &*descendant }.NextInPreOrder(layout_inline as *const LayoutInline as *const LayoutObject)
+                unsafe { &*descendant }
+                    .NextInPreOrder(layout_inline as *const LayoutInline as *const LayoutObject)
             };
             if item_idx == 0 {
                 descendant = next_descendant;
@@ -573,7 +528,8 @@ impl FragmentItems {
     // cpp: layoutng_fragment_tree/fragment_items.h:127-128
     // cpp: layoutng_fragment_tree/fragment_items.cc:452-464
     fn TryDirtyFirstLineFor(layout_object: &LayoutObject, container: &LayoutBlockFlow) -> bool {
-        debug_assert!(layout_object.IsDescendantOf(container as *const LayoutBlockFlow as *const LayoutObject));
+        debug_assert!(layout_object
+            .IsDescendantOf(container as *const LayoutBlockFlow as *const LayoutObject));
         let mut cursor = InlineCursor::from_container(container);
         cursor.MoveToLayoutObject(layout_object);
         if cursor.IsNull() {
@@ -591,7 +547,8 @@ impl FragmentItems {
     // cpp: layoutng_fragment_tree/fragment_items.h:129-130
     // cpp: layoutng_fragment_tree/fragment_items.cc:466-479
     fn TryDirtyLastLineFor(layout_object: &LayoutObject, container: &LayoutBlockFlow) -> bool {
-        debug_assert!(layout_object.IsDescendantOf(container as *const LayoutBlockFlow as *const LayoutObject));
+        debug_assert!(layout_object
+            .IsDescendantOf(container as *const LayoutBlockFlow as *const LayoutObject));
         let mut cursor = InlineCursor::from_container(container);
         cursor.MoveToLayoutObject(layout_object);
         if cursor.IsNull() {

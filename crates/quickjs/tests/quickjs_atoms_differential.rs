@@ -258,7 +258,7 @@ fn official_c_runtime_layouts_atom_storage_and_failure_states_match() {
         offset_of!(JSContext, rt),
         offset_of!(JSContext, binary_object_size),
         offset_of!(JSContext, class_proto),
-        offset_of!(JSContext, native_error_proto),
+        offset_of!(JSContext, error_proto),
         offset_of!(JSContext, loaded_modules),
         offset_of!(JSContext, eval_internal),
         offset_of!(JSContext, user_opaque),

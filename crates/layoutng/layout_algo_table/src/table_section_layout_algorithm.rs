@@ -2,7 +2,7 @@
 use foundation::{kIndefiniteSize, LayoutUnit, To, Vector};
 use layout_algo_block::block_child_iterator::BlockChildIterator;
 use layoutng_assembly::internal::{
-    algorithm_entry::NativeAlgorithm,
+    algorithm_entry::LayoutAlgorithmImplementation,
     block_node::BlockNode,
     break_appeal::kBreakAppealPerfect,
     constraint_space_builder::ConstraintSpaceBuilder,
@@ -199,7 +199,7 @@ impl TableSectionLayoutAlgorithm {
     }
 }
 // cpp: layoutng_table/table_section_layout_algorithm.h:17-32
-impl NativeAlgorithm for TableSectionLayoutAlgorithm {
+impl LayoutAlgorithmImplementation for TableSectionLayoutAlgorithm {
     const LAYOUT_TRACE_NAME: &'static str = "layout_algo_table.SectionLayout";
     const MEASURE_TRACE_NAME: &'static str = "layout_algo_table.SectionMeasure";
 

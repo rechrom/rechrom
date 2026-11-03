@@ -70,6 +70,7 @@ impl FrameAlignedInputQueue {
                         a.delta.x += b.delta.x;
                         a.delta.y += b.delta.y;
                         a.native = b.native.clone();
+                        a.timestamp = b.timestamp;
                         true
                     } else {
                         false

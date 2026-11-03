@@ -169,10 +169,26 @@ impl OpenDocumentAdapter for PageOpenAdapter<'_> {
     fn PrepareDocumentServices(&mut self) -> OpenDocumentServices {
         self.state.CancelImageEvents();
         self.state.InvalidateLayoutOutput();
+        let media_state = self.state.clone();
         OpenDocumentServices {
             document: self.state.document.Handle(),
             resources: self.resources.clone(),
             scripts: self.scripts.as_deref().map(PageScripts::OpenServices),
+            render_blocking_media_matches: Rc::new(move |condition| {
+                let constraints = media_state.constraints.borrow();
+                let values = crate::style_services::MediaValuesForLayout(
+                    &constraints,
+                    media_state.preferred_color_scheme.get(),
+                    media_state.forced_colors.get(),
+                );
+                let evaluator =
+                    style::production_style_sheet::ProductionMediaQueryEvaluator::FromCachedData(
+                        &values,
+                    );
+                let queries =
+                    style::media_queries::media_query_backend::ParseMediaQuerySet(condition);
+                evaluator.EvalSet(&queries)
+            }),
         }
     }
 

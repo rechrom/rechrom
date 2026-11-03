@@ -4,7 +4,7 @@ pub mod checked_math;
 pub mod checked_math_impl;
 pub mod clamped_math;
 pub mod clamped_math_impl;
-pub mod native_overflow_builtins;
+pub mod overflow_builtins;
 pub mod safe_conversions;
 pub mod safe_conversions_arm_impl;
 pub mod safe_conversions_impl;

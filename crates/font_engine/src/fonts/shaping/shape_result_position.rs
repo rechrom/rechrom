@@ -6,7 +6,7 @@ use super::shape_result::{ShapeResult, ShapeResultCharacterData};
 use super::shape_result_run::ShapeResultRun;
 use super::shape_result_types::{AdjustMidCluster, BreakGlyphsOption};
 use crate::fonts::glyph::Glyph;
-use crate::text::native::character_break_iterator::GraphemesClusterList;
+use crate::text::implementation::character_break_iterator::GraphemesClusterList;
 use foundation::blink_geometry::geometry::{InlineLayoutUnit, TextRunLayoutUnit};
 use foundation::{
     GCedHeapVector, HeapVector, IsLtr, LayoutUnit, MakeGarbageCollected, String, StringView,

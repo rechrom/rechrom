@@ -10,10 +10,10 @@ use crate::adapter::{
     layer_tree_impl::{ResourceId, UIResourceId},
 };
 
-pub trait NativeRasterContextProvider: Send + Sync {
+pub trait RasterContextProviderBackend: Send + Sync {
     fn Lock(&self) -> Box<dyn HostRasterContextLock>;
 }
-pub type RasterContextProvider = std::sync::Arc<dyn NativeRasterContextProvider>;
+pub type RasterContextProvider = std::sync::Arc<dyn RasterContextProviderBackend>;
 pub struct ImageDecodeCache(pub Box<dyn HostImplImageDecodeCache>);
 impl HostImplImageDecodeCache for ImageDecodeCache {
     fn ImageDecodeCacheIdentity(&self) -> crate::adapter::tile_manager::ImageDecodeCacheId {
@@ -31,7 +31,7 @@ impl HostImplImageDecodeCache for ImageDecodeCache {
 /// call's live release client and never capture the host.
 /// A call-scoped callback target for a resource returned to its actual pool.
 /// Providers store only the source weak identity, never this borrowed client.
-pub trait NativePoolReleaseClient {
+pub trait PoolReleaseClient {
     fn OnPoolResourceReleased(
         &mut self,
         callback: crate::adapter::resource_pool::ResourcePoolReleaseCallback,
@@ -39,7 +39,7 @@ pub trait NativePoolReleaseClient {
         lost: bool,
     );
 }
-pub trait NativeClientResourceProvider<
+pub trait ClientResourceProviderBackend<
     B: HostUIResourceTypes<UITransferableResource = RasterTransferableResource>
         + HostImplResourceTypes<ResourceId = ResourceId>,
 >: HostUIResourceProvider<B>
@@ -55,12 +55,12 @@ pub trait NativeClientResourceProvider<
     fn ReceiveReturnsFromParent(
         &mut self,
         resources: Vec<RasterReturnedResource>,
-        pool: Option<&mut dyn NativePoolReleaseClient>,
+        pool: Option<&mut dyn PoolReleaseClient>,
         client: &mut dyn HostUIResourceReleaseClient<B>,
     );
     fn ReleaseAllExportedResources(
         &mut self,
-        pool: Option<&mut dyn NativePoolReleaseClient>,
+        pool: Option<&mut dyn PoolReleaseClient>,
         lose: bool,
         client: &mut dyn HostUIResourceReleaseClient<B>,
     );
@@ -74,7 +74,7 @@ pub trait NativeClientResourceProvider<
 pub struct ClientResourceProvider<
     B: HostUIResourceTypes<UITransferableResource = RasterTransferableResource>
         + HostImplResourceTypes<ResourceId = ResourceId>,
->(pub Box<dyn NativeClientResourceProvider<B>>);
+>(pub Box<dyn ClientResourceProviderBackend<B>>);
 impl<
         B: HostUIResourceTypes<UITransferableResource = RasterTransferableResource>
             + HostImplResourceTypes<ResourceId = ResourceId>,
@@ -97,12 +97,12 @@ impl<
 }
 /// The external metrics FrameSorter remains a real instance. Canonical host
 /// calls Reset in its source position rather than maintaining duplicate state.
-pub trait NativeFrameSorter {
+pub trait FrameSorterBackend {
     fn Reset(&mut self, reset_first_contentful_paint: bool);
     fn FirstContentfulPaintReceived(&self) -> bool;
     fn OnFirstContentfulPaintReceived(&mut self);
 }
-pub struct FrameSorter(pub Box<dyn NativeFrameSorter>);
+pub struct FrameSorter(pub Box<dyn FrameSorterBackend>);
 impl FrameSorter {
     pub fn FirstContentfulPaintReceived(&self) -> bool {
         self.0.FirstContentfulPaintReceived()
@@ -208,7 +208,7 @@ impl<R: super::types::CpuSkiaBackend>
 }
 /// The actual native request owns its callback and capture parameters. Calls
 /// only expose the exact request API consumed by the canonical compositor.
-pub trait NativeViewTransitionRequest:
+pub trait ViewTransitionRequestBackend:
     crate::adapter::layer_tree_impl::LayerTreeViewTransitionRequest
     + crate::adapter::layer_tree_host_impl::HostMetadataTransitionRequest
 {
@@ -230,7 +230,7 @@ pub trait NativeViewTransitionRequest:
         delay: bool,
     ) -> super::metadata::TransitionDirective;
 }
-pub struct ViewTransitionRequest(pub Box<dyn NativeViewTransitionRequest + Send + Sync>);
+pub struct ViewTransitionRequest(pub Box<dyn ViewTransitionRequestBackend + Send + Sync>);
 impl ViewTransitionRequest {
     pub(crate) fn ConstructDirective(
         &self,
@@ -292,14 +292,14 @@ pub struct VideoFrameControllerClient {
     pub owner: crate::adapter::layer_tree_impl::LayerTreeHostId,
 }
 
-pub trait NativeChildLocalSurfaceIdAllocator:
+pub trait ChildLocalSurfaceIdAllocatorBackend:
     crate::adapter::layer_tree_host_impl::HostChildLocalSurfaceIdAllocator
 {
     fn CurrentLocalSurfaceId(&self) -> &super::types::LocalSurfaceId;
     fn GetCurrentLocalSurfaceId(&self) -> super::types::LocalSurfaceId;
     fn UpdateFromParent(&mut self, id: &super::types::LocalSurfaceId);
 }
-pub struct ChildLocalSurfaceIdAllocator(pub Box<dyn NativeChildLocalSurfaceIdAllocator>);
+pub struct ChildLocalSurfaceIdAllocator(pub Box<dyn ChildLocalSurfaceIdAllocatorBackend>);
 impl crate::adapter::layer_tree_host_impl::HostChildLocalSurfaceIdAllocator
     for ChildLocalSurfaceIdAllocator
 {
@@ -307,7 +307,7 @@ impl crate::adapter::layer_tree_host_impl::HostChildLocalSurfaceIdAllocator
         self.0.GenerateId()
     }
 }
-pub trait NativeAverageLagTrackingManager {
+pub trait AverageLagTrackingManagerBackend {
     fn Clear(&mut self);
     fn DidPresentCompositorFrame(
         &mut self,
@@ -316,7 +316,7 @@ pub trait NativeAverageLagTrackingManager {
     );
     fn CollectScrollEventsFromFrame(&mut self, token: u32, events: &super::input::EventMetricsSet);
 }
-pub struct AverageLagTrackingManager(pub Box<dyn NativeAverageLagTrackingManager>);
+pub struct AverageLagTrackingManager(pub Box<dyn AverageLagTrackingManagerBackend>);
 impl AverageLagTrackingManager {
     pub(crate) fn CollectScrollEventsFromFrame(
         &mut self,
@@ -326,7 +326,7 @@ impl AverageLagTrackingManager {
         self.0.CollectScrollEventsFromFrame(token, events)
     }
 }
-pub trait NativeEventsMetricsManager {
+pub trait EventsMetricsManagerBackend {
     fn TakeSavedEventsMetrics(&mut self) -> Vec<super::input::EventMetrics>;
     fn SaveActiveEventMetrics(&mut self);
     fn SetDidScroll(&mut self, scrolled: bool);
@@ -337,7 +337,7 @@ pub trait NativeEventsMetricsManager {
         callback: super::input::EventMetricsDoneCallback,
     ) -> Box<dyn super::input::EventMetricsScopedMonitor>;
 }
-pub struct EventsMetricsManager(pub Box<dyn NativeEventsMetricsManager>);
+pub struct EventsMetricsManager(pub Box<dyn EventsMetricsManagerBackend>);
 /// Type-only throttle configuration. A native frame is borrowed separately by
 /// BorrowedFrameThrottle; this marker has no `pass()` method or fake pass owner.
 pub struct ThrottleTypes<R: super::types::CpuSkiaBackend>(std::marker::PhantomData<fn() -> R>);
@@ -352,13 +352,13 @@ impl<R: super::types::CpuSkiaBackend> crate::adapter::throttle::ThrottleTypes fo
 /// Native SkColorType enum value returned by the external format conversion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SkColorType(pub u32);
-pub trait NativeDarkModeFilter: Send + Sync {
+pub trait DarkModeFilterBackend: Send + Sync {
     fn ApplyToColor(
         &self,
         color: crate::adapter::layer_tree_impl::Color4f,
     ) -> crate::adapter::layer_tree_impl::Color4f;
 }
-pub trait NativeImageDecodeFactory {
+pub trait ImageDecodeFactoryBackend {
     fn ToClosestSkColorType(
         &self,
         format: crate::adapter::resource_types::SharedImageFormat,
@@ -369,7 +369,7 @@ pub trait NativeImageDecodeFactory {
         color: SkColorType,
         budget: usize,
         max_texture_size: i32,
-        filter: Option<&dyn NativeDarkModeFilter>,
+        filter: Option<&dyn DarkModeFilterBackend>,
     ) -> Box<ImageDecodeCache>;
     fn CreateSoftwareImageDecodeCache(
         &self,
@@ -377,13 +377,13 @@ pub trait NativeImageDecodeFactory {
         budget: usize,
     ) -> Box<ImageDecodeCache>;
 }
-pub struct ImageDecodeFactory(pub Box<dyn NativeImageDecodeFactory>);
+pub struct ImageDecodeFactory(pub Box<dyn ImageDecodeFactoryBackend>);
 impl crate::adapter::layer_tree_host_impl::HostImplImageDecodeFactory for ImageDecodeFactory {
     type ImageDecodeCache = ImageDecodeCache;
     // Source: cc/trees/layer_tree_host_impl.cc:426-440. The worker
     // provider is nullable and remains unused in the software cache branch.
     type RasterContextProvider = Option<RasterContextProvider>;
-    type DarkModeFilter = dyn NativeDarkModeFilter;
+    type DarkModeFilter = dyn DarkModeFilterBackend;
     type ColorType = SkColorType;
     fn ToClosestSkColorType(
         &self,
@@ -397,7 +397,7 @@ impl crate::adapter::layer_tree_host_impl::HostImplImageDecodeFactory for ImageD
         color: SkColorType,
         budget: usize,
         max_texture_size: i32,
-        filter: Option<&dyn NativeDarkModeFilter>,
+        filter: Option<&dyn DarkModeFilterBackend>,
     ) -> Box<ImageDecodeCache> {
         self.0
             .CreateGpuImageDecodeCache(provider, color, budget, max_texture_size, filter)
@@ -437,7 +437,7 @@ impl HostRasterContextLock for RasterContextLock {
         self.0.BestSupportedRenderbufferFormat()
     }
 }
-pub trait NativeRenderFrameMetadataObserver<R: super::types::CpuSkiaBackend> {
+pub trait RenderFrameMetadataObserverBackend<R: super::types::CpuSkiaBackend> {
     fn BindToCurrentSequence(&mut self);
     fn DidEndScroll(&mut self);
     fn ReportScrollJankStats(&mut self, total: u32, janky: u32);
@@ -451,7 +451,7 @@ pub trait NativeRenderFrameMetadataObserver<R: super::types::CpuSkiaBackend> {
     );
 }
 pub struct RenderFrameMetadataObserver<R: super::types::CpuSkiaBackend>(
-    pub Box<dyn NativeRenderFrameMetadataObserver<R>>,
+    pub Box<dyn RenderFrameMetadataObserverBackend<R>>,
 );
 impl<R: super::types::CpuSkiaBackend> RenderFrameMetadataObserver<R> {
     pub(crate) fn ObserveRenderFrameSubmission(
@@ -468,11 +468,11 @@ impl<R: super::types::CpuSkiaBackend> RenderFrameMetadataObserver<R> {
 
 /// External scoped GPU visibility owner. Its native destructor restores the
 /// visibility state; the compositor neither caches that state nor emulates it.
-pub trait NativeContextVisibility {}
-pub struct ContextVisibility(pub Box<dyn NativeContextVisibility>);
+pub trait ContextVisibilityBackend {}
+pub struct ContextVisibility(pub Box<dyn ContextVisibilityBackend>);
 /// Animation events stay in their native animation subsystem allocation.
 /// The host only tests emptiness and transfers the same owner to the mutator.
-pub trait NativeMutatorEvents {
+pub trait MutatorEventsBackend {
     fn IsEmpty(&self) -> bool;
     fn WithScrollAnimationEvents(
         &mut self,
@@ -483,7 +483,7 @@ pub trait NativeMutatorEvents {
         ),
     );
 }
-pub struct MutatorEvents(pub Box<dyn NativeMutatorEvents>);
+pub struct MutatorEvents(pub Box<dyn MutatorEventsBackend>);
 impl MutatorEvents {
     pub(crate) fn WithScrollAnimationEvents(
         &mut self,
@@ -501,13 +501,13 @@ impl MutatorEvents {
 }
 /// Native animation-worklet mutator. HostImpl transfers this owner to the
 /// animation subsystem; no animation state or mutation algorithm is copied.
-pub trait NativeLayerTreeMutator {
+pub trait LayerTreeMutatorBackend {
     fn HasMutators(&mut self) -> bool;
 }
-pub struct LayerTreeMutator(pub Box<dyn NativeLayerTreeMutator>);
+pub struct LayerTreeMutator(pub Box<dyn LayerTreeMutatorBackend>);
 /// HostImpl itself only owns/transfers the painter. Dispatch is performed by
 /// the external PaintWorklet subsystem, on this same native allocation.
-pub trait NativePaintWorkletLayerPainter<R: super::types::CpuSkiaBackend = super::skia::SkRegion> {
+pub trait PaintWorkletLayerPainterBackend<R: super::types::CpuSkiaBackend = super::skia::SkRegion> {
     fn DispatchWorklets(
         &mut self,
         jobs: crate::adapter::client_layer_tree_host_impl::PaintWorkletJobMap<
@@ -522,11 +522,11 @@ pub trait NativePaintWorkletLayerPainter<R: super::types::CpuSkiaBackend = super
     fn HasOngoingDispatch(&self) -> bool;
 }
 pub struct PaintWorkletLayerPainter<R: super::types::CpuSkiaBackend = super::skia::SkRegion>(
-    pub Box<dyn NativePaintWorkletLayerPainter<R>>,
+    pub Box<dyn PaintWorkletLayerPainterBackend<R>>,
 );
 /// Native Viz transport, separate from the source-owned unbounded handler.
 /// Every operation is forwarded on the injected transport owner.
-pub trait NativeLayerContext {
+pub trait LayerContextBackend {
     fn SetUnboundedFrameSinkId(
         &mut self,
         sink: &super::types::FrameSinkId,
@@ -538,7 +538,7 @@ pub trait NativeLayerContext {
     fn Flush(&mut self);
     fn SetTargetLocalSurfaceId(&mut self, local: &super::types::LocalSurfaceId);
 }
-pub struct LayerContext(pub Box<dyn NativeLayerContext>);
+pub struct LayerContext(pub Box<dyn LayerContextBackend>);
 impl<B> crate::adapter::layer_tree_host_impl::HostUnboundedLayerContext<B> for LayerContext
 where
     B: crate::adapter::layer_tree_host_impl::HostImplTypes<
@@ -573,7 +573,7 @@ use crate::cc::tiles::tile_manager::TileManagerRasterQueryQueue;
 pub struct RasterQueryQueue(pub(crate) std::sync::Arc<dyn TileManagerRasterQueryQueue>);
 /// Native benchmark implementation. Completion receives the actual owner and
 /// services for this call, never a retained host identity masquerading as host.
-pub trait NativeMicroBenchmark<R: super::types::CpuSkiaBackend>
+pub trait MicroBenchmarkBackend<R: super::types::CpuSkiaBackend>
 where
     super::types::CpuCompositorTypes<R>: crate::adapter::layer_tree_host_impl::HostImplTypes,
 {
@@ -586,7 +586,7 @@ where
         >,
     );
 }
-pub struct MicroBenchmark<R: super::types::CpuSkiaBackend>(pub Box<dyn NativeMicroBenchmark<R>>)
+pub struct MicroBenchmark<R: super::types::CpuSkiaBackend>(pub Box<dyn MicroBenchmarkBackend<R>>)
 where
     super::types::CpuCompositorTypes<R>: crate::adapter::layer_tree_host_impl::HostImplTypes;
 

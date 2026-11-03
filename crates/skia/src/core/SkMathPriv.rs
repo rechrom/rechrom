@@ -1,7 +1,7 @@
 // Source-aligned Skia translation. Rust methods use snake_case; fields retain upstream names.
 #![allow(non_snake_case)]
 
-macro_rules! native_const_assert {
+macro_rules! const_assert {
  ($condition:expr,$line:expr,$text:expr)=>{{
   #[cfg(sk_debug)] {
    const fn at_const(value:bool){assert!(value);}
@@ -153,28 +153,28 @@ pub const fn SkBSwap32(v: u32) -> u32 {
 // Source: src/core/SkMathPriv.h:157-160
 #[inline]
 pub const fn SkNextLog2(value: u32) -> i32 {
-    native_const_assert!(value != 0, 158, b"value != 0\0".as_ptr());
+    const_assert!(value != 0, 158, b"value != 0\0".as_ptr());
     32 - SkCLZ(value.wrapping_sub(1))
 }
 
 // Source: src/core/SkMathPriv.h:171-174
 #[inline]
 pub const fn SkPrevLog2(value: u32) -> i32 {
-    native_const_assert!(value != 0, 172, b"value != 0\0".as_ptr());
+    const_assert!(value != 0, 172, b"value != 0\0".as_ptr());
     32 - SkCLZ(value >> 1)
 }
 
 // Source: src/core/SkMathPriv.h:181-184
 #[inline]
 pub const fn SkNextPow2(value: i32) -> i32 {
-    native_const_assert!(value > 0, 182, b"value > 0\0".as_ptr());
+    const_assert!(value > 0, 182, b"value > 0\0".as_ptr());
     1i32.wrapping_shl(SkNextLog2(value as u32) as u32)
 }
 
 // Source: src/core/SkMathPriv.h:191-194
 #[inline]
 pub const fn SkPrevPow2(value: i32) -> i32 {
-    native_const_assert!(value > 0, 192, b"value > 0\0".as_ptr());
+    const_assert!(value > 0, 192, b"value > 0\0".as_ptr());
     1i32.wrapping_shl(SkPrevLog2(value as u32) as u32)
 }
 

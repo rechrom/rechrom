@@ -341,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn native_states_and_templates_exclude_lexical_false_images() {
+    fn states_and_templates_exclude_lexical_false_images() {
         let source = concat!(
             "<!-- <img src=comment> -->",
             "<script>let x = '<img src=script>'; let y = '</template>';</script>",

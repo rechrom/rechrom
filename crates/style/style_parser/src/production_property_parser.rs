@@ -1876,7 +1876,7 @@ fn ConsumeLonghandWithAlias<
     }
     if id == CSSPropertyID::kZIndex {
         // ConsumeInteger admits the full finite double range. ComputeInteger
-        // clamps to native int later; parser range is not the storage range.
+        // clamps to computed style int later; parser range is not the storage range.
         if is_function(stream) {
             return ConsumeMath(
                 id,
@@ -2185,7 +2185,7 @@ fn ContainsRuntimeGatedMathOperation(
 }
 // cpp: css_parsing_utils.cc:CalcParser and numeric consumers. The permitted
 // range clamps at computation, so a negative calc is accepted then clamped.
-fn ConsumeMath<T: TokenStreamTokenizer>(
+pub(crate) fn ConsumeMath<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     categories: &[crate::css_math_expression_node::CalculationResultCategory],
@@ -2226,7 +2226,7 @@ pub fn ConsumeNonNegativeIntegerOrNumberCalc<T: TokenStreamTokenizer>(
     let id = CSSPropertyID::kFontVariantAlternates;
     if IsMathFunction(stream) {
         // Unlike an element property, feature-value math is consumed and
-        // resolved immediately. Reuse the native expression parser without
+        // resolved immediately. Reuse the computed style expression parser without
         // the unrelated property-application capability gate.
         let expression =
             crate::css_math_expression_node::ConsumeMathFunction(stream).map_err(|error| {
@@ -4521,7 +4521,7 @@ fn ConsumeGradientStops<T: TokenStreamTokenizer>(
             offset: offset.clone(),
         });
         // A double-position color stop is represented as two adjacent stops
-        // with the same color, matching CSSGradientValue's native storage.
+        // with the same color, matching CSSGradientValue's computed style storage.
         if color.is_some() && offset.is_some() {
             if let Some(offset) = optional_position(id, stream, mode, position)? {
                 stops.push(values::CSSGradientColorStop {
@@ -5404,7 +5404,7 @@ pub fn ConsumeColor<T: TokenStreamTokenizer>(
             // html.css uses the spec default interpolation (Oklab/shorter),
             // whose grammar omits both `in` and its following comma. Keep the
             // general two-color/optional-percentage operand grammar typed;
-            // explicit interpolation spaces wait for their native converters.
+            // explicit interpolation spaces wait for their computed style converters.
             let mix = {
                 let mut args = BlockGuard::new(stream);
                 args.ConsumeWhitespace();
@@ -6970,7 +6970,7 @@ mod tests {
     }
 
     #[test]
-    fn content_uses_native_list_payloads_and_shared_attr_substitution() {
+    fn content_uses_computed_style_list_payloads_and_shared_attr_substitution() {
         let parsed = parse(
             CSSPropertyID::kContent,
             "'prefix' /* comment */ \"\\41\" !important",

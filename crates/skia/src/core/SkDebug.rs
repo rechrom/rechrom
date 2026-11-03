@@ -58,7 +58,7 @@ macro_rules! SkDebugf {
         unsafe{$crate::src::core::SkDebug::SkDebugf_FileLine(
             $file,$line as core::ffi::c_int,$format $(,$argument)*);}
     }};
-    ($format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("Chromium logging requires @source native_file_ptr,native_line; format,args to preserve original C++ caller location")};
+    ($format:expr $(,$argument:expr)* $(,)?)=>{compile_error!("Chromium logging requires @source file_ptr,line; format,args to preserve original C++ caller location")};
 }
 #[cfg(skia_use_default_debugf)]
 #[macro_export]

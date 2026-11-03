@@ -2,9 +2,9 @@
 //! Canonical manager/queue/pool policy is not implemented by this object.
 use super::{
     execution::{EngineTask, EngineTaskQueue, ExecutorTaskGraphRunner},
-    native_images::CpuNativeImageServices,
-    native_services::NativeEventSink,
+    images::CpuImageServices,
     raster_resources::{EngineRasterFailure, ExternalRasterBufferProvider, RasterAllocationIds},
+    services::EventSink,
     types::{CpuCompositorTypes, CpuSkiaBackend},
 };
 use crate::{
@@ -32,7 +32,7 @@ use std::sync::{
 
 type B<R> = CpuCompositorTypes<R>;
 pub struct TileExecution<R: CpuSkiaBackend> {
-    pub(crate) images: CpuNativeImageServices<B<R>>,
+    pub(crate) images: CpuImageServices<B<R>>,
     pub(crate) raster_provider: Arc<dyn CompositorRasterProvider>,
     pub(crate) shared_images: crate::runtime::raster_resources::RasterPoolImages,
     pub(crate) allocations: Arc<RasterAllocationIds>,
@@ -45,12 +45,12 @@ pub struct TileExecution<R: CpuSkiaBackend> {
 }
 impl<R: CpuSkiaBackend> TileExecution<R> {
     pub(crate) fn new(
-        images: CpuNativeImageServices<B<R>>,
+        images: CpuImageServices<B<R>>,
         raster_provider: Arc<dyn CompositorRasterProvider>,
         origin: Arc<dyn CompositorExecutor>,
         raster: Arc<dyn CompositorExecutor>,
         commands: EngineTaskQueue,
-        events: Arc<dyn NativeEventSink>,
+        events: Arc<dyn EventSink>,
         raster_worker_limit: usize,
     ) -> Self {
         let diagnostics = Arc::new(TileDiagnostics {
@@ -169,10 +169,10 @@ impl<R: CpuSkiaBackend> TileManagerInitialization<B<R>> for TileExecution<R> {
 
 pub(crate) struct TileDiagnostics {
     pub(crate) origin: Arc<dyn CompositorExecutor>,
-    pub(crate) events: Arc<dyn NativeEventSink>,
+    pub(crate) events: Arc<dyn EventSink>,
 }
 pub(crate) struct RasterTraceScope {
-    events: Arc<dyn NativeEventSink>,
+    events: Arc<dyn EventSink>,
     event: &'static str,
 }
 impl Drop for RasterTraceScope {

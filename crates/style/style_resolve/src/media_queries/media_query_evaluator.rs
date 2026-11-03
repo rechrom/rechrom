@@ -43,7 +43,7 @@ use foundation::{CSSValueID, LayoutUnit};
 // media_query_evaluator.cc: 1964 / 1257 / 1211 / 46 / 0 (complete).
 // media_query_evaluator.h: 154 / 61 / 43 / 18 / 0.
 // Production document/ancestor owners, computed variable reads, unparsed typed
-// downcasts, native font/line-height conversion contexts, position-area and
+// downcasts, computed style font/line-height conversion contexts, position-area and
 // fallback conversion/matching adapters live in production_container_query.rs
 // and document_style_engine.rs. Layout/scroll/anchor snapshots are explicitly
 // published by their owner and invalidate query matches; absent state is Unknown.

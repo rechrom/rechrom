@@ -136,8 +136,8 @@ pub enum SnapReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapFlingState {
     kNoFling,
-    kNativeFling,
-    kConstrainedNativeFling,
+    kFling,
+    kConstrainedFling,
     kSnapFling,
 }
 

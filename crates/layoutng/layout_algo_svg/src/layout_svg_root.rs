@@ -177,7 +177,7 @@ impl LayoutSVGRoot {
         while !object.is_null() {
             let box_model = DynamicTo::<LayoutBoxModelObject>(object);
             if !box_model.is_null() {
-                unsafe { &mut *box_model }.UpdateTransformForLayout();
+                unsafe { &mut *box_model }.UpdateTransform();
             }
             object = unsafe { &*object }.Parent();
         }

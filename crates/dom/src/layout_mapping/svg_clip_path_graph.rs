@@ -20,7 +20,7 @@ impl std::ops::Index<usize> for ResourceElements<'_> {
     type Output = Element;
     fn index(&self, index: usize) -> &Element {
         self.cache.get_or_init(|| {
-            // Native ID/type/style lookups borrow DOM directly. Allocate
+            // Chromium ID/type/style lookups borrow DOM directly. Allocate
             // adapter projection slots only when graph construction actually
             // reads an Element; HTML and SVG without resource graphs need none.
             let mut slots = HashMap::new();
@@ -90,7 +90,7 @@ impl<'a> ResourceDocument<'a> {
             .elements
             .document
             .ResolvedStyleFor(index)
-            .and_then(|resolved| unsafe { resolved.native_style.Get().as_ref() })
+            .and_then(|resolved| unsafe { resolved.computed_style_owner.Get().as_ref() })
         {
             // Same computed override as project_resource_element, without
             // serializing font/geometry state just to inspect display.
@@ -272,8 +272,8 @@ fn svg_length_token(raw: &str) -> Result<SvgClipLength, String> {
 }
 // SVGLengthConversionData consumes canonical computed lengths. Preserve the
 // unresolved linear percentage part until Paint knows the reference viewport;
-// native fixed lengths carry effective zoom, while SVG resource units do not.
-fn native_clip_length(value: &foundation::Length, zoom: f32) -> Result<SvgClipLength, String> {
+// source fixed lengths carry effective zoom, while SVG resource units do not.
+fn clip_length(value: &foundation::Length, zoom: f32) -> Result<SvgClipLength, String> {
     if value.IsAuto() {
         return Ok(SvgClipLength::default());
     }
@@ -302,12 +302,12 @@ fn native_clip_length(value: &foundation::Length, zoom: f32) -> Result<SvgClipLe
     Ok(length)
 }
 
-fn native_shape_geometry(
+fn computed_shape_geometry(
     tag: &str,
     style: &layoutng_style::style::computed_style::ComputedStyle,
 ) -> Result<Option<SvgClipGeometry>, String> {
     let zoom = style.EffectiveZoom().max(f32::MIN_POSITIVE);
-    let length = |value: &foundation::Length| native_clip_length(value, zoom);
+    let length = |value: &foundation::Length| clip_length(value, zoom);
     Ok(match tag {
         "circle" => Some(SvgClipGeometry::kCircle {
             cx: length(style.Cx())?,
@@ -1114,7 +1114,7 @@ fn raw_resource_display_suppressed(document: &ResourceDocument<'_>, index: usize
     if !owner.StyleState().all_dirty {
         return owner.ResolvedStyleFor(index).is_none_or(|resolved| {
             !resolved.own_generates_box
-                || unsafe { resolved.native_style.Get().as_ref() }
+                || unsafe { resolved.computed_style_owner.Get().as_ref() }
                     .is_some_and(|style| style.IsEnsuredInDisplayNone())
         });
     }
@@ -1141,24 +1141,24 @@ fn project_resource_element(document: &crate::Document, index: usize) -> Element
         .filter(|attribute| !attribute.local_name.starts_with("data-computed-"))
         .map(|attribute| (attribute.local_name.clone(), attribute.value.clone()))
         .collect::<Vec<_>>();
-    if let Some(native) = document
+    if let Some(source) = document
         .ResolvedStyleFor(index)
-        .and_then(|resolved| unsafe { resolved.native_style.Get().as_ref() })
+        .and_then(|resolved| unsafe { resolved.computed_style_owner.Get().as_ref() })
     {
         {
-            match computed_css_transform(native) {
+            match computed_css_transform(source) {
                 Ok(transform) => {
                     attributes.push(("data-computed-clip-transform".into(), transform))
                 }
                 Err(error) => attributes.push(("data-computed-clip-transform-error".into(), error)),
             }
         }
-        let zoom = native.EffectiveZoom().max(f32::MIN_POSITIVE);
-        let font = native.GetFontDescription();
+        let zoom = source.EffectiveZoom().max(f32::MIN_POSITIVE);
+        let font = source.GetFontDescription();
         attributes.push(("data-computed-font-family".into(), font.Family().ToString()));
         attributes.push((
             "data-computed-font-size".into(),
-            (native.ComputedFontSize() / zoom).to_string(),
+            (source.ComputedFontSize() / zoom).to_string(),
         ));
         attributes.push((
             "data-computed-font-weight".into(),
@@ -1170,39 +1170,39 @@ fn project_resource_element(document: &crate::Document, index: usize) -> Element
         ));
         attributes.push((
             "data-computed-letter-spacing".into(),
-            (native.LetterSpacing() / zoom).to_string(),
+            (source.LetterSpacing() / zoom).to_string(),
         ));
         attributes.push((
             "data-computed-word-spacing".into(),
-            (native.WordSpacing() / zoom).to_string(),
+            (source.WordSpacing() / zoom).to_string(),
         ));
         attributes.push((
             "data-computed-direction".into(),
-            if native.IsLeftToRightDirection() {
+            if source.IsLeftToRightDirection() {
                 "ltr"
             } else {
                 "rtl"
             }
             .into(),
         ));
-        attributes.push(("data-computed-language".into(), native.Locale().Utf8()));
+        attributes.push(("data-computed-language".into(), source.Locale().Utf8()));
         attributes.push((
             "data-computed-text-anchor".into(),
-            match native.TextAnchor() {
+            match source.TextAnchor() {
                 foundation::ETextAnchor::kStart => "start",
                 foundation::ETextAnchor::kMiddle => "middle",
                 foundation::ETextAnchor::kEnd => "end",
             }
             .into(),
         ));
-        // Resource descendants retain native style/layout ownership. Their
+        // Resource descendants retain source style/layout ownership. Their
         // final cascade values are authoritative over raw inline text in
         // this immutable geometry snapshot.
         attributes
             .retain(|(name, _)| !matches!(name.as_str(), "clip-rule" | "display" | "visibility"));
         attributes.push((
             "data-computed-clip-rule".into(),
-            if native.ClipRule() == foundation::WindRule::RULE_EVENODD {
+            if source.ClipRule() == foundation::WindRule::RULE_EVENODD {
                 "evenodd"
             } else {
                 "nonzero"
@@ -1211,7 +1211,7 @@ fn project_resource_element(document: &crate::Document, index: usize) -> Element
         ));
         attributes.push((
             "data-computed-display".into(),
-            if native.Display() == foundation::EDisplay::kNone {
+            if source.Display() == foundation::EDisplay::kNone {
                 "none"
             } else {
                 "rendered"
@@ -1220,7 +1220,7 @@ fn project_resource_element(document: &crate::Document, index: usize) -> Element
         ));
         attributes.push((
             "data-computed-clip-path".into(),
-            if native.ClipPath().is_some() {
+            if source.ClipPath().is_some() {
                 "reference-or-shape"
             } else {
                 "none"
@@ -1229,7 +1229,7 @@ fn project_resource_element(document: &crate::Document, index: usize) -> Element
         ));
         attributes.push((
             "data-computed-visibility".into(),
-            match native.Visibility() {
+            match source.Visibility() {
                 foundation::EVisibility::kVisible => "visible",
                 foundation::EVisibility::kHidden => "hidden",
                 foundation::EVisibility::kCollapse => "collapse",
@@ -1294,28 +1294,29 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<SvgClipResourc
             continue;
         }
         svg_nodes += 1;
-        if let Some(native) = document
+        if let Some(source) = document
             .ResolvedStyleFor(index)
-            .and_then(|s| unsafe { s.native_style.Get().as_ref() })
+            .and_then(|s| unsafe { s.computed_style_owner.Get().as_ref() })
         {
             if matches!(node.Name(), "rect" | "circle" | "ellipse") {
                 catalog
                     .computed_geometry
-                    .insert(index, native_shape_geometry(node.Name(), native));
+                    .insert(index, computed_shape_geometry(node.Name(), source));
             }
             if node.Name() == "use" {
-                let zoom = native.EffectiveZoom().max(f32::MIN_POSITIVE);
+                let zoom = source.EffectiveZoom().max(f32::MIN_POSITIVE);
                 catalog.computed_use_offsets.insert(
                     index,
-                    native_clip_length(native.X(), zoom)
-                        .and_then(|x| native_clip_length(native.Y(), zoom).map(|y| (x, y))),
+                    clip_length(source.X(), zoom)
+                        .and_then(|x| clip_length(source.Y(), zoom).map(|y| (x, y))),
                 );
             }
         }
         if node.IsElement("mask", DOMNamespace::kSVG) {
             if let Some(graph) = document
-                .ResolvedStyleFor(index)
-                .and_then(|style| style.style.paint.svg_mask_resource.clone())
+                .ResolvedStyleResourcesFor(index)
+                .svg_mask_resource
+                .clone()
             {
                 catalog.mask_graphs.insert(index, graph);
             }
@@ -1594,17 +1595,17 @@ mod tests {
     }
 
     #[test]
-    fn svg_clip_native_geometry_preserves_zoom_percent_and_linear_calc() {
+    fn svg_clip_source_geometry_preserves_zoom_percent_and_linear_calc() {
         use foundation::{CalculationValue, Length, LengthValueRange, PixelsAndPercent};
         assert_eq!(
-            native_clip_length(&Length::Fixed(30.0), 3.0).unwrap(),
+            clip_length(&Length::Fixed(30.0), 3.0).unwrap(),
             SvgClipLength {
                 value: 10.0,
                 percentage: 0.0
             }
         );
         assert_eq!(
-            native_clip_length(&Length::Percent(40.0), 3.0).unwrap(),
+            clip_length(&Length::Percent(40.0), 3.0).unwrap(),
             SvgClipLength {
                 value: 0.0,
                 percentage: 0.4
@@ -1615,17 +1616,17 @@ mod tests {
             LengthValueRange::kAll,
         ));
         assert_eq!(
-            native_clip_length(&calculation, 3.0).unwrap(),
+            clip_length(&calculation, 3.0).unwrap(),
             SvgClipLength {
                 value: 10.0,
                 percentage: 0.4
             }
         );
-        assert!(native_clip_length(Length::MinContent(), 1.0).is_err());
+        assert!(clip_length(Length::MinContent(), 1.0).is_err());
     }
 
     #[test]
-    fn svg_clip_native_transform_unzooms_lengths_without_scaling_percentages() {
+    fn svg_clip_source_transform_unzooms_lengths_without_scaling_percentages() {
         use foundation::{
             CalculationValue, Length, LengthValueRange, PixelsAndPercent, TransformOperations,
         };
@@ -1643,8 +1644,8 @@ mod tests {
             Length::Fixed(60.0),
         );
         builder.SetTransform(&operations);
-        let native = unsafe { &*builder.TakeStyle() };
-        let transform = computed_css_transform(native).unwrap();
+        let source = unsafe { &*builder.TakeStyle() };
+        let transform = computed_css_transform(source).unwrap();
         let values = numbers(
             transform
                 .strip_prefix("matrix-affine(")
@@ -1750,12 +1751,12 @@ mod tests {
 pub fn SVGMaskShape(
     document: &crate::Document,
     index: usize,
-    native: &layoutng_style::style::computed_style::ComputedStyle,
+    source: &layoutng_style::style::computed_style::ComputedStyle,
 ) -> Result<Option<layoutng_assembly::internal::layout_input::SvgShapeData>, String> {
     use layoutng_assembly::internal::layout_input::{SvgShapeData, SvgShapeGeometry};
     let node = document.Node(index);
     if node.Name() == "path" {
-        if !native.D().is_null() {
+        if !source.D().is_null() {
             return Err("CSS d resource geometry".into());
         }
         return Ok(super::layout_object_tree_builder::SVGShapeDataForResourceNode(node));
@@ -1768,7 +1769,7 @@ pub fn SVGMaskShape(
         }
     };
     let mut shape = SvgShapeData::default();
-    match native_shape_geometry(node.Name(), native)? {
+    match computed_shape_geometry(node.Name(), source)? {
         Some(SvgClipGeometry::kRect {
             x,
             y,

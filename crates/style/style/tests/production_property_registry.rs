@@ -21,7 +21,7 @@ fn width(owner: &dom::DOM, id: &str) -> f64 {
             .GetDocument()
             .ResolvedStyleFor(node(owner, id))
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -51,7 +51,7 @@ fn registered_custom_properties_apply_inherits_initial_invalid_and_dependency_fa
                     .GetDocument()
                     .ResolvedStyleFor(node(&owner, id))
                     .unwrap()
-                    .native_style
+                    .computed_style_owner
                     .Get()
             }
             .Height()
@@ -115,7 +115,7 @@ fn registered_style_queries_use_computed_typed_values_and_registered_initial() {
                 .GetDocument()
                 .ResolvedStyleFor(node(&owner, "target"))
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Height()
@@ -209,7 +209,7 @@ fn replacing_layer_order_rebuilds_registry_and_typed_color_queries_match() {
                 .GetDocument()
                 .ResolvedStyleFor(node(&owner, "target"))
                 .unwrap()
-                .native_style
+                .computed_style_owner
                 .Get()
         }
         .Height()

@@ -877,7 +877,7 @@ pub trait HostImplHServices<B: HostImplTypes> {
         &self,
         host: &<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::MutatorHost,
     ) -> bool;
-    fn MutatorHasNativePropertyAnimation(
+    fn MutatorHasPropertyAnimation(
         &self,
         host: &<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::MutatorHost,
     ) -> bool;

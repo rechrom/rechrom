@@ -1,8 +1,8 @@
-// C++: foundation/text/native/hanging_punctuation.h. The declared
+// C++: foundation/text/source/hanging_punctuation.h. The declared
 // IsHangingPunctuation(UChar32, mask) has no definition in the supplied tree.
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
-// cpp: foundation/text/native/hanging_punctuation.h:14-20
+// cpp: foundation/text/source/hanging_punctuation.h:14-20
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct HangingPunctuation(u32);
@@ -22,7 +22,7 @@ impl HangingPunctuation {
     }
 }
 
-// cpp: foundation/text/native/hanging_punctuation.h:22-50
+// cpp: foundation/text/source/hanging_punctuation.h:22-50
 impl BitOr for HangingPunctuation {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {

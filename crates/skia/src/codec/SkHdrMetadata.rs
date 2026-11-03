@@ -30,13 +30,13 @@ impl ContentLightLevelInformation {
     /// Safety: the source value must not be NaN. Native float-to-integer
     /// conversion is undefined for NaN; no replacement success/fallback is added.
     pub unsafe fn getUint16MaxCLL(&self) -> u16 {
-        unsafe { native_u16_clamp_round(self.fMaxCLL) }
+        unsafe { u16_clamp_round(self.fMaxCLL) }
     }
     // Source: include/private/SkHdrMetadata.h:69
     /// Safety: the source value must not be NaN. Native float-to-integer
     /// conversion is undefined for NaN; no replacement success/fallback is added.
     pub unsafe fn getUint16MaxFALL(&self) -> u16 {
-        unsafe { native_u16_clamp_round(self.fMaxFALL) }
+        unsafe { u16_clamp_round(self.fMaxFALL) }
     }
 }
 // Source: include/private/SkHdrMetadata.h:105
@@ -360,7 +360,7 @@ unsafe extern "C" {
     fn llroundf(value: f32) -> core::ffi::c_longlong;
 }
 // Source: include/private/SkHdrMetadata.h:69-73
-unsafe fn native_u16_clamp_round(value: f32) -> u16 {
+unsafe fn u16_clamp_round(value: f32) -> u16 {
     let rounded = unsafe { roundf(value) };
     let clamped = if rounded < 0.0 {
         0.0
@@ -747,10 +747,10 @@ impl PartialEq for Metadata {
 // __vector/layout.h:236-241,280-286,348-353,392-398;
 // __memory/allocator.h:75. Both real layout branches leave source size/capacity
 // empty. No promise is made for a different stateful allocator or stdlib.
-fn native_vector_move<T>(source: &mut Vec<T>) -> Vec<T> {
+fn vector_move<T>(source: &mut Vec<T>) -> Vec<T> {
     core::mem::take(source)
 }
-fn native_vector_clear<T>(target: &mut Vec<T>) {
+fn vector_clear<T>(target: &mut Vec<T>) {
     // libc++ destroys from end before deallocating, unlike Rust Vec's ordinary
     // forward element drop. No extra heap buffer or element Clone is used.
     while let Some(value) = target.pop() {
@@ -758,16 +758,16 @@ fn native_vector_clear<T>(target: &mut Vec<T>) {
     }
     drop(core::mem::replace(target, Vec::new()));
 }
-fn native_vector_assign<T>(target: &mut Vec<T>, source: &mut Vec<T>) {
-    native_vector_clear(target);
-    *target = native_vector_move(source);
+fn vector_assign<T>(target: &mut Vec<T>, source: &mut Vec<T>) {
+    vector_clear(target);
+    *target = vector_move(source);
 }
 // libc++ optional::__construct_from/__assign_from (optional:460-476) never
 // disengage the source: recurse into its existing object, including Some/Some.
-fn native_optional_move<T>(source: &mut Option<T>, ctor: fn(&mut T) -> T) -> Option<T> {
+fn optional_move<T>(source: &mut Option<T>, ctor: fn(&mut T) -> T) -> Option<T> {
     source.as_mut().map(ctor)
 }
-fn native_optional_assign<T>(
+fn optional_assign<T>(
     target: &mut Option<T>,
     source: &mut Option<T>,
     ctor: fn(&mut T) -> T,
@@ -787,7 +787,7 @@ fn native_optional_assign<T>(
         *target = None;
     }
 }
-macro_rules! native_move_raw {
+macro_rules! move_raw {
     ($ty:ty) => {
         impl $ty {
             /// Safety: complete exclusive live objects; equal pointers select
@@ -813,17 +813,17 @@ macro_rules! native_move_raw {
 impl GainCurve {
     pub fn move_from(source: &mut Self) -> Self {
         Self {
-            fControlPoints: native_vector_move(&mut source.fControlPoints),
+            fControlPoints: vector_move(&mut source.fControlPoints),
         }
     }
     pub fn move_assign(&mut self, source: &mut Self) {
-        native_vector_assign(&mut self.fControlPoints, &mut source.fControlPoints);
+        vector_assign(&mut self.fControlPoints, &mut source.fControlPoints);
     }
     fn self_move_members(&mut self) {
-        native_vector_clear(&mut self.fControlPoints);
+        vector_clear(&mut self.fControlPoints);
     }
 }
-native_move_raw!(GainCurve);
+move_raw!(GainCurve);
 // Source: include/private/SkHdrMetadata.h:192-197
 impl ColorGainFunction {
     pub fn move_from(source: &mut Self) -> Self {
@@ -842,7 +842,7 @@ impl ColorGainFunction {
         self.fGainCurve.self_move_members();
     }
 }
-native_move_raw!(ColorGainFunction);
+move_raw!(ColorGainFunction);
 // Source: include/private/SkHdrMetadata.h:205-210
 impl AlternateImage {
     pub fn move_from(source: &mut Self) -> Self {
@@ -862,13 +862,13 @@ impl AlternateImage {
         self.fColorGainFunction.self_move_members();
     }
 }
-native_move_raw!(AlternateImage);
+move_raw!(AlternateImage);
 // Source: include/private/SkHdrMetadata.h:218-228
 impl HeadroomAdaptiveToneMap {
     pub fn move_from(source: &mut Self) -> Self {
         let fBaselineHdrHeadroom = source.fBaselineHdrHeadroom;
         let fGainApplicationSpacePrimaries = source.fGainApplicationSpacePrimaries;
-        let fAlternateImages = native_vector_move(&mut source.fAlternateImages);
+        let fAlternateImages = vector_move(&mut source.fAlternateImages);
         Self {
             fBaselineHdrHeadroom,
             fGainApplicationSpacePrimaries,
@@ -878,18 +878,18 @@ impl HeadroomAdaptiveToneMap {
     pub fn move_assign(&mut self, source: &mut Self) {
         self.fBaselineHdrHeadroom = source.fBaselineHdrHeadroom;
         self.fGainApplicationSpacePrimaries = source.fGainApplicationSpacePrimaries;
-        native_vector_assign(&mut self.fAlternateImages, &mut source.fAlternateImages);
+        vector_assign(&mut self.fAlternateImages, &mut source.fAlternateImages);
     }
     fn self_move_members(&mut self) {
-        native_vector_clear(&mut self.fAlternateImages);
+        vector_clear(&mut self.fAlternateImages);
     }
 }
-native_move_raw!(HeadroomAdaptiveToneMap);
+move_raw!(HeadroomAdaptiveToneMap);
 // Source: include/private/SkHdrMetadata.h:240-244
 impl AdaptiveGlobalToneMap {
     pub fn move_from(source: &mut Self) -> Self {
         let fHdrReferenceWhite = source.fHdrReferenceWhite;
-        let fHeadroomAdaptiveToneMap = native_optional_move(
+        let fHeadroomAdaptiveToneMap = optional_move(
             &mut source.fHeadroomAdaptiveToneMap,
             HeadroomAdaptiveToneMap::move_from,
         );
@@ -900,7 +900,7 @@ impl AdaptiveGlobalToneMap {
     }
     pub fn move_assign(&mut self, source: &mut Self) {
         self.fHdrReferenceWhite = source.fHdrReferenceWhite;
-        native_optional_assign(
+        optional_assign(
             &mut self.fHeadroomAdaptiveToneMap,
             &mut source.fHeadroomAdaptiveToneMap,
             HeadroomAdaptiveToneMap::move_from,
@@ -914,13 +914,13 @@ impl AdaptiveGlobalToneMap {
         }
     }
 }
-native_move_raw!(AdaptiveGlobalToneMap);
+move_raw!(AdaptiveGlobalToneMap);
 // Source: include/private/SkHdrMetadata.h:350-352
 impl Metadata {
     pub fn move_from(source: &mut Self) -> Self {
         let fContentLightLevelInformation = source.fContentLightLevelInformation;
         let fMasteringDisplayColorVolume = source.fMasteringDisplayColorVolume;
-        let fAdaptiveGlobalToneMap = native_optional_move(
+        let fAdaptiveGlobalToneMap = optional_move(
             &mut source.fAdaptiveGlobalToneMap,
             AdaptiveGlobalToneMap::move_from,
         );
@@ -933,7 +933,7 @@ impl Metadata {
     pub fn move_assign(&mut self, source: &mut Self) {
         self.fContentLightLevelInformation = source.fContentLightLevelInformation;
         self.fMasteringDisplayColorVolume = source.fMasteringDisplayColorVolume;
-        native_optional_assign(
+        optional_assign(
             &mut self.fAdaptiveGlobalToneMap,
             &mut source.fAdaptiveGlobalToneMap,
             AdaptiveGlobalToneMap::move_from,
@@ -947,4 +947,4 @@ impl Metadata {
         }
     }
 }
-native_move_raw!(Metadata);
+move_raw!(Metadata);

@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{MakeGarbageCollected, To};
-use layoutng_assembly::internal::algorithm_entry::NativeAlgorithmEntry;
+use layoutng_assembly::internal::algorithm_entry::LayoutAlgorithmEntryFor;
 use layoutng_assembly::internal::layout_block::LayoutBlock;
 use layoutng_assembly::internal::layout_node_metadata::{Element, Node};
 use layoutng_assembly::internal::layout_object::LayoutObject;
@@ -27,5 +27,5 @@ fn CreateAnonymousFlexObject() -> *mut LayoutBlock {
 pub fn InstallFlexAlgorithm(assembly: &mut LayoutAssembly) {
     assembly.objects.flex = Some(CreateFlexObject);
     assembly.objects.anonymous_flex = Some(CreateAnonymousFlexObject);
-    assembly.algorithms.flex = NativeAlgorithmEntry::<FlexLayoutAlgorithm>("layout_algo_flex");
+    assembly.algorithms.flex = LayoutAlgorithmEntryFor::<FlexLayoutAlgorithm>("layout_algo_flex");
 }

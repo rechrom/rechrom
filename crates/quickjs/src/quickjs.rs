@@ -61,7 +61,7 @@ include!("quickjs_private_properties.rs");
 include!("quickjs_property_names.rs");
 include!("quickjs_string_object_length.rs");
 include!("quickjs_object_operations.rs");
-include!("quickjs_calls_native.rs");
+include!("quickjs_calls.rs");
 include!("quickjs_calls_public.rs");
 include!("quickjs_calls_closure.rs");
 include!("quickjs_calls_class.rs");

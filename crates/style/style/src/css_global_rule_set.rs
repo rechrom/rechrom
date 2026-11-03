@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 /// Document-owned selector lists, media evaluator and engine are external.
 /// Rule ingestion, UA feature collection and engine feature collection use
-/// their existing native implementations rather than backend body forwarding.
+/// their existing computed style implementations rather than backend body forwarding.
 pub trait CSSGlobalRuleSetBackend: CSSDefaultStyleSheetsBackend {
     type EngineBackend: StyleEngineBackend<
         Document = Self::Document,

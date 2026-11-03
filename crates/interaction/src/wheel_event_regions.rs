@@ -6,8 +6,8 @@
 
 use crate::interaction_engine::InteractionFragmentSource;
 use dom::{persistent_document::DOMNodeType, Document};
-use layoutng_assembly::layout_engine::NativePaintFragmentCursor;
-use paint::paint_engine::{NativeFragmentClientRectsByNode, PaintRect};
+use layoutng_assembly::layout_engine::PaintFragmentCursor;
+use paint::paint_engine::{FragmentClientRectsByNode, PaintRect};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -26,12 +26,12 @@ pub struct WheelEventRegionResolver {
 }
 
 impl WheelEventRegionResolver {
-    pub fn ResolveNative(
+    pub fn ResolvePlatform(
         &mut self,
         frame_sequence: u64,
         mut listener_targets: Vec<u64>,
         document: &Document,
-        fragments: Option<NativePaintFragmentCursor<'_>>,
+        fragments: Option<PaintFragmentCursor<'_>>,
     ) -> BlockingWheelEventRegions {
         listener_targets.sort_unstable();
         if let Some((cached_sequence, cached_targets, cached_regions)) = &self.cached {
@@ -98,7 +98,7 @@ fn ResolveBlockingWheelEventRegionsSource(
             fixed_rects: Vec::new(),
         };
     }
-    let by_node = NativeFragmentClientRectsByNode(fragments.Native());
+    let by_node = FragmentClientRectsByNode(fragments.Cursor());
     // Fixed descendants are painted in the viewport transform space. Keep
     // that attachment across this input metadata boundary: compositor scroll
     // can then move ordinary event regions without moving fixed controls.

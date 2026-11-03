@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::ops::Deref;
 use std::sync::Arc;
 
-/// A native physical ink rect, relative to the owning fragment's origin.
+/// A source physical ink rect, relative to the owning fragment's origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FragmentPaintRect {
     pub offset: LayoutOffset,
@@ -87,6 +87,13 @@ impl<Style> Default for TablePaintData<Style> {
 pub struct CanvasBackgroundPaintData<Style> {
     pub style: Style,
     pub effective_zoom: f32,
+    pub document_element_size: LayoutSize,
+    pub document_element_content_box: FragmentPaintRect,
+    pub document_element_scrollable_overflow: Option<FragmentPaintRect>,
+    pub document_element_has_transform: bool,
+    pub background_fill_layer_count: usize,
+    pub background_any_local_attachment_image: bool,
+    pub background_any_layer_uses_content_box: bool,
 }
 
 impl Default for PaintResources {
@@ -160,10 +167,19 @@ pub struct StitchedDecorationData {
 pub struct ReplacedContentPaintData {
     pub offset: LayoutOffset,
     pub size: LayoutSize,
+    /// LayoutReplaced::RespectsCSSOverflow(). This decides whether the
+    /// replaced element always clips to its content box independently of the
+    /// authored overflow value.
+    pub respects_css_overflow: bool,
     /// LayoutReplaced::ClipsToContentBox(). Ordinary images clip regardless
     /// of computed overflow; replaced elements that opt into CSS overflow use
     /// the property-tree overflow clip instead.
     pub clips_to_content_box: bool,
+    pub is_svg_root: bool,
+    pub is_image: bool,
+    pub is_media: bool,
+    pub is_layout_embedded_content: bool,
+    pub is_embedded_object: bool,
 }
 
 impl Default for ReplacedContentPaintData {
@@ -171,7 +187,13 @@ impl Default for ReplacedContentPaintData {
         Self {
             offset: LayoutOffset::default(),
             size: LayoutSize::default(),
+            respects_css_overflow: false,
             clips_to_content_box: true,
+            is_svg_root: false,
+            is_image: false,
+            is_media: false,
+            is_layout_embedded_content: false,
+            is_embedded_object: false,
         }
     }
 }
@@ -185,7 +207,7 @@ pub struct PaintGlyph {
     pub advance: f64,
 }
 
-/// Immutable native shaping output retained by Paint. The glyph vector is
+/// Immutable source shaping output retained by Paint. The glyph vector is
 /// shared so crossing the Layout/Fragment boundary never copies a run.
 // cpp: layoutng_fragment_tree/fragment_tree.h:133-153
 #[derive(Clone, PartialEq)]
@@ -196,7 +218,7 @@ pub struct PaintGlyphRun {
     pub ascent: f64,
     pub baseline: f64,
     pub underline_position: f64,
-    pub underline_thickness: f64,
+    pub underline_thickness: Option<f64>,
     pub strikeout_position: f64,
     pub strikeout_thickness: f64,
     pub horizontal: bool,
@@ -217,7 +239,7 @@ impl Default for PaintGlyphRun {
             ascent: 0.0,
             baseline: 0.0,
             underline_position: 0.0,
-            underline_thickness: 1.0,
+            underline_thickness: None,
             strikeout_position: 0.0,
             strikeout_thickness: 1.0,
             horizontal: true,
@@ -256,7 +278,7 @@ pub struct MathMLPaintData {
     pub operator_glyph_runs: Vec<PaintGlyphRun>,
 }
 
-/// Native LayoutTextCombine emphasis state carried across the Layout/Paint
+/// Chromium LayoutTextCombine emphasis state carried across the Layout/Paint
 /// boundary. PrePaint owns the corresponding transform property node.
 #[derive(Clone, Default, PartialEq)]
 pub struct TextCombineEmphasisPaintData {
@@ -291,6 +313,9 @@ pub struct TextControlCaretMetrics {
     pub font_height: f64,
     pub ascent: f64,
     pub line_height: f64,
+    /// Primary-font `0` advance used by Chromium as the 1ch fallback for a
+    /// block/underscore caret when no following grapheme can be measured.
+    pub zero_width: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -311,15 +336,39 @@ impl BackgroundPaintLocation {
     }
 }
 
-/// Native dirty-bit facts consumed by the fragment-local PrePaint tracker.
+/// Chromium dirty-bit facts consumed by the fragment-local PrePaint tracker.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PrePaintInvalidation {
     pub needs_paint_property_update: bool,
     pub descendant_needs_paint_property_update: bool,
+    /// LayoutObject::ChildPrePaintBlockedByDisplayLock(). This participates in
+    /// PrePaintTreeWalk's tree-builder-context admission independently from the
+    /// dirty bits above.
+    pub child_pre_paint_blocked_by_display_lock: bool,
     pub should_check_for_paint_invalidation: bool,
+    /// LayoutObject::BackgroundNeedsFullPaintInvalidation(). BoxPaintInvalidator
+    /// consumes this independently from the object's ordinary full reason.
+    pub background_needs_full_paint_invalidation: bool,
+    /// LayoutObject's pending full-invalidation reason. PrePaint consumes this
+    /// through ObjectPaintInvalidator; exporting it does not mutate the source
+    /// DisplayItemClient.
+    pub full_paint_invalidation_reason: Option<foundation::PaintInvalidationReason>,
     pub should_check_layout_for_paint_invalidation: bool,
     pub descendant_should_check_layout_for_paint_invalidation: bool,
     pub subtree_should_check_for_paint_invalidation: bool,
+    /// Source: LayoutObject::SubtreeShouldDoFullPaintInvalidation(). This is
+    /// distinct from subtree checking: descendants receive kSubtree rather
+    /// than computing their ordinary incremental reason.
+    pub subtree_should_do_full_paint_invalidation: bool,
+    /// LayoutObject::ShouldDelayFullPaintInvalidation(). PaintInvalidator
+    /// retains the object's full reason for a future visible frame when this
+    /// pass did not produce an ordinary full client invalidation.
+    pub should_delay_full_paint_invalidation: bool,
+    /// Visibility state is updated by PrePaint after this snapshot is read.
+    pub previous_visibility_visible: bool,
+    pub visual_rect_respects_visibility: bool,
+    pub should_invalidate_selection: bool,
+    pub can_be_selection_leaf: bool,
 }
 
 impl PrePaintInvalidation {
@@ -328,12 +377,14 @@ impl PrePaintInvalidation {
             || self.should_check_for_paint_invalidation
             || self.should_check_layout_for_paint_invalidation
             || self.subtree_should_check_for_paint_invalidation
+            || self.subtree_should_do_full_paint_invalidation
     }
 
     pub fn descendants(self) -> bool {
         self.descendant_needs_paint_property_update
             || self.descendant_should_check_layout_for_paint_invalidation
             || self.subtree_should_check_for_paint_invalidation
+            || self.subtree_should_do_full_paint_invalidation
     }
 }
 
@@ -452,7 +503,7 @@ impl<Paint> crate::revision::FragmentRevisionNode for FragmentPaintData<Paint> {
 }
 
 /// Fragmentation metadata needed to paint one collapsed-border table section.
-/// It contains no table algorithm or native LayoutObject state.
+/// It contains no table algorithm or source LayoutObject state.
 // cpp: layoutng_fragment_tree/fragment_tree.h:202-209
 #[derive(Clone, Default, PartialEq)]
 pub struct CollapsedTableSection {
@@ -565,17 +616,36 @@ pub struct ScrollbarPaintData {
     pub corner_client_is_just_created: Cell<bool>,
     pub horizontal: Option<ScrollbarPaintAxis>,
     pub vertical: Option<ScrollbarPaintAxis>,
+    /// PaintLayerScrollableArea::ShouldOverflowControlsPaintAsOverlay().
+    /// This is broader than platform overlay scrollbars: root/global-root
+    /// scrollers and CSS overflow:overlay controls also paint above content.
+    pub should_paint_as_overlay: bool,
     pub uses_overlay_scrollbars: bool,
+    /// Negated ScrollbarTheme::AllowsHitTest(). The negated representation
+    /// preserves the safe, hit-testable behavior of older/default payloads.
+    pub theme_disallows_hit_test: bool,
     pub minimum_thumb_length: i32,
     pub corner_offset: LayoutOffset,
     pub corner_size: LayoutSize,
+    /// PaintLayerScrollableArea::ResizerCornerRect(kResizerForTouch).
+    /// This is deliberately distinct from the painted pointer-sized corner:
+    /// Chromium records the expanded rectangle as metadata that forces main
+    /// thread handling for touch resize gestures.
+    pub resizer_touch_offset: LayoutOffset,
+    pub resizer_touch_size: LayoutSize,
+    /// Pointer-sized source resizer visual geometry.
+    pub resizer_pointer_offset: LayoutOffset,
+    pub resizer_pointer_size: LayoutSize,
+    pub resizer_on_left: bool,
+    pub resizer_paint_scale: f64,
+    pub needs_scroll_corner: bool,
     pub track_color: PaintColor,
     pub thumb_color: PaintColor,
     pub button_color: PaintColor,
     pub corner_color: PaintColor,
 }
 
-/// Fully resolved native control state consumed by Paint. DOM and style
+/// Fully resolved source control state consumed by Paint. DOM and style
 /// objects stay on the producer side of this fragment boundary.
 // cpp: layoutng_fragment_tree/fragment_tree.h:252-268
 #[derive(Clone, PartialEq)]
@@ -647,7 +717,7 @@ impl Default for SvgTextPaintData {
     }
 }
 
-/// Native SVG viewport geometry, in SVG user coordinates.
+/// Chromium SVG viewport geometry, in SVG user coordinates.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SvgViewportGeometry {
     pub viewport: FragmentPaintRect,
@@ -656,18 +726,72 @@ pub struct SvgViewportGeometry {
     pub disabled: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The computed `scroll-snap-type` values retained by Layout for Paint.
+/// Source: layoutng_style/style/scroll_snap_data.h:8-49.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollSnapAxisPaintData {
+    #[default]
+    Both,
+    X,
+    Y,
+    Block,
+    Inline,
+    Pair,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollSnapStrictnessPaintData {
+    #[default]
+    Proximity,
+    Mandatory,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScrollSnapTypePaintData {
+    pub is_none: bool,
+    pub axis: ScrollSnapAxisPaintData,
+    pub strictness: ScrollSnapStrictnessPaintData,
+}
+
+impl Default for ScrollSnapTypePaintData {
+    fn default() -> Self {
+        Self {
+            is_none: true,
+            axis: ScrollSnapAxisPaintData::Both,
+            strictness: ScrollSnapStrictnessPaintData::Proximity,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScrollContainerPaintData {
     pub compositor_element_id: foundation::CompositorElementId,
     pub scrollable_axes: [bool; 2],
+    /// LayoutScrollableArea::ScrollOrigin(). Chromium keeps this separate
+    /// from the public scroll offset when building paint properties.
+    pub scroll_origin: LayoutOffset,
+    /// LayoutScrollableArea::ScrollPosition() (origin + scroll offset). This
+    /// is the exact translation input used by PaintPropertyTreeBuilder.
+    pub scroll_position: LayoutOffset,
     pub background_needs_repaint_on_scroll: Option<bool>,
     pub prefers_non_composited_scrolling: Option<bool>,
-    pub scroll_snap_type_is_none: Option<bool>,
+    /// `None` means that this producer did not query the source scroll area.
+    /// `Some` carries the actual computed type, including explicit `none`.
+    pub scroll_snap_type: Option<ScrollSnapTypePaintData>,
     pub container_rect: FragmentPaintRect,
+    /// PaintLayerScrollableArea::ScrollingBackgroundVisualRect(), stored
+    /// fragment-local after source pixel snapping. This is the display-item
+    /// visual rect, not the enlarged background paint rect.
+    pub scrolling_background_visual_rect: FragmentPaintRect,
     pub minimum_scroll_offset: LayoutOffset,
     pub maximum_scroll_offset: LayoutOffset,
     pub user_scrollable_horizontal: bool,
     pub user_scrollable_vertical: bool,
+    pub scrolling_background_client_id: u64,
+    pub scrolling_background_client_invalidation_reason:
+        Option<foundation::PaintInvalidationReason>,
+    pub scrolling_background_client_is_cacheable: bool,
+    pub scrolling_background_client_is_just_created: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -728,7 +852,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boundary_defaults_match_native_fragment_semantics() {
+    fn boundary_defaults_match_source_fragment_semantics() {
         assert_eq!(FragmentKind::default(), FragmentKind::kBox);
         assert!(FragmentBoxSides::default().HasAllSides());
         assert_eq!(FragmentPaintRect::default().size, LayoutSize::default());

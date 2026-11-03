@@ -7,7 +7,6 @@ use layoutng_assembly::internal::paint_input::{
 
 use paint_model::PaintRect;
 
-// cpp: paint/background_geometry.h:7-16
 pub struct ResolvedBackgroundTile {
     pub tile_rect: PaintRect,
     pub repeat_x: bool,
@@ -18,7 +17,6 @@ pub struct ResolvedBackgroundTile {
     pub tile_spacing: Size,
 }
 
-// cpp: paint/background_geometry.cc:10-22
 fn LegacyRule(repeat: BackgroundRepeat, horizontal: bool) -> BackgroundRepeatRule {
     match repeat {
         BackgroundRepeat::kRepeat => BackgroundRepeatRule::kRepeat,
@@ -40,18 +38,17 @@ fn LegacyRule(repeat: BackgroundRepeat, horizontal: bool) -> BackgroundRepeatRul
     }
 }
 
-// cpp: paint/background_geometry.cc:24-28
 struct AxisGeometry {
     origin: f64,
     spacing: f64,
     repeats: bool,
 }
 
-// cpp: paint/background_geometry.cc:30-64
 fn ResolveAxis(
     area_origin: f64,
     area_size: f64,
     tile_size: f64,
+    position_available: f64,
     position: f64,
     position_offset: f64,
     calculation: Option<&std::sync::Arc<foundation::CalculationValue>>,
@@ -65,16 +62,18 @@ fn ResolveAxis(
             repeats: false,
         };
     }
-    let available = area_size - tile_size;
-    let resolved_position = calculation.map_or(available * position + position_offset, |value| {
-        let edge_relative =
-            value.Evaluate(available as f32, &foundation::EvaluationInput::default()) as f64;
-        if from_far_edge {
-            available - edge_relative
-        } else {
-            edge_relative
-        }
-    });
+    let resolved_position =
+        calculation.map_or(position_available * position + position_offset, |value| {
+            let edge_relative = value.Evaluate(
+                position_available as f32,
+                &foundation::EvaluationInput::default(),
+            ) as f64;
+            if from_far_edge {
+                position_available - edge_relative
+            } else {
+                edge_relative
+            }
+        });
     let mut result = AxisGeometry {
         origin: area_origin + resolved_position,
         spacing: 0.0,
@@ -100,12 +99,48 @@ fn ResolveAxis(
     result
 }
 
-// cpp: paint/background_geometry.h:20-22
-// cpp: paint/background_geometry.cc:68-149
+// cpp: paint/background_image_geometry.cc:45-61
+fn ResolveClampedWidthForRatio(height: f64, natural_size: Size) -> f64 {
+    let width = height * natural_size.width / natural_size.height;
+    if natural_size.width >= 1.0 && width < 1.0 {
+        1.0
+    } else {
+        width
+    }
+}
+
+// cpp: paint/background_image_geometry.cc:45-61
+fn ResolveClampedHeightForRatio(width: f64, natural_size: Size) -> f64 {
+    let height = width * natural_size.height / natural_size.width;
+    if natural_size.height >= 1.0 && height < 1.0 {
+        1.0
+    } else {
+        height
+    }
+}
+
+fn PixelSnappedSize(rect: &PaintRect) -> Size {
+    // LayoutUnit::SnapSizeToPixel preserves a non-zero size once the fixed
+    // point magnitude exceeds four raw units (4 / 64 CSS px).
+    let snap = |size: f64, origin: f64| {
+        let result = (origin.fract() + size).round() - origin.fract().round();
+        if result == 0.0 && size.abs() > 4.0 / 64.0 {
+            size.signum()
+        } else {
+            result
+        }
+    };
+    Size {
+        width: snap(rect.width, rect.x).max(0.0),
+        height: snap(rect.height, rect.y).max(0.0),
+    }
+}
+
 pub fn ResolveBackgroundTileSize(
     layer: &BackgroundImageLayer,
     positioning_area: &PaintRect,
     image: Option<&PaintImage>,
+    image_orientation: image_resource::ImageOrientation,
     effective_zoom: f64,
 ) -> Size {
     if !positioning_area.width.is_finite()
@@ -129,6 +164,7 @@ pub fn ResolveBackgroundTileSize(
         panic!("explicit background size must be finite and non-negative");
     }
 
+    let snapped_positioning_size = PixelSnappedSize(positioning_area);
     let mut width = positioning_area.width;
     let mut height = positioning_area.height;
     // Fixed and percentage components are additive for calculated lengths.
@@ -178,10 +214,10 @@ pub fn ResolveBackgroundTileSize(
         // density separate: resolution_scale converts resource pixels to CSS
         // pixels, then effective_zoom converts those CSS pixels to this
         // artifact's coordinates.
-        let intrinsic_width =
-            f64::from(image.width) / layer.image_resolution_scale * effective_zoom;
-        let intrinsic_height =
-            f64::from(image.height) / layer.image_resolution_scale * effective_zoom;
+        let (oriented_width, oriented_height) =
+            image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
+        let intrinsic_width = oriented_width / layer.image_resolution_scale * effective_zoom;
+        let intrinsic_height = oriented_height / layer.image_resolution_scale * effective_zoom;
         width = intrinsic_width;
         height = intrinsic_height;
         if matches!(
@@ -192,8 +228,11 @@ pub fn ResolveBackgroundTileSize(
                 width = 0.0;
                 height = 0.0;
             } else {
-                let x_scale = positioning_area.width / intrinsic_width;
-                let y_scale = positioning_area.height / intrinsic_height;
+                // Chromium deliberately sizes contain/cover against the
+                // pixel-snapped positioning area so the selected dimension
+                // reaches the actual painted edge.
+                let x_scale = snapped_positioning_size.width / intrinsic_width;
+                let y_scale = snapped_positioning_size.height / intrinsic_height;
                 let scale = if layer.size_mode == BackgroundSizeMode::kContain {
                     x_scale.min(y_scale)
                 } else {
@@ -201,6 +240,21 @@ pub fn ResolveBackgroundTileSize(
                 };
                 width *= scale;
                 height *= scale;
+                if layer.size_mode == BackgroundSizeMode::kContain {
+                    if width != snapped_positioning_size.width {
+                        width = width.round().max(1.0);
+                    }
+                    if height != snapped_positioning_size.height {
+                        height = height.round().max(1.0);
+                    }
+                } else {
+                    if width != snapped_positioning_size.width {
+                        width = width.max(1.0);
+                    }
+                    if height != snapped_positioning_size.height {
+                        height = height.max(1.0);
+                    }
+                }
             }
         } else if layer.size_mode == BackgroundSizeMode::kExplicit {
             if let (Some(specified_width), Some(specified_height)) =
@@ -210,10 +264,22 @@ pub fn ResolveBackgroundTileSize(
                 height = specified_height;
             } else if let Some(specified_width) = specified_width {
                 width = specified_width;
-                height = intrinsic_height * width / intrinsic_width;
+                height = ResolveClampedHeightForRatio(
+                    width,
+                    Size {
+                        width: intrinsic_width,
+                        height: intrinsic_height,
+                    },
+                );
             } else if let Some(specified_height) = specified_height {
                 height = specified_height;
-                width = intrinsic_width * height / intrinsic_height;
+                width = ResolveClampedWidthForRatio(
+                    height,
+                    Size {
+                        width: intrinsic_width,
+                        height: intrinsic_height,
+                    },
+                );
             }
         }
     } else if layer.size_mode == BackgroundSizeMode::kExplicit {
@@ -226,8 +292,6 @@ pub fn ResolveBackgroundTileSize(
     Size { width, height }
 }
 
-// cpp: paint/background_geometry.h:24-28
-// cpp: paint/background_geometry.cc:151-226
 pub fn ResolveBackgroundTile(
     layer: &BackgroundImageLayer,
     positioning_area: &PaintRect,
@@ -258,6 +322,15 @@ pub fn ResolveBackgroundTile(
         .repeat_rule_y
         .unwrap_or(LegacyRule(layer.repeat, false));
     let original_size = tile_size;
+    let snapped_positioning_size = PixelSnappedSize(positioning_area);
+    // Chromium computes both available extents before either round axis mutates
+    // the tile. Repeat/no-repeat resolve against the unsnapped extent; round
+    // resolves against the snapped extent. An orthogonal auto-size change does
+    // not rewrite either position reference.
+    let original_available_width = positioning_area.width - tile_size.width;
+    let original_available_height = positioning_area.height - tile_size.height;
+    let snapped_available_width = snapped_positioning_size.width - tile_size.width;
+    let snapped_available_height = snapped_positioning_size.height - tile_size.height;
     let auto_width = layer.size_mode == BackgroundSizeMode::kAuto
         || (layer.size_mode == BackgroundSizeMode::kExplicit
             && layer.width.is_none()
@@ -269,26 +342,28 @@ pub fn ResolveBackgroundTile(
             && layer.height_percentage.is_none()
             && layer.height_calculation.is_none());
     if rule_x == BackgroundRepeatRule::kRound
-        && positioning_area.width > 0.0
+        && snapped_positioning_size.width > 0.0
         && tile_size.width > 0.0
     {
-        let count = (positioning_area.width / tile_size.width).round().max(1.0);
-        let rounded_width = positioning_area.width / count;
+        let count = (snapped_positioning_size.width / tile_size.width)
+            .round()
+            .max(1.0);
+        let rounded_width = snapped_positioning_size.width / count;
         if rule_y != BackgroundRepeatRule::kRound && auto_height {
-            tile_size.height *= rounded_width / tile_size.width;
+            tile_size.height = ResolveClampedHeightForRatio(rounded_width, tile_size);
         }
         tile_size.width = rounded_width;
     }
     if rule_y == BackgroundRepeatRule::kRound
-        && positioning_area.height > 0.0
+        && snapped_positioning_size.height > 0.0
         && tile_size.height > 0.0
     {
-        let count = (positioning_area.height / tile_size.height)
+        let count = (snapped_positioning_size.height / tile_size.height)
             .round()
             .max(1.0);
-        let rounded_height = positioning_area.height / count;
+        let rounded_height = snapped_positioning_size.height / count;
         if rule_x != BackgroundRepeatRule::kRound && auto_width {
-            tile_size.width *= rounded_height / tile_size.height;
+            tile_size.width = ResolveClampedWidthForRatio(rounded_height, tile_size);
         }
         tile_size.height = rounded_height;
     }
@@ -301,8 +376,13 @@ pub fn ResolveBackgroundTile(
     }
     let x = ResolveAxis(
         positioning_area.x,
-        positioning_area.width,
+        snapped_positioning_size.width,
         tile_size.width,
+        if rule_x == BackgroundRepeatRule::kRound {
+            snapped_available_width
+        } else {
+            original_available_width
+        },
         layer.position.x,
         layer.position_offset.x,
         layer.position_x_calculation.as_ref(),
@@ -311,8 +391,13 @@ pub fn ResolveBackgroundTile(
     );
     let y = ResolveAxis(
         positioning_area.y,
-        positioning_area.height,
+        snapped_positioning_size.height,
         tile_size.height,
+        if rule_y == BackgroundRepeatRule::kRound {
+            snapped_available_height
+        } else {
+            original_available_height
+        },
         layer.position.y,
         layer.position_offset.y,
         layer.position_y_calculation.as_ref(),
@@ -346,5 +431,56 @@ pub fn ResolveBackgroundTile(
             width: x.spacing,
             height: y.spacing,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intrinsic_tile_size_uses_the_effective_image_orientation() {
+        let image = PaintImage {
+            width: 40,
+            height: 20,
+            resolution_scale: 2.0,
+            ..PaintImage::default()
+        };
+        let area = PaintRect {
+            width: 100.0,
+            height: 100.0,
+            ..PaintRect::default()
+        };
+        let layer = BackgroundImageLayer {
+            image_resolution_scale: 2.0,
+            ..BackgroundImageLayer::default()
+        };
+
+        assert_eq!(
+            ResolveBackgroundTileSize(
+                &layer,
+                &area,
+                Some(&image),
+                image_resource::ImageOrientation::kDefault,
+                1.0,
+            ),
+            Size {
+                width: 20.0,
+                height: 10.0,
+            }
+        );
+        assert_eq!(
+            ResolveBackgroundTileSize(
+                &layer,
+                &area,
+                Some(&image),
+                image_resource::ImageOrientation::kRotate90,
+                1.0,
+            ),
+            Size {
+                width: 10.0,
+                height: 20.0,
+            }
+        );
     }
 }

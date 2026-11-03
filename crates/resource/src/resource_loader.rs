@@ -168,9 +168,9 @@ impl ResourceLoader {
         true
     }
 
-    pub(crate) fn SetDefer(&mut self, defer: url_loader::RequestDefer) {
+    pub(crate) fn SetScheduling(&mut self, request: &url_loader::URLRequest) {
         if let Some(operation) = self.shared.borrow_mut().operation.as_mut() {
-            operation.SetDefer(defer);
+            operation.SetScheduling(request.destination, request.defer, request.script_type);
         }
     }
 
@@ -181,8 +181,6 @@ impl ResourceLoader {
         let mut shared = self.shared.borrow_mut();
         if let Some(operation) = shared.operation.as_mut() {
             operation.SetWakeCallback(callback);
-        } else if shared.status != ResourceLoadStatus::kLoading {
-            callback();
         }
     }
 

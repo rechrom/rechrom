@@ -7,12 +7,12 @@ use layoutng_assembly::{
     debug_assertions,
     ignore = "Compare the source NDEBUG build with cargo test --release; named areas violate a source GridSpan DCHECK"
 )]
-fn native_grid_layout_matches_unchanged_cpp() {
-    crate::native_test_thread::run(body);
+fn grid_layout_matches_unchanged_cpp() {
+    crate::test_thread::run(body);
 }
 #[test]
-fn native_grid_layout_debug_matches_unchanged_cpp() {
-    crate::native_test_thread::run(debug_body);
+fn grid_layout_debug_matches_unchanged_cpp() {
+    crate::test_thread::run(debug_body);
 }
 fn debug_body() {
     run_matrix(true);
@@ -123,7 +123,7 @@ fn run_matrix(smoke: bool) {
         }
         crate::style_services::ResolveLayoutStyles(&mut owner, &space);
         engine.ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::Constraints(&space));
-        let root = crate::native_test_thread::BuildDOMProjection(
+        let root = crate::test_thread::BuildDOMProjection(
             &mut owner,
             &dom::UserInteractionState::default(),
             &mut engine,

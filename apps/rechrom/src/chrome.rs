@@ -14,7 +14,7 @@ svg{display:block;flex-shrink:0;width:20px;height:20px}#tabrow{display:flex;alig
 #tabs{display:flex;flex:0 1 auto;min-width:0;height:34px;gap:6px;overflow:visible}
 .tab{position:relative;z-index:0;display:flex;align-items:center;flex:1;min-width:56px;max-width:232px;height:34px;padding:0 8px;gap:8px;border-radius:10px;cursor:default}
 .hoverbackdrop{display:none;position:absolute;z-index:-1;left:0;right:0;top:0;height:28px;border-radius:10px;background:#cbd0d8}.tab.hovered .hoverbackdrop{display:block}.tab.active .hoverbackdrop{display:none}.tab.active,.tab.active.hovered{background:#fff;border-radius:10px 10px 0 0;z-index:2}
-.favicon{width:16px;height:16px;flex-shrink:0}.favicon svg{width:16px;height:16px}.title{flex:1;min-width:0;height:20px;line-height:20px;overflow:hidden;white-space:nowrap;font-size:12px}
+.favicon{width:16px;height:16px;flex-shrink:0}.favicon svg{width:16px;height:16px}.throbber{animation:throbber-rotate 1568ms linear infinite;transform-origin:center}.throbber circle{fill:none;stroke:#1a73e8;stroke-width:2;stroke-linecap:round;stroke-dasharray:28.27 9.42;transform:rotate(-90deg);transform-origin:8px 8px}@keyframes throbber-rotate{to{transform:rotate(360deg)}}.title{flex:1;min-width:0;height:20px;line-height:20px;overflow:hidden;white-space:nowrap;font-size:12px}
 .close{height:28px;width:28px;min-width:28px;border-radius:14px;margin-left:-4px;margin-right:-4px}.close svg{height:16px;width:16px}.close.hovered{background:#c5c9d0}
 .separator{position:absolute;right:-1px;top:9px;width:2px;height:16px;background:#aeb4be;border-radius:1px}.active .separator,.beforeactive .separator,.tab.hovered .separator{display:none}
 .shoulder{display:none;position:absolute;bottom:0;width:12px;height:12px}.active .shoulder{display:block}.left{left:-12px}.right{right:-12px}
@@ -52,9 +52,14 @@ pub fn tab_strip<P>(tabs: &crate::tabs::Tabs<P>) -> String {
     ordered.iter().enumerate().map(|(index, tab)| {
         let active = tab.id == tabs.active.id;
         let before_active = ordered.get(index + 1).is_some_and(|next| next.id == tabs.active.id);
+        let icon = if tab.loading {
+            r#"<svg class="throbber" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/></svg>"#
+        } else {
+            include_str!("chrome_icons/page.svg")
+        };
         format!(r##"<div id="tab-{}" class="tab{}{}" title="{}"><span class="hoverbackdrop"></span><svg class="shoulder left" width="12" height="12" viewBox="0 0 12 12"><path fill="#fff" d="M0 12 A12 12 0 0 0 12 0 L12 12 Z"/></svg><svg class="shoulder right" width="12" height="12" viewBox="0 0 12 12"><path fill="#fff" d="M0 0 A12 12 0 0 0 12 12 L0 12 Z"/></svg><span class="favicon">{}</span><span id="title-{}" class="title">{}</span><button id="close-{}" class="close" aria-label="Close tab">{}</button><span class="separator"></span></div>"##,
             tab.id, if active { " active" } else { "" }, if before_active { " beforeactive" } else { "" }, escape(&tab.location),
-            include_str!("chrome_icons/page.svg"), tab.id, escape(&tab.title), tab.id, include_str!("chrome_icons/close.svg"))
+            icon, tab.id, escape(&tab.title), tab.id, include_str!("chrome_icons/close.svg"))
     }).collect()
 }
 

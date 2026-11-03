@@ -192,7 +192,7 @@ fn AssembleFonts(
         };
         faces.push(FontFace {
             family: host.family.clone(),
-            native_family: host.family.clone(),
+            resolved_family: host.family.clone(),
             metrics_family: host.family,
             weight: host.weight,
             italic: host.italic,
@@ -203,13 +203,13 @@ fn AssembleFonts(
             ..FontFace::default()
         });
     }
-    let native_count = faces.len();
+    let count = faces.len();
     for (family, native) in aliases {
         if family == native {
             continue;
         }
-        for index in 0..native_count {
-            if faces[index].native_family == native {
+        for index in 0..count {
+            if faces[index].resolved_family == native {
                 let mut alias = faces[index].clone();
                 alias.family = family.clone();
                 // Native entries already supply fallback. Aliases only take
@@ -368,7 +368,7 @@ mod tests {
             let face = faces
                 .iter()
                 .find(|face| {
-                    face.native_family == candidate.family && face.face_index == candidate.index
+                    face.resolved_family == candidate.family && face.face_index == candidate.index
                 })
                 .expect("an installed character-bearing Fontconfig face must enter the catalog");
             let font = font_engine::OpenTypeFont::new_shared(
@@ -382,7 +382,7 @@ mod tests {
             assert!(faces.iter().any(|face| face.family == "sans-serif"));
             println!(
                 "host glyph U+{:04X}: {} (index {}, {:?})",
-                character as u32, face.native_family, face.face_index, face.fallback_role
+                character as u32, face.resolved_family, face.face_index, face.fallback_role
             );
         }
     }

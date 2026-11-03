@@ -390,10 +390,12 @@ where
         let monotonic_time = self.base.CurrentBeginFrameArgs().frame_time;
         self.base
             .AnimateLayers(monotonic_time, false, &mut context.Base());
-        if let Some(input) = self.base.input_delegate_.as_mut() {
-            use crate::cc::input::compositor_input_interfaces::InputDelegateForCompositor;
-            input.TickAnimations(monotonic_time);
-        }
+        self.base.WithInputHandler(&mut context.Base(), |input, runtime| {
+            if let Some(input) = input {
+                use crate::cc::input::compositor_input_interfaces::InputDelegateForCompositor;
+                input.TickAnimations(runtime, monotonic_time);
+            }
+        });
     }
     // Source: cc/trees/client_layer_tree_host_impl.h:64-65.
     // Source: cc/trees/client_layer_tree_host_impl.cc:549-592.

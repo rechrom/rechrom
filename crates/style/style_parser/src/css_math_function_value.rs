@@ -46,7 +46,7 @@ impl CSSMathFunctionValue {
     ) -> Result<f64, MathError> {
         Ok(self.ClampToPermittedRange(self.expression.ComputeValue(resolver, percentage_basis)?))
     }
-    // cpp: css_math_function_value.cc:123-139,ConvertToLength; native
+    // cpp: css_math_function_value.cc:123-139,ConvertToLength; computed style
     // CalculationValue applies NaN censoring and range at used-value time.
     pub fn ConvertToLength(
         &self,

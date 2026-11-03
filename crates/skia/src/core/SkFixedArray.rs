@@ -5,19 +5,19 @@ use core::{
 };
 /// Rust primitive constraint for native std::is_trivial_v<T>. Implementors are
 /// Copy, have no destructor/padding observability, and permit native T() zero initialization.
-pub unsafe trait NativeTrivial: Copy {}
-macro_rules! trivial{($($t:ty),*)=>{$(unsafe impl NativeTrivial for $t{})*};}
+pub unsafe trait Trivial: Copy {}
+macro_rules! trivial{($($t:ty),*)=>{$(unsafe impl Trivial for $t{})*};}
 trivial!(u8, i8, u16, i16, u32, i32, u64, i64, usize, isize, f32, f64, bool);
-unsafe impl<T: NativeTrivial, const M: usize> NativeTrivial for [T; M] {}
+unsafe impl<T: Trivial, const M: usize> Trivial for [T; M] {}
 // Source: src/core/SkFixedArray.h:29-30
 // Source: src/core/SkFixedArray.h:226-227
 // Native unused slots remain uninitialized; no array of fabricated default T values.
 #[repr(C)]
-pub struct FixedArray<const N: usize, T: NativeTrivial> {
+pub struct FixedArray<const N: usize, T: Trivial> {
     fData: [MaybeUninit<T>; N],
     fSize: u8,
 }
-impl<const N: usize, T: NativeTrivial> FixedArray<N, T> {
+impl<const N: usize, T: Trivial> FixedArray<N, T> {
     // Source: src/core/SkFixedArray.h:34-34
     pub fn new() -> Self {
         let () = Self::NATIVE_CONSTRAINTS;
@@ -247,7 +247,7 @@ impl<const N: usize, T: NativeTrivial> FixedArray<N, T> {
         N as i32
     }
     // Source: src/core/SkFixedArray.h:222-224
-    // NativeTrivial is the explicit Rust std::is_trivial adapter; N's assertions
+    // Trivial is the explicit Rust std::is_trivial adapter; N's assertions
     // remain compile-time associated state, evaluated before constructing storage.
     const NATIVE_CONSTRAINTS: () = {
         assert!(!core::mem::needs_drop::<T>());
@@ -264,12 +264,12 @@ impl<const N: usize, T: NativeTrivial> FixedArray<N, T> {
         unsafe { core::slice::from_raw_parts_mut(self.data_mut(), self.fSize as usize) }
     }
 }
-impl<const N: usize, T: NativeTrivial> Default for FixedArray<N, T> {
+impl<const N: usize, T: Trivial> Default for FixedArray<N, T> {
     fn default() -> Self {
         Self::new()
     }
 }
-impl<const N: usize, T: NativeTrivial> Clone for FixedArray<N, T> {
+impl<const N: usize, T: Trivial> Clone for FixedArray<N, T> {
     fn clone(&self) -> Self {
         Self::copy_construct(self)
     }
@@ -277,19 +277,19 @@ impl<const N: usize, T: NativeTrivial> Clone for FixedArray<N, T> {
         self.assign(source);
     }
 }
-impl<const N: usize, T: NativeTrivial> PartialEq for FixedArray<N, T> {
+impl<const N: usize, T: Trivial> PartialEq for FixedArray<N, T> {
     fn eq(&self, that: &Self) -> bool {
         self.equals(that)
     }
 }
-impl<const N: usize, T: NativeTrivial> Eq for FixedArray<N, T> {}
-impl<const N: usize, T: NativeTrivial> Index<usize> for FixedArray<N, T> {
+impl<const N: usize, T: Trivial> Eq for FixedArray<N, T> {}
+impl<const N: usize, T: Trivial> Index<usize> for FixedArray<N, T> {
     type Output = T;
     fn index(&self, index: usize) -> &T {
         self.at(index)
     }
 }
-impl<const N: usize, T: NativeTrivial> IndexMut<usize> for FixedArray<N, T> {
+impl<const N: usize, T: Trivial> IndexMut<usize> for FixedArray<N, T> {
     fn index_mut(&mut self, index: usize) -> &mut T {
         self.at_mut(index)
     }

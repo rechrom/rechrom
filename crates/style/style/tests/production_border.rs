@@ -18,13 +18,13 @@ fn node(owner: &dom::DOM, id: &str) -> usize {
         .find(|&i| d.Node(i).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap()
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     unsafe {
         &*owner
             .GetDocument()
             .ResolvedStyleFor(node(owner, id))
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
 }
@@ -48,7 +48,7 @@ fn hsl_border_shorthand_preserves_geometry_for_following_width_shorthand() {
          <div id=target></div>",
     );
     update(&mut owner);
-    let target = native(&owner, "target");
+    let target = computed_style(&owner, "target");
     assert_eq!(target.BorderTopStyle(), EBorderStyle::kSolid);
     assert_eq!(target.BorderBottomStyle(), EBorderStyle::kSolid);
     assert_eq!(target.BorderLeftStyle(), EBorderStyle::kSolid);
@@ -60,15 +60,15 @@ fn hsl_border_shorthand_preserves_geometry_for_following_width_shorthand() {
 }
 
 #[test]
-fn border_native_values_initial_inherit_and_math_pairs() {
+fn border_computed_style_values_initial_inherit_and_math_pairs() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='border-color:red green blue currentcolor;border-radius:2px 4px / 6px 8px;border-spacing:3.999px 5.2px'><div id=c style='border-color:inherit;border-radius:inherit;border-spacing:inherit'></div><div id=i style='border-color:initial;border-radius:initial;border-spacing:initial'></div><div id=m style='border-top-left-radius:calc(10% + 2px) max(3px, 4px);border-spacing:calc(1px + 3px)'></div></div>");
     update(&mut owner);
     let (p, c, i, m) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "m"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "m"),
     );
     assert_eq!(p.BorderTopColor().GetColor(), Color::FromRGB(255, 0, 0));
     assert_eq!(p.BorderBottomColor().GetColor(), Color::FromRGB(0, 0, 255));
@@ -106,11 +106,11 @@ fn border_native_values_initial_inherit_and_math_pairs() {
 }
 
 #[test]
-fn logical_border_shorthands_and_corners_reach_native_physical_fields() {
+fn logical_border_shorthands_and_corners_reach_computed_style_physical_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=x style='writing-mode:vertical-rl;direction:rtl;border-block-color:red blue;border-inline-color:green currentcolor;border-block-style:solid dashed;border-inline-style:dotted double;border-block-width:2px 4px;border-inline-width:6px 8px;border-start-start-radius:10px 20%;border-end-end-radius:30px 40%'></div>");
     update(&mut owner);
-    let x = native(&owner, "x");
+    let x = computed_style(&owner, "x");
     assert_eq!(x.BorderRightColor().GetColor(), Color::FromRGB(255, 0, 0));
     assert_eq!(x.BorderLeftColor().GetColor(), Color::FromRGB(0, 0, 255));
     assert_eq!(
@@ -181,7 +181,7 @@ fn invalid_border_declarations_preserve_previous_values_and_quirks_are_contextua
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=x style='border-top-color:red;border-top-color:#nope;border-radius:5px;border-radius:-2px;border-spacing:7px;border-spacing:10%;border-block-style:solid;border-block-style:solid bogus'></div>");
     update(&mut owner);
-    let x = native(&owner, "x");
+    let x = computed_style(&owner, "x");
     assert_eq!(x.BorderTopColor().GetColor(), Color::FromRGB(255, 0, 0));
     assert_eq!(x.BorderTopLeftRadius().Width().Pixels(), 5.0);
     assert_eq!(x.HorizontalBorderSpacing(), 7);
@@ -224,15 +224,15 @@ fn invalid_border_declarations_preserve_previous_values_and_quirks_are_contextua
 }
 
 #[test]
-fn logical_border_wide_keywords_and_writing_direction_inherit_native_state() {
+fn logical_border_wide_keywords_and_writing_direction_inherit_computed_style_state() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='direction:rtl;writing-mode:vertical-rl;border-block-width:2px 4px;border-inline-width:6px 8px;border-block-style:solid dashed;border-inline-style:dotted double;border-block-color:red blue'><div id=c style='direction:inherit;writing-mode:inherit;border-block-width:inherit;border-inline-width:inherit;border-block-style:inherit;border-inline-style:inherit;border-block-color:inherit'></div><div id=i style='direction:initial;writing-mode:initial;border-block-width:initial;border-inline-width:initial;border-block-style:initial;border-inline-style:initial;border-block-color:initial'></div><div id=o style='border-spacing:32768px 32766.999px'></div></div>");
     update(&mut owner);
     let (p, c, i, o) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "o"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "o"),
     );
     assert_eq!(c.Direction(), TextDirection::kRtl);
     assert_eq!(c.GetWritingMode(), WritingMode::kVerticalRl);

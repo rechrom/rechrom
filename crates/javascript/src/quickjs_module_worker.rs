@@ -228,6 +228,14 @@ mod tests {
             self.0.lock().unwrap().push(task);
             Ok(())
         }
+
+        fn execute_after(
+            &self,
+            _delay: std::time::Duration,
+            task: executor::Task,
+        ) -> std::io::Result<()> {
+            self.execute(task)
+        }
     }
     #[test]
     fn background_module_worker_uses_injected_executor_and_discards_cancelled_jobs() {

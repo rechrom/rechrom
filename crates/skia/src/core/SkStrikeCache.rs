@@ -54,7 +54,7 @@ unsafe impl Sync for SkStrikeCache {}
 // Every live table entry owns Some(actual strike); table slot moves leave None
 // exactly as sk_sp::release. No descriptor copy is stored alongside the owner.
 struct StrikeHandle(Option<Arc<SkStrike>>);
-impl crate::src::core::SkTHash::NativeMove for StrikeHandle {
+impl crate::src::core::SkTHash::CxxMove for StrikeHandle {
     fn move_construct(source: &mut Self) -> Self {
         Self(source.0.take())
     }

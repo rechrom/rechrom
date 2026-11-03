@@ -33,7 +33,7 @@ fn content(style: &layoutng_style::style::computed_style::ComputedStyle) -> Stri
 }
 
 #[test]
-fn content_string_attr_important_and_mutation_use_native_data() {
+fn content_string_attr_important_and_mutation_use_computed_style_data() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=target data-label=one></div>");
     owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(
@@ -48,15 +48,17 @@ fn content_string_attr_important_and_mutation_use_native_data() {
     );
     {
         let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-        let native = unsafe { &*resolved.native_style.Get() };
-        assert_eq!(content(native), "origin");
+        let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+        assert_eq!(content(computed_style), "origin");
         assert_eq!(
-            content(unsafe { &*resolved.before.as_ref().unwrap().native_style.Get() }),
+            content(unsafe { &*resolved.before.as_ref().unwrap().computed_style_owner.Get() }),
             "one A"
         );
-        let cached = native.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore);
+        let cached =
+            computed_style.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore);
         assert!(unsafe { &*cached }.HasAttrFunction());
-        let after = native.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdAfter);
+        let after =
+            computed_style.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdAfter);
         let after_data = unsafe { &*after }.GetContentData().unwrap();
         assert!(unsafe { &*after_data }.IsNone());
     }
@@ -71,7 +73,7 @@ fn content_string_attr_important_and_mutation_use_native_data() {
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     assert_eq!(
-        content(unsafe { &*resolved.before.as_ref().unwrap().native_style.Get() }),
+        content(unsafe { &*resolved.before.as_ref().unwrap().computed_style_owner.Get() }),
         "two A"
     );
 }
@@ -91,15 +93,16 @@ fn content_inherit_is_chromium_noop_and_revert_layer_uses_normal_cascade() {
         engine.Diagnostics()
     );
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
-    let native = unsafe { &*resolved.native_style.Get() };
-    assert_eq!(content(native), "origin");
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    assert_eq!(content(computed_style), "origin");
     assert_eq!(
-        content(unsafe { &*resolved.before.as_ref().unwrap().native_style.Get() }),
+        content(unsafe { &*resolved.before.as_ref().unwrap().computed_style_owner.Get() }),
         "base"
     );
     assert!(resolved.after.is_none());
-    let inherited = native.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdAfter);
+    let inherited =
+        computed_style.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdAfter);
     assert!(unsafe { &*inherited }.GetContentData().is_none());
     assert!(unsafe { &*inherited }.HasExplicitInheritance());
-    assert!(native.ChildHasExplicitInheritance());
+    assert!(computed_style.ChildHasExplicitInheritance());
 }

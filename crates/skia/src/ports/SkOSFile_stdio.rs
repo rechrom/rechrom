@@ -12,7 +12,7 @@ unsafe extern "C" {
 unsafe extern "C" {
     static mut stderr: *mut FILE;
 }
-unsafe fn native_stderr() -> *mut FILE {
+unsafe fn stderr() -> *mut FILE {
     #[cfg(target_vendor = "apple")]
     {
         __stderrp
@@ -114,7 +114,7 @@ pub unsafe fn sk_mkdir(path: *const c_char) -> bool {
     // Native default argument is zero (existence only).
     if crate::src::core::SkOSFile::sk_exists(path, 0) {
         libc::fprintf(
-            native_stderr(),
+            stderr(),
             b"sk_mkdir: path '%s' already exists but is not a directory\n\0"
                 .as_ptr()
                 .cast(),

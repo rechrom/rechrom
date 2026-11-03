@@ -286,7 +286,7 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> CompositorLay
             Self::SolidColorScrollbar(layer) => layer.GetLayerType(),
         }
     }
-    fn native_damage_rect(&self) -> Rect {
+    fn damage_rect(&self) -> Rect {
         match self {
             Self::Picture(layer) => layer.GetDamageRectForDispatch(),
             _ => self.impl_base().GetDamageRect(),
@@ -471,14 +471,14 @@ where
             .LayerPropertyChangedFromPropertyTreesForPropertyTrees(trees)
     }
     fn GetDamageRect(&self) -> Rect {
-        self.native_damage_rect()
+        self.damage_rect()
     }
     fn GetDamageReasons(
         &self,
         trees: &PropertyTreesFor<B>,
     ) -> crate::cc::trees::damage_reason::DamageReasonSet {
         self.impl_base()
-            .GetDamageReasonsForPropertyTrees(trees, || self.native_damage_rect())
+            .GetDamageReasonsForPropertyTrees(trees, || self.damage_rect())
     }
     fn GetEnclosingVisibleRectInTargetSpace(&self, trees: &PropertyTreesFor<B>) -> Rect {
         match self {

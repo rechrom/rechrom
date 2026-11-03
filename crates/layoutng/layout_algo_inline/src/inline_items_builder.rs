@@ -2,7 +2,7 @@
 // instantiations share this Rust generic and retain their mapping modes.
 #![allow(non_snake_case)]
 
-use font_engine::text::native::character::Character;
+use font_engine::text::implementation::character::Character;
 use font_engine::FontHeight;
 use foundation::{
     kNotFound, EOrder, ETextTransform, HeapVector, IsA, MakeGarbageCollected, Member, String,

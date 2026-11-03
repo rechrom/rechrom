@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::text::native::emoji_segmentation_category::{
+use crate::text::implementation::emoji_segmentation_category::{
     EmojiSegmentationCategory, GetEmojiSegmentationCategory,
 };
 use std::ops::{Add, AddAssign, Sub, SubAssign};

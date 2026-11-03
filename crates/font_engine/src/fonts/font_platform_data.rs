@@ -1,12 +1,12 @@
 // C++: font_engine/fonts/font_platform_data.h/.cc. HarfBuzzFace and its
-// back-reference remain GC members; OpenTypeFont and the native backend use
+// back-reference remain GC members; OpenTypeFont and the platform backend use
 // reference counting as in the source.
 use super::font_backend::{FontBackend, FontVariation};
 use super::font_orientation::{FontOrientation, IsVerticalAnyUpright, IsVerticalNonCJKUpright};
 use super::resolved_font_features::ResolvedFontFeatures;
 use super::shaping::harfbuzz_face::HarfBuzzFace;
 use super::text_rendering_mode::TextRenderingMode;
-use crate::text::native::opentype_font::OpenTypeFont;
+use crate::text::implementation::opentype_font::OpenTypeFont;
 use foundation::{MakeGarbageCollected, Member, Traceable, Visitor};
 use std::cell::RefCell;
 use std::sync::Arc;

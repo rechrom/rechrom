@@ -99,7 +99,7 @@ trait EnvironmentObserver<B: StyleEnvironmentVariablesBackend> {
 }
 
 thread_local! {
-    // Exactly the source root singleton. One provider owns the native class;
+    // Exactly the source root singleton. One provider owns the computed style class;
     // selecting a different provider is an integration error, not a fallback.
     static ROOT_INSTANCE: RefCell<Option<Rc<dyn Any>>> = RefCell::new(None);
 }

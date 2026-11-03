@@ -1,4 +1,4 @@
-//! Native feature-values ownership through Style's retained document lifecycle.
+//! Canonical feature-values ownership through Style's retained document lifecycle.
 use font_engine::fonts::font_description::FontDescription;
 use foundation::Persistent;
 use layoutng_style::style::computed_style::ComputedStyle;
@@ -20,12 +20,12 @@ fn node(owner: &dom::DOM, id: &str) -> usize {
         .find(|&i| d.Node(i).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap()
 }
-fn native(owner: &dom::DOM, id: &str) -> Persistent<ComputedStyle> {
+fn computed_style(owner: &dom::DOM, id: &str) -> Persistent<ComputedStyle> {
     owner
         .GetDocument()
         .ResolvedStyleFor(node(owner, id))
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone()
 }
 fn features(description: &FontDescription, family: &str) -> Vec<(String, u32)> {
@@ -51,7 +51,7 @@ fn features(description: &FontDescription, family: &str) -> Vec<(String, u32)> {
 }
 fn actual(owner: &dom::DOM, id: &str, family: &str) -> Vec<(String, u32)> {
     features(
-        unsafe { &*native(owner, id).Get() }.GetFontDescription(),
+        unsafe { &*computed_style(owner, id).Get() }.GetFontDescription(),
         family,
     )
 }
@@ -109,7 +109,7 @@ fn symbolic_alternates_remain_canonical_with_distinct_family_resolution_and_inhe
         actual(&owner, "parent", "Missing"),
         vec![("hist".into(), 1)]
     );
-    let retained = native(&owner, "parent");
+    let retained = computed_style(&owner, "parent");
     let parent = unsafe { &*retained.Get() };
     assert_eq!(
         parent
@@ -129,19 +129,19 @@ fn symbolic_alternates_remain_canonical_with_distinct_family_resolution_and_inhe
         features(pseudo.GetFontDescription(), "Beta"),
         vec![("ss10".into(), 1), ("hist".into(), 1)]
     );
-    assert!(unsafe { &*native(&owner, "normal").Get() }
+    assert!(unsafe { &*computed_style(&owner, "normal").Get() }
         .GetFontDescription()
         .ResolvedFontFeaturesForFamilies()
         .is_empty());
 }
 
 #[test]
-fn alias_only_sheet_edits_invalidate_fonts_and_preserve_old_native_snapshot() {
+fn alias_only_sheet_edits_invalidate_fonts_and_preserve_old_computed_style_snapshot() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<!doctype html><style id=aliases>@font-feature-values Probe{@styleset{readable:2}}</style><style>#target{font-family:Probe;font-variant-alternates:styleset(readable)}</style><span id=target>letters</span>");
     let mut engine = StyleEngine::new(&owner);
     update(&mut engine, &mut owner, 800.);
-    let retained = native(&owner, "target");
+    let retained = computed_style(&owner, "target");
     assert_eq!(actual(&owner, "target", "Probe"), ss(2));
     assert!(update(&mut engine, &mut owner, 800.).IsEmpty());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 0);
@@ -159,7 +159,7 @@ fn alias_only_sheet_edits_invalidate_fonts_and_preserve_old_native_snapshot() {
     );
     assert!(
         unsafe { &*retained.Get() }.GetFontDescription()
-            != unsafe { &*native(&owner, "target").Get() }.GetFontDescription()
+            != unsafe { &*computed_style(&owner, "target").Get() }.GetFontDescription()
     );
     owner.GetDocumentMut().Remove(aliases);
     assert!(update(&mut engine, &mut owner, 800.).layout);

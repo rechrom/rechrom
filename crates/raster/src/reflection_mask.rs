@@ -35,7 +35,7 @@ pub fn CompileReflectionMaskLayers(
                             // may only consume its compiled immutable record; the
                             // producer has not supplied that typed payload yet.
                             return Err(io::Error::new(io::ErrorKind::Unsupported,
-                                "reflection document mask requires compositor-precompiled native PaintRecord"));
+                                "reflection document mask requires compositor-precompiled source PaintRecord"));
                         }
                     },
                 };

@@ -43,7 +43,10 @@ impl<'a> FocusController<'a> {
             }
             if document
                 .ResolvedStyleFor(index)
-                .is_some_and(|style| !style.style.paint.visible)
+                .and_then(|style| style.ComputedStyle())
+                .is_some_and(|style| {
+                    style.Visibility() != foundation::style_constants::EVisibility::kVisible
+                })
             {
                 return false;
             }

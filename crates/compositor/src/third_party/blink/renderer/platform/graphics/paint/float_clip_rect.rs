@@ -159,3 +159,45 @@ pub fn InfiniteLooseFloatClipRect() -> FloatClipRect {
     rect.ClearIsTight();
     rect
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infinite_clip_and_unknown_infinite_clip_keep_distinct_tightness() {
+        let finite = FloatClipRect::FromRect(RectF::new(1.0, 2.0, 3.0, 4.0));
+        let mut no_clip = FloatClipRect::default();
+        no_clip.Intersect(&finite);
+        assert_eq!(no_clip, finite);
+
+        let mut unknown_bounds = InfiniteLooseFloatClipRect();
+        assert!(unknown_bounds.IsInfinite());
+        assert!(!unknown_bounds.IsTight());
+        unknown_bounds.Intersect(&finite);
+        assert!(!unknown_bounds.IsInfinite());
+        assert!(!unknown_bounds.IsTight());
+        assert_eq!(*unknown_bounds.Rect(), *finite.Rect());
+    }
+
+    #[test]
+    fn rounded_intersection_propagates_radius_and_looseness() {
+        let rounded = FloatClipRect::FromRoundedRect(&RRectF {
+            rect: RectF::new(5.0, 5.0, 20.0, 20.0),
+            corner_radii: [Vector2dF::new(2.0, 3.0); 4],
+        });
+        let mut clip = FloatClipRect::FromRect(RectF::new(0.0, 0.0, 10.0, 10.0));
+        clip.Intersect(&rounded);
+        assert_eq!(*clip.Rect(), RectF::new(5.0, 5.0, 5.0, 5.0));
+        assert!(clip.HasRadius());
+        assert!(!clip.IsTight());
+    }
+
+    #[test]
+    fn inclusive_intersection_retains_touching_edges() {
+        let mut clip = FloatClipRect::FromRect(RectF::new(0.0, 0.0, 10.0, 10.0));
+        let touching = FloatClipRect::FromRect(RectF::new(10.0, 2.0, 3.0, 4.0));
+        assert!(clip.InclusiveIntersect(&touching));
+        assert_eq!(*clip.Rect(), RectF::new(10.0, 2.0, 0.0, 4.0));
+    }
+}

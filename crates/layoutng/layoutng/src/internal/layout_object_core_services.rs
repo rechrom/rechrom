@@ -25,26 +25,26 @@ use super::layout_text::LayoutText;
 use super::map_coordinates_flags::{MapCoordinatesFlags, MapCoordinatesMode};
 use super::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 
-#[path = "../../../layout_invalidation/src/native_layout_object_style_update.rs"]
-mod layout_invalidation_native_layout_object_style_update;
+#[path = "../../../layout_invalidation/src/layout_object_style_update.rs"]
+mod layout_invalidation_layout_object_style_update;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_tree_lifecycle.rs"]
-mod layout_invalidation_native_layout_object_tree_lifecycle;
+#[path = "../../../layout_invalidation/src/layout_object_tree_lifecycle.rs"]
+mod layout_invalidation_layout_object_tree_lifecycle;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_child_mutation.rs"]
-mod layout_invalidation_native_layout_object_child_mutation;
+#[path = "../../../layout_invalidation/src/layout_object_child_mutation.rs"]
+mod layout_invalidation_layout_object_child_mutation;
 
-#[path = "../../../layout_fragment/src/native_layout_object_overflow_recalc.rs"]
-mod layout_fragment_native_layout_object_overflow_recalc;
+#[path = "../../../layout_fragment/src/layout_object_overflow_recalc.rs"]
+mod layout_fragment_layout_object_overflow_recalc;
 
-#[path = "../../../layout_fragment/src/native_layout_object_geometry_queries.rs"]
-mod layout_fragment_native_layout_object_geometry_queries;
+#[path = "../../../layout_fragment/src/layout_object_geometry_queries.rs"]
+mod layout_fragment_layout_object_geometry_queries;
 
-#[path = "../../../layout_reuse/src/native_layout_object_font_validity.rs"]
-mod layout_reuse_native_layout_object_font_validity;
+#[path = "../../../layout_reuse/src/layout_object_font_validity.rs"]
+mod layout_reuse_layout_object_font_validity;
 
-#[path = "../../../layout_algo_svg/src/native_layout_object_svg_dispatch.rs"]
-mod layout_algo_svg_native_layout_object_svg_dispatch;
+#[path = "../../../layout_algo_svg/src/layout_object_svg_dispatch.rs"]
+mod layout_algo_svg_layout_object_svg_dispatch;
 
 // The concrete hierarchy must supply each virtual dispatch entry.
 // cpp: layoutng/internal/layout_object_core_services.cc:107-162
@@ -131,7 +131,11 @@ impl LayoutObject {
 
     pub fn IsInTopOrViewTransitionLayer(&self) -> bool {
         self.CheckIsNotDestroyed();
-        false
+        if self.IsViewTransitionRoot() {
+            return true;
+        }
+        let parent = self.Parent();
+        !self.IsDocumentElement() && !parent.is_null() && unsafe { &*parent }.IsLayoutView()
     }
 
     // cpp: layoutng/internal/layout_object_core_services.cc:402-408

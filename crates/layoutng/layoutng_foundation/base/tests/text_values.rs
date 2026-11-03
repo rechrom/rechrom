@@ -1,9 +1,9 @@
 use foundation::layout_features::runtime_enabled_features::RuntimeEnabledFeatures;
-use foundation::text::native::character_property::CharacterProperty;
-use foundation::text::native::east_asian_spacing_type::EastAsianSpacingType;
-use foundation::text::native::han_kerning_char_type::HanKerningCharType;
-use foundation::text::native::tab_size::{TabSize, TabSizeValueType};
-use foundation::text::native::unicode_bidi::{IsIsolated, IsOverride, UnicodeBidi};
+use foundation::text::primitives::character_property::CharacterProperty;
+use foundation::text::primitives::east_asian_spacing_type::EastAsianSpacingType;
+use foundation::text::primitives::han_kerning_char_type::HanKerningCharType;
+use foundation::text::primitives::tab_size::{TabSize, TabSizeValueType};
+use foundation::text::primitives::unicode_bidi::{IsIsolated, IsOverride, UnicodeBidi};
 
 #[test]
 fn character_property_packing_matches_cpp_probe() {

@@ -1,4 +1,4 @@
-//! Source-aligned minmax grammar and native track values through production Style.
+//! Source-aligned minmax grammar and computed style track values through production Style.
 use foundation::CSSPropertyID as P;
 use style::css_value::CSSValuePayload;
 use style::parser::{
@@ -92,7 +92,7 @@ fn minmax_shorthands_share_the_track_consumer() {
 }
 
 #[test]
-fn subgrid_parser_and_native_style_retain_the_subgridded_axis() {
+fn subgrid_parser_and_computed_style_style_retain_the_subgridded_axis() {
     for value in [
         "subgrid",
         "subgrid [content-start] [content-end]",
@@ -146,14 +146,20 @@ fn subgrid_parser_and_native_style_retain_the_subgridded_axis() {
                 .is_some_and(|attribute| attribute.value == "g")
         })
         .unwrap();
-    let native = unsafe { &*doc.ResolvedStyleFor(index).unwrap().native_style.Get() };
-    let columns = unsafe { &*native.SpecifiedGridTemplateColumns().Get() };
+    let computed_style = unsafe {
+        &*doc
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
+    let columns = unsafe { &*computed_style.SpecifiedGridTemplateColumns().Get() };
     assert!(columns.IsSubgriddedAxis());
     assert!(columns.GetTrackList().IsSubgriddedAxis());
 }
 
 #[test]
-fn minmax_native_values_preserve_math_flex_intrinsic_and_minimum_greater_than_maximum() {
+fn minmax_computed_style_values_preserve_math_flex_intrinsic_and_minimum_greater_than_maximum() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=g style='font-size:16px;grid-template-columns:minmax(calc(1px - 2px),1fr) minmax(min-content,auto) minmax(100px,20px);grid-auto-rows:minmax(10%,2fr);grid-template-rows:minmax(10px,30px)'></div>");
     let mut engine = StyleEngine::new(&owner);
@@ -173,8 +179,14 @@ fn minmax_native_values_preserve_math_flex_intrinsic_and_minimum_greater_than_ma
                 .is_some_and(|a| a.value == "g")
         })
         .unwrap();
-    let native = unsafe { &*doc.ResolvedStyleFor(index).unwrap().native_style.Get() };
-    let columns = unsafe { &*native.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
+    let computed_style = unsafe {
+        &*doc
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
+    let columns = unsafe { &*computed_style.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
     let first = columns.RepeatTrackSize(0, 0);
     assert_eq!(first.MinTrackBreadth().Pixels(), 0.0);
     assert_eq!(first.MaxTrackBreadth().FlexValue(), 1.0);
@@ -184,15 +196,49 @@ fn minmax_native_values_preserve_math_flex_intrinsic_and_minimum_greater_than_ma
     let third = columns.RepeatTrackSize(2, 0);
     assert_eq!(third.MinTrackBreadth().Pixels(), 100.0);
     assert_eq!(third.MaxTrackBreadth().Pixels(), 20.0);
-    let auto = native.GridAutoRows().RepeatTrackSize(0, 0);
+    let auto = computed_style.GridAutoRows().RepeatTrackSize(0, 0);
     assert_eq!(auto.MinTrackBreadth().PercentValue(), 10.0);
     assert_eq!(auto.MaxTrackBreadth().FlexValue(), 2.0);
     assert_eq!(
-        unsafe { &*native.SpecifiedGridTemplateRows().Get() }
+        unsafe { &*computed_style.SpecifiedGridTemplateRows().Get() }
             .GetTrackList()
             .RepeatTrackSize(0, 0)
             .MaxTrackBreadth()
             .Pixels(),
         30.0
     );
+}
+
+#[test]
+fn physical_min_height_preserves_min_content_in_computed_style() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<div id=target style='height:100%;min-height:min-content'></div>",
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine
+        .Update(&mut owner, &MediaValuesCachedData::default(), &[])
+        .unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let doc = owner.GetDocument();
+    let index = (0..doc.NodeCount())
+        .find(|&i| {
+            doc.Node(i)
+                .FindAttribute("id")
+                .is_some_and(|attribute| attribute.value == "target")
+        })
+        .unwrap();
+    let computed_style = unsafe {
+        &*doc
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
+    assert!(computed_style.Height().IsPercent());
+    assert!(computed_style.MinHeight().IsMinContent());
 }

@@ -180,8 +180,8 @@ impl<B: MainLayerTypes> Default for LayerTreeInputs<B> {
 pub struct Layer<B: MainLayerTypes> {
     // Native base::RefCounted lifecycle, distinct from temporary Rust pointer
     // liveness. 0=live, 1=derived destruction, 2=base destruction, 3=dead.
-    native_owners_: AtomicUsize,
-    native_lifecycle_: AtomicU8,
+    owners_: AtomicUsize,
+    lifecycle_: AtomicU8,
     parent_: ProtectedSequenceReadable<Option<Weak<dyn LayerObject<B>>>>,
     layer_tree_host_: RwLock<Option<MainLayerHostId>>,
     layer_tree_inputs_: ProtectedSequenceReadableBox<LayerTreeInputs<B>>,
@@ -223,7 +223,7 @@ pub trait LayerObject<B: MainLayerTypes>: Send + Sync {
     }
     // Rust destructor dispatch for the native most-derived destructor chain.
     // Derived owners release their own members and invoke the canonical base.
-    fn NativeShutdown(&self, c: &mut LayerContext<'_, B>) {
+    fn ShutdownLayer(&self, c: &mut LayerContext<'_, B>) {
         self.base().Shutdown(c);
     }
     // Source: cc/layers/layer.h:795. Virtual dispatch only; canonical base
@@ -320,7 +320,7 @@ impl<B: MainLayerTypes> Clone for LayerRef<B> {
     fn clone(&self) -> Self {
         self.0
             .base()
-            .native_owners_
+            .owners_
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 if count == 0 {
                     None
@@ -336,7 +336,7 @@ impl<B: MainLayerTypes> std::ops::Deref for LayerRef<B> {
     type Target = Layer<B>;
     fn deref(&self) -> &Layer<B> {
         assert_eq!(
-            self.0.base().native_lifecycle_.load(Ordering::Acquire),
+            self.0.base().lifecycle_.load(Ordering::Acquire),
             0,
             "native Layer owner points to a destroyed object"
         );
@@ -376,8 +376,8 @@ impl<B: MainLayerTypes> Layer<B> {
     // Source: cc/layers/layer.cc:106-119.
     pub(crate) fn new(services: &dyn MainLayerServices) -> Self {
         Self {
-            native_owners_: AtomicUsize::new(1),
-            native_lifecycle_: AtomicU8::new(0),
+            owners_: AtomicUsize::new(1),
+            lifecycle_: AtomicU8::new(0),
             parent_: ProtectedSequenceReadable::new(None),
             layer_tree_host_: RwLock::new(None),
             layer_tree_inputs_: ProtectedSequenceReadableBox::new(None),
@@ -755,15 +755,15 @@ impl<B: MainLayerTypes> LayerBorrow<B> {
         std::ptr::eq(self.0.base(), base)
     }
     pub fn IsAlive(&self) -> bool {
-        self.0.base().native_lifecycle_.load(Ordering::Acquire) == 0
-            && self.0.base().native_owners_.load(Ordering::Acquire) > 0
+        self.0.base().lifecycle_.load(Ordering::Acquire) == 0
+            && self.0.base().owners_.load(Ordering::Acquire) > 0
     }
     fn object(&self, c: &LayerContext<'_, B>) -> &dyn LayerObject<B> {
         let base = self.0.base();
-        let state = base.native_lifecycle_.load(Ordering::Acquire);
+        let state = base.lifecycle_.load(Ordering::Acquire);
         assert!(
             self.IsAlive()
-                || ((state == 1 || state == 2) && c.native_destruction_layer == Some(base.id())),
+                || ((state == 1 || state == 2) && c.destruction_layer == Some(base.id())),
             "raw Layer borrow used after native Shutdown"
         );
         self.0.as_ref()
@@ -784,23 +784,23 @@ impl<B: MainLayerTypes> Drop for LayerRef<B> {
     fn drop(&mut self) {
         let base = self.0.base();
         let previous = base
-            .native_owners_
+            .owners_
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 count.checked_sub(1)
             })
             .expect("native Layer owner-count underflow");
         if previous == 1 {
-            base.native_lifecycle_
+            base.lifecycle_
                 .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
                 .expect("native Layer Shutdown executed twice");
             let mut context = LayerContext::DetachedForDestruction(base.id());
-            self.0.NativeShutdown(&mut context);
+            self.0.ShutdownLayer(&mut context);
             assert_eq!(
-                base.native_lifecycle_.load(Ordering::Acquire),
+                base.lifecycle_.load(Ordering::Acquire),
                 2,
                 "most-derived shutdown must execute its unique native base destructor"
             );
-            base.native_lifecycle_.store(3, Ordering::Release);
+            base.lifecycle_.store(3, Ordering::Release);
         }
     }
 }
@@ -1099,16 +1099,16 @@ impl<B: MainLayerTypes> Layer<B> {
     // at the last LayerRef release while raw Rust borrows may still keep allocation.
     pub(crate) fn Shutdown(&self, c: &mut LayerContext<'_, B>) {
         assert_eq!(
-            c.native_destruction_layer,
+            c.destruction_layer,
             Some(self.id()),
             "native destructor requires its scoped allocation identity"
         );
         assert_eq!(
-            self.native_owners_.load(Ordering::Acquire),
+            self.owners_.load(Ordering::Acquire),
             0,
             "native destructor requires the final owner release"
         );
-        self.native_lifecycle_
+        self.lifecycle_
             .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
             .expect("native Layer base destructor executed twice");
         debug_assert!(self.parent(c).is_none());
@@ -3425,7 +3425,7 @@ impl<B: MainLayerTypes> LayerBorrow<B> {
     pub fn ToSourceRef(&self, c: &LayerContext<'_, B>) -> LayerRef<B> {
         self.object(c)
             .base()
-            .native_owners_
+            .owners_
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 if n == 0 {
                     None

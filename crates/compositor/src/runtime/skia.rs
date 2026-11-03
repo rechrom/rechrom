@@ -7,13 +7,13 @@ use std::sync::OnceLock;
 pub use skia::src::core::SkPath::SkPath as BoundaryPath;
 use skia::src::core::{
     SkRect::SkIRect as SkRegionIRect,
-    SkRegion::{Op, RegionIterator as SkRegionIterator, SkRegion as NativeSkRegion},
+    SkRegion::{Op, RegionIterator as SkRegionIterator, SkRegion as SkRegionStorage},
 };
 
 #[derive(Clone, Default, PartialEq)]
-pub struct SkRegion(NativeSkRegion);
+pub struct SkRegion(SkRegionStorage);
 
-fn native_rect(rect: SkIRect) -> SkRegionIRect {
+fn sk_region_rect(rect: SkIRect) -> SkRegionIRect {
     SkRegionIRect::make_ltrb(rect.left, rect.top, rect.right, rect.bottom)
 }
 fn region_rect(rect: SkRegionIRect) -> SkIRect {
@@ -32,7 +32,7 @@ fn region_op(op: SkRegionOp) -> Op {
         SkRegionOp::XOR => Op::Xor,
     }
 }
-/// Borrowed native RLE cursor; each next projects one current LTRB value.
+/// Borrowed Skia RLE cursor; each next projects one current LTRB value.
 pub struct RegionRectIterator<'a>(SkRegionIterator<'a>);
 impl Iterator for RegionRectIterator<'_> {
     type Item = SkIRect;
@@ -49,14 +49,14 @@ impl SkRegionBackend for SkRegion {
     type BoundaryPath = BoundaryPath;
     type RectIterator<'a> = RegionRectIterator<'a>;
     fn from_rect(rect: SkIRect) -> Self {
-        Self(NativeSkRegion::from_rect(native_rect(rect)))
+        Self(SkRegionStorage::from_rect(sk_region_rect(rect)))
     }
     fn shared_empty_region() -> &'static Region<Self> {
         static EMPTY: OnceLock<Region<SkRegion>> = OnceLock::new();
         EMPTY.get_or_init(Region::default)
     }
     fn translate(&mut self, x: i32, y: i32) {
-        NativeSkRegion::translate(&mut self.0, x, y);
+        SkRegionStorage::translate(&mut self.0, x, y);
     }
     fn setEmpty(&mut self) {
         {
@@ -85,7 +85,7 @@ impl SkRegionBackend for SkRegion {
     }
     fn contains_rect(&self, rect: SkIRect) -> bool {
         {
-            NativeSkRegion::contains_rect(&self.0, &native_rect(rect))
+            SkRegionStorage::contains_rect(&self.0, &sk_region_rect(rect))
         }
     }
     fn contains_region(&self, region: &Self) -> bool {
@@ -95,7 +95,7 @@ impl SkRegionBackend for SkRegion {
     }
     fn intersects_rect(&self, rect: SkIRect) -> bool {
         {
-            NativeSkRegion::intersects_rect(&self.0, &native_rect(rect))
+            SkRegionStorage::intersects_rect(&self.0, &sk_region_rect(rect))
         }
     }
     fn intersects_region(&self, region: &Self) -> bool {
@@ -105,17 +105,21 @@ impl SkRegionBackend for SkRegion {
     }
     fn op_rect(&mut self, rect: SkIRect, op: SkRegionOp) {
         {
-            NativeSkRegion::op_rect(&mut self.0, native_rect(rect), region_op(op));
+            SkRegionStorage::op_rect(&mut self.0, sk_region_rect(rect), region_op(op));
         }
     }
     fn op_region(&mut self, region: &Self, op: SkRegionOp) {
         {
-            NativeSkRegion::op_region(&mut self.0, &region.0, region_op(op));
+            SkRegionStorage::op_region(&mut self.0, &region.0, region_op(op));
         }
     }
     fn setRects(&mut self, rects: &[SkIRect]) {
         {
-            let rects = rects.iter().copied().map(native_rect).collect::<Vec<_>>();
+            let rects = rects
+                .iter()
+                .copied()
+                .map(sk_region_rect)
+                .collect::<Vec<_>>();
             self.0.set_rects(&rects);
         }
     }
@@ -205,16 +209,18 @@ impl RoundedRectTransformBackend for SkRegion {
 
 use crate::adapter::{geometry::Rect, occlusion::SkMatrix};
 use foundation::gfx;
-use paint::cc::paint::filter_operation::{FilterMapTransform, FilterType};
+use paint::cc::paint::filter_operation::{
+    FilterMapTransform as FilterMapTransformContract, FilterType,
+};
 pub use paint::cc::paint::filter_operations::FilterOperations;
 
 /// Feature-selected native matrix used only for FilterOperation::mapVector.
 /// Adapter property trees keep their source-shaped nine scalar values while
 /// each production Skia path executes its own matrix implementation.
-struct NativeFilterMapTransform {
+struct FilterMapTransform {
     matrix: TranslatedMatrix,
 }
-impl NativeFilterMapTransform {
+impl FilterMapTransform {
     fn new(values: [f32; 9]) -> Self {
         {
             Self {
@@ -226,7 +232,7 @@ impl NativeFilterMapTransform {
         }
     }
 }
-impl FilterMapTransform for NativeFilterMapTransform {
+impl FilterMapTransformContract for FilterMapTransform {
     fn MapVector(&self, x: f32, y: f32) -> (f32, f32) {
         {
             let mapped = self.matrix.mapVector(TranslatedPoint::make(x, y));
@@ -234,7 +240,7 @@ impl FilterMapTransform for NativeFilterMapTransform {
         }
     }
 }
-fn native_filter_rect(rect: Rect) -> gfx::Rect {
+fn sk_filter_rect(rect: Rect) -> gfx::Rect {
     gfx::Rect::new(
         gfx::Point::new(rect.x, rect.y),
         gfx::Size::new(rect.width, rect.height),
@@ -254,13 +260,8 @@ impl crate::adapter::draw_property::DrawFilters for FilterOperations {
         self.HasFilterOfType(FilterType::BLUR)
     }
     fn ExpandRect(&self, rect: Rect, scale: Vector2dF) -> Rect {
-        let matrix =
-            NativeFilterMapTransform::new([scale.x(), 0., 0., 0., scale.y(), 0., 0., 0., 1.]);
-        filter_rect(Self::ExpandRect(
-            self,
-            native_filter_rect(rect),
-            Some(&matrix),
-        ))
+        let matrix = FilterMapTransform::new([scale.x(), 0., 0., 0., scale.y(), 0., 0., 0., 1.]);
+        filter_rect(Self::ExpandRect(self, sk_filter_rect(rect), Some(&matrix)))
     }
 }
 impl crate::adapter::damage_context::DamageFilters for FilterOperations {
@@ -268,12 +269,8 @@ impl crate::adapter::damage_context::DamageFilters for FilterOperations {
         Self::HasFilterThatMovesPixels(self)
     }
     fn MapRect(&self, rect: Rect, transform: &SkMatrix) -> Rect {
-        let transform = NativeFilterMapTransform::new(transform.values);
-        filter_rect(Self::MapRect(
-            self,
-            native_filter_rect(rect),
-            Some(&transform),
-        ))
+        let transform = FilterMapTransform::new(transform.values);
+        filter_rect(Self::MapRect(self, sk_filter_rect(rect), Some(&transform)))
     }
 }
 impl crate::adapter::occlusion::OcclusionFilters for FilterOperations {
@@ -284,10 +281,10 @@ impl crate::adapter::occlusion::OcclusionFilters for FilterOperations {
         Self::HasFilterThatMovesPixels(self)
     }
     fn MapRectReverse(&self, rect: Rect, transform: &SkMatrix) -> Rect {
-        let transform = NativeFilterMapTransform::new(transform.values);
+        let transform = FilterMapTransform::new(transform.values);
         filter_rect(Self::MapRectReverse(
             self,
-            native_filter_rect(rect),
+            sk_filter_rect(rect),
             Some(&transform),
         ))
     }
@@ -354,6 +351,74 @@ impl crate::adapter::main_layer::MainLayerPath for SkPath {
         }
     }
 }
+
+fn stroke_backend_path(
+    path: &SkPath,
+    width: f32,
+    cap: paint::cc::paint::paint_flags::Cap,
+    join: paint::cc::paint::paint_flags::Join,
+    miter_limit: f32,
+    dash_intervals: &[f32],
+    dash_phase: f32,
+    resolution_scale: f32,
+) -> Option<SkPath> {
+    if !width.is_finite()
+        || width < 0.0
+        || !miter_limit.is_finite()
+        || !dash_phase.is_finite()
+        || !resolution_scale.is_finite()
+        || resolution_scale <= 0.0
+        || dash_intervals.iter().any(|value| !value.is_finite())
+        || !path.isFinite()
+        || path.isEmpty()
+    {
+        return None;
+    }
+    use skia::src::{
+        core::{
+            SkPaint::{Cap as SkCap, Join as SkJoin},
+            SkPathBuilder::SkPathBuilder,
+            SkPathEffect::SkPathEffect,
+            SkStrokeRec::{InitStyle, SkStrokeRec},
+        },
+        effects::SkDashPathEffect,
+    };
+    let mut stroke = SkStrokeRec::new(InitStyle::kHairline_InitStyle);
+    stroke.setStrokeStyle(width, false);
+    stroke.setStrokeParams(
+        match cap {
+            paint::cc::paint::paint_flags::Cap::kButt_Cap => SkCap::kButt_Cap,
+            paint::cc::paint::paint_flags::Cap::kRound_Cap => SkCap::kRound_Cap,
+            paint::cc::paint::paint_flags::Cap::kSquare_Cap => SkCap::kSquare_Cap,
+        },
+        match join {
+            paint::cc::paint::paint_flags::Join::kMiter_Join => SkJoin::kMiter_Join,
+            paint::cc::paint::paint_flags::Join::kRound_Join => SkJoin::kRound_Join,
+            paint::cc::paint::paint_flags::Join::kBevel_Join => SkJoin::kBevel_Join,
+        },
+        miter_limit,
+    );
+    stroke.setResScale(resolution_scale);
+    let mut filtered = SkPathBuilder::new();
+    let filtered_path = if dash_intervals.is_empty() {
+        None
+    } else {
+        let effect = SkDashPathEffect::Make(dash_intervals, dash_phase);
+        effect
+            .get()
+            .filter(|effect| effect.filterPathWithoutCTM(&mut filtered, path, &mut stroke))
+            .map(|_| filtered.detach(None))
+    };
+    let source = filtered_path.as_ref().unwrap_or(path);
+    if stroke.isFillStyle() {
+        return Some(source.clone());
+    }
+    let mut outline = SkPathBuilder::new();
+    stroke
+        .applyToPath(&mut outline, source)
+        .then(|| outline.detach(None))
+}
+
 impl crate::runtime::types::SkiaValueBackend for SkRegion {
     type Filters = FilterOperations;
     type Path = SkPath;
@@ -484,6 +549,49 @@ impl crate::runtime::types::SkiaValueBackend for SkRegion {
                 })
         }
     }
+    fn StrokePath(
+        path: &paint::paint_clip_path::PaintPath,
+        width: f32,
+        cap: paint::cc::paint::paint_flags::Cap,
+        join: paint::cc::paint::paint_flags::Join,
+        miter_limit: f32,
+        dash_intervals: &[f32],
+        dash_phase: f32,
+        resolution_scale: f32,
+    ) -> Option<Self::Path> {
+        let path = Self::FromPaintPath(path);
+        stroke_backend_path(
+            &path,
+            width,
+            cap,
+            join,
+            miter_limit,
+            dash_intervals,
+            dash_phase,
+            resolution_scale,
+        )
+    }
+    fn StrokeBackendPath(
+        path: &Self::Path,
+        width: f32,
+        cap: paint::cc::paint::paint_flags::Cap,
+        join: paint::cc::paint::paint_flags::Join,
+        miter_limit: f32,
+        dash_intervals: &[f32],
+        dash_phase: f32,
+        resolution_scale: f32,
+    ) -> Option<Self::Path> {
+        stroke_backend_path(
+            path,
+            width,
+            cap,
+            join,
+            miter_limit,
+            dash_intervals,
+            dash_phase,
+            resolution_scale,
+        )
+    }
 }
 
 // Source consumer: cc/layers/render_surface_impl.cc:242-246. The selected
@@ -491,11 +599,7 @@ impl crate::runtime::types::SkiaValueBackend for SkRegion {
 // the external 3x3/value representations at the package boundary.
 impl crate::adapter::render_surface_impl::RenderSurfaceFilters for FilterOperations {
     fn ExpandRectWithMatrix(&self, rect: Rect, matrix: &SkMatrix) -> Rect {
-        let matrix = NativeFilterMapTransform::new(matrix.values);
-        filter_rect(Self::ExpandRect(
-            self,
-            native_filter_rect(rect),
-            Some(&matrix),
-        ))
+        let matrix = FilterMapTransform::new(matrix.values);
+        filter_rect(Self::ExpandRect(self, sk_filter_rect(rect), Some(&matrix)))
     }
 }

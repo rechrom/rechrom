@@ -1,6 +1,6 @@
 //! Integer repeat track lists through production Style and native LayoutNG.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::{
@@ -59,7 +59,7 @@ fn fixture(css: &str, children: &str) -> Page {
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -127,12 +127,15 @@ fn native(
                 .is_some_and(|a| a.value == name)
         })
         .unwrap();
-    doc.ResolvedStyleFor(index).unwrap().native_style.clone()
+    doc.ResolvedStyleFor(index)
+        .unwrap()
+        .computed_style_owner
+        .clone()
 }
 
 #[test]
-fn integer_repeat_reaches_native_tracks_and_two_row_column_flow() {
-    native_test_thread::run(|| {
+fn integer_repeat_reaches_source_tracks_and_two_row_column_flow() {
+    test_thread::run(|| {
         let page = fixture("width:683px;grid-auto-flow:column;grid-template-columns:repeat(9,1fr);grid-template-rows:repeat(2,1fr);gap:10px", &(0..18).map(|i| format!("<div id=item{i} style='height:28px'></div>")).collect::<String>());
         let style = native(&page, "grid");
         let style = unsafe { &*style.Get() };
@@ -152,7 +155,7 @@ fn integer_repeat_reaches_native_tracks_and_two_row_column_flow() {
 
 #[test]
 fn integer_repeat_with_spanning_item_preserves_four_column_geometry() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let page = fixture("width:1045px;grid-template-columns:repeat(4,1fr);gap:20px", "<div id=feature style='grid-column:1/3;grid-row:1/3;height:370px'></div><div id=card style='height:175px'></div><div style='height:175px'></div><div style='height:175px'></div>");
         assert_eq!(item(&page, "feature").1.width, 512.5);
         assert_eq!(item(&page, "card").0.x, 532.5);
@@ -160,8 +163,8 @@ fn integer_repeat_with_spanning_item_preserves_four_column_geometry() {
 }
 
 #[test]
-fn repeat_custom_property_mutation_and_media_keep_native_snapshots() {
-    native_test_thread::run(|| {
+fn repeat_custom_property_mutation_and_media_keep_source_snapshots() {
+    test_thread::run(|| {
         let mut page = fixture("width:400px;--n:2;grid-template-columns:repeat(var(--n),minmax(0,1fr))", "<div id=item0 style='height:20px'></div><div id=item1 style='height:20px'></div><div id=item2 style='height:20px'></div><div id=item3 style='height:20px'></div>");
         let old = native(&page, "grid");
         let old_frame = page.CurrentFrame().unwrap().fragments.clone();
@@ -207,7 +210,7 @@ fn repeat_custom_property_mutation_and_media_keep_native_snapshots() {
 
 #[test]
 fn repeat_math_counts_round_and_clamp_before_layout() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for (count, width) in [("calc(1 + 1.5)", 100.0), ("calc(0 - 4)", 300.0)] {
             let page = fixture(
                 &format!("width:300px;grid-template-columns:repeat({count},1fr)"),
@@ -220,7 +223,7 @@ fn repeat_math_counts_round_and_clamp_before_layout() {
 
 #[test]
 fn repeated_line_height_units_recompute_after_inherited_metrics_change() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             "line-height:inherit;grid-template-columns:repeat(2,minmax(0,1lh))",
             "<div id=item style='height:20px'></div>",

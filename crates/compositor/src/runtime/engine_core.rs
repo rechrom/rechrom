@@ -5,10 +5,10 @@
 //! no independent policy chooses activation or draws an unfinished pending tree.
 use super::{
     host_services::{CpuHostServices, HostInit},
+    layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
     main_endpoint::EngineMainEndpoint,
     main_host::{CpuMainLayerHost, CpuMainLayerHosts},
-    native_frame_sink::NativeFrameSinkEndpoint,
-    native_pac_scroll::{NativePacScrollCallbacks, NativePacScrollEffects},
+    pac_scroll::{PacScrollCallbacks, PacScrollEffects},
     paint_services::CpuPaintServices,
     resources::RasterReturnedResource,
     skia::SkRegion,
@@ -33,7 +33,7 @@ use crate::{
     engine::{CompositorError, CompositorMainThreadEffect, CompositorViewportState},
     performance::{CompositorPackage, Span},
     third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor,
-    NativeCompositorFrame, NativeCompositorFrameSubmission,
+    CompositorFrame, CompositorFrameSubmission,
 };
 use paint::PaintArtifact;
 use std::{
@@ -44,7 +44,7 @@ type Root = CpuCompositorTypes<SkRegion>;
 
 /// All constructor inputs are actual owners/capabilities, never test stand-ins.
 /// This is private to compositor: Page only provides executors/pixel primitives.
-pub(crate) struct NativeEngineCore {
+pub(crate) struct EngineCore {
     pub(crate) host: Option<ClientLayerTreeHostImpl<Root>>,
     pub(crate) services: CpuHostServices<Root>,
     pub(crate) main: CpuMainLayerHost<SkRegion>,
@@ -55,13 +55,13 @@ pub(crate) struct NativeEngineCore {
     // not a copied snapshot.
     previous_artifact: Option<Arc<PaintArtifact>>,
     pub(crate) endpoint: Arc<EngineMainEndpoint>,
-    lifecycle: Arc<super::native_host_lifecycle::NativeHostLifecycle>,
+    lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
     pub(crate) scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
     // PAC stores only Weak. Retaining this exact strong owner is required for
     // source scroll/snap/scrollbar-hidden delivery throughout PAC's lifetime.
-    _scroll_callbacks: Rc<NativePacScrollCallbacks>,
-    scroll_effects: NativePacScrollEffects,
-    pub(crate) frame_sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
+    _scroll_callbacks: Rc<PacScrollCallbacks>,
+    scroll_effects: PacScrollEffects,
+    pub(crate) frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
     ready_commit: Option<CommitState<Root>>,
     // `ready_commit` is built on the Page sequence before the Scheduler may
     // open the BeginMainFrame that owns it. Keep the source distinction
@@ -84,7 +84,45 @@ pub(crate) struct NativeEngineCore {
     //         cc/trees/unbounded_frame_sink_handler.cc:56-77.
     surface_parameters: Option<(crate::adapter::geometry::Size, u32)>,
 }
-impl NativeEngineCore {
+impl EngineCore {
+    pub(crate) fn SetViewportState(
+        &mut self,
+        viewport: CompositorViewportState,
+    ) -> Result<(), CompositorError> {
+        viewport.Validate()?;
+        let surface_parameters = (viewport.size, viewport.device_scale_factor.to_bits());
+        if self
+            .surface_parameters
+            .is_some_and(|previous| previous != surface_parameters)
+        {
+            // ParentLocalSurfaceIdAllocator::GenerateId increments only the
+            // parent sequence and preserves the child sequence/embed token.
+            self.local_surface_id.parent_sequence_number = self
+                .local_surface_id
+                .parent_sequence_number
+                .checked_add(1)
+                .expect("parent LocalSurfaceId sequence exhausted");
+        }
+        self.surface_parameters = Some(surface_parameters);
+        self.main.SetViewportRectAndScale(
+            Rect::new(0, 0, viewport.size.width(), viewport.size.height()),
+            viewport.device_scale_factor,
+            self.local_surface_id,
+        );
+        self.main.SetPageScaleFactorAndLimits(
+            viewport.page_scale_factor,
+            viewport.min_page_scale_factor,
+            viewport.max_page_scale_factor,
+        );
+        self.host.as_mut().unwrap().BaseMutable().SetVisible(
+            viewport.visible,
+            &mut HostImplContext {
+                services: &mut self.services,
+            },
+        );
+        Ok(())
+    }
+
     // Source: cc/trees/single_thread_proxy.cc:1175-1190. This CPU runtime has
     // one sequenced Page executor, so the source single-thread Proxy ordering
     // is exact: pull impl deltas, then apply them to the resident main host
@@ -114,23 +152,20 @@ impl NativeEngineCore {
         mut main: CpuMainLayerHost<SkRegion>,
         paint: Arc<CpuPaintServices<SkRegion>>,
         endpoint: Arc<EngineMainEndpoint>,
-        lifecycle: Arc<super::native_host_lifecycle::NativeHostLifecycle>,
+        lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
         scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
-        frame_sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
+        frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
         local_surface_id: LocalSurfaceId,
         next_property_owner: u64,
-        input_client: std::sync::Arc<super::native_input_client::NativeInputHandlerClient>,
+        input_client: std::sync::Arc<super::input_client::QueuedInputHandlerClient>,
     ) -> Result<Self, CompositorError> {
-        let scroll_effects = NativePacScrollEffects::default();
-        let callbacks = NativePacScrollCallbacks::new(scroll_effects.clone());
+        let scroll_effects = PacScrollEffects::default();
+        let callbacks = PacScrollCallbacks::new(scroll_effects.clone());
         let pac = {
             let mut hosts = CpuMainLayerHosts { host: &mut main };
             let mut context =
                 LayerContext::new(&mut hosts, paint.as_ref()).WithDerivedServices(paint.as_ref());
-            paint.CreateCompositor(
-                NativePacScrollCallbacks::Downgrade(&callbacks),
-                &mut context,
-            )
+            paint.CreateCompositor(PacScrollCallbacks::Downgrade(&callbacks), &mut context)
         };
         // Native PAC::Update intentionally returns when the root has no host.
         // Attach the actual PAC root before admitting any producer commit.
@@ -144,9 +179,13 @@ impl NativeEngineCore {
                 services: &mut services,
             },
             |input, runtime| {
-                input
-                    .expect("source bound InputHandler")
-                    .BindToClient(runtime, input_client)
+                let input = input.expect("source bound InputHandler");
+                input.BindToClient(runtime, input_client);
+                // Source: blink::InputHandlerProxy construction calls
+                // UpdateElasticOverscroll immediately after BindToClient.
+                // Creation remains inside compositor and borrows the same
+                // resident HostImpl; no tree or Page state crosses the edge.
+                let _ = input.CreateScrollElasticityHelper(runtime);
             },
         );
         let result = Self {
@@ -203,32 +242,11 @@ impl NativeEngineCore {
             "image_dependencies",
             artifact.image_dependencies.image_ids().count() as f64,
         );
-        // Validate all producer metadata before changing resident owner state.
-        self.paint.PrepareInput(artifact.clone())?;
-        let surface_parameters = (viewport.size, viewport.device_scale_factor.to_bits());
-        if self
-            .surface_parameters
-            .is_some_and(|previous| previous != surface_parameters)
-        {
-            // ParentLocalSurfaceIdAllocator::GenerateId increments only the
-            // parent sequence and preserves the child sequence/embed token.
-            self.local_surface_id.parent_sequence_number = self
-                .local_surface_id
-                .parent_sequence_number
-                .checked_add(1)
-                .expect("parent LocalSurfaceId sequence exhausted");
-        }
-        self.surface_parameters = Some(surface_parameters);
-        self.main.SetViewportRectAndScale(
-            Rect::new(0, 0, viewport.size.width(), viewport.size.height()),
-            viewport.device_scale_factor,
-            self.local_surface_id,
-        );
-        self.main.SetPageScaleFactorAndLimits(
-            viewport.page_scale_factor,
-            viewport.min_page_scale_factor,
-            viewport.max_page_scale_factor,
-        );
+        // Validate all producer metadata once, before changing resident owner
+        // state, and carry that same live input through PAC update. Rebuilding
+        // PaintInput below would repeat the complete artifact/property walk.
+        let paint_input = self.paint.PrepareInput(artifact.clone())?;
+        self.SetViewportState(viewport)?;
         {
             let mut hosts = CpuMainLayerHosts {
                 host: &mut self.main,
@@ -237,7 +255,7 @@ impl NativeEngineCore {
                 .WithDerivedServices(self.paint.as_ref());
             self.paint.UpdateCompositor(
                 self.pac.as_mut().unwrap(),
-                artifact.clone(),
+                paint_input,
                 self.previous_artifact.as_ref(),
                 Vec::new(),
                 &mut context,
@@ -268,12 +286,6 @@ impl NativeEngineCore {
         // numbering advances after the activated commit has taken its value.
         self.main.pending_commit_state_mut().source_frame_number += 1;
         self.endpoint.DidBeginCommit();
-        self.host.as_mut().unwrap().BaseMutable().SetVisible(
-            viewport.visible,
-            &mut HostImplContext {
-                services: &mut self.services,
-            },
-        );
         Ok(())
     }
 
@@ -433,7 +445,7 @@ impl NativeEngineCore {
             },
         );
     }
-    pub(crate) fn TakeFrame(&self) -> Option<NativeCompositorFrameSubmission> {
+    pub(crate) fn TakeFrame(&self) -> Option<CompositorFrameSubmission> {
         let _trace = Span(CompositorPackage::Frame, "Compositor.Frame.TakeSubmission");
         self.frame_sink
             .lock()
@@ -446,7 +458,7 @@ impl NativeEngineCore {
         }
     }
 }
-impl NativeEngineCore {
+impl EngineCore {
     pub(crate) fn Shutdown(&mut self) {
         // Native child client finalization needs the current actual main tree;
         // clear clients before detaching/dropping the main root allocation.
@@ -476,12 +488,12 @@ impl NativeEngineCore {
 // Scheduler owns every action decision. A fresh mutable Engine client is lent
 // on each call, matching Proxy's synchronous source callbacks without retaining
 // a Host/client pointer in Scheduler or external services.
-impl crate::cc::scheduler::scheduler::SchedulerClient for NativeEngineCore {
+impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
     type Types = crate::adapter::scheduler_host::FacadeSchedulerTypes;
     fn WillBeginImplFrame(&mut self, args: &BeginFrameArgs, scheduler: &mut Scheduler) -> bool {
         let _query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
         let redraw_sequence = self.lifecycle.redraw_sequence();
-        let has_damage = NativeEngineCore::WillBeginImplFrame(self, args);
+        let has_damage = EngineCore::WillBeginImplFrame(self, args);
         // Source: cc/trees/proxy_impl.cc:394-396. LayerTreeHostImpl calls
         // ProxyImpl::SetWaitingForScrollEvent from WillBeginImplFrame and the
         // proxy updates Scheduler synchronously, before Scheduler chooses this
@@ -521,20 +533,35 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for NativeEngineCore {
             self.NotifyReadyToCommit(scheduler, false, true);
         } else {
             self.effects
-                .push(CompositorMainThreadEffect::RequestMainFrame);
+                .push(CompositorMainThreadEffect::BeginMainFrame);
         }
     }
     fn ScheduledActionDrawIfPossible(&mut self, scheduler: &mut Scheduler) -> DrawResult {
-        {
+        let result = {
             let _query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
             self.Draw(false, scheduler)
+        };
+        // Source: cc/trees/proxy_impl.cc SetNeedsPrepareTilesOnImplThread.
+        // UpdateDrawProperties can discover newly exposed tiles while the
+        // Scheduler is inside DRAW. Chromium records that request directly in
+        // Scheduler, so its current deadline runs PREPARE_TILES after DRAW.
+        // The Rust delegate also leaves the typed FIFO effect for the outer
+        // owner; mirror its live state here before this Scheduler callback
+        // returns, otherwise raster starts one complete BeginFrame late.
+        if self.lifecycle.needs_prepare_tiles() {
+            scheduler.SetNeedsPrepareTiles(self);
         }
+        result
     }
     fn ScheduledActionDrawForced(&mut self, scheduler: &mut Scheduler) -> DrawResult {
-        {
+        let result = {
             let _query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
             self.Draw(true, scheduler)
+        };
+        if self.lifecycle.needs_prepare_tiles() {
+            scheduler.SetNeedsPrepareTiles(self);
         }
+        result
     }
     fn ScheduledActionCommit(&mut self, _scheduler: &mut Scheduler) {
         let _query = self.scheduler_queries.Enter(_scheduler.IsReadyToActivate());
@@ -615,7 +642,7 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for NativeEngineCore {
     }
     fn DidFinishImplFrame(&mut self, args: &BeginFrameArgs, _scheduler: &mut Scheduler) {
         let _query = self.scheduler_queries.Enter(_scheduler.IsReadyToActivate());
-        NativeEngineCore::DidFinishImplFrame(self, args)
+        EngineCore::DidFinishImplFrame(self, args)
     }
     fn DidNotProduceFrame(
         &mut self,
@@ -669,7 +696,7 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for NativeEngineCore {
     }
 }
 use crate::cc::scheduler::scheduler::Scheduler;
-impl NativeEngineCore {
+impl EngineCore {
     pub(crate) fn NotifyReadyToCommit(
         &mut self,
         scheduler: &mut Scheduler,
@@ -719,7 +746,7 @@ impl NativeEngineCore {
     }
 }
 
-impl Drop for NativeEngineCore {
+impl Drop for EngineCore {
     fn drop(&mut self) {
         self.Shutdown();
     }

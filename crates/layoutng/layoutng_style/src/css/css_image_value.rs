@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native computed CSSImageValue. Fetching remains outside the Style owner.
+//! Chromium computed CSSImageValue. Fetching remains outside the Style owner.
 #![allow(non_snake_case)]
 
 use super::{

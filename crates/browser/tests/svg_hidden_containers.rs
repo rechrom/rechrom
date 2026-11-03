@@ -1,6 +1,6 @@
 //! SVG definitions retain layout/resource identity without ordinary paint or hit targets.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -166,8 +166,8 @@ fn pixels(page: &Page, artifact: &std::sync::Arc<PaintArtifact>) -> Vec<u32> {
 const HIDDEN: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="visible" width="20" height="20" fill="blue"/><defs id="defs"><g id="group"><rect id="definition" x="30" width="40" height="40" fill="red"/></g></defs><clipPath id="clip"><rect id="clip-shape" x="70" width="40" height="40" fill="red"/></clipPath></svg>"##;
 
 #[test]
-fn hidden_svg_native_kinds_keep_descendant_layout_and_empty_visual_geometry() {
-    native_test_thread::run(|| {
+fn hidden_svg_source_kinds_keep_descendant_layout_and_empty_visual_geometry() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(HIDDEN);
         let assembly = browser::CreateLayoutAssembly();
@@ -208,7 +208,7 @@ fn hidden_svg_native_kinds_keep_descendant_layout_and_empty_visual_geometry() {
 fn hidden_svg_subtrees_never_paint_or_hit_and_stay_hidden_after_mutations() {
     use interaction::input_event::{InputEvent, MouseEvent, MouseEventType};
     use layoutng_assembly::internal::layout_input::Offset;
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(HIDDEN);
         let old = page.CurrentFrame().unwrap().display_items.clone();
@@ -254,7 +254,7 @@ fn hidden_svg_subtrees_never_paint_or_hit_and_stay_hidden_after_mutations() {
 
 #[test]
 fn fetched_svg_hidden_definitions_match_inline_recording() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let inline = fixture(HIDDEN);
         let fetched = page_fixture(
@@ -270,7 +270,7 @@ fn fetched_svg_hidden_definitions_match_inline_recording() {
 
 #[test]
 fn generated_pseudos_bind_only_referenced_clip_resources_in_the_originating_scope() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for referenced in [false, true] {
             let binding_rules = if referenced {

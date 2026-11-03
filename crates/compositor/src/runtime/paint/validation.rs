@@ -1,6 +1,6 @@
 //! Reject producer blockers before entering canonical algorithms. Traversal
 //! borrows the actual graph; the worklist retains allocation identities only.
-use super::{native, PaintArtifact};
+use super::{paint_property_tree, PaintArtifact};
 use std::{collections::HashSet, sync::Arc};
 #[derive(Debug)]
 pub enum PaintInputError {
@@ -20,10 +20,10 @@ pub enum PaintInputError {
         reason: &'static str,
     },
     MissingStickyConstraint {
-        node: Arc<native::TransformPaintPropertyNode>,
+        node: Arc<paint_property_tree::TransformPaintPropertyNode>,
     },
     UnsupportedCanvasChild {
-        node: Arc<native::EffectPaintPropertyNode>,
+        node: Arc<paint_property_tree::EffectPaintPropertyNode>,
     },
     InvalidRecordRange {
         item: usize,
@@ -32,7 +32,7 @@ pub enum PaintInputError {
         ops: usize,
     },
     MissingScrollCompositorData {
-        node: Arc<native::ScrollPaintPropertyNode>,
+        node: Arc<paint_property_tree::ScrollPaintPropertyNode>,
     },
     MissingChunkCompositorData {
         chunk: usize,
@@ -42,12 +42,12 @@ pub enum PaintInputError {
         item_type: u8,
     },
     EffectFilter {
-        node: Arc<native::EffectPaintPropertyNode>,
+        node: Arc<paint_property_tree::EffectPaintPropertyNode>,
         backdrop: bool,
         blocker: paint::property_filter_operations::FilterInputBlocker,
     },
     ClipPath {
-        node: Arc<native::ClipPaintPropertyNode>,
+        node: Arc<paint_property_tree::ClipPaintPropertyNode>,
         reason: String,
     },
     InvalidChunkRange {
@@ -135,9 +135,9 @@ impl std::fmt::Display for PaintInputError {
 }
 impl std::error::Error for PaintInputError {}
 enum Node {
-    Transform(Arc<native::TransformPaintPropertyNode>),
-    Clip(Arc<native::ClipPaintPropertyNode>),
-    Effect(Arc<native::EffectPaintPropertyNode>),
+    Transform(Arc<paint_property_tree::TransformPaintPropertyNode>),
+    Clip(Arc<paint_property_tree::ClipPaintPropertyNode>),
+    Effect(Arc<paint_property_tree::EffectPaintPropertyNode>),
 }
 pub fn ValidateArtifact(artifact: &PaintArtifact) -> Result<(), PaintInputError> {
     let mut artifacts = HashSet::new();
@@ -167,6 +167,16 @@ fn ValidateArtifactGraph(
     {
         return Err(PaintInputError::InvalidViewportMetadata {
             reason: "LayoutView scroll translation is absent from the producer scroll-node list",
+        });
+    }
+    if viewport
+        .scroll_translation_nodes
+        .iter()
+        .any(|node| node.scroll.is_none())
+    {
+        return Err(PaintInputError::InvalidViewportMetadata {
+            reason:
+                "producer scroll-translation list contains a transform without a Paint scroll node",
         });
     }
     let mut seen = HashSet::new();
@@ -203,17 +213,15 @@ fn ValidateArtifactGraph(
             });
         }
         use paint::display_item_id::DisplayItemIdType as T;
-        if (T::kForeignLayerFirst.0..=T::kForeignLayerLast.0).contains(&item.id.r#type.0) {
+        if (T::kForeignLayerFirst.0..=T::kForeignLayerLast.0).contains(&item.id.r#type.0)
+            && (item.kind != super::RecordedDisplayItemKind::ForeignLayer
+                || item.foreign_layer.is_none())
+        {
             return Err(PaintInputError::UnsupportedDisplayItem {
                 item: index,
                 item_type: item.id.r#type.0,
             });
         }
-    }
-    for state in &artifact.recorded_properties {
-        pending.push(Node::Transform(state.transform.clone()));
-        pending.push(Node::Clip(state.clip.clone()));
-        pending.push(Node::Effect(state.effect.clone()));
     }
     // These are only stable resource identities; record/shader owners stay in
     // the original artifact. Nested SVG pattern images are not all present in
@@ -227,7 +235,7 @@ fn ValidateArtifactGraph(
             image_ids.insert(op.resource_id);
         }
         if let Some(shader) = &op.paint_shader {
-            super::native_metadata::visit_shader_images(shader, &mut |id| {
+            super::metadata::visit_shader_images(shader, &mut |id| {
                 image_ids.insert(id);
             });
         }
@@ -236,7 +244,7 @@ fn ValidateArtifactGraph(
                 image_ids.insert(layer.resource_id);
             }
             if let Some(shader) = &layer.paint_shader {
-                super::native_metadata::visit_shader_images(shader, &mut |id| {
+                super::metadata::visit_shader_images(shader, &mut |id| {
                     image_ids.insert(id);
                 });
             }
@@ -265,7 +273,7 @@ fn ValidateArtifactGraph(
                 })
                 .ok_or(PaintInputError::ImagePlayback {
                     resource_id,
-                    reason: "document image has no published native PaintRecord",
+                    reason: "document image has no published PaintRecord",
                 })?;
             ValidateArtifactGraph(&record.artifact, artifacts)?;
         }
@@ -275,10 +283,11 @@ fn ValidateArtifactGraph(
                 resource_id,
                 blocker: blocker.clone(),
             })?
+            && image.BitmapAnimationFrames().is_none()
         {
             return Err(PaintInputError::ImagePlayback {
                 resource_id,
-                reason: "animated image lacks its native per-frame timeline owner",
+                reason: "animated image lacks its per-frame timeline owner",
             });
         }
     }
@@ -288,11 +297,8 @@ fn ValidateArtifactGraph(
                 if !seen.insert((0, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if node
-                    .direct_compositing_reasons
-                    .iter()
-                    .any(|reason| *reason == "StickyPosition")
-                    && node.compositor.sticky_constraint.is_none()
+                if node.RequiresCompositingForStickyPosition()
+                    && node.GetStickyConstraint().is_none()
                 {
                     return Err(PaintInputError::MissingStickyConstraint { node: node.clone() });
                 }
@@ -303,7 +309,10 @@ fn ValidateArtifactGraph(
                     pending.push(Node::Transform(parent.clone()));
                 }
                 if let Some(scroll) = &node.scroll {
-                    if scroll.parent.is_some() && !scroll.compositor.snap_container_data_absent {
+                    if scroll.parent.is_some()
+                        && !scroll.compositor.snap_container_data_absent
+                        && scroll.compositor.snap_container_data.is_none()
+                    {
                         return Err(PaintInputError::MissingScrollCompositorData {
                             node: scroll.clone(),
                         });

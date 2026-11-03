@@ -15,6 +15,16 @@ pub(super) struct PageBeginFrame {
     last_frame: Option<(u64, u64)>,
 }
 impl Page {
+    fn PresentedFrameHasCurrentLayoutResult(&self) -> bool {
+        self.frame.as_ref().is_some_and(|frame| {
+            self.state
+                .layout_engine
+                .borrow()
+                .GetLayoutResult()
+                .is_some_and(|resident| resident.PtrEq(&frame.fragments))
+        })
+    }
+
     fn AdvanceCompositorBeginFrame(&mut self, args: BeginFrameArgs) -> io::Result<()> {
         let output = {
             let mut rendering = self.state.rendering.borrow_mut();
@@ -75,7 +85,12 @@ impl Page {
         // loading tasks. Re-requesting an unrenderable dirty page each tick
         // cannot advance that work and must not compete with its task queue.
         // Once readiness changes, the next task reaches UpdateFrameIfNeeded.
-        let compositor_demand = self.state.rendering.borrow().NeedsBeginFrames();
+        // Before the first PaintArtifact exists, cc has no active tree to
+        // animate. Page readiness owns that first BeginMainFrame; admitting
+        // cc's internal demand earlier can leave this owner-side request bit
+        // attached to a no-update bootstrap transaction.
+        let compositor_demand =
+            self.frame.is_some() && self.state.rendering.borrow().NeedsBeginFrames();
         let demand = compositor_demand
             || (self.IsRenderingReady()
                 && (self.HasPendingFrameInput()
@@ -145,7 +160,22 @@ impl Page {
             let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
                 .is_some()
                 .then(Instant::now);
-            if self.frame.is_none() {
+            // A synchronous CSSOM geometry query may have advanced Layout
+            // without running PrePaint/Paint.  That retires the fragment
+            // result owned by the presented frame, so hit testing must first
+            // finish the pending lifecycle and use the new canonical result.
+            // This is only an ownership/currentness check; no fragment data is
+            // copied across the Page boundary.
+            let frame_layout_current = self.PresentedFrameHasCurrentLayoutResult();
+            trace.set(
+                "frame_layout_current_before_input",
+                frame_layout_current as u8 as f64,
+            );
+            if self.frame.is_none() || !frame_layout_current {
+                debug_assert!(
+                    self.frame.is_none() || self.state.dirty.get(),
+                    "a newer Layout result must keep the Page lifecycle dirty until Paint"
+                );
                 self.UpdateFrameIfNeeded()?;
             }
             if self.resources.HasAnimatedImages() {
@@ -300,7 +330,12 @@ impl Page {
         let executing = std::mem::replace(&mut self.begin_frame.executing, true);
         let completion_scope = self.open_engine.BeginRenderingOpportunity();
         let result = (|| {
-            if self.frame.is_none() {
+            let frame_layout_current = self.PresentedFrameHasCurrentLayoutResult();
+            if self.frame.is_none() || !frame_layout_current {
+                debug_assert!(
+                    self.frame.is_none() || self.state.dirty.get(),
+                    "a newer Layout result must keep the Page lifecycle dirty until Paint"
+                );
                 self.UpdateFrameIfNeeded()?;
             }
             self.DrainFrameInputs()?;

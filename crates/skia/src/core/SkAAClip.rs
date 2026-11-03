@@ -243,14 +243,14 @@ impl<'a> Iter<'a> {
 // RunHead is the Rust owning pointer; its initialization bit prevents creating
 // typed references before Builder/AllocRect have written every payload byte.
 #[repr(C)]
-struct NativeRunHead {
+struct RunHeadStorage {
     ref_count: AtomicI32,
     row_count: i32,
     data_size: usize,
 }
 #[derive(Debug)]
 struct RunHead {
-    pointer: NonNull<NativeRunHead>,
+    pointer: NonNull<RunHeadStorage>,
     initialized: bool,
 }
 unsafe impl Send for RunHead {}
@@ -273,7 +273,7 @@ impl Clone for RunHead {
     }
 }
 impl RunHead {
-    fn native(&self) -> &NativeRunHead {
+    fn native(&self) -> &RunHeadStorage {
         unsafe { self.pointer.as_ref() }
     }
     fn ref_count(&self) -> &AtomicI32 {
@@ -375,22 +375,22 @@ impl RunHead {
     }
     fn alloc(rows: usize, bytes: usize) -> Self {
         assert!(i32::try_from(rows).is_ok());
-        let size = core::mem::size_of::<NativeRunHead>()
+        let size = core::mem::size_of::<RunHeadStorage>()
             .checked_add(
                 rows.checked_mul(core::mem::size_of::<YOffset>())
                     .expect("AAClip allocation overflow"),
             )
             .and_then(|n| n.checked_add(bytes))
             .expect("AAClip allocation overflow");
-        let raw = unsafe { aa_malloc(size) }.cast::<NativeRunHead>();
+        let raw = unsafe { aa_malloc(size) }.cast::<RunHeadStorage>();
         let Some(pointer) = NonNull::new(raw) else {
             std::alloc::handle_alloc_error(
-                std::alloc::Layout::from_size_align(size, core::mem::align_of::<NativeRunHead>())
+                std::alloc::Layout::from_size_align(size, core::mem::align_of::<RunHeadStorage>())
                     .unwrap(),
             )
         };
         unsafe {
-            pointer.as_ptr().write(NativeRunHead {
+            pointer.as_ptr().write(RunHeadStorage {
                 ref_count: AtomicI32::new(1),
                 row_count: rows as i32,
                 data_size: bytes,

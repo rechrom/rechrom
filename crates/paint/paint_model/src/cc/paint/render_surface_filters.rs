@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Source: cc/paint/render_surface_filters.cc:24-157.
+// Sources:
+//   cc/paint/render_surface_filters.cc:24-157.
+//   third_party/blink/renderer/core/paint/filter_effect_builder.cc:59-124.
 #![allow(non_snake_case)]
 
 /// The CSS filter operations represented by Chromium's private
@@ -169,4 +171,47 @@ pub fn CssColorMatrix(kind: ColorMatrixKind, amount: f32) -> [f32; 20] {
         ColorMatrixKind::Contrast => GetContrastMatrix(amount, &mut matrix),
     }
     matrix
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blink_grayscale_and_sepia_coefficients_are_preserved() {
+        // Source: filter_effect_builder.cc:72-124. Blink passes
+        // `one_minus_amount`; CssColorMatrix performs that conversion at the
+        // single canonical Paint/Raster boundary.
+        let grayscale = CssColorMatrix(ColorMatrixKind::Grayscale, 1.0);
+        assert_eq!(
+            [grayscale[0], grayscale[1], grayscale[2]],
+            [0.2126, 0.7152, 0.0722]
+        );
+        assert_eq!(
+            [grayscale[5], grayscale[6], grayscale[7]],
+            [0.2126, 0.7152, 0.0722]
+        );
+        assert_eq!(
+            [grayscale[10], grayscale[11], grayscale[12]],
+            [0.2126, 0.7152, 0.0722]
+        );
+
+        let sepia = CssColorMatrix(ColorMatrixKind::Sepia, 1.0);
+        assert_eq!([sepia[0], sepia[1], sepia[2]], [0.393, 0.769, 0.189]);
+        assert_eq!([sepia[5], sepia[6], sepia[7]], [0.349, 0.686, 0.168]);
+        assert_eq!([sepia[10], sepia[11], sepia[12]], [0.272, 0.534, 0.131]);
+    }
+
+    #[test]
+    fn zero_amount_keeps_identity_for_blink_shorthand_matrices() {
+        let identity = |matrix: [f32; 20]| {
+            let mut expected = [0.0; 20];
+            for index in [0, 6, 12, 18] {
+                expected[index] = 1.0;
+            }
+            assert_eq!(matrix, expected);
+        };
+        identity(CssColorMatrix(ColorMatrixKind::Grayscale, 0.0));
+        identity(CssColorMatrix(ColorMatrixKind::Sepia, 0.0));
+    }
 }

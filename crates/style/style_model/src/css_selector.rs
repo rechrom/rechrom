@@ -3411,7 +3411,7 @@ pub fn MaximumSpecificityWhere(
     }
     result
 }
-// cpp: css_selector.h:1191-1198; native Rust swap moves the active union too.
+// cpp: css_selector.h:1191-1198; computed style Rust swap moves the active union too.
 pub fn swap(a: &mut CSSSelector, b: &mut CSSSelector) {
     std::mem::swap(a, b);
 }

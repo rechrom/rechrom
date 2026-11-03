@@ -19,7 +19,7 @@ pub trait TimeNumber: Copy {
         false
     }
 }
-macro_rules! native_number{($($t:ty),*)=>{$(impl TimeNumber for $t{
+macro_rules! number{($($t:ty),*)=>{$(impl TimeNumber for $t{
  fn is_zero(self)->bool{self==0 as $t}
  fn unit(self,mul:i64,div:i64)->i64{
   // Actual factory expressions have either one multiply, one divide, or
@@ -32,8 +32,8 @@ macro_rules! native_number{($($t:ty),*)=>{$(impl TimeNumber for $t{
  fn divide(self,value:i64)->i64{(ClampedNumeric::<i64>::new(value)/self).Into::<i64>()}
  fn hertz_period(self)->i64{(1_000_000i64/ClampedNumeric::<$t>::new(self)).Into::<i64>()}
 })*}}
-native_number!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
-macro_rules! native_float{($($t:ty),*)=>{$(impl TimeNumber for $t{
+number!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+macro_rules! float{($($t:ty),*)=>{$(impl TimeNumber for $t{
  fn is_zero(self)->bool{self==0.0}
  fn unit(self,mul:i64,div:i64)->i64{if div!=1{(ClampedNumeric::<$t>::new(self)/div).Into::<i64>()}else if mul!=1{(ClampedNumeric::<$t>::new(self)*mul).Into::<i64>()}else{saturated_cast::<i64,_>(self)}}
  fn multiply(self,value:i64)->i64{(ClampedNumeric::<i64>::new(value)*self).Into::<i64>()}
@@ -41,7 +41,7 @@ macro_rules! native_float{($($t:ty),*)=>{$(impl TimeNumber for $t{
  fn hertz_period(self)->i64{(1_000_000i64/ClampedNumeric::<$t>::new(self)).Into::<i64>()}
  fn is_nan(self)->bool{self.is_nan()}
 })*}}
-native_float!(f32, f64);
+float!(f32, f64);
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimeDelta {
@@ -787,12 +787,12 @@ impl RemAssign for TimeDelta {
 // Source: base/time/time.h:914-918. Explicitly supported primitive CTFE domain;
 // the ordinary generic factory remains runtime rather than a pretend const trait.
 #[macro_export]
-macro_rules! NativeMicrosecondsConst {
+macro_rules! MicrosecondsConst {
     ($source:ident,$value:expr) => {
         const {
-            $crate::base::time::time::TimeDelta::FromInternalValue(
-                $crate::NativeSaturatedCastConst!(i64, $source, $value),
-            )
+            $crate::base::time::time::TimeDelta::FromInternalValue($crate::SaturatedCastConst!(
+                i64, $source, $value
+            ))
         }
     };
 }

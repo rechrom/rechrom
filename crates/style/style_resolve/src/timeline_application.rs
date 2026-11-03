@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native ComputedStyle timeline definition lists, independent of animation data.
+//! Canonical ComputedStyle timeline definition lists, independent of animation data.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::AtomicString;

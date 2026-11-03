@@ -18,7 +18,7 @@ const fn text_eq(text: &str, expected: &[u8]) -> bool {
     }
     true
 }
-const fn native_flag(value: Option<&str>, target_default: bool) -> bool {
+const fn flag(value: Option<&str>, target_default: bool) -> bool {
     match value {
         Some(value) => !text_eq(value, b"undefined"),
         None => {
@@ -30,7 +30,7 @@ const fn native_flag(value: Option<&str>, target_default: bool) -> bool {
         }
     }
 }
-const fn native_integer(value: Option<&str>) -> Option<i32> {
+const fn integer(value: Option<&str>) -> Option<i32> {
     let Some(text) = value else {
         return None;
     };
@@ -68,12 +68,12 @@ const fn native_integer(value: Option<&str>) -> Option<i32> {
 }
 macro_rules! flag {
     ($name:literal,$fallback:expr) => {
-        native_flag(option_env!(concat!("SK_FEATURES_INPUT_", $name)), $fallback)
+        flag(option_env!(concat!("SK_FEATURES_INPUT_", $name)), $fallback)
     };
 }
 macro_rules! integer {
     ($name:literal) => {
-        native_integer(option_env!(concat!("SK_FEATURES_INPUT_", $name)))
+        integer(option_env!(concat!("SK_FEATURES_INPUT_", $name)))
     };
 }
 #[derive(Clone, Copy)]
@@ -112,7 +112,7 @@ const CXX: CxxCompiler = match option_env!("SK_FEATURES_CXX_COMPILER") {
 const GNU_STYLE_TARGET: bool = matches!(CXX, CxxCompiler::Clang | CxxCompiler::Gcc);
 const MSVC_TARGET: bool = matches!(CXX, CxxCompiler::Msvc);
 const fn target_conditional(raw: Option<&str>) -> bool {
-    match native_integer(raw) {
+    match integer(raw) {
         Some(value) => value != 0,
         None => {
             if raw.is_some() || COMPLETE_NATIVE_INPUTS {

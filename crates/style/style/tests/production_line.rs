@@ -14,12 +14,12 @@ use style::{
     },
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -37,18 +37,18 @@ fn parse(id: P, text: &str) -> Vec<style::production_css_value::PropertyValue> {
     .unwrap()
 }
 #[test]
-fn vertical_align_tab_size_and_legacy_line_clamp_reach_native_fields() {
+fn vertical_align_tab_size_and_legacy_line_clamp_reach_computed_style_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=p style='vertical-align:calc(25% - 3px);tab-size:calc(2 + .5);-webkit-line-clamp:calc(2.5)'><div id=c style='vertical-align:inherit;tab-size:inherit;-webkit-line-clamp:inherit'></div><div id=i style='vertical-align:initial;tab-size:initial;-webkit-line-clamp:initial'></div><div id=u style='vertical-align:unset;tab-size:unset;-webkit-line-clamp:unset'></div><div id=l style='vertical-align:-8px;tab-size:12px;-webkit-line-clamp:999999999999'></div><div id=k style='vertical-align:-webkit-baseline-middle;tab-size:0;-webkit-line-clamp:none'></div><div id=n style='vertical-align:20%;tab-size:calc(3px + 4px);-webkit-line-clamp:calc(-5)'></div></div>");
     update(&mut owner);
     let (p, c, i, u, l, k, n) = (
-        native(&owner, "p"),
-        native(&owner, "c"),
-        native(&owner, "i"),
-        native(&owner, "u"),
-        native(&owner, "l"),
-        native(&owner, "k"),
-        native(&owner, "n"),
+        computed_style(&owner, "p"),
+        computed_style(&owner, "c"),
+        computed_style(&owner, "i"),
+        computed_style(&owner, "u"),
+        computed_style(&owner, "l"),
+        computed_style(&owner, "k"),
+        computed_style(&owner, "n"),
     );
     assert_eq!(p.VerticalAlign(), EVerticalAlign::kLength);
     assert!(p.GetVerticalAlignLength().IsCalculated());
@@ -76,7 +76,7 @@ fn vertical_align_tab_size_and_legacy_line_clamp_reach_native_fields() {
     assert_eq!(n.WebkitLineClamp(), 1);
 }
 #[test]
-fn page_break_aliases_expand_to_native_break_properties_with_css_wide_reset() {
+fn page_break_aliases_expand_to_computed_style_break_properties_with_css_wide_reset() {
     let _heap = foundation::LayoutHeapScope::new();
     for (id, longhand, text, expected) in [
         (P::kPageBreakBefore, P::kBreakBefore, "always", V::kPage),
@@ -94,21 +94,21 @@ fn page_break_aliases_expand_to_native_break_properties_with_css_wide_reset() {
     }
     let mut owner=html::html_parser::ParseHTML("<div id=p style='page-break-before:always;page-break-after:left;page-break-inside:avoid'><div id=c style='page-break-before:inherit;page-break-after:inherit;page-break-inside:inherit'></div><div id=i style='page-break-before:initial;page-break-after:initial;page-break-inside:initial'></div><div id=u style='page-break-before:unset;page-break-after:unset;page-break-inside:unset'></div><div id=b style='break-before:recto;break-after:avoid-column;break-inside:avoid-page'></div><div id=r style='break-before:column;page-break-before:auto;break-inside:avoid-column;page-break-inside:auto'></div></div>");
     update(&mut owner);
-    for s in [native(&owner, "p"), native(&owner, "c")] {
+    for s in [computed_style(&owner, "p"), computed_style(&owner, "c")] {
         assert_eq!(s.BreakBefore(), EBreakBetween::kPage);
         assert_eq!(s.BreakAfter(), EBreakBetween::kLeft);
         assert_eq!(s.BreakInside(), EBreakInside::kAvoid);
     }
-    for s in [native(&owner, "i"), native(&owner, "u")] {
+    for s in [computed_style(&owner, "i"), computed_style(&owner, "u")] {
         assert_eq!(s.BreakBefore(), EBreakBetween::kAuto);
         assert_eq!(s.BreakAfter(), EBreakBetween::kAuto);
         assert_eq!(s.BreakInside(), EBreakInside::kAuto);
     }
-    let b = native(&owner, "b");
+    let b = computed_style(&owner, "b");
     assert_eq!(b.BreakBefore(), EBreakBetween::kRecto);
     assert_eq!(b.BreakAfter(), EBreakBetween::kAvoidColumn);
     assert_eq!(b.BreakInside(), EBreakInside::kAvoidPage);
-    let r = native(&owner, "r");
+    let r = computed_style(&owner, "r");
     assert_eq!(r.BreakBefore(), EBreakBetween::kAuto);
     assert_eq!(r.BreakInside(), EBreakInside::kAuto);
 }

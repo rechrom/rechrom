@@ -156,8 +156,8 @@ unsafe impl AllocatorInterface for MMapAllocator {
         );
         #[cfg(all(
             any(target_os = "android", target_os = "linux"),
-            native_pr_set_vma_defined,
-            native_pr_set_vma_anon_name_defined
+            pr_set_vma_defined,
+            pr_set_vma_anon_name_defined
         ))]
         if result != libc::MAP_FAILED {
             libc::prctl(

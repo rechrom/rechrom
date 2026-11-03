@@ -8,8 +8,8 @@ use super::layout_input::NodeKind;
 use super::layout_node_metadata::Element;
 use super::layout_object::LayoutObject;
 
-#[path = "../../../layout_invalidation/src/native_layout_object_hot_invalidation.rs"]
-mod layout_invalidation_native_layout_object_hot_invalidation;
+#[path = "../../../layout_invalidation/src/layout_object_hot_invalidation.rs"]
+mod layout_invalidation_layout_object_hot_invalidation;
 
 impl LayoutObject {
     // cpp: layoutng/internal/layout_object_hot.cc:130-143
@@ -34,7 +34,7 @@ impl LayoutObject {
         self.CheckIsNotDestroyed();
         let element = DynamicTo::<Element>(self.GetNode());
         if !element.is_null() {
-            // The style crate's Element forward type is the same native node
+            // The style crate's Element forward type is the same source node
             // boundary, pending cross-crate type reconciliation.
             return self.StyleRef().CanMatchSizeContainerQueries(unsafe {
                 &*(element as *const layoutng_style::style::forward::Element)

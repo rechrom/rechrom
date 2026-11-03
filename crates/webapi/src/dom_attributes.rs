@@ -11,7 +11,7 @@ impl DOMJavaScriptBindings {
     // IDLMemberInstaller::InstallAttribute installs an actual native accessor
     // on the ordinary prototype. The runtime owns/traces captures; the DOM
     // callback retains declaring-interface validation and property semantics.
-    pub(crate) fn PrepareNativeGetter(arguments: &[HostValue]) -> HostContinuation {
+    pub(crate) fn PrepareGetter(arguments: &[HostValue]) -> HostContinuation {
         let [HostValue::String(interface), HostValue::String(member), HostValue::Boolean(lenient), ..] =
             arguments
         else {
@@ -33,7 +33,7 @@ impl DOMJavaScriptBindings {
         Box::new(move |runtime| runtime.CreateHostFunction(&binding))
     }
 
-    pub(super) fn NativeAttributeGetter(&self, arguments: &[HostValue]) -> HostResult {
+    pub(super) fn AttributeGetter(&self, arguments: &[HostValue]) -> HostResult {
         let [receiver, HostValue::String(interface), HostValue::String(member), HostValue::Boolean(lenient), ..] =
             arguments
         else {
@@ -83,12 +83,15 @@ impl DOMJavaScriptBindings {
             "DocumentFragment" => node.Type() == DOMNodeType::kDocumentFragment,
             "ShadowRoot" => document.ShadowHost(index).is_some(),
             "CharacterData" => is_character_data(node.Type()),
+            "ProcessingInstruction" => node.Type() == DOMNodeType::kProcessingInstruction,
             "HTMLInputElement" => node.IsHTMLElement("input"),
             "HTMLTextAreaElement" => node.IsHTMLElement("textarea"),
             "HTMLSelectElement" => node.IsHTMLElement("select"),
             "HTMLOptionElement" => node.IsHTMLElement("option"),
             "HTMLImageElement" => node.IsHTMLElement("img"),
             "HTMLTemplateElement" => node.IsHTMLElement("template"),
+            "HTMLDivElement" => node.IsHTMLElement("div"),
+            "HTMLLIElement" => node.IsHTMLElement("li"),
             "HTMLPreElement" => {
                 matches!(node.Name(), "pre" | "listing" | "xmp") && node.IsHTMLElement(node.Name())
             }
@@ -96,7 +99,7 @@ impl DOMJavaScriptBindings {
         }
     }
 
-    pub(super) fn NativeAttributeCall(
+    pub(super) fn AttributeCall(
         &mut self,
         receiver: HostObjectId,
         operation: &str,

@@ -258,7 +258,7 @@ fn ResolveColorOperand(
 // cpp: Color::FromColorMix for the default Oklab interpolation family. CSS
 // Color mixes premultiplied channels, then applies the normalization alpha.
 // Production color operands are retained sRGB colors, so conversion can stay
-// local to the native StyleColor owner without exposing a second CSS matcher.
+// local to the source StyleColor owner without exposing a second CSS matcher.
 fn MixInOklab(first: Color, second: Color, amount: f64, alpha_multiplier: f64) -> Color {
     fn linear(channel: f64) -> f64 {
         if channel <= 0.04045 {
@@ -675,7 +675,7 @@ impl StyleColor {
     }
     pub fn IsSystemColorIncludingDeprecatedKeyword(keyword: CSSValueID) -> bool {
         // cpp: style_color.cc:567-570. The generated CSSValueID interval is
-        // part of the native ABI and includes the deprecated system colors.
+        // part of the source ABI and includes the deprecated system colors.
         (keyword >= CSSValueID::kActiveborder && keyword <= CSSValueID::kWindowtext)
             || keyword == CSSValueID::kMenu
     }

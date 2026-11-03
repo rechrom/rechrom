@@ -79,12 +79,12 @@ fn insets(s: &ComputedStyle) -> [&Length; 8] {
         s.RowRuleInsetJunctionEnd(),
     ]
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn eight_longhands_and_shorthands_reject_invalid_grammar_without_partial_accepta
 }
 
 #[test]
-fn style_engine_cascade_variables_css_wide_and_native_length_conversion() {
+fn style_engine_cascade_variables_css_wide_and_computed_style_length_conversion() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p style='font-size:20px;rule-inset:-2em 20% / overlap-join calc(3px + 4%);column-rule-inset-cap-end:7px'><div id=c style='font-size:10px;rule-inset:inherit'></div><div id=i style='rule-inset:initial'></div><div id=u style='rule-inset:unset'></div><div id=none></div></div><div id=v style='--insets:1px 2px / 3px 4px;rule-inset:var(--insets);rule-inset-start:9%;column-rule-inset-end:overlap-join;row-rule-inset-cap:5px !important;row-rule-inset-cap:6px;rule:2px solid red;direction:rtl;writing-mode:vertical-rl'></div><div id=layer></div>");
@@ -364,7 +364,7 @@ fn style_engine_cascade_variables_css_wide_and_native_length_conversion() {
         engine.Diagnostics()
     );
     for id in ["p", "c"] {
-        let a = insets(native(&owner, id));
+        let a = insets(computed_style(&owner, id));
         assert_eq!(a[0].Pixels(), -40.);
         assert_eq!(a[1].Pixels(), 7.);
         assert!(a[2].IsOverlapJoin());
@@ -375,14 +375,14 @@ fn style_engine_cascade_variables_css_wide_and_native_length_conversion() {
         assert!(a[7].IsCalculated());
     }
     for id in ["i", "u", "none"] {
-        assert!(insets(native(&owner, id))
+        assert!(insets(computed_style(&owner, id))
             .iter()
             .all(|l| l.IsFixed() && l.Pixels() == 0.));
     }
-    assert!(insets(native(&owner, "layer"))
+    assert!(insets(computed_style(&owner, "layer"))
         .iter()
         .all(|l| l.Pixels() == 8.));
-    let a = insets(native(&owner, "v"));
+    let a = insets(computed_style(&owner, "v"));
     assert_eq!(a[0].PercentValue(), 9.);
     assert!(a[1].IsOverlapJoin());
     assert_eq!(a[2].PercentValue(), 9.);

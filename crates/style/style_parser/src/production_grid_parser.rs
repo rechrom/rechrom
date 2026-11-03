@@ -180,7 +180,7 @@ fn ConsumeTrackSize<T: TokenStreamTokenizer>(
     }
     // cpp: css_parsing_utils.cc:6926-6944,7031-7034. fit-content()
     // carries one nonnegative length-percentage, not a grid breadth. Keep
-    // its typed function so the existing native track constructor retains
+    // its typed function so the existing computed style track constructor retains
     // the fit-content limit independently from its intrinsic min/max sizes.
     if stream.Peek().FunctionId() == Some(CSSValueID::kFitContent) {
         let result;
@@ -251,7 +251,7 @@ fn ConsumeGridBreadth<T: TokenStreamTokenizer>(
 }
 
 // cpp: css_parsing_utils.cc:6925-6948 ConsumeGridLineNames. The bracketed
-// subclass is retained because its position among track sizes is the native
+// subclass is retained because its position among track sizes is the computed style
 // grid line index.
 fn ConsumeLineNames<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
@@ -298,7 +298,7 @@ pub(super) fn ConsumeTracks<T: TokenStreamTokenizer>(
 }
 
 // cpp: css_parsing_utils.cc:7105-7203 ConsumeGridTrackRepeatFunction. Preserve
-// both ordinary track repeaters and subgrid name-repeat entries as their native
+// both ordinary track repeaters and subgrid name-repeat entries as their computed style
 // typed subclasses; never expand a repeat into a flat track list.
 fn ConsumeRepeat<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
@@ -401,7 +401,7 @@ pub(super) fn ConsumeTracksWithGridLanes<T: TokenStreamTokenizer>(
     // cpp: css_parsing_utils.cc:7274-7301 ConsumeGridTrackList. A subgrid
     // track list starts with the axis keyword and may only carry line-name
     // groups after it. Retain the keyword in the typed list so the shared
-    // style converter can select the native subgridded-axis representation.
+    // style converter can select the computed style subgridded-axis representation.
     if template && stream.Peek().Id() == CSSValueID::kSubgrid {
         stream.ConsumeIncludingWhitespace();
         let mut tracks = vec![values::identifier(CSSValueID::kSubgrid)];

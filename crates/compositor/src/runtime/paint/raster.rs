@@ -52,7 +52,7 @@ pub trait RasterFailureHandler: Send + Sync {
     fn OnRasterFailure(&self, error: io::Error);
 }
 pub type CpuTileRasterBufferValueFor<R> = dyn for<'a> RasterBuffer<
-    NativeRasterSource<R>,
+    RasterSourceStorage<R>,
     RasterTransform,
     RasterImageProviderRef<'a, R>,
     ScrollOffsetMap,
@@ -76,7 +76,7 @@ impl<R: CpuSkiaBackend> TileRasterBuffer<R> {
     pub fn new<T>(external: T, failure: Arc<dyn RasterFailureHandler>) -> Self
     where
         T: for<'a> RasterBuffer<
-                NativeRasterSource<R>,
+                RasterSourceStorage<R>,
                 RasterTransform,
                 RasterImageProviderRef<'a, R>,
                 ScrollOffsetMap,
@@ -98,10 +98,8 @@ impl<R: CpuSkiaBackend> WorkletImageProvider<CpuCompositorTypes<R>> for CpuWorkl
         self.0.GetPaintRecordResult(input)
     }
 }
-struct NativeImageProvider<'a, R: CpuSkiaBackend>(
-    &'a mut dyn RasterImageProvider<CpuCompositorTypes<R>>,
-);
-impl<R: CpuSkiaBackend> CpuImageProvider<R> for NativeImageProvider<'_, R> {
+struct ImageProvider<'a, R: CpuSkiaBackend>(&'a mut dyn RasterImageProvider<CpuCompositorTypes<R>>);
+impl<R: CpuSkiaBackend> CpuImageProvider<R> for ImageProvider<'_, R> {
     fn GetRasterContent(&mut self, image: &CpuDrawImage) -> CpuScopedRasterResult<R> {
         self.0.GetRasterContent(image)
     }
@@ -111,8 +109,8 @@ impl<R: CpuSkiaBackend> TileManagerRasterBuffer<CpuCompositorTypes<R>> for TileR
         self.external.SupportsBackgroundThreadPriority()
     }
     fn Playback(&mut self, request: RasterPlaybackRequest<'_, CpuCompositorTypes<R>>) {
-        let mut native = NativeImageProvider(request.settings.image_provider);
-        let mut provider = RasterImageProviderRef(&mut native);
+        let mut image_provider = ImageProvider(request.settings.image_provider);
+        let mut provider = RasterImageProviderRef(&mut image_provider);
         let result = self.external.Playback(RasterPlayback {
             source: request.source,
             content_rect: request.content_rect,

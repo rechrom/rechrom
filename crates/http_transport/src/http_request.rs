@@ -29,6 +29,14 @@ use url::Url;
 use crate::HTTPWakeCallback;
 
 type BoxError = Box<dyn Error + Send + Sync>;
+
+// Chromium: net/http/http_network_session.h:73. Hyper's legacy client
+// advertises a 16 KiB HTTP/2 header-list limit by default, which rejects
+// legitimate responses with large policy/reporting headers before their
+// response head can be published (notably YouTube). Match Chromium's network
+// session limit instead of treating those headers as a protocol error.
+const kSpdyMaxHeaderListSize: u32 = 256 * 1024;
+
 struct HTTPClient {
     inner: Client<ConnectTimeout<EnvironmentConnector>, Full<Bytes>>,
     proxy: Arc<Matcher>,
@@ -73,11 +81,15 @@ pub struct HTTPRequestData {
     pub priority: HTTPRequestPriority,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum HTTPRequestPriority {
     #[default]
-    Normal,
-    High,
+    Normal = 0,
+    High = 1,
+    /// Chromium's `ResourceLoadPriority::kVeryHigh`, mapped to the network
+    /// service's HIGHEST priority for parser/render-blocking resources.
+    VeryHigh = 2,
 }
 
 // cpp: http_transport/http_request.h:20-25
@@ -86,6 +98,7 @@ pub struct HTTPResponseData {
     pub status: i64,
     pub final_url: String,
     pub mime_type: String,
+    pub content_dpr: Option<f64>,
     pub referrer_policy: String,
     pub content_security_policy: Vec<String>,
     pub body: Vec<u8>,
@@ -162,6 +175,7 @@ pub(crate) struct Scheduler {
     pub(crate) options: HTTPTransportOptions,
     pub(crate) slots: Arc<Semaphore>,
     priority_slots: Option<Arc<Semaphore>>,
+    critical_slots: Option<Arc<Semaphore>>,
     client: HTTPClient,
 }
 
@@ -180,18 +194,55 @@ impl Scheduler {
         let roots = root_certificates(certificate_file.as_deref().map(Path::new))?;
         let timeout = (milliseconds > 0).then(|| Duration::from_millis(milliseconds));
         let client = build_client(roots, timeout)?;
-        // Chromium's ResourceLoadScheduler prevents render-blocking resources
-        // from sitting behind a large queue of deferred script/image requests.
-        // Reserve one quarter of transport admissions for high-priority work;
-        // high priority may also consume an ordinary free slot.
+        // Source: third_party/blink/renderer/platform/loader/fetch/
+        // resource_load_scheduler.cc; services/network/public/cpp/
+        // resource_request.cc.  Parser/render-blocking CSS is VeryHigh while
+        // module scripts remain High.  Keep a distinct admission class for
+        // each so a large module graph cannot occupy every slot required to
+        // reach first paint.  The partitions still sum to the embedder's
+        // configured maximum; this does not manufacture extra concurrency.
+        let critical = options.max_parallel_requests / 4;
         let reserved = options.max_parallel_requests / 4;
-        let ordinary = options.max_parallel_requests - reserved;
+        let ordinary = options.max_parallel_requests - critical - reserved;
         Ok(Self {
             slots: Arc::new(Semaphore::new(ordinary.max(1))),
             priority_slots: (reserved != 0).then(|| Arc::new(Semaphore::new(reserved))),
+            critical_slots: (critical != 0).then(|| Arc::new(Semaphore::new(critical))),
             options,
             client,
         })
+    }
+
+    pub(crate) async fn acquire_slot(
+        &self,
+        priority: HTTPRequestPriority,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
+        if priority == HTTPRequestPriority::VeryHigh {
+            if let Some(critical) = &self.critical_slots {
+                return tokio::select! {
+                    biased;
+                    permit = critical.clone().acquire_owned() => permit,
+                    permit = self.acquire_high_or_ordinary_slot() => permit,
+                };
+            }
+        }
+        if priority >= HTTPRequestPriority::High {
+            return self.acquire_high_or_ordinary_slot().await;
+        }
+        self.slots.clone().acquire_owned().await
+    }
+
+    async fn acquire_high_or_ordinary_slot(
+        &self,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
+        if let Some(high) = &self.priority_slots {
+            return tokio::select! {
+                biased;
+                permit = high.clone().acquire_owned() => permit,
+                permit = self.slots.clone().acquire_owned() => permit,
+            };
+        }
+        self.slots.clone().acquire_owned().await
     }
 }
 
@@ -253,6 +304,7 @@ fn build_client_with_proxy(
     let client = Client::builder(TokioExecutor::new())
         .pool_timer(TokioTimer::new())
         .timer(TokioTimer::new())
+        .http2_max_header_list_size(kSpdyMaxHeaderListSize)
         .build(connector);
     Ok(HTTPClient {
         inner: client,
@@ -608,11 +660,13 @@ pub(crate) async fn fetch_response(
             response_header_values(response.headers(), "referrer-policy").join(",");
         let content_security_policy =
             response_header_values(response.headers(), "content-security-policy");
+        let content_dpr = response_content_dpr(response.headers());
         return Ok(ResponseStart {
             incoming: response.into_body(),
             status: i64::from(status.as_u16()),
             final_url: url.to_string(),
             mime_type,
+            content_dpr,
             referrer_policy,
             content_security_policy,
             encodings,
@@ -627,6 +681,7 @@ pub(crate) struct ResponseStart {
     pub(crate) status: i64,
     pub(crate) final_url: String,
     pub(crate) mime_type: String,
+    pub(crate) content_dpr: Option<f64>,
     pub(crate) referrer_policy: String,
     pub(crate) content_security_policy: Vec<String>,
     pub(crate) encodings: String,
@@ -643,6 +698,37 @@ fn response_header_values(headers: &HeaderMap, name: &'static str) -> Vec<String
         .collect()
 }
 
+fn response_content_dpr(headers: &HeaderMap) -> Option<f64> {
+    // cpp: core/layout/layout_image.cc:177-185. Preserve the response-owned
+    // DPR fact until the selected HTML image use applies the override.
+    headers
+        .get("content-dpr")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
+
+#[cfg(test)]
+mod response_header_tests {
+    use super::*;
+
+    #[test]
+    fn content_dpr_accepts_only_positive_finite_numbers() {
+        for (header, expected) in [
+            ("2.5", Some(2.5)),
+            (" 4 ", Some(4.0)),
+            ("0", None),
+            ("-1", None),
+            ("NaN", None),
+            ("invalid", None),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-dpr", HeaderValue::from_str(header).unwrap());
+            assert_eq!(response_content_dpr(&headers), expected, "{header}");
+        }
+    }
+}
+
 async fn transfer_traced(
     request: &HTTPRequestData,
     scheduler: &Scheduler,
@@ -654,6 +740,7 @@ async fn transfer_traced(
         status,
         final_url,
         mime_type,
+        content_dpr,
         referrer_policy,
         content_security_policy,
         encodings,
@@ -706,6 +793,7 @@ async fn transfer_traced(
         status,
         final_url,
         mime_type,
+        content_dpr,
         referrer_policy,
         content_security_policy,
         body,
@@ -722,21 +810,12 @@ async fn transfer(
 
 async fn execute(request: HTTPRequestData, state: Arc<State>) {
     let _slot = loop {
-        let admission = async {
-            if state.priority.load(Ordering::Acquire) != 0 {
-                if let Some(priority) = &state.scheduler.priority_slots {
-                    tokio::select! {
-                        biased;
-                        permit = priority.clone().acquire_owned() => permit,
-                        permit = state.scheduler.slots.clone().acquire_owned() => permit,
-                    }
-                } else {
-                    state.scheduler.slots.clone().acquire_owned().await
-                }
-            } else {
-                state.scheduler.slots.clone().acquire_owned().await
-            }
+        let priority = match state.priority.load(Ordering::Acquire) {
+            2 => HTTPRequestPriority::VeryHigh,
+            1 => HTTPRequestPriority::High,
+            _ => HTTPRequestPriority::Normal,
         };
+        let admission = state.scheduler.acquire_slot(priority);
         tokio::select! {
             biased;
             _ = state.priority_changed.notified() => continue,
@@ -817,7 +896,7 @@ impl HTTPRequest {
         let executor = runtime()?;
         let trace = RequestTrace::queued(&request, false);
         let state = Arc::new(State {
-            priority: AtomicU8::new((request.priority == HTTPRequestPriority::High) as u8),
+            priority: AtomicU8::new(request.priority as u8),
             priority_changed: Notify::new(),
             cancelled: AtomicBool::new(false),
             cancel: Notify::new(),
@@ -860,12 +939,13 @@ impl HTTPRequestOperation for HTTPRequest {
     fn SetPriority(&mut self, priority: HTTPRequestPriority) {
         // Fetcher's coalesced parser consumer boosts an existing speculative
         // load. A later async consumer must not demote the blocking consumer.
-        if priority == HTTPRequestPriority::High
-            && self.state.priority.swap(1, Ordering::AcqRel) == 0
-        {
-            self.state
-                .trace
-                .event("HTTPRequestPriorityRaised", &[("priority", 1.)]);
+        let requested = priority as u8;
+        let previous = self.state.priority.fetch_max(requested, Ordering::AcqRel);
+        if requested > previous {
+            self.state.trace.event(
+                "HTTPRequestPriorityRaised",
+                &[("priority", requested as f64)],
+            );
             self.state.priority_changed.notify_one();
         }
     }
@@ -1061,9 +1141,43 @@ mod tls_tests {
             },
             slots: Arc::new(Semaphore::new(1)),
             priority_slots: None,
+            critical_slots: None,
             client: build_client_with_proxy(fixture_roots(), Some(Duration::from_secs(2)), proxy)
                 .unwrap(),
         }
+    }
+
+    #[test]
+    fn very_high_admission_survives_saturated_module_and_ordinary_pools() {
+        let scheduler = Scheduler::new(HTTPTransportOptions {
+            max_parallel_requests: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        runtime().unwrap().block_on(async {
+            // max=4 partitions into two ordinary, one High and one VeryHigh
+            // permit. Saturating the first two classes must not make a
+            // parser/render-blocking stylesheet wait behind them.
+            let _ordinary_1 = scheduler
+                .acquire_slot(HTTPRequestPriority::Normal)
+                .await
+                .unwrap();
+            let _ordinary_2 = scheduler
+                .acquire_slot(HTTPRequestPriority::Normal)
+                .await
+                .unwrap();
+            let _module = scheduler
+                .acquire_slot(HTTPRequestPriority::High)
+                .await
+                .unwrap();
+            let _critical = tokio::time::timeout(
+                Duration::from_millis(50),
+                scheduler.acquire_slot(HTTPRequestPriority::VeryHigh),
+            )
+            .await
+            .expect("VeryHigh admission must retain its own capacity")
+            .unwrap();
+        });
     }
 
     async fn read_headers(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> String {
@@ -1233,7 +1347,7 @@ mod tls_tests {
     }
 
     #[test]
-    fn http2_tls_negotiation_multiplexes_requests_on_one_connection() {
+    fn http2_tls_negotiation_accepts_chromium_sized_headers_and_multiplexes() {
         let cert = rustls::pki_types::CertificateDer::from(
             include_bytes!("../tests/fixtures/server.der").to_vec(),
         );
@@ -1267,7 +1381,13 @@ mod tls_tests {
                 responders.push(responder);
             }
             for mut responder in responders {
-                let response = hyper::Response::builder().status(200).body(()).unwrap();
+                // Larger than Hyper's 16 KiB default and representative of
+                // policy/reporting response headers emitted by large sites.
+                let response = hyper::Response::builder()
+                    .status(200)
+                    .header("x-large-policy", "x".repeat(24 * 1024))
+                    .body(())
+                    .unwrap();
                 responder
                     .send_response(response, false)
                     .unwrap()
@@ -1352,6 +1472,7 @@ mod tls_tests {
             },
             slots: Arc::new(Semaphore::new(1)),
             priority_slots: None,
+            critical_slots: None,
             client: build_client(roots, Some(Duration::from_secs(2))).unwrap(),
         };
         let result = runtime()

@@ -21,7 +21,7 @@ fn media() -> MediaValuesCachedData {
         ..Default::default()
     }
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let doc = owner.GetDocument();
     let node = (0..doc.NodeCount())
         .find(|&i| {
@@ -30,7 +30,13 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|a| a.value == id)
         })
         .unwrap();
-    unsafe { &*doc.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe {
+        &*doc
+            .ResolvedStyleFor(node)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn parse(id: P, css: &str) -> Vec<values::PropertyValue> {
     ParseProperty(
@@ -46,7 +52,7 @@ fn apply(b: &mut ComputedStyleBuilder, id: P, css: &str) {
 }
 
 #[test]
-fn initial_letter_native_drop_raise_omitted_integer_and_math() {
+fn initial_letter_computed_style_drop_raise_omitted_integer_and_math() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<i id=a></i><i id=b></i><i id=c></i><i id=d></i><i id=e></i><i id=f></i>",
@@ -59,26 +65,26 @@ fn initial_letter_native_drop_raise_omitted_integer_and_math() {
         "{:?}",
         engine.Diagnostics()
     );
-    let a = native(&owner, "a").InitialLetter();
+    let a = computed_style(&owner, "a").InitialLetter();
     assert_eq!((a.Size(), a.Sink()), (3.9, 3));
     assert!(!a.IsDrop() && !a.IsRaise() && !a.IsIntegerSink());
-    let b = native(&owner, "b").InitialLetter();
+    let b = computed_style(&owner, "b").InitialLetter();
     assert_eq!((b.Size(), b.Sink()), (3.9, 3));
     assert!(b.IsDrop());
-    let c = native(&owner, "c").InitialLetter();
+    let c = computed_style(&owner, "c").InitialLetter();
     assert_eq!((c.Size(), c.Sink()), (3.9, 1));
     assert!(c.IsRaise());
-    let d = native(&owner, "d").InitialLetter();
+    let d = computed_style(&owner, "d").InitialLetter();
     assert_eq!((d.Size(), d.Sink()), (2.5, 7));
     assert!(d.IsIntegerSink());
-    let e = native(&owner, "e").InitialLetter();
+    let e = computed_style(&owner, "e").InitialLetter();
     assert_eq!((e.Size(), e.Sink()), (2.5, 2));
     assert!(e.IsIntegerSink());
-    assert_eq!(native(&owner, "f").InitialLetter().Sink(), i32::MAX);
+    assert_eq!(computed_style(&owner, "f").InitialLetter().Sink(), i32::MAX);
 }
 
 #[test]
-fn marker_modes_are_stable_and_scope_owns_native_scoped_names() {
+fn marker_modes_are_stable_and_scope_owns_computed_style_scoped_names() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p><i id=c></i></div><i id=t></i><i id=l></i><i id=a></i>",
@@ -91,14 +97,14 @@ fn marker_modes_are_stable_and_scope_owns_native_scoped_names() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
-    let c = native(&owner, "c");
+    let p = computed_style(&owner, "p");
+    let c = computed_style(&owner, "c");
     assert_eq!(p.GetScrollMarkerGroup(), c.GetScrollMarkerGroup());
     let group = unsafe { &*p.GetScrollMarkerGroup() };
     assert!(group.PositionBefore() && group.IsInLinksMode());
-    let tabs = unsafe { &*native(&owner, "t").GetScrollMarkerGroup() };
+    let tabs = unsafe { &*computed_style(&owner, "t").GetScrollMarkerGroup() };
     assert!(tabs.PositionAfter() && tabs.IsInTabsMode());
-    let links = unsafe { &*native(&owner, "l").GetScrollMarkerGroup() };
+    let links = unsafe { &*computed_style(&owner, "l").GetScrollMarkerGroup() };
     assert!(links.PositionBefore() && links.IsInLinksMode());
     assert_eq!(p.TriggerScope().Names(), c.TriggerScope().Names());
     let names = unsafe { &*p.TriggerScope().Names() }.GetNames();
@@ -112,12 +118,12 @@ fn marker_modes_are_stable_and_scope_owns_native_scoped_names() {
     assert!(names
         .iter()
         .all(|n| unsafe { &*n.Get() }.GetTreeScope().is_null()));
-    let all = native(&owner, "a").TriggerScope();
+    let all = computed_style(&owner, "a").TriggerScope();
     assert!(all.IsAll() && all.AllTreeScope().is_null() && all.Names().is_null());
 }
 
 #[test]
-fn css_wide_resets_and_explicit_inheritance_reach_native_fields() {
+fn css_wide_resets_and_explicit_inheritance_reach_computed_style_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=p><i id=c></i><i id=i></i><i id=u></i><i id=n></i></div>",
@@ -130,14 +136,14 @@ fn css_wide_resets_and_explicit_inheritance_reach_native_fields() {
         "{:?}",
         engine.Diagnostics()
     );
-    let p = native(&owner, "p");
-    let c = native(&owner, "c");
+    let p = computed_style(&owner, "p");
+    let c = computed_style(&owner, "c");
     assert_eq!(p.InitialLetter(), c.InitialLetter());
     assert_eq!(p.GetScrollMarkerGroup(), c.GetScrollMarkerGroup());
     assert!(p.TriggerScope() == c.TriggerScope());
     assert!(c.HasExplicitInheritance() && p.ChildHasExplicitInheritance());
     for id in ["i", "u", "n"] {
-        let s = native(&owner, id);
+        let s = computed_style(&owner, id);
         assert!(s.InitialLetter().IsNormal());
         assert!(s.GetScrollMarkerGroup().is_null());
         assert!(s.TriggerScope().IsNone());
@@ -150,7 +156,7 @@ fn css_wide_resets_and_explicit_inheritance_reach_native_fields() {
 }
 
 #[test]
-fn invalid_grammar_and_typed_native_boundaries_are_explicit() {
+fn invalid_grammar_and_typed_computed_style_boundaries_are_explicit() {
     for (id, css) in [
         (P::kInitialLetter, "0"),
         (P::kInitialLetter, ".9"),

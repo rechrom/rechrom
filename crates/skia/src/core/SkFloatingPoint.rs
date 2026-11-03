@@ -70,13 +70,13 @@ impl SkCppRound for bool {
 }
 // Source: include/private/SkFloatingPoint.h:40-40
 // Native floating-type constraint specialized to this CPU closure's scalar float/double types.
-mod native_float_type {
+mod float_type {
     pub trait Sealed {}
     impl Sealed for f32 {}
     impl Sealed for f64 {}
 }
 pub trait SkFloatingPointValue:
-    native_float_type::Sealed
+    float_type::Sealed
     + Copy
     + PartialEq
     + core::ops::Sub<Output = Self>
@@ -531,11 +531,11 @@ macro_rules! SkIsFinite {
 
 // Actual compiler long-double protocol, separately gated by the real native
 // bridge's build/link availability, not inferred from Cargo host layout.
-#[cfg(sk_native_long_double_ffi)]
+#[cfg(sk_long_double_ffi)]
 pub mod long_double {
-    use crate::interop::native_long_double as ld;
+    use crate::interop::long_double as ld;
     // Staged caller projection for the real same-type long-double array overload.
-    // Bind `ld` to the companion interop/native_long_double.rs module after root
+    // Bind `ld` to the companion interop/long_double.rs module after root
     // registers and links the genuine compiler TU. No native long-double by-value
     // Rust ABI or generic owning floating type is claimed.
     // Source: include/private/SkFloatingPoint.h:57-66

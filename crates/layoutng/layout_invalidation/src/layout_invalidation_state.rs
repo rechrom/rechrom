@@ -7,7 +7,7 @@ pub enum MarkingBehavior {
     kMarkContainerChain,
 }
 
-/// Layout-only dirty state retained by each native LayoutObject.
+/// Layout-only dirty state retained by each source LayoutObject.
 ///
 /// Propagation still walks the private object tree in the core assembly. The
 /// state itself is isolated here so invalidation policy no longer shares the

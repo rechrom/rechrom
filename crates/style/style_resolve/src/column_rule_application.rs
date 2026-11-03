@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Chromium column-rule converters into native GapDataList storage.
+//! Chromium column-rule converters into computed style GapDataList storage.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{EBorderStyle, EInsideLink};
@@ -65,7 +65,7 @@ pub(super) fn Apply(
                 }
             } else {
                 let entries = Entries(id, v)?;
-                // converter.cc:2634-2641: use the real native InsideLink state
+                // converter.cc:2634-2641: use the real computed style InsideLink state
                 // when supplied. Document link-state/visited ownership remains
                 // explicit partial; no link state is inferred from CSS strings.
                 if entries.len() > 1 && b.InsideLink() != EInsideLink::kNotInsideLink {
@@ -113,7 +113,7 @@ pub(super) fn Apply(
             let row = id == kRowRuleWidth;
             let widths = if initial {
                 // custom longhands.cc:2732-2737, initial int is zoomed pixels.
-                // RowRuleWidth custom:2767-2772 uses its native legacy value.
+                // RowRuleWidth custom:2767-2772 uses its computed style legacy value.
                 let width = if row {
                     ComputedStyleInitialValues::InitialRowRuleWidth().GetLegacyValue()
                 } else {

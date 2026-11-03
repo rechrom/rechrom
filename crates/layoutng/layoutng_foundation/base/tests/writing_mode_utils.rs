@@ -1,8 +1,8 @@
-use foundation::text::native::writing_mode_utils::{
+use foundation::text::primitives::writing_mode_utils::{
     LogicalToLogical, LogicalToPhysical, LogicalToPhysicalGetter, LogicalToPhysicalSetter,
     PhysicalToLogical, PhysicalToLogicalGetter,
 };
-use foundation::text::native::{TextDirection, WritingDirectionMode, WritingMode};
+use foundation::text::primitives::{TextDirection, WritingDirectionMode, WritingMode};
 
 const MODES: [WritingMode; 5] = [
     WritingMode::kHorizontalTb,

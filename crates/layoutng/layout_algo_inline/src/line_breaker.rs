@@ -13,11 +13,11 @@ use font_engine::fonts::shaping::shaping_line_breaker::{
     Result as ShapingBreakResult, ShapeLineBackend, ShapingLineBreaker,
 };
 use font_engine::fonts::simple_font_data::SimpleFontData;
-use font_engine::text::native::bidi_paragraph::BidiParagraph;
-use font_engine::text::native::character::Character;
-use font_engine::text::native::hyphenation::Hyphenation;
-use font_engine::text::native::layout_locale::LineBreakStrictness;
-use font_engine::text::native::text_break_iterator::{
+use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
+use font_engine::text::implementation::character::Character;
+use font_engine::text::implementation::hyphenation::Hyphenation;
+use font_engine::text::implementation::layout_locale::LineBreakStrictness;
+use font_engine::text::implementation::text_break_iterator::{
     BreakSpaceType, LazyLineBreakIterator, LineBreakType,
 };
 use foundation::{

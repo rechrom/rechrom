@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
-use font_engine::text::native::bidi_paragraph::BidiParagraph;
+use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
 use font_engine::FontBaseline;
 use foundation::{
     EPosition, ETextAlign, HeapVector, IsA, IsLtr, LayoutUnit, MakeGarbageCollectedDefault, Member,

@@ -198,8 +198,8 @@ impl Eq for CascadePriorityListIterator<'_> {}
 // live-entry distinction; this changes storage mechanics, not cascade logic.
 pub struct CascadeMap {
     inline_style_lost_: bool,
-    native_properties_: Vec<Option<CascadePriorityList>>,
-    native_bits_: CSSBitset,
+    properties_: Vec<Option<CascadePriorityList>>,
+    bits_: CSSBitset,
     custom_properties_: HashMap<AtomicString, CascadePriorityList>,
     backing_vector_: CascadePriorityBackingVector,
     important_set_: Option<CSSBitset>,
@@ -210,8 +210,8 @@ impl Default for CascadeMap {
     fn default() -> Self {
         Self {
             inline_style_lost_: false,
-            native_properties_: vec![None; kNumCSSProperties as usize],
-            native_bits_: CSSBitset::new(),
+            properties_: vec![None; kNumCSSProperties as usize],
+            bits_: CSSBitset::new(),
             custom_properties_: HashMap::new(),
             backing_vector_: Vec::new(),
             important_set_: None,
@@ -240,7 +240,7 @@ impl CascadeMap {
         }
         let index = name.Id() as usize;
         debug_assert!(index < kNumCSSProperties as usize);
-        self.native_properties_[index]
+        self.properties_[index]
             .as_ref()
             .map(|list| list.Top(&self.backing_vector_))
     }
@@ -254,7 +254,7 @@ impl CascadeMap {
         } else {
             let index = name.Id() as usize;
             debug_assert!(index < kNumCSSProperties as usize);
-            self.native_properties_[index].as_ref()?.head_index_
+            self.properties_[index].as_ref()?.head_index_
         };
         Some(&mut self.backing_vector_[head as usize].priority)
     }
@@ -356,17 +356,17 @@ impl CascadeMap {
             });
         }
 
-        if !self.native_bits_.Has(id) {
-            self.native_bits_.Set(id);
-            self.native_properties_[index] = Some(CascadePriorityList::FromPriority(
+        if !self.bits_.Has(id) {
+            self.bits_.Set(id);
+            self.properties_[index] = Some(CascadePriorityList::FromPriority(
                 &mut self.backing_vector_,
                 priority,
             ));
             return;
         }
-        let list = self.native_properties_[index]
+        let list = self.properties_[index]
             .as_mut()
-            .expect("native bit and list must agree");
+            .expect("computed_style bit and list must agree");
         Self::AddToList(
             &mut self.inline_style_lost_,
             list,
@@ -400,8 +400,8 @@ impl CascadeMap {
     // cpp: cascade_map.cc:209-218
     pub fn Reset(&mut self) {
         self.inline_style_lost_ = false;
-        self.native_bits_.Reset();
-        self.native_properties_.fill(None);
+        self.bits_.Reset();
+        self.properties_.fill(None);
         self.custom_properties_.clear();
         self.backing_vector_.clear();
         self.important_set_ = None;
@@ -417,7 +417,7 @@ impl CascadeMap {
 
     // cpp: cascade_map.h:79-92,94-100,203-204
     pub fn HighPriorityBits(&self) -> u64 {
-        self.native_bits_.HighPriorityBits()
+        self.bits_.HighPriorityBits()
     }
 
     pub fn ReleaseImportantSet(&mut self) -> Option<CSSBitset> {
@@ -431,7 +431,7 @@ impl CascadeMap {
     }
 
     pub const fn NativeBitset(&self) -> &CSSBitset {
-        &self.native_bits_
+        &self.bits_
     }
 
     pub const fn GetCustomMap(&self) -> &HashMap<AtomicString, CascadePriorityList> {
@@ -446,7 +446,7 @@ impl CascadeMap {
         if name.IsCustomProperty() {
             self.custom_properties_.get(name.ToAtomicString())
         } else {
-            self.native_properties_[name.Id() as usize].as_ref()
+            self.properties_[name.Id() as usize].as_ref()
         }
     }
 }

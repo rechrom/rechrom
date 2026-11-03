@@ -5,7 +5,7 @@
 use crate::quickjs_libc_windows::crt as libc;
 use quickjs::quickjs_header::*;
 use std::{
-    alloc::{alloc, dealloc, realloc, Layout},
+    alloc::{alloc, dealloc, realloc as rust_realloc_raw, Layout},
     ffi::{c_void, CStr},
     io::Write,
 };
@@ -155,7 +155,7 @@ unsafe fn rust_realloc(pointer: *mut c_void, size: usize) -> *mut c_void {
         return std::ptr::null_mut();
     }
     let old = rust_usable_size(pointer);
-    let raw = realloc(
+    let raw = rust_realloc_raw(
         pointer.cast::<u8>().sub(ALLOCATION_HEADER),
         Layout::from_size_align_unchecked(old + ALLOCATION_HEADER, 16),
         total,
@@ -167,15 +167,15 @@ unsafe fn rust_realloc(pointer: *mut c_void, size: usize) -> *mut c_void {
     raw.add(ALLOCATION_HEADER).cast()
 }
 #[cfg(any(unix, windows))]
-unsafe fn native_malloc(size: usize) -> *mut c_void {
+unsafe fn platform_malloc(size: usize) -> *mut c_void {
     libc::malloc(size)
 }
 #[cfg(any(unix, windows))]
-unsafe fn native_free(pointer: *mut c_void) {
+unsafe fn platform_free(pointer: *mut c_void) {
     libc::free(pointer);
 }
 #[cfg(any(unix, windows))]
-unsafe fn native_realloc(pointer: *mut c_void, size: usize) -> *mut c_void {
+unsafe fn platform_realloc(pointer: *mut c_void, size: usize) -> *mut c_void {
     libc::realloc(pointer, size)
 }
 #[cfg(any(
@@ -186,7 +186,7 @@ unsafe fn native_realloc(pointer: *mut c_void, size: usize) -> *mut c_void {
     target_os = "dragonfly",
     target_os = "windows"
 ))]
-unsafe fn native_usable_size(pointer: *const c_void) -> usize {
+unsafe fn platform_usable_size(pointer: *const c_void) -> usize {
     #[cfg(target_os = "macos")]
     {
         libc::malloc_size(pointer)
@@ -222,14 +222,14 @@ unsafe fn host_def_malloc(s: *mut JSMallocState, size: usize) -> *mut c_void {
     if (*s).malloc_size.wrapping_add(size) > (*s).malloc_limit {
         return std::ptr::null_mut();
     }
-    let p = native_malloc(size);
+    let p = platform_malloc(size);
     if p.is_null() {
         return p;
     }
     (*s).malloc_count = (*s).malloc_count.wrapping_add(1);
     (*s).malloc_size = (*s)
         .malloc_size
-        .wrapping_add(native_usable_size(p))
+        .wrapping_add(platform_usable_size(p))
         .wrapping_add(if cfg!(target_vendor = "apple") { 0 } else { 8 });
     p
 }
@@ -240,9 +240,9 @@ unsafe fn host_def_free(s: *mut JSMallocState, p: *mut c_void) {
     (*s).malloc_count = (*s).malloc_count.wrapping_sub(1);
     (*s).malloc_size = (*s)
         .malloc_size
-        .wrapping_sub(native_usable_size(p))
+        .wrapping_sub(platform_usable_size(p))
         .wrapping_sub(if cfg!(target_vendor = "apple") { 0 } else { 8 });
-    native_free(p);
+    platform_free(p);
 }
 unsafe fn host_def_realloc(s: *mut JSMallocState, p: *mut c_void, size: usize) -> *mut c_void {
     if p.is_null() {
@@ -251,7 +251,7 @@ unsafe fn host_def_realloc(s: *mut JSMallocState, p: *mut c_void, size: usize) -
         }
         return host_def_malloc(s, size);
     }
-    let old_size = native_usable_size(p);
+    let old_size = platform_usable_size(p);
     if size == 0 {
         host_def_free(s, p);
         return std::ptr::null_mut();
@@ -259,36 +259,36 @@ unsafe fn host_def_realloc(s: *mut JSMallocState, p: *mut c_void, size: usize) -
     if (*s).malloc_size.wrapping_add(size).wrapping_sub(old_size) > (*s).malloc_limit {
         return std::ptr::null_mut();
     }
-    let q = native_realloc(p, size);
+    let q = platform_realloc(p, size);
     if q.is_null() {
         return q;
     }
     (*s).malloc_size = (*s)
         .malloc_size
-        .wrapping_add(native_usable_size(q))
+        .wrapping_add(platform_usable_size(q))
         .wrapping_sub(old_size);
     q
 }
-fn native_default_mf() -> JSMallocFunctions {
+fn default_mf() -> JSMallocFunctions {
     JSMallocFunctions {
         js_malloc: Some(host_def_malloc),
         js_free: Some(host_def_free),
         js_realloc: Some(host_def_realloc),
-        js_malloc_usable_size: Some(native_usable_size),
+        js_malloc_usable_size: Some(platform_usable_size),
     }
 }
 unsafe fn new_cli_runtime() -> *mut JSRuntime {
-    quickjs::quickjs::JS_NewRuntime2(&native_default_mf(), std::ptr::null_mut())
+    quickjs::quickjs::JS_NewRuntime2(&default_mf(), std::ptr::null_mut())
 }
 impl Default for TraceAllocator {
     fn default() -> Self {
         #[cfg(any(unix, windows))]
         {
             Self {
-                malloc: native_malloc,
-                free: native_free,
-                realloc: native_realloc,
-                usable_size: native_usable_size,
+                malloc: platform_malloc,
+                free: platform_free,
+                realloc: platform_realloc,
+                usable_size: platform_usable_size,
             }
         }
         #[cfg(not(any(unix, windows)))]

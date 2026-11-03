@@ -15,7 +15,7 @@ fn Request(query: SystemFontQuery) -> SystemFontRequest {
 }
 
 #[test]
-fn metadata_queries_and_explicit_opens_keep_native_face_identity() {
+fn metadata_queries_and_explicit_opens_keep_source_face_identity() {
     let mut provider = BrowserSystemFontProvider::new(FontContextVersion(9));
     let query = Request(SystemFontQuery::MatchGeneric {
         generic: "sans-serif".into(),
@@ -31,7 +31,7 @@ fn metadata_queries_and_explicit_opens_keep_native_face_identity() {
     }; // A fontless platform is supported.
     assert!(selected.face.bytes.is_empty());
     assert_eq!(selected.face.family, "sans-serif");
-    assert!(!selected.face.native_family.is_empty());
+    assert!(!selected.face.resolved_family.is_empty());
     let open = Request(SystemFontQuery::OpenFace {
         id: selected.id.clone(),
     });
@@ -47,7 +47,7 @@ fn metadata_queries_and_explicit_opens_keep_native_face_identity() {
     assert!(font.GlyphForCharacter('A' as u32).is_some());
     println!(
         "opened {} collection-index={} bytes={}",
-        first.native_family,
+        first.resolved_family,
         first.face_index,
         first.bytes.len()
     );
@@ -116,7 +116,7 @@ fn contextual_fallback_roundtrips_exact_ttc_faces() {
             {
                 println!(
                     "contextual {} -> {} collection-index={}",
-                    text, face.native_family, face.face_index
+                    text, face.resolved_family, face.face_index
                 );
                 found = true;
                 break;
@@ -130,11 +130,11 @@ fn contextual_fallback_roundtrips_exact_ttc_faces() {
         }
     }
 }
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 #[test]
 fn page_settles_system_font_requests_before_publishing_glyphs() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         use std::{cell::RefCell, io, rc::Rc};
         use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
         struct Operation(Option<URLResponse>);

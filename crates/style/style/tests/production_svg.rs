@@ -25,7 +25,7 @@ fn parse(id: P, text: &str) -> std::rc::Rc<style::production_css_value::Value> {
     .remove(0)
     .ValueRef()
 }
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let doc = owner.GetDocument();
     let node = (0..doc.NodeCount())
         .find(|&i| {
@@ -34,7 +34,13 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
                 .is_some_and(|attribute| attribute.value == id)
         })
         .unwrap();
-    unsafe { &*doc.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe {
+        &*doc
+            .ResolvedStyleFor(node)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
 }
 fn media() -> MediaValuesCachedData {
     MediaValuesCachedData {
@@ -66,9 +72,9 @@ fn svg_presentation_attributes_enter_author_hint_cascade() {
         "{:?}",
         engine.Diagnostics()
     );
-    let group = native(&owner, "group");
+    let group = computed_style(&owner, "group");
     assert_eq!(group.Transform().Operations().len(), 1);
-    let path = native(&owner, "path");
+    let path = computed_style(&owner, "path");
     assert_eq!(path.FillPaint().GetColor().GetColor().Param0(), 18.);
     assert_eq!(path.StrokePaint().GetColor().GetColor().Param0(), 6.);
     assert_eq!(path.StrokeWidth().length(), &Length::Fixed(3));
@@ -134,7 +140,7 @@ fn svg_typed_grammar_handles_user_units_dash_separators_and_canonical_order() {
 }
 
 #[test]
-fn production_svg_values_inheritance_and_initial_reach_native_fields() {
+fn production_svg_values_inheritance_and_initial_reach_computed_style_fields() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<svg id=parent><g id=child></g><g id=reset></g><g id=invalid></g></svg>",
@@ -148,7 +154,7 @@ fn production_svg_values_inheritance_and_initial_reach_native_fields() {
         "{:?}",
         engine.Diagnostics()
     );
-    let parent = native(&owner, "parent");
+    let parent = computed_style(&owner, "parent");
     assert!(parent.FillPaint().HasCurrentColor());
     assert_eq!(parent.StrokePaint().paint_type, SVGPaintType::kColor);
     assert_eq!(parent.StrokePaint().GetColor().GetColor().Param0(), 18.);
@@ -170,7 +176,7 @@ fn production_svg_values_inheritance_and_initial_reach_native_fields() {
         parent.PaintOrder(),
         EPaintOrder::kPaintOrderStrokeMarkersFill
     );
-    let child = native(&owner, "child");
+    let child = computed_style(&owner, "child");
     assert!(child.FillPaint().HasCurrentColor());
     assert!(child.StrokePaint() == parent.StrokePaint());
     assert_eq!(child.StrokeWidth(), parent.StrokeWidth());
@@ -185,7 +191,7 @@ fn production_svg_values_inheritance_and_initial_reach_native_fields() {
     assert_eq!(child.Y(), parent.Y());
     assert_eq!(child.PathLength(), parent.PathLength());
     assert_eq!(child.PaintOrder(), parent.PaintOrder());
-    let reset = native(&owner, "reset");
+    let reset = computed_style(&owner, "reset");
     assert!(reset.FillPaint().IsInitial());
     assert!(reset.FillPaint().IsColor());
     assert!(reset.StrokePaint().IsInitial());
@@ -202,7 +208,7 @@ fn production_svg_values_inheritance_and_initial_reach_native_fields() {
     assert_eq!(reset.X(), &Length::Fixed(0));
     assert_eq!(reset.Y(), &Length::Fixed(0));
     assert!(reset.PathLength().IsNone());
-    let invalid = native(&owner, "invalid");
+    let invalid = computed_style(&owner, "invalid");
     assert_eq!(invalid.StrokeWidth().length(), &Length::Fixed(4));
     assert_eq!(invalid.R(), &Length::Fixed(5));
     assert_eq!(

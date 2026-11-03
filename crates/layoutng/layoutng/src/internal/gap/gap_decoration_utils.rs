@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../../layout_fragment/src/native_gap_decoration_utils.rs"]
-mod layout_fragment_native_gap_decoration_utils;
+#[path = "../../../../layout_fragment/src/gap_decoration_utils.rs"]
+mod layout_fragment_gap_decoration_utils;
 
-pub use layout_fragment_native_gap_decoration_utils::*;
+pub use layout_fragment_gap_decoration_utils::*;

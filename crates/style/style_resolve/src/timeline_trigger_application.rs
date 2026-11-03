@@ -16,7 +16,7 @@ pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
             | CSSPropertyID::kTimelineTriggerActiveRangeEnd
     )
 }
-// cpp: css_to_style_map.cc:403-429. Shared animation range typed/native bridge.
+// cpp: css_to_style_map.cc:403-429. Shared animation range typed/computed style bridge.
 pub(super) fn Range(
     id: CSSPropertyID,
     v: &Value,
@@ -246,7 +246,7 @@ mod tests {
         unsafe { &*b.Animations().Get() }
     }
     #[test]
-    fn production_timeline_trigger_native_lists_repetition_and_recalc() {
+    fn production_timeline_trigger_computed_style_lists_repetition_and_recalc() {
         let _heap = foundation::LayoutHeapScope::new();
         let mut b = ComputedStyleBuilder::from_style(initial());
         apply(&mut b,None,"timeline-trigger-name:--a,--b,--c;timeline-trigger-source:--scroll,none;timeline-trigger-activation-range-start:entry 20%,calc(10px + 5%);timeline-trigger-activation-range-end:exit;timeline-trigger-active-range-start:auto,normal;timeline-trigger-active-range-end:contain 75%");

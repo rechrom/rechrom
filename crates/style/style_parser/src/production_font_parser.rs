@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Stable font consumers; every result is a native CSSValue subtype.
+//! Stable font consumers; every result is a computed style CSSValue subtype.
 // Source audit of direct entrypoints and converters (nested collaborator bodies
 // are outside these counts; their pending branches remain in parser ledger).
 // Effective lines exclude comments, blanks, preprocessing/includes/namespaces,

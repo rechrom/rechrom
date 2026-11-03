@@ -40,7 +40,7 @@ fn style(owner: &DOM, element: usize) -> &ComputedStyle {
             .GetDocument()
             .ResolvedStyleFor(element)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
 }
@@ -158,7 +158,7 @@ fn shared_selector_owner_reuses_handles_after_growth_mutation_and_interaction() 
         .GetDocument()
         .ResolvedStyleFor(unrelated)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
     engine
         .SetUserInteractionState(
@@ -179,7 +179,7 @@ fn shared_selector_owner_reuses_handles_after_growth_mutation_and_interaction() 
             .GetDocument()
             .ResolvedStyleFor(unrelated)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get(),
         "unrelated styles must retain their canonical owner across hover changes"
     );
@@ -217,7 +217,7 @@ fn shared_selector_sessions_refresh_scope_and_shadow_tree_state() {
         .GetDocument()
         .ResolvedStyleFor(root)
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone();
     // Attach a new TreeScope after the selector service has already interned
     // the light DOM. Style and scope caches must come from the next session.
@@ -236,7 +236,7 @@ fn shared_selector_sessions_refresh_scope_and_shadow_tree_state() {
             .GetDocument()
             .ResolvedStyleFor(root)
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get(),
         unrelated_style.Get()
     );

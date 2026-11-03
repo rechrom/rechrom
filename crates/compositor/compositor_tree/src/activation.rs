@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_tree_uses_complete_native_activation_order() {
+    fn pending_tree_uses_complete_activation_order() {
         let mut context = Context {
             pending: true,
             full_sync: true,

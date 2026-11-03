@@ -4,14 +4,14 @@ use layoutng_style::style::style_difference::StyleDifference;
 use super::layout_block::LayoutBlock;
 use super::layout_block_flow::LayoutBlockFlow;
 use super::layout_box::LayoutBox;
-use super::layout_input::NativeNodeConstructionData;
+use super::layout_input::NodeConstructionData;
 use super::layout_node_metadata::{Element, Node};
 use super::layout_object::LayoutObject;
+use super::layout_replaced::LayoutReplaced;
 
 // cpp: layoutng/internal/layout_object_factory_set.h:19-43
 pub type LayoutObjectFactory = fn(&mut Node, &ComputedStyle) -> *mut LayoutObject;
-pub type ElementMetadataFactory =
-    fn(&NativeNodeConstructionData, *const ComputedStyle) -> *mut Element;
+pub type ElementMetadataFactory = fn(&NodeConstructionData, *const ComputedStyle) -> *mut Element;
 pub type AnonymousLayoutBlockFactory = fn() -> *mut LayoutBlock;
 pub type TableChildInserter = fn(&mut LayoutObject, &mut LayoutObject, *mut LayoutObject);
 pub type InlineTextChildInserter =
@@ -37,6 +37,15 @@ pub type FieldsetScrollExtent = fn(&LayoutBlockFlow) -> foundation::LayoutUnit;
 pub type CustomLayoutChildFactory = fn(&mut LayoutBox);
 pub type InlineObjectStyleUpdater = fn(&mut LayoutBlockFlow, *const ComputedStyle, &ComputedStyle);
 pub type AnonymousTextCombineStyleUpdater = fn(&mut LayoutObject, &mut ComputedStyleBuilder);
+pub type CombinedTextStyleAdjuster = fn(&mut ComputedStyleBuilder);
+pub type TextFragmentSelectionQuery = fn(&super::layout_text::LayoutText) -> bool;
+pub type TextCombineBoundingBoxAdjuster =
+    fn(&LayoutObject, &foundation::PhysicalRect) -> foundation::PhysicalRect;
+// InlineCursor belongs to the reciprocal fragment package, so the factory
+// boundary carries its borrowed pointer opaquely and the inline owner restores
+// the concrete type without moving or retaining it.
+pub type TextCombineContentsInkOverflowRecalculator =
+    fn(&LayoutObject, *const ()) -> foundation::PhysicalRect;
 pub type SvgBlockTextScale = fn(&LayoutBlock) -> f64;
 pub type SvgBlockStyleUpdater = fn(&mut LayoutBlock, f64, *const ComputedStyle, &ComputedStyle);
 // Rust callback for LayoutSVGGroup::AddChild's C++ virtual override.
@@ -54,6 +63,8 @@ pub type SvgRootChildRemover = fn(&mut LayoutObject, *mut LayoutObject);
 pub type SvgRootChildren =
     fn(&LayoutObject) -> *mut super::layout_object_child_list::LayoutObjectChildList;
 pub type ColumnSpannerInvalidator = fn(&mut LayoutBox);
+pub type ReplacedRespectsCSSOverflow = fn(&LayoutReplaced) -> bool;
+pub type ReplacedImageStateUpdater = fn(&mut LayoutReplaced, f64, bool);
 
 // C++ derived table vtables live in the table package. This typed callback
 // record preserves those overrides without a Cargo dependency cycle. Every
@@ -86,6 +97,7 @@ pub struct TableObjectVirtuals {
     pub physical_location: fn(&LayoutBox) -> foundation::PhysicalOffset,
     pub overflow_clip_rect:
         fn(&LayoutBox, foundation::OverlayScrollbarClipBehavior) -> foundation::PhysicalRect,
+    pub computed_row_span: fn(&LayoutBox) -> u32,
     pub update_from_element: fn(&mut LayoutObject),
 }
 
@@ -99,6 +111,8 @@ pub struct LayoutObjectFactorySet {
     pub inline_text: Option<LayoutObjectFactory>,
     pub inline_word_break: Option<LayoutObjectFactory>,
     pub replaced: Option<LayoutObjectFactory>,
+    pub replaced_respects_css_overflow: Option<ReplacedRespectsCSSOverflow>,
+    pub replaced_image_state_updater: Option<ReplacedImageStateUpdater>,
     pub flex: Option<LayoutObjectFactory>,
     pub grid: Option<LayoutObjectFactory>,
     pub grid_lanes: Option<LayoutObjectFactory>,
@@ -129,6 +143,11 @@ pub struct LayoutObjectFactorySet {
     pub create_custom_child: Option<CustomLayoutChildFactory>,
     pub update_inline_style: Option<InlineObjectStyleUpdater>,
     pub update_anonymous_text_combine_style: Option<AnonymousTextCombineStyleUpdater>,
+    pub adjust_combined_text_style: Option<CombinedTextStyleAdjuster>,
+    pub is_text_fragment_selected: Option<TextFragmentSelectionQuery>,
+    pub adjust_text_combine_bounding_box: Option<TextCombineBoundingBoxAdjuster>,
+    pub recalc_text_combine_contents_ink_overflow:
+        Option<TextCombineContentsInkOverflowRecalculator>,
     pub svg_block_text_scale: Option<SvgBlockTextScale>,
     pub update_svg_block_style: Option<SvgBlockStyleUpdater>,
     pub svg_group_add_child: Option<SvgGroupChildInserter>,

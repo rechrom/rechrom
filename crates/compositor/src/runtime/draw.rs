@@ -3,9 +3,9 @@
 //! stored in a layer or surface, and no resident graph/state is copied.
 use crate::{
     adapter::{
-        damage_context::{DamageContext as NativeDamageContext, DamageLayer, DamageSurface},
+        damage_context::{DamageContext as RuntimeDamageContext, DamageLayer, DamageSurface},
         draw_property::{
-            DrawContext as NativeDrawContext, DrawLayer, DrawLayerMut, DrawPropertyTrees,
+            DrawContext as RuntimeDrawContext, DrawLayer, DrawLayerMut, DrawPropertyTrees,
             ViewTransitionToken,
         },
         geometry::{Rect, RectF},
@@ -16,7 +16,7 @@ use crate::{
             LayerTreeLayerList, LayerTreeTypes, PropertyTreesFor,
         },
         occlusion::{
-            OcclusionContext as NativeOcclusionContext, OcclusionLayer, OcclusionLayerTree,
+            OcclusionContext as RuntimeOcclusionContext, OcclusionLayer, OcclusionLayerTree,
             OcclusionRenderSurface,
         },
         property_tree::PropertyTreeFeatures,
@@ -98,7 +98,7 @@ where
             .LogMaxTextureExceeded(maximum, width, height);
     }
 }
-impl<B> NativeDrawContext for DrawContext<'_, B>
+impl<B> RuntimeDrawContext for DrawContext<'_, B>
 where
     B: RenderSurfaceTypes<RenderSurface = RenderSurfaceImpl<B>, Settings = LayerTreeSettings>,
     B::Layer: DrawLayerMut<B::Transform, Types = B>,
@@ -270,7 +270,7 @@ impl<'a, B: RenderSurfaceTypes> DamageContext<'a, B> {
         Self { tree }
     }
 }
-impl<B> NativeDamageContext for DamageContext<'_, B>
+impl<B> RuntimeDamageContext for DamageContext<'_, B>
 where
     B: RenderSurfaceTypes<RenderSurface = RenderSurfaceImpl<B>>
         + super::frame::ViewTransitionGeometry<FrameTransform = B::Transform>,
@@ -358,7 +358,7 @@ impl<'a, B: RenderSurfaceTypes> OcclusionContext<'a, B> {
         Self { layers, trees }
     }
 }
-impl<B> NativeOcclusionContext for OcclusionContext<'_, B>
+impl<B> RuntimeOcclusionContext for OcclusionContext<'_, B>
 where
     B: RenderSurfaceTypes<RenderSurface = RenderSurfaceImpl<B>>,
     B::Filters: crate::adapter::occlusion::OcclusionFilters,

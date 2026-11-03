@@ -11,7 +11,7 @@
 //! production declarations and cc:65-530 map, including the source-local loader,
 //! cache selection, image-set/crossfade recursion, final builder property walks,
 //! SVG/local-mask handling and images-before-SVG load order. External factories
-//! bind the existing CSSValue payloads and native StyleImage; no resource/style
+//! bind the existing CSSValue payloads and computed style StyleImage; no resource/style
 //! model or network/renderer dependency is introduced. RetainStyleImage is an
 //! ownership bridge only: selection, mutations and traversal stay in Rust.
 #![allow(non_snake_case)]
@@ -23,7 +23,7 @@ use layoutng_style::style::content_data::ImageContentData;
 use layoutng_style::style::fill_layer::FillLayer;
 use layoutng_style::style::filter_operation::{FilterOperation, OperationType as FilterType};
 use layoutng_style::style::filter_operations::FilterOperationVector;
-use layoutng_style::style::forward::SVGResource as NativeSVGResource;
+use layoutng_style::style::forward::SVGResource as LayoutSVGResource;
 use layoutng_style::style::style_image::StyleImage;
 use layoutng_style::style::style_svg_resource::StyleSVGResource;
 use std::cell::{OnceCell, RefCell};
@@ -138,9 +138,9 @@ pub trait ElementStyleResourcesBackend: StyleResolverStateBackend {
         element: &Self::Element,
         id: &AtomicString,
     ) -> Option<Rc<Self::SVGResource>>;
-    fn SVGResourceFromNative(
+    fn SVGResourceFromStyle(
         &self,
-        resource: *mut NativeSVGResource,
+        resource: *mut LayoutSVGResource,
     ) -> Option<Rc<Self::SVGResource>>;
     fn ReferenceFilterResource(&self, operation: &FilterOperation)
         -> Option<Rc<Self::SVGResource>>;
@@ -154,7 +154,7 @@ pub trait ElementStyleResourcesBackend: StyleResolverStateBackend {
         document: &Self::Document,
         cross_origin: Self::CrossOrigin,
     );
-    /// Ownership-only bridge into the native Member/GC builder. The returned
+    /// Ownership-only bridge into the computed style Member/GC builder. The returned
     /// pointer denotes this exact image and remains rooted for the built style.
     /// It must retain the image even after this per-element resources object dies.
     fn RetainStyleImage(
@@ -342,7 +342,7 @@ impl<B: ElementStyleResourcesBackend> ElementStyleResources<B> {
     }
     fn GetSVGResourceOrNull(&self, resource: *mut StyleSVGResource) -> Option<Rc<B::SVGResource>> {
         unsafe { resource.as_ref() }
-            .and_then(|resource| self.backend.SVGResourceFromNative(resource.Resource()))
+            .and_then(|resource| self.backend.SVGResourceFromStyle(resource.Resource()))
     }
     fn GetSingleSVGResource(
         &self,
@@ -412,7 +412,7 @@ impl<B: ElementStyleResourcesBackend> ElementStyleResources<B> {
         let not_set = self.backend.CrossOriginNotSet();
         let anonymous = self.backend.CrossOriginAnonymous();
         // Iterate properties, then inspect the final builder. Overridden pending
-        // values therefore cause no fetch. Native list nodes remain builder-owned
+        // values therefore cause no fetch. Canonical list nodes remain builder-owned
         // throughout their traversal; image replacement cannot invalidate nodes.
         for property in &self.pending_image_properties_ {
             match property {
@@ -443,7 +443,7 @@ impl<B: ElementStyleResourcesBackend> ElementStyleResources<B> {
                     while let Some(pointer) = content {
                         let content_data = unsafe { &mut *pointer };
                         if content_data.IsImage() {
-                            // The native ContentData contract identifies the
+                            // The computed style ContentData contract identifies the
                             // concrete ImageContentData object for this cast.
                             let image_content = unsafe { &mut *(pointer as *mut ImageContentData) };
                             if let Some(value) = self.PendingCssValue(image_content.GetImage()) {
@@ -525,7 +525,7 @@ fn AllowExternalResources(property: CSSPropertyID) -> bool {
     )
 }
 
-/// Source-local loader. Its builder is passed on each call so native list
+/// Source-local loader. Its builder is passed on each call so computed style list
 /// traversal can borrow individual nodes without aliasing a mutable builder.
 /// This is not a backend: all recursion and type selection remain here.
 struct StyleImageLoader<'a, B: ElementStyleResourcesBackend> {

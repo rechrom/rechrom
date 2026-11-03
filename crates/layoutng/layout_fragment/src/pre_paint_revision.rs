@@ -1,20 +1,20 @@
 //! Rust layout-output invalidation observer. Production revisions consume the
-//! native LayoutObject dirty flags and add fragment-local geometry/resource
-//! changes at the owned-output boundary. Hand-built fragments without native
+//! source LayoutObject dirty flags and add fragment-local geometry/resource
+//! changes at the owned-output boundary. Hand-built fragments without source
 //! identity retain an exhaustive value-comparison fallback. The resulting
 //! object/descendant distinction feeds PrePaintTreeWalk (upstream
 //! core/paint/pre_paint_tree_walk.cc:418-436).
 
 use std::sync::Arc;
 
-use super::{FragmentKind, FragmentPaintData, PaintProperties, PaintResources};
+use super::{FragmentKind, FragmentPaintData, FragmentPaintRect, PaintProperties, PaintResources};
 use foundation::{
     IsManagedLayoutAddress, LayoutOffset as Offset, LayoutSize as Size,
     TrustedIdentityHashMap as HashMap, TrustedIdentityHashSet as HashSet, WeakPersistent,
 };
 pub use layout_fragment_boundary::revision::PrePaintRevisionStats;
 
-/// Version an in-place native scroll/sticky/control change on an already
+/// Version an in-place source scroll/sticky/control change on an already
 /// certified layout output. The layout boundary must call this on every
 /// changed node and its complete ancestor path. Zero remains unobserved;
 /// this operation cannot certify external or previously unobserved inputs.
@@ -30,11 +30,23 @@ pub struct PrePaintRevisionTracker {
     owners: HashMap<u64, LiveOwner>,
     spare_owners: HashMap<u64, LiveOwner>,
     last_stats: PrePaintRevisionStats,
+    production_update: Option<ProductionUpdate>,
 }
 
-/// A non-owning view of Chromium's native fragment topology. The pointed
+struct ProductionUpdate {
+    trace: layout_fragment_boundary::revision::RevisionUpdateTrace,
+    generation: u64,
+    next: HashMap<InputKey, Box<Input>>,
+    previous: HashMap<InputKey, Box<Input>>,
+    previous_owners: HashMap<u64, LiveOwner>,
+    next_owners: HashMap<u64, LiveOwner>,
+    resource_matches: HashMap<(usize, usize, bool), bool>,
+    stats: PrePaintRevisionStats,
+}
+
+/// A non-owning view of Chromium's source fragment topology. The pointed
 /// `FragmentPaintData` is only the fragment-local Paint data attached to a
-/// PhysicalFragment or FragmentItem; `parent` describes the native link and
+/// PhysicalFragment or FragmentItem; `parent` describes the source link and
 /// never creates a second owned tree.
 #[derive(Clone, Copy)]
 pub struct FlatPrePaintInput {
@@ -44,7 +56,7 @@ pub struct FlatPrePaintInput {
 
 #[derive(Hash, PartialEq, Eq)]
 enum InputKey {
-    // Production updates preserve the native FragmentData-equivalent identity.
+    // Production updates preserve the source FragmentData-equivalent identity.
     // Child indices are traversal positions, not object identity.
     Instance(u64),
     // Hand-built external/test fragments may not carry a boundary identity.
@@ -58,11 +70,13 @@ struct LiveOwner {
 }
 
 struct Input {
-    // Production fragments retain only the values Chromium's PrePaint walk
-    // needs after LayoutObject dirty bits have decided whether paint changed.
-    // A complete PaintProperties snapshot is reserved for hand-built inputs
-    // without a native fragment identity, where no dirty-bit contract exists.
-    snapshot: InputSnapshot,
+    // Production keeps only lifecycle revisions and owner identities. A value
+    // snapshot exists solely for hand-built inputs without Chromium source
+    // dirty bits.
+    revision: u64,
+    subtree_revision: u64,
+    owner_ids: [u64; 5],
+    fallback_snapshot: Option<InputSnapshot>,
     fallback_paint: Option<PaintProperties>,
     resources: Option<Arc<PaintResources>>,
     uses_viewport_resource: bool,
@@ -83,10 +97,6 @@ struct InputSnapshot {
     logical_parent_node_id: Option<u64>,
     logical_parent_fragment_instance_id: Option<u64>,
     logical_tree_order: u64,
-    owner_ids: [u64; 5],
-    pre_paint_revision: u64,
-    pre_paint_subtree_revision: u64,
-    pre_paint_owner_retained: bool,
 }
 
 impl PrePaintRevisionTracker {
@@ -100,6 +110,67 @@ impl PrePaintRevisionTracker {
         self.owners.clear();
         self.spare_owners.clear();
         self.last_stats = PrePaintRevisionStats::default();
+        self.production_update = None;
+    }
+
+    /// Begin a production source walk. Layout calls ObserveProductionNode
+    /// directly while following the canonical fragment cursor, so revision
+    /// certification does not allocate a flat copy of the fragment topology.
+    pub fn BeginProductionUpdate(&mut self) {
+        assert!(self.production_update.is_none());
+        let mut next = std::mem::take(&mut self.spare_inputs);
+        debug_assert!(next.is_empty());
+        next.reserve(self.inputs.len());
+        let mut next_owners = std::mem::take(&mut self.spare_owners);
+        debug_assert!(next_owners.is_empty());
+        next_owners.reserve(self.owners.len());
+        self.production_update = Some(ProductionUpdate {
+            trace: layout_fragment_boundary::revision::update_span(),
+            generation: layout_fragment_boundary::revision::next_revision(),
+            next,
+            previous: std::mem::take(&mut self.inputs),
+            previous_owners: std::mem::take(&mut self.owners),
+            next_owners,
+            resource_matches: HashMap::default(),
+            stats: PrePaintRevisionStats::default(),
+        });
+    }
+
+    pub fn ObserveProductionNode(&mut self, node: &mut FragmentPaintData) {
+        assert_ne!(node.fragment_instance_id, 0);
+        let update = self
+            .production_update
+            .as_mut()
+            .expect("production revision update has not begun");
+        let key = InputKey::Instance(node.fragment_instance_id);
+        Self::observe(
+            node,
+            key,
+            &[],
+            update.generation,
+            &mut update.previous,
+            &mut update.next,
+            &mut update.resource_matches,
+            &mut update.previous_owners,
+            &mut update.next_owners,
+            &mut update.stats,
+            true,
+        );
+    }
+
+    pub fn FinishProductionUpdate(&mut self) {
+        let mut update = self
+            .production_update
+            .take()
+            .expect("production revision update has not begun");
+        self.inputs = update.next;
+        self.owners = update.next_owners;
+        update.previous.clear();
+        update.previous_owners.clear();
+        self.spare_inputs = update.previous;
+        self.spare_owners = update.previous_owners;
+        self.last_stats = update.stats;
+        update.trace.finish(update.stats);
     }
 
     pub fn last_stats(&self) -> PrePaintRevisionStats {
@@ -108,7 +179,7 @@ impl PrePaintRevisionTracker {
 
     /// Mirror the lifecycle validation performed by the real PaintController
     /// commit for its used cacheable clients. This only advances the observed
-    /// lifecycle bits; it neither validates native clients nor changes paint
+    /// lifecycle bits; it neither validates source clients nor changes paint
     /// geometry, revisions or weak-owner proofs on its own.
     #[allow(non_snake_case)]
     pub fn CommitClients(&mut self, clients: impl IntoIterator<Item = u64>) {
@@ -116,54 +187,70 @@ impl PrePaintRevisionTracker {
         if used.is_empty() {
             return;
         }
-        let committed = |id, cacheable, created| cacheable && created && used.contains(&id);
+        let committed = |id, cacheable| cacheable && used.contains(&id);
         for input in self.inputs.values_mut() {
             let Some(paint) = input.fallback_paint.as_mut() else {
-                // Native clients are validated and have their dirty/lifecycle
+                // Chromium clients are validated and have their dirty/lifecycle
                 // flags cleared by LayoutEngine's PaintController commit.
                 continue;
             };
             if committed(
                 paint.display_item_client_id,
                 paint.display_item_client_is_cacheable,
-                paint.display_item_client_is_just_created.get(),
             ) {
+                paint.display_item_client_invalidation_reason =
+                    Some(foundation::PaintInvalidationReason::kNone);
                 paint.display_item_client_is_just_created.set(false);
+            }
+            if committed(
+                paint.selection_client_id,
+                paint.selection_client_is_cacheable,
+            ) {
+                paint.selection_client_invalidation_reason =
+                    Some(foundation::PaintInvalidationReason::kNone);
+                paint.selection_client_is_just_created.set(false);
             }
             if committed(
                 paint.paint_layer_client_id,
                 paint.paint_layer_client_is_cacheable,
-                paint.paint_layer_client_is_just_created.get(),
             ) {
+                paint.paint_layer_client_invalidation_reason =
+                    Some(foundation::PaintInvalidationReason::kNone);
                 paint.paint_layer_client_is_just_created.set(false);
             }
+            if let Some(scroll) = &mut paint.scroll_container {
+                if committed(
+                    scroll.scrolling_background_client_id,
+                    scroll.scrolling_background_client_is_cacheable,
+                ) {
+                    scroll.scrolling_background_client_invalidation_reason =
+                        Some(foundation::PaintInvalidationReason::kNone);
+                    scroll
+                        .scrolling_background_client_is_just_created
+                        .set(false);
+                }
+            }
             if let Some(bars) = &mut paint.scrollbars {
-                let changes = committed(
-                    bars.corner_client_id,
-                    bars.corner_client_is_cacheable,
-                    bars.corner_client_is_just_created.get(),
-                ) || bars.horizontal.as_ref().is_some_and(|axis| {
-                    committed(
-                        axis.display_item_client_id,
-                        axis.display_item_client_is_cacheable,
-                        axis.display_item_client_is_just_created.get(),
-                    )
-                }) || bars.vertical.as_ref().is_some_and(|axis| {
-                    committed(
-                        axis.display_item_client_id,
-                        axis.display_item_client_is_cacheable,
-                        axis.display_item_client_is_just_created.get(),
-                    )
-                });
+                let changes = committed(bars.corner_client_id, bars.corner_client_is_cacheable)
+                    || bars.horizontal.as_ref().is_some_and(|axis| {
+                        committed(
+                            axis.display_item_client_id,
+                            axis.display_item_client_is_cacheable,
+                        )
+                    })
+                    || bars.vertical.as_ref().is_some_and(|axis| {
+                        committed(
+                            axis.display_item_client_id,
+                            axis.display_item_client_is_cacheable,
+                        )
+                    });
                 if changes {
                     // Detach only a scrollbar payload whose actual used-client
                     // flags changed. Other shared paint payloads are untouched.
                     let bars = Arc::make_mut(bars);
-                    if committed(
-                        bars.corner_client_id,
-                        bars.corner_client_is_cacheable,
-                        bars.corner_client_is_just_created.get(),
-                    ) {
+                    if committed(bars.corner_client_id, bars.corner_client_is_cacheable) {
+                        bars.corner_client_invalidation_reason =
+                            Some(foundation::PaintInvalidationReason::kNone);
                         bars.corner_client_is_just_created.set(false);
                     }
                     for axis in [&mut bars.horizontal, &mut bars.vertical]
@@ -173,8 +260,9 @@ impl PrePaintRevisionTracker {
                         if committed(
                             axis.display_item_client_id,
                             axis.display_item_client_is_cacheable,
-                            axis.display_item_client_is_just_created.get(),
                         ) {
+                            axis.display_item_client_invalidation_reason =
+                                Some(foundation::PaintInvalidationReason::kNone);
                             axis.display_item_client_is_just_created.set(false);
                         }
                     }
@@ -184,7 +272,7 @@ impl PrePaintRevisionTracker {
     }
 
     /// Certify fragment-local Paint data by following a caller-provided flat
-    /// view of the native PhysicalFragment/FragmentItems graph. Entries must be
+    /// view of the source PhysicalFragment/FragmentItems graph. Entries must be
     /// in preorder, so every parent index is smaller than its children.
     pub fn update_flat(&mut self, nodes: &mut [FlatPrePaintInput]) {
         let mut trace = layout_fragment_boundary::revision::update_span();
@@ -222,7 +310,7 @@ impl PrePaintRevisionTracker {
                 })
                 .collect();
             let key = if node.fragment_instance_id == 0 {
-                // Production native inputs always have an instance id. Keep a
+                // Production source inputs always have an instance id. Keep a
                 // deterministic fallback for diagnostics without inventing a
                 // copied-tree path.
                 InputKey::Path(vec![index])
@@ -240,6 +328,7 @@ impl PrePaintRevisionTracker {
                 &mut previous_owners,
                 &mut next_owners,
                 &mut stats,
+                false,
             );
         }
         self.inputs = next;
@@ -264,6 +353,7 @@ impl PrePaintRevisionTracker {
         previous_owners: &mut HashMap<u64, LiveOwner>,
         next_owners: &mut HashMap<u64, LiveOwner>,
         stats: &mut PrePaintRevisionStats,
+        trust_source_dirty_bits: bool,
     ) {
         let (key, old) = match previous.remove_entry(&lookup_key) {
             Some((key, old)) => (key, Some(old)),
@@ -291,18 +381,30 @@ impl PrePaintRevisionTracker {
         node.pre_paint_owner_retained = owners_live
             && old
                 .as_ref()
-                .is_some_and(|old| old.snapshot.owner_ids == owner_ids(&node.paint));
-        let native_input = node.fragment_instance_id != 0;
+                .is_some_and(|old| old.owner_ids == owner_ids(&node.paint));
+        let input = node.fragment_instance_id != 0;
         let (same_identity, same_geometry, same_paint, same_resources) = old
             .as_ref()
             .map(|old| {
-                let identity = snapshot_identity_equal(&old.snapshot, node);
-                let geometry = snapshot_geometry_equal(&old.snapshot, node);
+                let identity = if input {
+                    true
+                } else {
+                    old.fallback_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot_identity_equal(snapshot, node))
+                };
+                let geometry = if input {
+                    !invalidation.own()
+                } else {
+                    old.fallback_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot_geometry_equal(snapshot, node))
+                };
                 // Chromium's production PrePaint walk consumes LayoutObject
                 // dirty bits. Deep comparison here duplicated that work for
                 // every fragment-local input on every resize. External fragments do
                 // not have that contract, so retain the exhaustive fallback.
-                let paint = if native_input {
+                let paint = if input {
                     !invalidation.own()
                 } else {
                     old.fallback_paint
@@ -330,17 +432,20 @@ impl PrePaintRevisionTracker {
             && same_geometry
             && same_paint
             && same_resources;
-        let children_same = old
-            .as_ref()
-            .is_some_and(|old| old.children.as_slice() == child_revisions);
+        let children_same = if trust_source_dirty_bits {
+            old.is_some() && !invalidation.descendants()
+        } else {
+            old.as_ref()
+                .is_some_and(|old| old.children.as_slice() == child_revisions)
+        };
         stats.child_changes += (!children_same) as usize;
         node.pre_paint_revision = if self_same {
-            old.as_ref().unwrap().snapshot.pre_paint_revision
+            old.as_ref().unwrap().revision
         } else {
             generation
         };
         node.pre_paint_subtree_revision = if self_same && children_same {
-            old.as_ref().unwrap().snapshot.pre_paint_subtree_revision
+            old.as_ref().unwrap().subtree_revision
         } else {
             generation
         };
@@ -360,9 +465,9 @@ impl PrePaintRevisionTracker {
             current.children.clear();
             current.children.extend_from_slice(child_revisions);
         }
-        current.snapshot.pre_paint_revision = node.pre_paint_revision;
-        current.snapshot.pre_paint_subtree_revision = node.pre_paint_subtree_revision;
-        current.snapshot.pre_paint_owner_retained = node.pre_paint_owner_retained;
+        current.revision = node.pre_paint_revision;
+        current.subtree_revision = node.pre_paint_subtree_revision;
+        current.owner_ids = owner_ids(&node.paint);
         next.insert(key, current);
     }
 }
@@ -401,7 +506,10 @@ impl Input {
             paint: _,
         } = node;
         Self {
-            snapshot: InputSnapshot {
+            revision: 0,
+            subtree_revision: 0,
+            owner_ids: owner_ids(&node.paint),
+            fallback_snapshot: (node.fragment_instance_id == 0).then_some(InputSnapshot {
                 fragment_instance_id: *fragment_instance_id,
                 fragmentainer_instance_id: *fragmentainer_instance_id,
                 node_id: *node_id,
@@ -414,11 +522,7 @@ impl Input {
                 logical_parent_node_id: node.paint.logical_parent_node_id,
                 logical_parent_fragment_instance_id: node.paint.logical_parent_fragment_instance_id,
                 logical_tree_order: node.paint.logical_tree_order,
-                owner_ids: owner_ids(&node.paint),
-                pre_paint_revision: 0,
-                pre_paint_subtree_revision: 0,
-                pre_paint_owner_retained: false,
-            },
+            }),
             fallback_paint,
             resources,
             uses_viewport_resource,
@@ -445,7 +549,7 @@ fn snapshot_geometry_equal(a: &InputSnapshot, b: &FragmentPaintData) -> bool {
 
 /// Compare all exported self inputs, excluding children and certification
 /// revisions/lifecycle metadata. Just-created clients need the boundary's
-/// certified live-owner proof. This does not consume native dirty flags.
+/// certified live-owner proof. This does not consume source dirty flags.
 #[allow(non_snake_case)]
 pub fn SamePrePaintInput(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     (!just_created(&b.paint) || (b.pre_paint_revision != 0 && b.pre_paint_owner_retained))
@@ -460,11 +564,11 @@ pub fn SamePrePaintInput(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 
 fn paint_uses_viewport_resource(paint: &PaintProperties) -> bool {
     use layoutng::internal::paint_input::BackgroundAttachment;
-    paint.is_layout_view
+    paint.IsLayoutView()
         || paint.canvas_background.is_some()
         || paint
             .style
-            .background_images
+            .background_images()
             .iter()
             .any(|layer| layer.attachment == BackgroundAttachment::kFixed)
 }
@@ -550,10 +654,38 @@ fn retain_owner(
 fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
     // Exhaustive field binding prevents a new paint output from being omitted.
     let PaintProperties {
-        // Native lifecycle facts drive traversal; they are not paint input.
+        source_object_address: _,
+        // Chromium lifecycle facts drive traversal; they are not paint input.
         pre_paint_invalidation: _,
         property_fragment_unique_id,
+        is_first_for_node,
+        can_paint_multiple_fragments,
         is_layout_view,
+        is_inclusive_descendant_of_unbounded_element,
+        is_printing,
+        canvas_draw_element_enabled,
+        is_in_canvas_subtree,
+        is_overscroll_area_parent,
+        is_overscroll_container,
+        needs_layout,
+        child_layout_blocked_by_display_lock,
+        is_fragment_less_box,
+        additional_compositing_reasons,
+        is_box_model_object,
+        is_layout_box,
+        is_page_border_box,
+        is_paginated_root,
+        is_layout_inline,
+        should_apply_paint_containment,
+        should_apply_style_containment,
+        should_apply_layout_containment,
+        should_clip_overflow_along_either_axis,
+        should_clip_overflow_along_both_axes,
+        is_layout_block,
+        is_layout_block_flow,
+        is_inline_formatting_context,
+        in_forced_colors_mode,
+        is_background_attachment_fixed_object,
         requires_main_thread_scrolling_for_background_attachment_fixed,
         display_item_client_invalidation_reason,
         // Source PaintArtifact records debug names only when actually painted;
@@ -563,21 +695,51 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         self_ink_overflow,
         contents_ink_overflow,
         ink_overflow,
+        filtered_ink_overflow,
+        first_line_decoration_rect,
         text_glyph_ink,
+        text_hit_test_bounds,
         box_self_visual_overflow,
         box_fragment_is_inline_box,
         display_item_raster_effect_outset,
         display_item_client_id,
         display_item_client_owner_node_id,
-        paint_layer_state_is_native,
+        paint_layer_state_is_authoritative,
         paint_layer_client_id,
         paint_layer_client_is_cacheable,
         paint_layer_client_is_just_created,
         paint_layer_is_self_painting,
+        paint_layer_invisible_for_position_visibility,
+        paint_layer_has_ancestor_invisible_for_position_visibility,
+        paint_layer_has_visible_content,
+        paint_layer_has_self_painting_layer_descendant,
+        paint_layer_is_under_svg_hidden_container,
+        paint_layer_supports_subsequence_caching,
+        paint_layer_self_or_descendant_needs_repaint,
+        paint_layer_is_fragmented,
+        paint_layer_known_to_clip_subtree_to_padding_box,
+        paint_layer_first_fragment_visual_rect,
+        paint_layer_contents_visual_rect,
+        paint_layer_filter_reference_box,
+        paint_layer_filter_viewport,
+        child_paint_blocked_by_display_lock,
         paint_layer_is_stacking_context,
+        paint_layer_is_stacked,
         paint_layer_stacking_level,
+        paint_layer_is_z_order_list_visible,
+        paint_layer_is_in_top_or_view_transition_layer,
+        paint_layer_is_direct_layout_view_child,
+        paint_layer_can_contain_absolute_position_objects,
+        paint_layer_can_contain_fixed_position_objects,
+        paint_layer_has_overlay_overflow_controls,
+        paint_layer_order_parent_unique_id,
+        paint_layer_order,
         display_item_client_is_cacheable,
         display_item_client_is_just_created,
+        selection_client_id,
+        selection_client_invalidation_reason,
+        selection_client_is_cacheable,
+        selection_client_is_just_created,
         display_item_fragment,
         has_source,
         logical_parent_node_id,
@@ -585,12 +747,25 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         logical_tree_order,
         establishes_paint_state,
         hidden,
+        is_line_break,
         svg_hidden_container,
+        svg_descendant_may_have_transform_related_operations,
+        svg_view_box_is_empty,
         painted_atomically,
         has_collapsed_borders,
         source_kind,
+        replaced_is_image,
+        image_decoding_mode,
+        image_last_painted_id: _,
+        focused_image_map_area,
+        // MutableForPainting state is output of ImagePainter, not Layout's
+        // immutable pre-paint input.
+        image_last_paint_rect: _,
         effective_zoom,
         style,
+        selection_style,
+        selection_text_decoration,
+        svg_text_decoration_style,
         margin,
         border,
         border_sides,
@@ -601,6 +776,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         display,
         position,
         fixed_to_view,
+        needs_anchor_position_scroll_adjustment,
         floating,
         sticky_offset,
         overflow_x,
@@ -611,7 +787,10 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         css_clip,
         overflow_clip_margin_outsets,
         scroll_offset,
+        hit_test_overflow_clip,
+        hit_test_scrolled_content_offset,
         scroll_size,
+        scrolls_overflow,
         client_size: _,
         scroll_container,
         writing_mode,
@@ -619,6 +798,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         first_baseline,
         text_line_top_offset,
         text_line_height,
+        is_ellipsis,
+        text_fit_scale,
         text_combine,
         text_combine_inline_offset,
         replaced_content,
@@ -642,16 +823,54 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         svg_view_box,
         svg_local_transform,
         svg_viewport,
+        svg_visual_rect,
         svg_text,
         table_cell_column,
         sticky_constraint,
         background_transfers_to_view,
         canvas_background,
+        view_background_invalidation,
         background_paint_location,
+        background_fill_layer_count,
+        has_background,
+        background_should_always_be_clipped,
+        background_any_local_attachment_image,
+        background_any_default_attachment_image,
+        background_any_layer_uses_content_box,
+        scrollable_overflow,
+        view_background_rect,
         can_composite_background_attachment_fixed,
     } = a;
     property_fragment_unique_id == &b.property_fragment_unique_id
+        && is_first_for_node == &b.is_first_for_node
+        && can_paint_multiple_fragments == &b.can_paint_multiple_fragments
         && is_layout_view == &b.is_layout_view
+        && is_inclusive_descendant_of_unbounded_element
+            == &b.is_inclusive_descendant_of_unbounded_element
+        && is_printing == &b.is_printing
+        && canvas_draw_element_enabled == &b.canvas_draw_element_enabled
+        && is_in_canvas_subtree == &b.is_in_canvas_subtree
+        && is_overscroll_area_parent == &b.is_overscroll_area_parent
+        && is_overscroll_container == &b.is_overscroll_container
+        && needs_layout == &b.needs_layout
+        && child_layout_blocked_by_display_lock == &b.child_layout_blocked_by_display_lock
+        && is_fragment_less_box == &b.is_fragment_less_box
+        && additional_compositing_reasons == &b.additional_compositing_reasons
+        && is_box_model_object == &b.is_box_model_object
+        && is_layout_box == &b.is_layout_box
+        && is_page_border_box == &b.is_page_border_box
+        && is_paginated_root == &b.is_paginated_root
+        && is_layout_inline == &b.is_layout_inline
+        && should_apply_paint_containment == &b.should_apply_paint_containment
+        && should_apply_style_containment == &b.should_apply_style_containment
+        && should_apply_layout_containment == &b.should_apply_layout_containment
+        && should_clip_overflow_along_either_axis == &b.should_clip_overflow_along_either_axis
+        && should_clip_overflow_along_both_axes == &b.should_clip_overflow_along_both_axes
+        && is_layout_block == &b.is_layout_block
+        && is_layout_block_flow == &b.is_layout_block_flow
+        && is_inline_formatting_context == &b.is_inline_formatting_context
+        && in_forced_colors_mode == &b.in_forced_colors_mode
+        && is_background_attachment_fixed_object == &b.is_background_attachment_fixed_object
         && requires_main_thread_scrolling_for_background_attachment_fixed
             == &b.requires_main_thread_scrolling_for_background_attachment_fixed
         && display_item_client_invalidation_reason == &b.display_item_client_invalidation_reason
@@ -659,21 +878,59 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && self_ink_overflow == &b.self_ink_overflow
         && contents_ink_overflow == &b.contents_ink_overflow
         && ink_overflow == &b.ink_overflow
+        && filtered_ink_overflow == &b.filtered_ink_overflow
+        && first_line_decoration_rect == &b.first_line_decoration_rect
         && text_glyph_ink == &b.text_glyph_ink
+        && text_hit_test_bounds == &b.text_hit_test_bounds
         && box_self_visual_overflow == &b.box_self_visual_overflow
         && box_fragment_is_inline_box == &b.box_fragment_is_inline_box
         && display_item_raster_effect_outset == &b.display_item_raster_effect_outset
         && display_item_client_id == &b.display_item_client_id
         && display_item_client_owner_node_id == &b.display_item_client_owner_node_id
-        && paint_layer_state_is_native == &b.paint_layer_state_is_native
+        && paint_layer_state_is_authoritative == &b.paint_layer_state_is_authoritative
         && paint_layer_client_id == &b.paint_layer_client_id
         && paint_layer_client_is_cacheable == &b.paint_layer_client_is_cacheable
         && paint_layer_client_is_just_created == &b.paint_layer_client_is_just_created
         && paint_layer_is_self_painting == &b.paint_layer_is_self_painting
+        && paint_layer_invisible_for_position_visibility
+            == &b.paint_layer_invisible_for_position_visibility
+        && paint_layer_has_ancestor_invisible_for_position_visibility
+            == &b.paint_layer_has_ancestor_invisible_for_position_visibility
+        && paint_layer_has_visible_content == &b.paint_layer_has_visible_content
+        && paint_layer_has_self_painting_layer_descendant
+            == &b.paint_layer_has_self_painting_layer_descendant
+        && paint_layer_is_under_svg_hidden_container == &b.paint_layer_is_under_svg_hidden_container
+        && paint_layer_supports_subsequence_caching == &b.paint_layer_supports_subsequence_caching
+        && paint_layer_self_or_descendant_needs_repaint
+            == &b.paint_layer_self_or_descendant_needs_repaint
+        && paint_layer_is_fragmented == &b.paint_layer_is_fragmented
+        && paint_layer_known_to_clip_subtree_to_padding_box
+            == &b.paint_layer_known_to_clip_subtree_to_padding_box
+        && paint_layer_first_fragment_visual_rect == &b.paint_layer_first_fragment_visual_rect
+        && paint_layer_contents_visual_rect == &b.paint_layer_contents_visual_rect
+        && paint_layer_filter_reference_box == &b.paint_layer_filter_reference_box
+        && paint_layer_filter_viewport == &b.paint_layer_filter_viewport
+        && child_paint_blocked_by_display_lock == &b.child_paint_blocked_by_display_lock
         && paint_layer_is_stacking_context == &b.paint_layer_is_stacking_context
+        && paint_layer_is_stacked == &b.paint_layer_is_stacked
         && paint_layer_stacking_level == &b.paint_layer_stacking_level
+        && paint_layer_is_z_order_list_visible == &b.paint_layer_is_z_order_list_visible
+        && paint_layer_is_in_top_or_view_transition_layer
+            == &b.paint_layer_is_in_top_or_view_transition_layer
+        && paint_layer_is_direct_layout_view_child == &b.paint_layer_is_direct_layout_view_child
+        && paint_layer_can_contain_absolute_position_objects
+            == &b.paint_layer_can_contain_absolute_position_objects
+        && paint_layer_can_contain_fixed_position_objects
+            == &b.paint_layer_can_contain_fixed_position_objects
+        && paint_layer_has_overlay_overflow_controls == &b.paint_layer_has_overlay_overflow_controls
+        && paint_layer_order_parent_unique_id == &b.paint_layer_order_parent_unique_id
+        && paint_layer_order == &b.paint_layer_order
         && display_item_client_is_cacheable == &b.display_item_client_is_cacheable
         && display_item_client_is_just_created == &b.display_item_client_is_just_created
+        && selection_client_id == &b.selection_client_id
+        && selection_client_invalidation_reason == &b.selection_client_invalidation_reason
+        && selection_client_is_cacheable == &b.selection_client_is_cacheable
+        && selection_client_is_just_created == &b.selection_client_is_just_created
         && display_item_fragment == &b.display_item_fragment
         && has_source == &b.has_source
         && logical_parent_node_id == &b.logical_parent_node_id
@@ -681,12 +938,21 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && logical_tree_order == &b.logical_tree_order
         && establishes_paint_state == &b.establishes_paint_state
         && hidden == &b.hidden
+        && is_line_break == &b.is_line_break
         && svg_hidden_container == &b.svg_hidden_container
+        && svg_descendant_may_have_transform_related_operations
+            == &b.svg_descendant_may_have_transform_related_operations
+        && svg_view_box_is_empty == &b.svg_view_box_is_empty
         && painted_atomically == &b.painted_atomically
         && has_collapsed_borders == &b.has_collapsed_borders
         && source_kind == &b.source_kind
+        && replaced_is_image == &b.replaced_is_image
+        && image_decoding_mode == &b.image_decoding_mode
+        && focused_image_map_area == &b.focused_image_map_area
         && effective_zoom == &b.effective_zoom
         && style == &b.style
+        && selection_style == &b.selection_style
+        && selection_text_decoration == &b.selection_text_decoration
         && margin == &b.margin
         && border == &b.border
         && border_sides == &b.border_sides
@@ -697,6 +963,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && display == &b.display
         && position == &b.position
         && fixed_to_view == &b.fixed_to_view
+        && needs_anchor_position_scroll_adjustment == &b.needs_anchor_position_scroll_adjustment
         && floating == &b.floating
         && sticky_offset == &b.sticky_offset
         && overflow_x == &b.overflow_x
@@ -707,13 +974,18 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && css_clip == &b.css_clip
         && overflow_clip_margin_outsets == &b.overflow_clip_margin_outsets
         && scroll_offset == &b.scroll_offset
+        && hit_test_overflow_clip == &b.hit_test_overflow_clip
+        && hit_test_scrolled_content_offset == &b.hit_test_scrolled_content_offset
         && scroll_size == &b.scroll_size
+        && scrolls_overflow == &b.scrolls_overflow
         && scroll_container == &b.scroll_container
         && writing_mode == &b.writing_mode
         && direction == &b.direction
         && first_baseline == &b.first_baseline
         && text_line_top_offset == &b.text_line_top_offset
         && text_line_height == &b.text_line_height
+        && is_ellipsis == &b.is_ellipsis
+        && text_fit_scale == &b.text_fit_scale
         && text_combine == &b.text_combine
         && text_combine_inline_offset == &b.text_combine_inline_offset
         && replaced_content == &b.replaced_content
@@ -736,12 +1008,23 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && svg_view_box == &b.svg_view_box
         && svg_local_transform == &b.svg_local_transform
         && svg_viewport == &b.svg_viewport
+        && svg_visual_rect == &b.svg_visual_rect
         && svg_text == &b.svg_text
+        && svg_text_decoration_style == &b.svg_text_decoration_style
         && table_cell_column == &b.table_cell_column
         && sticky_constraint == &b.sticky_constraint
         && background_transfers_to_view == &b.background_transfers_to_view
         && canvas_background == &b.canvas_background
+        && view_background_invalidation == &b.view_background_invalidation
         && background_paint_location == &b.background_paint_location
+        && background_fill_layer_count == &b.background_fill_layer_count
+        && has_background == &b.has_background
+        && background_should_always_be_clipped == &b.background_should_always_be_clipped
+        && background_any_local_attachment_image == &b.background_any_local_attachment_image
+        && background_any_default_attachment_image == &b.background_any_default_attachment_image
+        && background_any_layer_uses_content_box == &b.background_any_layer_uses_content_box
+        && scrollable_overflow == &b.scrollable_overflow
+        && view_background_rect == &b.view_background_rect
         && can_composite_background_attachment_fixed == &b.can_composite_background_attachment_fixed
 }
 
@@ -764,7 +1047,12 @@ fn geometry_equal(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 
 fn just_created(paint: &PaintProperties) -> bool {
     paint.display_item_client_is_just_created.get()
+        || paint.selection_client_is_just_created.get()
         || paint.paint_layer_client_is_just_created.get()
+        || paint
+            .scroll_container
+            .as_ref()
+            .is_some_and(|scroll| scroll.scrolling_background_client_is_just_created.get())
         || paint.scrollbars.as_ref().is_some_and(|bars| {
             bars.corner_client_is_just_created.get()
                 || bars
@@ -828,16 +1116,16 @@ fn resources_equal(
 mod tests {
     use super::*;
 
-    fn native_fragment(instance: u64) -> FragmentPaintData {
+    fn fragment(instance: u64) -> FragmentPaintData {
         let mut fragment = FragmentPaintData::default();
         fragment.fragment_instance_id = instance;
         fragment
     }
 
     #[test]
-    fn logical_parent_occurrence_changes_native_revision() {
+    fn logical_parent_occurrence_changes_source_revision() {
         let mut tracker = PrePaintRevisionTracker::new();
-        let mut fragment = native_fragment(1);
+        let mut fragment = fragment(1);
         tracker.update_flat(&mut [FlatPrePaintInput {
             node: &mut fragment,
             parent: None,
@@ -855,11 +1143,65 @@ mod tests {
     }
 
     #[test]
+    fn scrolls_overflow_changes_source_revision() {
+        let first = fragment(1);
+        let mut second = fragment(1);
+        assert!(SamePrePaintInput(&first, &second));
+        second.paint.scrolls_overflow = true;
+        assert!(!SamePrePaintInput(&first, &second));
+    }
+
+    #[test]
+    fn ancestor_position_visibility_changes_source_revision() {
+        let first = fragment(1);
+        let mut second = fragment(1);
+        assert!(SamePrePaintInput(&first, &second));
+        second
+            .paint
+            .paint_layer_has_ancestor_invisible_for_position_visibility = true;
+        assert!(!SamePrePaintInput(&first, &second));
+    }
+
+    #[test]
+    fn filter_reference_box_changes_source_revision() {
+        let first = fragment(1);
+        let mut second = fragment(1);
+        assert!(SamePrePaintInput(&first, &second));
+        second.paint.paint_layer_filter_reference_box = Some(FragmentPaintRect::default());
+        assert!(!SamePrePaintInput(&first, &second));
+    }
+
+    #[test]
+    fn filter_viewport_changes_source_revision() {
+        let first = fragment(1);
+        let mut second = fragment(1);
+        assert!(SamePrePaintInput(&first, &second));
+        second.paint.paint_layer_filter_viewport = Some(Size {
+            width: 40.0,
+            height: 50.0,
+        });
+        assert!(!SamePrePaintInput(&first, &second));
+    }
+
+    #[test]
+    fn fragment_occurrence_policy_is_input_and_part_of_revision() {
+        let first = fragment(1);
+        let mut repeated = fragment(1);
+        repeated.paint.is_first_for_node = false;
+        repeated.paint.can_paint_multiple_fragments = false;
+        assert!(!repeated.paint.CanPaintFragmentOccurrence());
+        assert!(!SamePrePaintInput(&first, &repeated));
+
+        repeated.paint.can_paint_multiple_fragments = true;
+        assert!(repeated.paint.CanPaintFragmentOccurrence());
+    }
+
+    #[test]
     fn child_identity_order_changes_subtree_revision() {
         let mut tracker = PrePaintRevisionTracker::new();
-        let mut root = native_fragment(1);
-        let mut first_child = native_fragment(2);
-        let mut second_child = native_fragment(3);
+        let mut root = fragment(1);
+        let mut first_child = fragment(2);
+        let mut second_child = fragment(3);
         tracker.update_flat(&mut [
             FlatPrePaintInput {
                 node: &mut root,
@@ -896,5 +1238,42 @@ mod tests {
         assert_eq!(first_child.pre_paint_revision, first_revision);
         assert_eq!(second_child.pre_paint_revision, second_revision);
         assert_ne!(root.pre_paint_subtree_revision, root_subtree);
+    }
+
+    #[test]
+    fn committed_fallback_clients_clear_invalidation_reasons() {
+        let mut tracker = PrePaintRevisionTracker::new();
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.display_item_client_id = 11;
+        fragment.paint.display_item_client_is_cacheable = true;
+        fragment.paint.display_item_client_invalidation_reason =
+            Some(foundation::PaintInvalidationReason::kStyle);
+        fragment.paint.selection_client_id = 12;
+        fragment.paint.selection_client_is_cacheable = true;
+        fragment.paint.selection_client_invalidation_reason =
+            Some(foundation::PaintInvalidationReason::kSelection);
+
+        tracker.update_flat(&mut [FlatPrePaintInput {
+            node: &mut fragment,
+            parent: None,
+        }]);
+        tracker.CommitClients([11, 12]);
+
+        let paint = tracker
+            .inputs
+            .values()
+            .next()
+            .unwrap()
+            .fallback_paint
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            paint.display_item_client_invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kNone)
+        );
+        assert_eq!(
+            paint.selection_client_invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kNone)
+        );
     }
 }

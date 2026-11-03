@@ -44,7 +44,7 @@ unsafe fn throw_on_failure(size: usize, p: *mut c_void) -> *mut c_void {
     all(sk_debug, target_os = "windows"),
     all(sk_build_for_android_framework, sk_bionic)
 ))]
-mod native_port_inputs {
+mod port_inputs {
     include!(concat!(
         env!("OUT_DIR"),
         "/sk_native_compiler_port_inputs.rs"
@@ -54,9 +54,7 @@ mod native_port_inputs {
 pub unsafe fn sk_abort_no_print() -> ! {
     #[cfg(all(sk_debug, target_os = "windows"))]
     unsafe {
-        crate::include::private::SkAssert::native_fastfail(
-            native_port_inputs::FAST_FAIL_FATAL_APP_EXIT,
-        );
+        crate::include::private::SkAssert::fastfail(port_inputs::FAST_FAIL_FATAL_APP_EXIT);
     }
     #[cfg(all(not(all(sk_debug, target_os = "windows")), sk_native_clang))]
     {
@@ -112,7 +110,7 @@ pub unsafe fn sk_malloc_flags(size: usize, flags: u32) -> *mut c_void {
             unsafe extern "C" {
                 fn mallopt(option: core::ffi::c_int, value: core::ffi::c_int) -> core::ffi::c_int;
             }
-            let _ = unsafe { mallopt(native_port_inputs::M_THREAD_DISABLE_MEM_INIT, 1) };
+            let _ = unsafe { mallopt(port_inputs::M_THREAD_DISABLE_MEM_INIT, 1) };
         }
         // Source: src/ports/SkMemory_malloc.cpp:107-107
         p = unsafe { libc::malloc(size) };
@@ -122,7 +120,7 @@ pub unsafe fn sk_malloc_flags(size: usize, flags: u32) -> *mut c_void {
             unsafe extern "C" {
                 fn mallopt(option: core::ffi::c_int, value: core::ffi::c_int) -> core::ffi::c_int;
             }
-            let _ = unsafe { mallopt(native_port_inputs::M_THREAD_DISABLE_MEM_INIT, 0) };
+            let _ = unsafe { mallopt(port_inputs::M_THREAD_DISABLE_MEM_INIT, 0) };
         }
     }
     // Source: src/ports/SkMemory_malloc.cpp:112-116

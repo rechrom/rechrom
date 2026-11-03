@@ -3,7 +3,7 @@
 //! No implementation or substitute metric state is supplied by this module.
 use crate::adapter::layer_tree_host_impl::*;
 
-pub trait NativeReportingController<B: HostImplTypes>:
+pub trait ReportingControllerBackend<B: HostImplTypes>:
     crate::adapter::scheduler_host::CompositorFrameReportingController<
     crate::adapter::scheduler_host::FacadeSchedulerTypes,
 >
@@ -23,10 +23,10 @@ pub trait NativeReportingController<B: HostImplTypes>:
     fn ReportingSetVisible(&self, visible: bool);
 }
 pub struct ReportingController<B: HostImplTypes>(
-    pub std::sync::Arc<dyn NativeReportingController<B>>,
+    pub std::sync::Arc<dyn ReportingControllerBackend<B>>,
 );
 
-pub trait NativeFrameSequenceTrackers<B: HostImplTypes> {
+pub trait FrameSequenceTrackersBackend<B: HostImplTypes> {
     fn GetScrollingThread(&self) -> super::input::SmoothEffectDrivingThread;
     fn StartMainSequence(
         &self,
@@ -59,7 +59,7 @@ pub trait NativeFrameSequenceTrackers<B: HostImplTypes> {
     fn StopDrawSequence(&self, kind: HostDrawSequence);
 }
 pub struct FrameSequenceTrackers<B: HostImplTypes>(
-    pub std::sync::Arc<dyn NativeFrameSequenceTrackers<B>>,
+    pub std::sync::Arc<dyn FrameSequenceTrackersBackend<B>>,
 );
 impl<B: HostImplTypes> FrameSequenceTrackers<B> {
     pub(crate) fn StopDrawSequence(&self, kind: HostDrawSequence) {

@@ -188,7 +188,7 @@ fn record(page: &Page, stage: &str, trace: &Rc<RefCell<Vec<String>>>) {
 }
 #[test]
 fn live_page_load_tasks_measurements_and_frames_match_cpp() {
-    crate::native_test_thread::run(body);
+    crate::test_thread::run(body);
 }
 fn body() {
     let root =
@@ -260,7 +260,7 @@ fn create_page(
         Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         space,
         Some(crate::page::ScriptEnvironment {
-            runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+            runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                 4 * 1024 * 1024,
             )),
             xhr: Box::new(XHR),
@@ -274,8 +274,8 @@ fn create_page(
 }
 
 #[test]
-fn native_computed_style_background_decorations_reach_paint_artifact() {
-    crate::native_test_thread::run(|| {
+fn computed_style_background_decorations_reach_paint_artifact() {
+    crate::test_thread::run(|| {
         let root =
             std::env::temp_dir().join(format!("rechrom-native-style-paint-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -311,7 +311,7 @@ fn native_computed_style_background_decorations_reach_paint_artifact() {
 
 #[test]
 fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         use crate::page::PreferredColorScheme;
         let root =
             std::env::temp_dir().join(format!("layoutng-color-scheme-{}", std::process::id()));
@@ -414,7 +414,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
 #[test]
 #[cfg(target_os = "macos")]
 fn css_semibold_font_selection_matches_repository_chromium() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../artifacts/qq-chromium-parity/font-fixture");
         let trace = Rc::new(RefCell::new(Vec::new()));
@@ -426,7 +426,7 @@ fn css_semibold_font_selection_matches_repository_chromium() {
             Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(160, 96),
             Some(crate::page::ScriptEnvironment {
-                runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+                runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 )),
                 xhr: Box::new(XHR),
@@ -453,7 +453,7 @@ fn css_semibold_font_selection_matches_repository_chromium() {
 
 #[test]
 fn image_mipmap_sampling_matches_repository_chromium() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../artifacts/qq-chromium-parity/image-fixture");
         let trace = Rc::new(RefCell::new(Vec::new()));
@@ -478,7 +478,7 @@ fn image_mipmap_sampling_matches_repository_chromium() {
 
 #[test]
 fn element_scroll_offsets_clamp_and_invalidate_cached_geometry() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root = std::env::temp_dir().join(format!("layoutng-scroll-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
@@ -519,7 +519,7 @@ fn element_scroll_offsets_clamp_and_invalidate_cached_geometry() {
 
 #[test]
 fn scroll_event_updates_intersection_observer_after_geometry_commit() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root = std::env::temp_dir().join(format!(
             "layoutng-scroll-intersection-{}",
             std::process::id()
@@ -532,7 +532,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
             #spacer{height:80px}#target{width:20px;height:20px}
             </style><div id=scroller><div id=zero></div><div id=spacer></div><div id=target></div></div>
             <script>
-            var scrollEvents=0, scrollRects=[], intersections=[], zeroIntersections=[], scrollerElement=document.getElementById('scroller'),
+            var scrollEvents=0, scrollRects=[], intersections=[], zeroIntersections=[], resizeWidths=[], scrollerElement=document.getElementById('scroller'),
               targetElement=document.getElementById('target');
             scrollerElement.addEventListener('scroll',()=>{scrollEvents++;scrollRects.push(targetElement.getBoundingClientRect().top)});
             var marginObserver=new IntersectionObserver(entries=>intersections.push(entries.at(-1).isIntersecting),
@@ -542,6 +542,9 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
             var zeroObserver=new IntersectionObserver(entries=>zeroIntersections.push({intersecting:entries.at(-1).isIntersecting,ratio:entries.at(-1).intersectionRatio}),
               {root:scrollerElement});
             zeroObserver.observe(document.getElementById('zero'));
+            var resizeObserver=new ResizeObserver(entries=>resizeWidths.push(...entries.map(entry=>entry.contentRect.width)));
+            resizeObserver.observe(targetElement);
+            resizeObserver.observe(targetElement);
             </script>"#,
         )
         .unwrap();
@@ -555,11 +558,45 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
         }
         let initial = page
             .Evaluate(
-                "if(!('intersectionRatio' in IntersectionObserverEntry.prototype)||!('isIntersecting' in IntersectionObserverEntry.prototype))throw Error('native observer feature detection');if(intersections.length!==1||intersections[0]!==true)throw Error('initial root-margin intersection '+JSON.stringify({intersections,target:targetElement.getBoundingClientRect(),root:scrollerElement.getBoundingClientRect()}));if(zeroIntersections.length!==1||!zeroIntersections[0].intersecting||zeroIntersections[0].ratio!==1)throw Error('zero-area sentinel '+JSON.stringify(zeroIntersections));if(new IntersectionObserver(()=>{},{rootMargin:'10%'}).rootMargin!=='10% 10% 10% 10%')throw Error('percent margin');try{new IntersectionObserver(()=>{},{rootMargin:'1em'});throw Error('invalid margin accepted')}catch(error){if(error.message==='invalid margin accepted')throw error}",
+                "if(!('intersectionRatio' in IntersectionObserverEntry.prototype)||!('isIntersecting' in IntersectionObserverEntry.prototype))throw Error('native observer feature detection');if(intersections.length!==1||intersections[0]!==true)throw Error('initial root-margin intersection '+JSON.stringify({intersections,target:targetElement.getBoundingClientRect(),root:scrollerElement.getBoundingClientRect()}));if(zeroIntersections.length!==1||!zeroIntersections[0].intersecting||zeroIntersections[0].ratio!==1)throw Error('zero-area sentinel '+JSON.stringify(zeroIntersections));if(resizeWidths.length!==1||Math.abs(resizeWidths[0]-20)>.01)throw Error('initial resize observation '+JSON.stringify(resizeWidths));if(new IntersectionObserver(()=>{},{rootMargin:'10%'}).rootMargin!=='10% 10% 10% 10%')throw Error('percent margin');try{new IntersectionObserver(()=>{},{rootMargin:'1em'});throw Error('invalid margin accepted')}catch(error){if(error.message==='invalid margin accepted')throw error}",
                 "fixture:initial-intersection",
             )
             .unwrap();
         assert!(initial.Succeeded(), "{:?}", initial.exception);
+        let repeated = page
+            .Evaluate(
+                "resizeObserver.observe(targetElement)",
+                "fixture:repeat-resize-observe",
+            )
+            .unwrap();
+        assert!(repeated.Succeeded(), "{:?}", repeated.exception);
+        for _ in 0..3 {
+            page.RunTask().unwrap();
+        }
+        let unchanged = page
+            .Evaluate(
+                "if(resizeWidths.length!==1)throw Error('unchanged resize redelivered '+JSON.stringify(resizeWidths))",
+                "fixture:unchanged-resize-observe",
+            )
+            .unwrap();
+        assert!(unchanged.Succeeded(), "{:?}", unchanged.exception);
+        let resized = page
+            .Evaluate(
+                "targetElement.style.width='30px'",
+                "fixture:resize-observer-change",
+            )
+            .unwrap();
+        assert!(resized.Succeeded(), "{:?}", resized.exception);
+        for _ in 0..4 {
+            page.RunTask().unwrap();
+        }
+        let resize_check = page
+            .Evaluate(
+                "if(resizeWidths.length!==2||Math.abs(resizeWidths[1]-30)>.01)throw Error('changed resize missing '+JSON.stringify(resizeWidths))",
+                "fixture:resize-observer-change-check",
+            )
+            .unwrap();
+        assert!(resize_check.Succeeded(), "{:?}", resize_check.exception);
         let layouts_before_scroll = page.FullLayoutLifecycleCount();
 
         let changed = page
@@ -644,7 +681,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
 
 #[test]
 fn viewport_scroll_reaches_window_and_updates_client_rects() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         use layoutng_assembly::internal::layout_input::Offset;
         use page_mutation::{PageMutation, ScrollMutation};
         let root =
@@ -695,7 +732,7 @@ fn viewport_scroll_reaches_window_and_updates_client_rects() {
 
 #[test]
 fn mouse_move_dispatches_dom_boundary_events_in_chromium_order() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root =
             std::env::temp_dir().join(format!("layoutng-mouse-boundary-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -737,7 +774,7 @@ fn mouse_move_dispatches_dom_boundary_events_in_chromium_order() {
 
 #[test]
 fn begin_frame_recomputes_hover_after_layout_under_stationary_mouse() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root =
             std::env::temp_dir().join(format!("layoutng-layout-hover-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -790,7 +827,7 @@ fn begin_frame_recomputes_hover_after_layout_under_stationary_mouse() {
 
 #[test]
 fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         use interaction::input_event::{FocusEvent, InputEvent};
         use layoutng_assembly::internal::layout_input::Offset;
         use page_mutation::{PageMutation, ScrollMutation};
@@ -952,7 +989,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
 
 #[test]
 fn css_zoom_matches_repository_chromium_geometry_and_pixels() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../artifacts/qq-chromium-parity/zoom-fixture");
         let trace = Rc::new(RefCell::new(Vec::new()));
@@ -994,7 +1031,7 @@ fn css_zoom_matches_repository_chromium_geometry_and_pixels() {
 
 #[test]
 fn apply_parse_document_lifecycle_and_frames_match_cpp() {
-    crate::native_test_thread::run(apply_parse_document);
+    crate::test_thread::run(apply_parse_document);
 }
 fn apply_parse_document() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1069,7 +1106,7 @@ fn apply_parse_document() {
 
 #[test]
 fn page_without_javascript_open_and_apply_match_cpp() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         for mode in ["open", "apply", "open-alpha"] {
             without_javascript(mode);
         }
@@ -1235,17 +1272,21 @@ fn decode_image_fixture(
         b"zero" => Ok(DecodedImage::default()),
         b"short" => Ok(DecodedImage {
             animation: Default::default(),
+            alpha_type: Default::default(),
             width: 2,
             height: 2,
             orientation: Default::default(),
+            animation_frames: Vec::new(),
             rgba8: vec![255, 0, 0, 255],
         }),
         b"failure" => Err(io::Error::other("fixture decoder failed")),
         b"good" => Ok(DecodedImage {
             animation: Default::default(),
+            alpha_type: Default::default(),
             width: 2,
             height: 1,
             orientation: Default::default(),
+            animation_frames: Vec::new(),
             rgba8: vec![255, 0, 0, 255, 0, 255, 0, 255],
         }),
         _ => Err(io::Error::other("unexpected image bytes")),
@@ -1376,7 +1417,7 @@ fn create_image_fixture_page(
         frames: frames.clone(),
     }));
     let environment = javascript.then(|| crate::page::ScriptEnvironment {
-        runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+        runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
             4 * 1024 * 1024,
         )),
         xhr: Box::new(XHR),
@@ -1387,7 +1428,7 @@ fn create_image_fixture_page(
 
 #[test]
 fn automatic_image_failures_events_and_frames_match_cpp() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         for mode in ["js", "no-js", "nested-events-pending"] {
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../artifacts/cpp-reference/page-image-errors")
@@ -1448,19 +1489,19 @@ fn automatic_image_failures_events_and_frames_match_cpp() {
 
 #[test]
 fn cached_image_host_mutations_and_external_apply_use_dom_tasks() {
-    crate::native_test_thread::run(
+    crate::test_thread::run(
         crate::streaming_page_tests::check_cached_image_external_apply_dom_tasks,
     );
 }
 
 #[test]
 fn mutation_observer_records_delivery_and_frames_match_cpp() {
-    crate::native_test_thread::run(|| run_host_mutation_fixture("page-mutation-observers", 8));
+    crate::test_thread::run(|| run_host_mutation_fixture("page-mutation-observers", 8));
 }
 
 #[test]
 fn synthetic_events_and_nested_host_mutations_match_cpp() {
-    crate::native_test_thread::run(|| run_host_mutation_fixture("page-synthetic-events", 9));
+    crate::test_thread::run(|| run_host_mutation_fixture("page-synthetic-events", 9));
 }
 
 // The historical page-modules oracle models synchronous resolver fetch/retry
@@ -1470,7 +1511,7 @@ fn synthetic_events_and_nested_host_mutations_match_cpp() {
 
 #[test]
 fn animation_sampling_cascade_lifecycle_and_frames_match_cpp() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         run_page_script_fixture(
             "page-animation",
             13,
@@ -1625,7 +1666,7 @@ fn run_page_script_fixture(
 
 #[test]
 fn ineffective_mutation_reuses_frame_data_and_preserves_presentation() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         use dom::dom_mutation::{DOMMutation, DOMMutationType};
         use page_mutation::PageMutation;
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1686,7 +1727,7 @@ fn ineffective_mutation_reuses_frame_data_and_preserves_presentation() {
 
 #[test]
 fn unchanged_style_text_does_not_overwrite_cssom_rule_edits() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../artifacts/persistent-style-refactor-20261001/cssom-fixture");
         std::fs::create_dir_all(&root).unwrap();
@@ -1705,7 +1746,7 @@ fn unchanged_style_text_does_not_overwrite_cssom_rule_edits() {
 #[test]
 #[ignore = "manual isolated real QQ loading trace; no network timing assertions"]
 fn profile_qq_loading_stall() {
-    crate::native_test_thread::run(|| {
+    crate::test_thread::run(|| {
         let options = url_loader::DefaultURLLoaderOptions::default();
         let assembly = crate::CreateLayoutAssembly();
         let loader = Rc::new(RefCell::new(
@@ -1717,7 +1758,7 @@ fn profile_qq_loading_stall() {
             Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(1216, 704),
             Some(crate::page::ScriptEnvironment {
-                runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+                runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                     8 * 1024 * 1024,
                 )),
                 xhr: xhr_transport::CreateHTTPXMLHttpRequestTransport(&options).unwrap(),

@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! SVG ApplyInitial/Inherit/Value and StyleBuilderConverter native branches.
+//! SVG ApplyInitial/Inherit/Value and StyleBuilderConverter computed style branches.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{MakeGarbageCollected, Member};
@@ -356,7 +356,7 @@ pub(super) fn Apply(
         b.SetPaintOrder(order);
     } else if id == kStrokeDasharray {
         // generated:15756-15769; converter:2794-2807. Convert all entries before
-        // changing style, then allocate the existing traced native SVGDashArray.
+        // changing style, then allocate the existing traced computed style SVGDashArray.
         let array = if initial {
             Member::default()
         } else if inherit {

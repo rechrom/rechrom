@@ -1,15 +1,15 @@
 // Source: partition_alloc_base/posix/eintr_wrapper.h: actual copied lambda and native int out.
 // Known producer instantiations return int/ssize_t. Every attempt narrows BEFORE the -1 check.
-pub trait NativeIntResult {
-    fn native_int(self) -> core::ffi::c_int;
+pub trait IntResult {
+    fn int(self) -> core::ffi::c_int;
 }
-impl NativeIntResult for core::ffi::c_int {
-    fn native_int(self) -> core::ffi::c_int {
+impl IntResult for core::ffi::c_int {
+    fn int(self) -> core::ffi::c_int {
         self
     }
 }
-impl NativeIntResult for isize {
-    fn native_int(self) -> core::ffi::c_int {
+impl IntResult for isize {
+    fn int(self) -> core::ffi::c_int {
         self as core::ffi::c_int
     }
 }
@@ -17,7 +17,7 @@ impl NativeIntResult for isize {
 pub fn WrapEINTR<F, R>(mut f: F) -> impl FnMut() -> core::ffi::c_int
 where
     F: FnMut() -> R,
-    R: NativeIntResult,
+    R: IntResult,
 {
     move || {
         let mut out = -1;
@@ -31,7 +31,7 @@ where
                 }
                 retry_count += 1;
             }
-            out = f().native_int();
+            out = f().int();
             if out != -1
                 || unsafe { *super::super::scoped_clear_last_error::errno_location() }
                     != libc::EINTR

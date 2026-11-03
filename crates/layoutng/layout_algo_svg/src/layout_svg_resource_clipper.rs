@@ -1,4 +1,4 @@
-// Native resource identity follows LayoutSVGResourceClipper ->
+// Chromium resource identity follows LayoutSVGResourceClipper ->
 // LayoutSVGResourceContainer -> LayoutSVGHiddenContainer. Immutable clip data
 // and consumer invalidation cross the existing document/Layout boundary;
 // this owner does not create a second mutable copy of that resource graph.

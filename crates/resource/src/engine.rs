@@ -110,6 +110,12 @@ impl ResourceEngine {
         self.document_url.borrow().clone()
     }
 
+    /// The resource owner supplies the document origin; URL loading owns the
+    /// parsed origin comparison used by image CORS provenance.
+    pub fn IsSameOriginWithDocument(&self, url: &str) -> bool {
+        url_loader::IsSameOrigin(&self.document_url.borrow(), url)
+    }
+
     pub fn SetDocumentURL(&self, url: String) {
         *self.document_url.borrow_mut() = url;
     }
@@ -178,7 +184,7 @@ impl ResourceEngine {
             let key = ResourceRequestKey::from(&request);
             if let Some(shared) = self.loads.borrow().get(&key).cloned() {
                 let mut resource = ResourceLoader::FromShared(shared);
-                resource.SetDefer(request.defer);
+                resource.SetScheduling(&request);
                 browser_tracing::instant_with_text(
                     "resource",
                     "ResourceRequestReused",
@@ -356,10 +362,12 @@ mod tests {
     impl ImageDecoder for BitmapDecoder {
         fn Decode(&mut self, _: &ImageDecodeInput<'_>) -> io::Result<DecodedImage> {
             Ok(DecodedImage {
+                alpha_type: Default::default(),
                 animation: Default::default(),
                 width: 1,
                 height: 1,
                 orientation: Default::default(),
+                animation_frames: Vec::new(),
                 rgba8: vec![1, 2, 3, 4],
             })
         }

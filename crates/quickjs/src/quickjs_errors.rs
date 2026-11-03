@@ -243,7 +243,7 @@ unsafe fn JS_ThrowError2(
     format_error_message(&mut buf, message);
     let mut obj = JS_NewObjectProtoClass(
         ctx,
-        (*ctx).native_error_proto[error_num as usize],
+        (*ctx).error_proto[error_num as usize],
         JS_CLASS_ERROR,
     );
     if JS_IsException(obj) != 0 {

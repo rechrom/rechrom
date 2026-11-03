@@ -33,6 +33,7 @@ use url_loader::{ReferrerPolicy, RequestDestination, URLRequest};
 pub trait ResourceFetcherClient {
     fn ApplyResourceMutation(&mut self, mutation: ResourceMutation);
     fn DispatchImageEvent(&mut self, id: u64, loaded: bool);
+    fn DispatchStyleSheetEvent(&mut self, id: u64, signature: String, loaded: bool);
     fn HasJavaScript(&self) -> bool;
 }
 // cpp: browser/browser.cc:1104-1112
@@ -51,6 +52,8 @@ struct PendingImage {
     resource: ResourceLoader,
     decode: Option<decode::ImageDecodeJob>,
     is_multipart_response: Option<bool>,
+    is_cors_same_origin: Option<bool>,
+    content_dpr: Option<f64>,
     blocks_load: bool,
 }
 
@@ -60,10 +63,37 @@ struct PendingStyleSheet {
     owner_node_id: u64,
     signature: String,
     url: String,
-    resource: ResourceLoader,
+    resource: Option<ResourceLoader>,
+    base: String,
+    sheet: Option<CSSStyleSheet>,
+    imports: Vec<PendingStyleSheetImport>,
+    import_failed: bool,
     alternate: bool,
     title: String,
     media: String,
+}
+
+struct PendingStyleSheetImport {
+    request: style::CSSStyleSheetImportRequest,
+    url: String,
+    resource: ResourceLoader,
+}
+
+/// Outstanding child resources for one parser-owned stylesheet. The parent
+/// sheet remains with the parser; each request retains the original typed
+/// `@import` rule and attaches the loaded child directly to that rule.
+pub struct StyleSheetImportLoad {
+    imports: Vec<PendingStyleSheetImport>,
+}
+
+pub struct StyleSheetImportFailure {
+    pub url: String,
+    pub error: String,
+}
+
+pub struct StyleSheetImportPoll {
+    pub complete: bool,
+    pub failures: Vec<StyleSheetImportFailure>,
 }
 
 struct DeferredImage {
@@ -340,6 +370,37 @@ impl ResourceFetcher {
         self.AddParsedStyleSheetToDocument(self.document.borrow_mut().GetDocumentMut(), sheet, base)
     }
 
+    /// Commit a connected `<style>` immediately when it has no imports, or
+    /// retain that exact parsed owner until its original `@import` rules have
+    /// their child contents attached.
+    pub fn AddParsedStyleSheetWithImports(
+        &self,
+        sheet: CSSStyleSheet,
+        base: &str,
+    ) -> io::Result<bool> {
+        let imports = self.StartStyleSheetImports(&sheet, base)?;
+        if imports.is_empty() {
+            self.AddParsedStyleSheet(sheet, base)?;
+            return Ok(true);
+        }
+        self.pending_style_sheets
+            .borrow_mut()
+            .push(PendingStyleSheet {
+                owner_node_id: sheet.owner_node_id,
+                signature: String::new(),
+                url: base.to_owned(),
+                resource: None,
+                base: base.to_owned(),
+                sheet: Some(sheet),
+                imports,
+                import_failed: false,
+                alternate: false,
+                title: String::new(),
+                media: String::new(),
+            });
+        Ok(false)
+    }
+
     // The parser temporarily owns the same arena; use its borrow directly.
     // Re-borrowing DOM here would target the swapped-out document.
     pub fn AddParsedStyleSheetToDocument(
@@ -481,7 +542,11 @@ impl ResourceFetcher {
                     owner_node_id: request.owner_node_id,
                     signature: request.signature,
                     url,
-                    resource,
+                    resource: Some(resource),
+                    base: String::new(),
+                    sheet: None,
+                    imports: Vec::new(),
+                    import_failed: false,
                     alternate: request.alternate,
                     title: request.title,
                     media: request.media,
@@ -493,6 +558,84 @@ impl ResourceFetcher {
 
     pub fn HasPendingStyleSheets(&self) -> bool {
         !self.pending_style_sheets.borrow().is_empty()
+    }
+
+    fn StartStyleSheetImports(
+        &self,
+        sheet: &CSSStyleSheet,
+        base: &str,
+    ) -> io::Result<Vec<PendingStyleSheetImport>> {
+        let referrer = self.engine.DocumentURL();
+        style::CSSStyleSheetImportRequests(sheet)
+            .into_iter()
+            .map(|request| {
+                let url = ResolveUrl(base, request.Href())?;
+                let resource = self.engine.Start(URLRequest {
+                    url: url.clone(),
+                    referrer: referrer.clone(),
+                    destination: RequestDestination::kStyleSheet,
+                    ..Default::default()
+                });
+                Ok(PendingStyleSheetImport {
+                    request,
+                    url,
+                    resource,
+                })
+            })
+            .collect()
+    }
+
+    pub fn StartStyleSheetImportLoad(
+        &self,
+        sheet: &CSSStyleSheet,
+        base: &str,
+    ) -> io::Result<StyleSheetImportLoad> {
+        Ok(StyleSheetImportLoad {
+            imports: self.StartStyleSheetImports(sheet, base)?,
+        })
+    }
+
+    /// Advance ready `@import` resources without blocking the parser task.
+    /// Newly discovered imports are appended to this same load owner.
+    pub fn PollStyleSheetImportLoad(
+        &self,
+        load: &mut StyleSheetImportLoad,
+    ) -> StyleSheetImportPoll {
+        let mut failures = Vec::new();
+        let ready = load
+            .imports
+            .iter_mut()
+            .position(|import| import.resource.Poll());
+        if let Some(position) = ready {
+            let mut import = load.imports.swap_remove(position);
+            let result = RequireResponse(import.resource.TakeResult()).and_then(|response| {
+                let base = if response.final_url.is_empty() {
+                    import.url.clone()
+                } else {
+                    response.final_url.clone()
+                };
+                let css = DecodeText(&response)?;
+                let sheet = style::ParseCSSWithBase(&css, &base);
+                if !import.request.Attach(&sheet) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "@import child lost its translated stylesheet owner",
+                    ));
+                }
+                self.StartStyleSheetImports(&sheet, &base)
+            });
+            match result {
+                Ok(imports) => load.imports.extend(imports),
+                Err(error) => failures.push(StyleSheetImportFailure {
+                    url: import.url,
+                    error: error.to_string(),
+                }),
+            }
+        }
+        StyleSheetImportPoll {
+            complete: load.imports.is_empty(),
+            failures,
+        }
     }
 
     pub fn PollPendingStyleSheetsWithBudget(
@@ -511,19 +654,116 @@ impl ResourceFetcher {
                 .borrow_mut()
                 .pop()
                 .expect("stylesheet count changed during poll");
-            if completed >= max_completions || !pending.resource.Poll() {
+            if completed >= max_completions {
                 self.pending_style_sheets.borrow_mut().insert(0, pending);
                 continue;
             }
-            completed += 1;
-            let result = RequireResponse(pending.resource.TakeResult()).and_then(|response| {
-                let base = if response.final_url.is_empty() {
-                    pending.url.clone()
-                } else {
-                    response.final_url.clone()
-                };
-                let css = DecodeText(&response)?;
-                let mut sheet = style::ParseCSSWithBase(&css, &base);
+
+            if pending.sheet.is_none() {
+                let ready = pending.resource.as_mut().is_some_and(ResourceLoader::Poll);
+                if !ready {
+                    self.pending_style_sheets.borrow_mut().insert(0, pending);
+                    continue;
+                }
+                completed += 1;
+                let result = RequireResponse(
+                    pending
+                        .resource
+                        .as_mut()
+                        .expect("ready stylesheet resource exists")
+                        .TakeResult(),
+                )
+                .and_then(|response| {
+                    let base = if response.final_url.is_empty() {
+                        pending.url.clone()
+                    } else {
+                        response.final_url.clone()
+                    };
+                    let css = DecodeText(&response)?;
+                    let sheet = style::ParseCSSWithBase(&css, &base);
+                    let imports = self.StartStyleSheetImports(&sheet, &base)?;
+                    Ok((sheet, base, imports))
+                });
+                pending.resource = None;
+                match result {
+                    Ok((sheet, base, imports)) => {
+                        pending.sheet = Some(sheet);
+                        pending.base = base;
+                        pending.imports = imports;
+                    }
+                    Err(error) => {
+                        // A changed href may retry. Do not pin the failed signature as
+                        // a successful LinkStyle state.
+                        if self
+                            .style_sheet_signatures
+                            .borrow()
+                            .get(&pending.owner_node_id)
+                            == Some(&pending.signature)
+                        {
+                            self.style_sheet_signatures
+                                .borrow_mut()
+                                .remove(&pending.owner_node_id);
+                        }
+                        client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
+                            ResourceLoadFailed {
+                                kind: ResourceKind::kStyleSheet,
+                                source: None,
+                                url: pending.url,
+                                error: error.to_string(),
+                            },
+                        ));
+                        if client.HasJavaScript() {
+                            client.DispatchStyleSheetEvent(
+                                pending.owner_node_id,
+                                pending.signature,
+                                false,
+                            );
+                        }
+                        continue;
+                    }
+                }
+            } else if let Some(position) = pending
+                .imports
+                .iter_mut()
+                .position(|import| import.resource.Poll())
+            {
+                completed += 1;
+                let mut import = pending.imports.swap_remove(position);
+                let result = RequireResponse(import.resource.TakeResult()).and_then(|response| {
+                    let base = if response.final_url.is_empty() {
+                        import.url.clone()
+                    } else {
+                        response.final_url.clone()
+                    };
+                    let css = DecodeText(&response)?;
+                    let sheet = style::ParseCSSWithBase(&css, &base);
+                    if !import.request.Attach(&sheet) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "@import child lost its translated stylesheet owner",
+                        ));
+                    }
+                    let imports = self.StartStyleSheetImports(&sheet, &base)?;
+                    Ok(imports)
+                });
+                match result {
+                    Ok(imports) => pending.imports.extend(imports),
+                    Err(error) => {
+                        pending.import_failed = true;
+                        client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
+                            ResourceLoadFailed {
+                                kind: ResourceKind::kStyleSheet,
+                                source: None,
+                                url: import.url,
+                                error: error.to_string(),
+                            },
+                        ));
+                    }
+                }
+            }
+
+            if pending.sheet.is_some() && pending.imports.is_empty() {
+                let mut sheet = pending.sheet.take().expect("checked stylesheet owner");
                 sheet.SetLinkMetadata(
                     pending.owner_node_id,
                     pending.alternate,
@@ -531,29 +771,30 @@ impl ResourceFetcher {
                     pending.title.clone(),
                     pending.media.clone(),
                 );
-                self.AddParsedStyleSheet(sheet, &base)
-            });
-            if let Err(error) = result {
-                // A changed href may retry. Do not pin the failed signature as
-                // a successful LinkStyle state.
-                if self
-                    .style_sheet_signatures
-                    .borrow()
-                    .get(&pending.owner_node_id)
-                    == Some(&pending.signature)
-                {
-                    self.style_sheet_signatures
-                        .borrow_mut()
-                        .remove(&pending.owner_node_id);
+                let loaded = !pending.import_failed;
+                match self.AddParsedStyleSheet(sheet, &pending.base) {
+                    Ok(()) => {
+                        if client.HasJavaScript() {
+                            client.DispatchStyleSheetEvent(
+                                pending.owner_node_id,
+                                pending.signature,
+                                loaded,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
+                            ResourceLoadFailed {
+                                kind: ResourceKind::kStyleSheet,
+                                source: None,
+                                url: pending.url,
+                                error: error.to_string(),
+                            },
+                        ));
+                    }
                 }
-                client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
-                    ResourceLoadFailed {
-                        kind: ResourceKind::kStyleSheet,
-                        source: None,
-                        url: pending.url,
-                        error: error.to_string(),
-                    },
-                ));
+            } else {
+                self.pending_style_sheets.borrow_mut().insert(0, pending);
             }
         }
         completed
@@ -579,6 +820,7 @@ impl ResourceFetcher {
                 && f.metadata.weight == metadata.weight
                 && f.metadata.italic == metadata.italic
                 && f.metadata.urls == metadata.urls
+                && f.metadata.font_feature_settings == metadata.font_feature_settings
                 && f.metadata.unicode_ranges == metadata.unicode_ranges
         }) {
             return Ok(());
@@ -675,6 +917,7 @@ impl ResourceFetcher {
                             weight: face.metadata.weight,
                             italic: face.metadata.italic,
                             bytes: bytes.into(),
+                            font_feature_settings: face.metadata.font_feature_settings.clone(),
                             unicode_ranges: face.metadata.unicode_ranges.clone(),
                             ..Default::default()
                         },
@@ -746,6 +989,8 @@ impl ResourceFetcher {
                         resource,
                         decode: None,
                         is_multipart_response: None,
+                        is_cors_same_origin: None,
+                        content_dpr: None,
                         blocks_load: true,
                     });
                 }
@@ -772,6 +1017,8 @@ impl ResourceFetcher {
             resource,
             decode: None,
             is_multipart_response: None,
+            is_cors_same_origin: None,
+            content_dpr: None,
             blocks_load,
         });
         Ok(())
@@ -799,6 +1046,8 @@ impl ResourceFetcher {
                 resource,
                 decode: None,
                 is_multipart_response: None,
+                is_cors_same_origin: None,
+                content_dpr: None,
                 blocks_load: false,
             });
         }
@@ -825,6 +1074,8 @@ impl ResourceFetcher {
                 .trim()
                 .eq_ignore_ascii_case("multipart/x-mixed-replace"),
         );
+        image.is_cors_same_origin = Some(self.engine.IsSameOriginWithDocument(&response.final_url));
+        image.content_dpr = response.content_dpr;
         ImageResultBoundary(|| {
             let mut container =
                 ContainerKey::new(0, 0, 1.0, self.constraints.borrow().device_pixel_ratio);
@@ -844,6 +1095,9 @@ impl ResourceFetcher {
             let is_multipart = image.is_multipart_response.ok_or_else(|| {
                 io::Error::other("image transport did not publish its response classification")
             })?;
+            let is_cors_same_origin = image.is_cors_same_origin.ok_or_else(|| {
+                io::Error::other("image transport did not publish its origin provenance")
+            })?;
             let (id, decoded, document_image) = match decoded_resource {
                 DecodedImageResource::Document { resource_id, frame } => {
                     let paint_image = PaintImage {
@@ -859,6 +1113,8 @@ impl ResourceFetcher {
                         revision: frame.revision,
                         width: frame.intrinsic_size.width,
                         height: frame.intrinsic_size.height,
+                        content_dpr: image.content_dpr,
+                        is_cors_same_origin,
                         document_container_key: Some(frame.container_key.clone()),
                         content: PaintImageContent::Document(Arc::new(DocumentPaintContent::new(
                             frame.container_key.clone(),
@@ -873,12 +1129,10 @@ impl ResourceFetcher {
                     image: bitmap,
                 } => {
                     // BitmapImage retains a concrete decoder/frame owner for
-                    // animated formats before it publishes a PaintImage. This
-                    // CPU decoder currently exposes only one immutable pixel
-                    // buffer, so reject that individual resource at the image
-                    // loading boundary. Letting incomplete animation facts
-                    // enter PaintArtifact would turn a recoverable image
-                    // decode failure into a terminal compositor/Page error.
+                    // animated formats before it publishes a PaintImage. The
+                    // decoded frame set below is that producer-owned value;
+                    // formats which have not published their complete frame
+                    // set remain recoverable resource errors at this boundary.
                     //
                     // Source: third_party/blink/renderer/platform/graphics/
                     // bitmap_image.cc:155-166; image.cc:217-234.
@@ -887,6 +1141,18 @@ impl ResourceFetcher {
                     {
                         return Err(io::Error::new(io::ErrorKind::Unsupported, error.clone()));
                     }
+                    let animation_frames = (!bitmap.animation_frames.is_empty()).then(|| {
+                        Arc::new(
+                            bitmap
+                                .animation_frames
+                                .into_iter()
+                                .map(|frame| image_resource::PaintImageFrame {
+                                    duration: frame.duration,
+                                    pixels: Arc::new(frame.rgba8),
+                                })
+                                .collect(),
+                        )
+                    });
                     (
                         resource_id,
                         PaintImage {
@@ -904,8 +1170,12 @@ impl ResourceFetcher {
                             revision: 1,
                             width: bitmap.width,
                             height: bitmap.height,
+                            content_dpr: image.content_dpr,
+                            is_cors_same_origin,
                             orientation: bitmap.orientation,
+                            alpha_type: bitmap.alpha_type,
                             content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
+                            animation_frames,
                             ..Default::default()
                         },
                         false,

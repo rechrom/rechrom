@@ -1097,7 +1097,7 @@ impl StyleBuilderConverter {
                 .map(|value| b.IdentifierFlags(value)),
         )
     }
-    // style_builder_converter.h:490-502. Shared native flag accumulation for
+    // style_builder_converter.h:490-502. Shared computed style flag accumulation for
     // the generic converter and typed production values.
     pub fn ConvertFlagsFromBits(bits: impl IntoIterator<Item = u32>) -> u32 {
         bits.into_iter().fold(0, |flags, value| flags | value)
@@ -1566,7 +1566,7 @@ use layoutng_style::{
         transform_origin::TransformOrigin,
     },
 };
-// cpp: style_builder_converter.cc:1846-1895. One native conversion shared by
+// cpp: style_builder_converter.cc:1846-1895. One computed style conversion shared by
 // the source backend and production typed value bridge.
 pub fn ConvertGridLanesDirectionIdentifiers(values: &[CSSValueID]) -> Option<GridLanesDirection> {
     if values == [CSSValueID::kNormal] {
@@ -1767,7 +1767,7 @@ pub trait StyleBuilderConverterBatch2Backend: StyleBuilderConverterBackend {
     ) -> foundation::TransformOperations;
 }
 
-/// Typed entries at the grid converter boundary. Native sizes stay compact;
+/// Typed entries at the grid converter boundary. Canonical sizes stay compact;
 /// only the named-line indices are expanded for integer repetition.
 pub enum GridTrackListEntry {
     Names(Vec<AtomicString>),
@@ -1836,7 +1836,7 @@ pub fn AppendIntegerGridRepeat(
 }
 
 impl StyleBuilderConverter {
-    // cpp: style_builder_converter.cc:1660-1680,1826-1833. The native plain
+    // cpp: style_builder_converter.cc:1660-1680,1826-1833. The computed style plain
     // track construction is shared by both generic and production value owners.
     pub fn ConvertGridTrackSizeListFromSizes(sizes: &[GridTrackSize]) -> GridTrackList {
         let mut result = GridTrackList::default();

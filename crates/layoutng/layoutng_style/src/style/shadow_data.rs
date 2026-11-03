@@ -1,4 +1,4 @@
-use foundation::{gfx, Visitor};
+use foundation::{gfx, Color, Visitor};
 
 use crate::css::style_color::StyleColor;
 
@@ -72,9 +72,16 @@ impl ShadowData {
     }
 
     // cpp: layoutng_style/style/shadow_data.h:75
-    // No definition is supplied in this package.
+    // cpp: core/style/shadow_data.cc:27-30
     pub fn NeutralValue() -> Self {
-        unsafe { ShadowDataNeutralValue() }
+        Self::new(
+            gfx::Vector2dF::new(0.0, 0.0),
+            0.0,
+            0.0,
+            ShadowStyle::kNormal,
+            StyleColor::from_color(Color::kTransparent),
+            1.0,
+        )
     }
 
     // cpp: layoutng_style/style/shadow_data.h:76-82
@@ -128,8 +135,4 @@ impl ShadowData {
             blur_and_spread - self.X(),
         )
     }
-}
-
-unsafe extern "Rust" {
-    fn ShadowDataNeutralValue() -> ShadowData;
 }

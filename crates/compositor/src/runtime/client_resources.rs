@@ -2,7 +2,7 @@
 //! The allocation is shared only between its provider wrapper and ResourcePool
 //! platform capability. Callback targets are borrowed per call, never retained.
 use super::{
-    host_owners::{NativeClientResourceProvider, NativePoolReleaseClient},
+    host_owners::{ClientResourceProviderBackend, PoolReleaseClient as PoolReleaseBackend},
     resources::{RasterReturnedResource, RasterSyncToken, RasterTransferableResource},
 };
 use crate::{
@@ -13,11 +13,12 @@ use crate::{
         },
         layer_tree_impl::ResourceId,
         resource_pool::{
-            PoolReleaseClient, ResourcePoolId, ResourcePoolReleaseCallback, ResourceSyncToken,
+            PoolReleaseClient as ResourcePoolReleaseClient, ResourcePoolId,
+            ResourcePoolReleaseCallback, ResourceSyncToken,
         },
     },
     cc::resources::resource_pool::ResourcePool,
-    NativeCompositorTypes,
+    CompositorTypes,
 };
 use compositor_resource::client_resource_lifecycle::{
     ApplyReturnedClientResources, ClientResourceImport, DrainClientResourcesForShutdown,
@@ -214,7 +215,7 @@ impl RasterClientResources {
         &self,
         owner: ResourcePoolId,
         id: ResourceId,
-        client: &mut dyn PoolReleaseClient<NativeCompositorTypes>,
+        client: &mut dyn ResourcePoolReleaseClient<CompositorTypes>,
     ) {
         let Some(imported) = self.Remove(id) else {
             return;
@@ -237,14 +238,14 @@ impl RasterClientResources {
     }
     fn RunReleases(
         releases: Vec<Imported>,
-        mut pool: Option<&mut dyn NativePoolReleaseClient>,
-        ui: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
+        mut pool: Option<&mut dyn PoolReleaseBackend>,
+        ui: &mut dyn HostUIResourceReleaseClient<CompositorTypes>,
     ) {
         // Source dependency: client_resource_provider.cc:330-341. The source
         // erases all returned entries before invoking impl release callbacks.
         for imported in releases {
             match imported.release {
-                Release::Ui(callback) => callback.Run::<NativeCompositorTypes>(
+                Release::Ui(callback) => callback.Run::<CompositorTypes>(
                     &imported.returned_sync_token,
                     imported.returned_lost,
                     ui,
@@ -265,7 +266,7 @@ impl RasterClientResources {
         }
     }
 }
-impl HostUIResourceProvider<NativeCompositorTypes> for RasterClientResources {
+impl HostUIResourceProvider<CompositorTypes> for RasterClientResources {
     fn ImportResource(
         &mut self,
         resource: RasterTransferableResource,
@@ -276,7 +277,7 @@ impl HostUIResourceProvider<NativeCompositorTypes> for RasterClientResources {
     fn RemoveImportedResource(
         &mut self,
         id: ResourceId,
-        client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
+        client: &mut dyn HostUIResourceReleaseClient<CompositorTypes>,
     ) {
         if let Some(imported) = self.Remove(id) {
             assert!(
@@ -287,7 +288,7 @@ impl HostUIResourceProvider<NativeCompositorTypes> for RasterClientResources {
         }
     }
 }
-impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResources {
+impl ClientResourceProviderBackend<CompositorTypes> for RasterClientResources {
     fn CreateScopedBatchResourcesRelease(
         &mut self,
         enabled: bool,
@@ -296,7 +297,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
             .lock()
             .expect("native client resources")
             .batch_release_callbacks = enabled;
-        Box::new(NativeBatchResourceRelease(self.clone()))
+        Box::new(BatchResourceRelease(self.clone()))
     }
 
     fn SetVisible(&mut self, visible: bool) {
@@ -315,7 +316,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
     }
     fn ShutdownAndReleaseAllResources(
         &mut self,
-        client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
+        client: &mut dyn HostUIResourceReleaseClient<CompositorTypes>,
     ) {
         // Source dependency: client_resource_provider.cc:409-435.
         let releases = {
@@ -329,8 +330,8 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
     fn ReceiveReturnsFromParent(
         &mut self,
         resources: Vec<RasterReturnedResource>,
-        pool: Option<&mut dyn NativePoolReleaseClient>,
-        client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
+        pool: Option<&mut dyn PoolReleaseBackend>,
+        client: &mut dyn HostUIResourceReleaseClient<CompositorTypes>,
     ) {
         // Source dependency: client_resource_provider.cc:275-341.
         let releases = {
@@ -341,9 +342,9 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
     }
     fn ReleaseAllExportedResources(
         &mut self,
-        pool: Option<&mut dyn NativePoolReleaseClient>,
+        pool: Option<&mut dyn PoolReleaseBackend>,
         lose: bool,
-        client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
+        client: &mut dyn HostUIResourceReleaseClient<CompositorTypes>,
     ) {
         // Source dependency: client_resource_provider.cc:376-407. Mutating
         // retain visits the resident entries once, without ID relookup/snapshot.
@@ -367,8 +368,8 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResourc
     }
 }
 
-pub(crate) struct ResidentPoolRelease<'a>(pub(crate) &'a mut ResourcePool<NativeCompositorTypes>);
-impl NativePoolReleaseClient for ResidentPoolRelease<'_> {
+pub(crate) struct ResidentPoolRelease<'a>(pub(crate) &'a mut ResourcePool<CompositorTypes>);
+impl PoolReleaseBackend for ResidentPoolRelease<'_> {
     fn OnPoolResourceReleased(
         &mut self,
         callback: ResourcePoolReleaseCallback,
@@ -383,12 +384,12 @@ impl NativePoolReleaseClient for ResidentPoolRelease<'_> {
 // Imports in this CPU provider register only impl release callbacks, matching
 // its ImportResource call sites. There are no main-thread release callbacks to
 // flush; the same provider's batch flag still resets at source scope exit.
-struct NativeBatchResourceRelease(RasterClientResources);
+struct BatchResourceRelease(RasterClientResources);
 impl crate::adapter::client_layer_tree_host_impl::ClientBatchResourceRelease
-    for NativeBatchResourceRelease
+    for BatchResourceRelease
 {
 }
-impl Drop for NativeBatchResourceRelease {
+impl Drop for BatchResourceRelease {
     fn drop(&mut self) {
         self.0
              .0

@@ -74,7 +74,7 @@ fn grid_axis_omissions_copy_only_bare_names_and_preserve_explicit_ends() {
 }
 
 #[test]
-fn omitted_grid_names_reach_canonical_native_positions_after_substitution() {
+fn omitted_grid_names_reach_canonical_computed_style_positions_after_substitution() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner =
         html::html_parser::ParseHTML("<div id=g style='--area:zone;grid-area:var(--area)'></div>");
@@ -95,12 +95,18 @@ fn omitted_grid_names_reach_canonical_native_positions_after_substitution() {
                 .is_some_and(|a| a.value == "g")
         })
         .unwrap();
-    let native = unsafe { &*doc.ResolvedStyleFor(index).unwrap().native_style.Get() };
+    let computed_style = unsafe {
+        &*doc
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
     for position in [
-        native.GridRowStart(),
-        native.GridColumnStart(),
-        native.GridRowEnd(),
-        native.GridColumnEnd(),
+        computed_style.GridRowStart(),
+        computed_style.GridColumnStart(),
+        computed_style.GridRowEnd(),
+        computed_style.GridColumnEnd(),
     ] {
         assert!(position.IsNamedGridArea());
         assert_eq!(position.NamedGridLine().Utf8(), "zone");

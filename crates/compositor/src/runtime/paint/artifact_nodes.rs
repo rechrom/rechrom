@@ -11,37 +11,22 @@ where
     >,
 {
     fn HasDirectCompositingReasons(&self) -> bool {
-        !self.node().direct_compositing_reasons.is_empty()
+        self.node().HasDirectCompositingReasons()
     }
     fn NearestDirectlyCompositedAncestor(&self) -> Option<Self> {
         WithTransformCache(self, |c| c.nearest_directly_composited_ancestor())
     }
     fn RequiresCompositingForFixedPositionOnly(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"FixedPosition")
-            && self.node().direct_compositing_reasons.iter().all(|r| {
-                matches!(
-                    *r,
-                    "FixedPosition"
-                        | "UndoOverscroll"
-                        | "AffectedByOuterViewportBoundsDelta"
-                        | "AffectedBySafeAreaBottom"
-                )
-            })
+        self.node().RequiresCompositingForFixedPositionOnly()
     }
     fn RequiresCompositingForStickyPositionOnly(&self) -> bool {
-        self.node().direct_compositing_reasons.as_slice() == ["StickyPosition"]
+        self.node().RequiresCompositingForStickyPositionOnly()
     }
     fn RequiresCompositingForFixedPosition(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"FixedPosition")
+        self.node().RequiresCompositingForFixedPosition()
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"StickyPosition")
+        self.node().RequiresCompositingForStickyPosition()
     }
     fn ScrollTranslationState(&self) -> Self {
         WithTransformCache(self, |c| c.scroll_translation_state())
@@ -50,75 +35,33 @@ where
         super::clear_transform_changed(self.as_arc(), s)
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
-        CpuCompositingReasons::from_native(&self.node().direct_compositing_reasons)
+        CpuCompositingReasons::from_source(&self.node().DirectCompositingReasonsForDebugging())
     }
 }
 impl<R: CpuSkiaBackend> ArtifactEffectNode<CpuCompositorTypes<R>> for EffectNode<R> {
     fn CanvasChildId(&self) -> NodeId {
-        NodeId(
-            self.node()
-                .compositor
-                .canvas_child_state
-                .as_ref()
-                .map_or(0, |s| s.id),
-        )
+        NodeId(self.node().CanvasChildId())
     }
     fn HasCanvasChildState(&self) -> bool {
-        self.node()
-            .compositor
-            .canvas_child_state
-            .as_ref()
-            .is_some_and(|s| s.id != 0)
+        self.node().HasCanvasChildState()
     }
     fn CanvasChildContentTransform(&self) -> TransformNode<R> {
-        TransformNode::from_arc(
-            self.node()
-                .compositor
-                .canvas_child_state
-                .as_ref()
-                .expect("source HasCanvasChildState")
-                .content_state
-                .transform
-                .clone(),
-        )
+        TransformNode::from_arc(self.node().CanvasChildContentTransform().clone())
     }
     fn CanvasChildContentClip(&self) -> ClipNode<R> {
-        ClipNode::from_arc(
-            self.node()
-                .compositor
-                .canvas_child_state
-                .as_ref()
-                .expect("source HasCanvasChildState")
-                .content_state
-                .clip
-                .clone(),
-        )
+        ClipNode::from_arc(self.node().CanvasChildContentClip().clone())
     }
     fn CanvasChildContentEffect(&self) -> Self {
-        Self::from_arc(
-            self.node()
-                .compositor
-                .canvas_child_state
-                .as_ref()
-                .expect("source HasCanvasChildState")
-                .content_state
-                .effect
-                .clone(),
-        )
+        Self::from_arc(self.node().CanvasChildContentEffect().clone())
     }
     fn IsInDrawableCanvasSubtree(&self) -> bool {
-        self.node().compositor.is_in_drawable_canvas_subtree
+        self.node().IsInDrawableCanvasSubtree()
     }
     fn DrawsContent(&self) -> bool {
-        self.HasFilter()
-            || self.HasActiveFilterAnimation()
-            || self.RequiresCompositingForWillChangeFilter()
-            || self.MayHaveBackdropEffect()
-            || self.HasValidViewTransitionElementResourceId()
-            || self.HasElementCaptureId()
+        self.node().DrawsContent()
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
-        CpuCompositingReasons::from_native(&self.node().direct_compositing_reasons)
+        CpuCompositingReasons::from_source(&self.node().direct_compositing_reasons)
     }
 }
 impl<R, B> ArtifactScrollNode<B> for ScrollNode<R>
@@ -127,11 +70,11 @@ where
     B: PaintArtifactCompositorTypes,
 {
     fn UserScrollable(&self) -> bool {
-        self.node().user_scrollable_horizontal || self.node().user_scrollable_vertical
+        self.node().UserScrollable()
     }
     fn CompositedScrollingPreferred(&self) -> bool {
-        self.node().compositor.composited_scrolling_preference
-            == native::PaintCompositedScrollingPreference::Preferred
+        self.node().GetCompositedScrollingPreference()
+            == paint_property_tree::PaintCompositedScrollingPreference::Preferred
     }
 }
 impl<R, B> ArtifactPropertyState<B> for PropertyTreeState<R>
@@ -161,22 +104,44 @@ macro_rules! debug_node {
         }
     };
 }
-debug_node!(TransformNode);
-debug_node!(ClipNode);
-debug_node!(EffectNode);
-impl<R, B> ArtifactDisplayItem<B> for DisplayItem
-where
-    R: CpuSkiaBackend,
-    B: PaintArtifactCompositorTypes<TransformNode = TransformNode<R>>,
-{
+impl<R> ArtifactDebugNode for TransformNode<R> {
+    fn DebugPointer(&self) -> String {
+        format!("{:p}", Arc::as_ptr(self.as_arc()))
+    }
+    fn DebugJSONString(&self) -> String {
+        self.node().ToString()
+    }
+}
+impl<R> ArtifactDebugNode for ClipNode<R> {
+    fn DebugPointer(&self) -> String {
+        format!("{:p}", Arc::as_ptr(self.as_arc()))
+    }
+    fn DebugJSONString(&self) -> String {
+        self.node().ToString()
+    }
+}
+impl<R> ArtifactDebugNode for EffectNode<R> {
+    fn DebugPointer(&self) -> String {
+        format!("{:p}", Arc::as_ptr(self.as_arc()))
+    }
+    fn DebugJSONString(&self) -> String {
+        self.node().ToString()
+    }
+}
+impl<R: CpuSkiaBackend> ArtifactDisplayItem<CpuCompositorTypes<R>> for DisplayItem {
     fn IsForeignLayer(&self) -> bool {
         let t = self.id.r#type.0;
         (paint::display_item_id::DisplayItemIdType::kForeignLayerFirst.0
             ..=paint::display_item_id::DisplayItemIdType::kForeignLayerLast.0)
             .contains(&t)
     }
-    fn ForeignLayerBorrow(&self) -> crate::cc::layers::layer::LayerBorrow<B> {
-        unreachable!("PaintInput rejects absent native foreign layer owner")
+    fn ForeignLayerBorrow(&self) -> crate::cc::layers::layer::LayerBorrow<CpuCompositorTypes<R>> {
+        self.GetForeignLayer()
+            .AsAny()
+            .downcast_ref::<CpuForeignLayer<R>>()
+            .expect("ForeignLayerDisplayItem owner must match the active compositor backend")
+            .Layer()
+            .borrow()
     }
     fn ScrollTranslation(&self) -> Option<TransformNode<R>> {
         self.scroll_translation

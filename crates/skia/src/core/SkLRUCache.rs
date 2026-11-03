@@ -1,6 +1,6 @@
 //! Native THashTable plus intrusive recency list. Pinning expresses the native
 //! nonmoving cache and preserves node debug back-pointers; entries are actual owned nodes.
-use super::SkTHash::{HashTraits, NativeHash, THashTable};
+use super::SkTHash::{HashPolicy, HashTraits, THashTable};
 use super::SkTInternalLList::{Iter, IterStart, Linked, Links, SkTInternalLList};
 use std::ffi::c_void;
 use std::marker::{PhantomData, PhantomPinned};
@@ -49,7 +49,7 @@ unsafe impl<K, V> Linked for Entry<K, V> {
         std::ptr::addr_of_mut!((*node).links)
     }
 }
-impl<K: PartialEq, V, H: NativeHash<K>, P: PurgeCallback<K, V>> SkLRUCache<K, V, H, P> {
+impl<K: PartialEq, V, H: HashPolicy<K>, P: PurgeCallback<K, V>> SkLRUCache<K, V, H, P> {
     // Source: src/core/SkLRUCache.h:39-42
     /// The callback context must remain valid through cache destruction, including
     /// on another thread when the cache is transferred. Native insertion requires
@@ -79,7 +79,7 @@ impl<K, V, H, P> Drop for SkLRUCache<K, V, H, P> {
         // Native destructor does not invoke PurgeCB and destroys fMap afterwards.
     }
 }
-impl<K: PartialEq, V, H: NativeHash<K>, P: PurgeCallback<K, V>> SkLRUCache<K, V, H, P> {
+impl<K: PartialEq, V, H: HashPolicy<K>, P: PurgeCallback<K, V>> SkLRUCache<K, V, H, P> {
     // Source: src/core/SkLRUCache.h:57-68
     pub fn find(self: Pin<&mut Self>, key: &K) -> Option<&mut V> {
         unsafe {
@@ -163,7 +163,7 @@ impl<K: PartialEq, V, H: NativeHash<K>, P: PurgeCallback<K, V>> SkLRUCache<K, V,
 }
 // Source: src/core/SkLRUCache.h:127-135
 struct Traits<H>(PhantomData<H>);
-impl<K, V, H: NativeHash<K>> HashTraits<NonNull<Entry<K, V>>, K> for Traits<H> {
+impl<K, V, H: HashPolicy<K>> HashTraits<NonNull<Entry<K, V>>, K> for Traits<H> {
     type Key<'a>
         = &'a K
     where

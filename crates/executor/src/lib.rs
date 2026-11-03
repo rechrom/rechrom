@@ -71,6 +71,19 @@ pub struct PoolExecutor {
 }
 impl PoolExecutor {
     pub fn new(name: &str, stack_size: usize, lanes: usize) -> io::Result<Self> {
+        Self::new_with_thread_initializer(name, stack_size, lanes, Arc::new(|| {}))
+    }
+
+    /// Constructs the same reusable pool while letting the embedding apply
+    /// platform thread policy before either worker or timer work begins.
+    /// Engines still see only `Executor`; thread placement and QoS remain an
+    /// application responsibility.
+    pub fn new_with_thread_initializer(
+        name: &str,
+        stack_size: usize,
+        lanes: usize,
+        initialize_thread: Arc<dyn Fn() + Send + Sync>,
+    ) -> io::Result<Self> {
         if lanes == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -84,10 +97,12 @@ impl PoolExecutor {
         for lane in 0..lanes {
             let receiver = receiver.clone();
             let busy = busy.clone();
+            let initialize_thread = initialize_thread.clone();
             std::thread::Builder::new()
                 .name(format!("{name}-{lane}"))
                 .stack_size(stack_size)
                 .spawn(move || {
+                    initialize_thread();
                     CURRENT_POOL.set(Some(id));
                     loop {
                         let task = receiver.lock().unwrap_or_else(|e| e.into_inner()).recv();
@@ -108,10 +123,12 @@ impl PoolExecutor {
         let (delayed_sender, delayed_receiver) =
             std::sync::mpsc::channel::<(std::time::Instant, Task)>();
         let ready = sender.clone();
+        let initialize_timer_thread = initialize_thread;
         std::thread::Builder::new()
             .name(format!("{name}-timer"))
             .stack_size(stack_size)
             .spawn(move || {
+                initialize_timer_thread();
                 let mut pending: Vec<(std::time::Instant, Task)> = Vec::new();
                 loop {
                     if pending.is_empty() {

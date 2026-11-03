@@ -1,5 +1,5 @@
 // C++: layoutng_inline/hyphen_result.cc. HyphenResult is physically owned by
-// this package's native_hyphen_result boundary source.
+// this package's hyphen_result_interface boundary source.
 #![allow(non_snake_case)]
 
 use font_engine::HarfBuzzShaper;

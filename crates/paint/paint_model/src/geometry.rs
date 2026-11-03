@@ -1,5 +1,4 @@
 /// Backend-neutral paint-space rectangle.
-// cpp: paint/paint_engine.h:70-76
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PaintRect {
     pub x: f64,

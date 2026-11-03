@@ -21,11 +21,11 @@ fn element(id: foundation::CompositorElementId) -> ElementId {
         ElementId::new(id)
     }
 }
-fn blend(n: &native::EffectPaintPropertyNode) -> BlendMode {
+fn blend(n: &paint_property_tree::EffectPaintPropertyNode) -> BlendMode {
     if n.is_mask {
         return BlendMode::kDstIn;
     }
-    use native::PaintBlendMode::*;
+    use paint_property_tree::PaintBlendMode::*;
     match n.blend_mode {
         kNormal => BlendMode::kSrcOver,
         kMultiply => BlendMode::kMultiply,
@@ -72,22 +72,18 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
         self.UnaliasedParent().expect("source parent")
     }
     fn IsIdentityOr2dTranslation(&self) -> bool {
-        crate::adapter::paint_geometry::TransformCacheNode::IsIdentityOr2dTranslation(self)
+        self.node().IsIdentityOr2dTranslation()
     }
     fn HasScrollNode(&self) -> bool {
-        self.node().scroll.is_some()
+        self.node().ScrollNode().is_some()
     }
     fn HasDirectCompositingReasonsOtherThan3dTransform(&self) -> bool {
-        self.node().direct_compositing_reasons.iter().any(|r| {
-            !matches!(
-                *r,
-                "3DTransform" | "3DScale" | "3DRotate" | "3DTranslate" | "Trivial3DTransform"
-            )
-        })
+        self.node()
+            .HasDirectCompositingReasonsOtherThan3dTransform()
     }
     fn FlattensInheritedTransformSameAsParent(&self) -> bool {
         self.node().parent.as_ref().is_none_or(|p| {
-            p.flattens_inherited_transform == self.node().flattens_inherited_transform
+            p.FlattensInheritedTransform() == self.node().FlattensInheritedTransform()
         })
     }
     fn BackfaceVisibilitySameAsParent(&self) -> bool {
@@ -99,56 +95,41 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
             || self.IsBackfaceHidden() == parent.IsBackfaceHidden()
     }
     fn HasStickyConstraint(&self) -> bool {
-        self.node().compositor.sticky_constraint.is_some()
+        self.node().GetStickyConstraint().is_some()
     }
     fn HasAnchorPositionScrollData(&self) -> bool {
-        self.node().compositor.anchor_position_scroll_data.is_some()
+        self.node().GetAnchorPositionScrollData().is_some()
     }
     fn IsAffectedByOuterViewportBoundsDelta(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"AffectedByOuterViewportBoundsDelta")
+        self.node().IsAffectedByOuterViewportBoundsDelta()
     }
     fn IsAffectedBySafeAreaBottom(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"AffectedBySafeAreaBottom")
+        self.node().IsAffectedBySafeAreaBottom()
     }
     fn IsInSubtreeOfPageScale(&self) -> bool {
-        self.node().compositor.in_subtree_of_page_scale
+        self.node().IsInSubtreeOfPageScale()
     }
     fn RequiresCompositingForFixedToViewport(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"UndoOverscroll")
+        self.node().RequiresCompositingForFixedToViewport()
     }
     fn FlattensInheritedTransform(&self) -> bool {
-        self.node().flattens_inherited_transform
+        self.node().FlattensInheritedTransform()
     }
     fn RenderingContextId(&self) -> i32 {
-        self.node().rendering_context_id as i32
+        self.node().RenderingContextId() as i32
     }
     fn DelegatesToParentForBackface(&self) -> bool {
-        self.node().backface_visibility == native::PaintBackfaceVisibility::Inherited
+        self.node().DelegatesToParentForBackface()
     }
     fn RequiresCompositingForWillChangeTransform(&self) -> bool {
-        self.node().direct_compositing_reasons.iter().any(|r| {
-            matches!(
-                *r,
-                "WillChangeTransform"
-                    | "WillChangeScale"
-                    | "WillChangeRotate"
-                    | "WillChangeTranslate"
-            )
-        })
+        self.node().RequiresCompositingForWillChangeTransform()
     }
     fn IsForSVGChild(&self) -> bool {
-        self.node().compositor.is_for_svg_child
+        self.node().IsForSVGChild()
     }
     fn ScrollParentScrollTranslation(&self) -> Option<Self> {
         self.node()
-            .scroll_parent_scroll_translation
-            .as_ref()
+            .ScrollParentScrollTranslation()
             .map(|n| Self::from_arc(n.clone()))
     }
     fn PropertyTreeNearestScrollTranslationNode(&self) -> Self {
@@ -157,7 +138,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
     fn GetStickyConstraint(
         &self,
     ) -> Option<crate::cc::trees::sticky_position_constraint::StickyPositionConstraint> {
-        self.node().compositor.sticky_constraint.as_ref().map(|v| {
+        self.node().GetStickyConstraint().map(|v| {
             let r = |p: paint::paint_engine::PaintRect| {
                 RectF::new(p.x as f32, p.y as f32, p.width as f32, p.height as f32)
             };
@@ -186,44 +167,40 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
     fn GetAnchorPositionScrollData(
         &self,
     ) -> Option<crate::cc::trees::property_tree::AnchorPositionScrollData> {
-        self.node()
-            .compositor
-            .anchor_position_scroll_data
-            .as_ref()
-            .map(
-                |v| crate::cc::trees::property_tree::AnchorPositionScrollData {
-                    adjustment_container_ids: v
-                        .adjustment_container_ids
-                        .iter()
-                        .copied()
-                        .map(element)
-                        .collect(),
-                    accumulated_scroll_origin: crate::adapter::geometry::Vector2d::new(
-                        v.accumulated_scroll_origin[0],
-                        v.accumulated_scroll_origin[1],
-                    ),
-                    needs_scroll_adjustment_in_x: v.needs_scroll_adjustment_in_x,
-                    needs_scroll_adjustment_in_y: v.needs_scroll_adjustment_in_y,
-                },
-            )
+        self.node().GetAnchorPositionScrollData().map(|v| {
+            crate::cc::trees::property_tree::AnchorPositionScrollData {
+                adjustment_container_ids: v
+                    .adjustment_container_ids
+                    .iter()
+                    .copied()
+                    .map(element)
+                    .collect(),
+                accumulated_scroll_origin: crate::adapter::geometry::Vector2d::new(
+                    v.accumulated_scroll_origin[0],
+                    v.accumulated_scroll_origin[1],
+                ),
+                needs_scroll_adjustment_in_x: v.needs_scroll_adjustment_in_x,
+                needs_scroll_adjustment_in_y: v.needs_scroll_adjustment_in_y,
+            }
+        })
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        element(self.node().compositor.compositor_element_id)
+        element(self.node().GetCompositorElementId())
     }
     fn GetVisibleFrameElementId(&self) -> ElementId {
-        element(self.node().compositor.visible_frame_element_id)
+        element(self.node().GetVisibleFrameElementId())
     }
     fn IsFramePaintOffsetTranslation(&self) -> bool {
-        self.node().compositor.is_frame_paint_offset_translation
+        self.node().IsFramePaintOffsetTranslation()
     }
     fn IsBackfaceHidden(&self) -> bool {
         crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache(self,|c|c.is_backface_hidden())
     }
     fn HasActiveTransformAnimation(&self) -> bool {
-        crate::adapter::paint_geometry::TransformCacheNode::HasActiveTransformAnimation(self)
+        self.node().HasActiveTransformAnimation()
     }
     fn TransformAnimationIsAxisAligned(&self) -> bool {
-        self.node().compositor.animation_is_axis_aligned
+        self.node().TransformAnimationIsAxisAligned()
     }
     fn PropertyTreeLowestCommonAncestor(&self, other: &Self) -> Self {
         Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
@@ -232,13 +209,14 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
         ))
     }
     fn Get2dTranslation(&self) -> Vector2dF {
-        crate::adapter::paint_geometry::TransformCacheNode::Get2dTranslation(self)
+        let translation = self.node().Get2dTranslation();
+        Vector2dF::new(translation[0], translation[1])
     }
     fn Matrix(&self) -> Self::Matrix {
         crate::adapter::paint_geometry::GeometryMapperNode::Matrix(self)
     }
     fn Origin(&self) -> crate::adapter::geometry::Point3F {
-        let o = self.node().origin;
+        let o = self.node().Origin();
         crate::adapter::geometry::Point3F::new(o[0] as f32, o[1] as f32, o[2] as f32)
     }
     fn NodeChanged(&self) -> PaintPropertyChange {
@@ -247,11 +225,9 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
     fn ScrollCompositorElementId(&self) -> ElementId {
         element(
             self.node()
-                .scroll
-                .as_ref()
+                .ScrollNode()
                 .expect("source ScrollNode")
-                .compositor
-                .compositor_element_id,
+                .GetCompositorElementId(),
         )
     }
     fn ScrollContainerRect(&self) -> crate::adapter::geometry::Rect {
@@ -261,7 +237,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
 impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNode<R> {
     type Filters = paint::cc::paint::filter_operations::FilterOperations;
     type Path = R::Path;
-    type PaintPropertyChange = native::PaintPropertyChangeType;
+    type PaintPropertyChange = paint_property_tree::PaintPropertyChangeType;
     type ClipNode = ClipNode<R>;
     fn CcNodeId(&self, s: i32) -> i32 {
         self.node().lifecycle.cc_node_id(s)
@@ -285,7 +261,7 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         )
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
-        TransformNode::from_arc(self.node().local_transform_space.clone())
+        TransformNode::from_arc(self.node().LocalTransformSpace().clone())
     }
     fn BlendMode(&self) -> BlendMode {
         blend(self.node())
@@ -294,51 +270,37 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         self.node().opacity
     }
     fn HasActiveOpacityAnimation(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"ActiveOpacityAnimation")
+        self.node().HasActiveOpacityAnimation()
     }
     fn HasFilter(&self) -> bool {
-        self.node().compositor.has_filter_info
+        self.node().Filter().is_some()
     }
     fn RequiresCompositingForWillChangeFilter(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"WillChangeFilter")
+        self.node().RequiresCompositingForWillChangeFilter()
     }
     fn HasActiveFilterAnimation(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"ActiveFilterAnimation")
+        self.node().HasActiveFilterAnimation()
     }
     fn HasBackdropFilter(&self) -> bool {
-        self.node().compositor.has_backdrop_filter_info
+        self.node().BackdropFilter().is_some()
     }
     fn RequiresCompositingForWillChangeBackdropFilter(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"WillChangeBackdropFilter")
+        self.node().RequiresCompositingForWillChangeBackdropFilter()
     }
     fn HasActiveBackdropFilterAnimation(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"ActiveBackdropFilterAnimation")
+        self.node().HasActiveBackdropFilterAnimation()
     }
     fn HasValidViewTransitionElementResourceId(&self) -> bool {
-        self.ViewTransitionElementResourceId().IsValid()
+        self.node().HasValidViewTransitionElementResourceId()
     }
     fn RequiresCompositingForUnboundedElement(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"UnboundedElement")
+        self.node().RequiresCompositingForUnboundedElement()
     }
     fn FlattensAtLeafOf3DScene(&self) -> bool {
-        self.node()
-            .direct_compositing_reasons
-            .contains(&"Transform3DSceneLeaf")
+        self.node().FlattensAtLeafOf3DScene()
     }
     fn HasElementCaptureId(&self) -> bool {
-        self.node().compositor.restriction_target_id != [0, 0]
+        self.node().HasElementCaptureId()
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
         Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
@@ -348,10 +310,7 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
     }
     // Source: effect_paint_property_node.h:355-385.
     fn MayHaveBackdropEffect(&self) -> bool {
-        self.BlendMode() != BlendMode::kSrcOver
-            || self.HasBackdropFilter()
-            || self.HasActiveBackdropFilterAnimation()
-            || self.RequiresCompositingForWillChangeBackdropFilter()
+        self.node().MayHaveBackdropEffect()
     }
     fn OutputClip(&self) -> Option<ClipNode<R>> {
         self.node()
@@ -363,7 +322,7 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         element(self.node().compositor.compositor_element_id)
     }
     fn NeedsEffectFor2DScaleTransform(&self) -> bool {
-        self.node().compositor.needs_effect_for_2d_scale_transform
+        self.node().NeedsEffectFor2DScaleTransform()
     }
     fn FilterOperations(&self) -> Option<Self::Filters> {
         self.HasFilter().then(|| {
@@ -435,11 +394,10 @@ impl<R: CpuSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R>
         )
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
-        TransformNode::from_arc(self.node().local_transform_space.clone())
+        TransformNode::from_arc(self.node().LocalTransformSpace().clone())
     }
     fn PaintClipRectRect(&self) -> RectF {
-        let c = &self.node().rect;
-        c.map(|r|RectF::new(r.x as f32,r.y as f32,r.width as f32,r.height as f32)).unwrap_or_else(||*crate::third_party::blink::renderer::platform::graphics::paint::float_clip_rect::FloatClipRect::default().Rect())
+        self.node().PaintClipRect().map(|r|RectF::new(r.x as f32,r.y as f32,r.width as f32,r.height as f32)).unwrap_or_else(||*crate::third_party::blink::renderer::platform::graphics::paint::float_clip_rect::FloatClipRect::default().Rect())
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
         Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
@@ -459,27 +417,26 @@ impl<R: CpuSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R>
         false
     }
     fn PaintClipRectIsRounded(&self) -> bool {
-        self.node().radii.HasRadius()
+        self.node().PaintClipRadii().HasRadius()
     }
     fn PaintClipRRect(&self) -> Option<RRectF> {
         self.node().rect.map(|_| RRectF {
             rect: self.PaintClipRectRect(),
             corner_radii: [
-                self.node().radii.top_left,
-                self.node().radii.top_right,
-                self.node().radii.bottom_right,
-                self.node().radii.bottom_left,
+                self.node().PaintClipRadii().top_left,
+                self.node().PaintClipRadii().top_right,
+                self.node().PaintClipRadii().bottom_right,
+                self.node().PaintClipRadii().bottom_left,
             ]
             .map(|r| Vector2dF::new(r.x as f32, r.y as f32)),
         })
     }
     fn HasClipPath(&self) -> bool {
-        self.node().clip_path.is_some()
+        self.node().ClipPath().is_some()
     }
     fn PixelMovingFilter(&self) -> Option<EffectNode<R>> {
         self.node()
-            .pixel_moving_filter
-            .as_ref()
+            .PixelMovingFilter()
             .map(|e| EffectNode::from_arc(e.clone()))
     }
 }

@@ -1,57 +1,50 @@
 //! The unique private production construction site. Only independent executor,
-//! paint value, diagnostics and native resource capabilities enter this file;
+//! paint value, diagnostics and capabilities resource capabilities enter this file;
 //! every resident compositor owner remains internal to the Engine assembly.
 use super::{
+    activation::ActivationServices,
+    animation_host::AnimationHostOwner,
+    animation_services::{AnimationServices, ScrollbarRegistrationServices},
+    begin_frame::BeginFrameServices,
+    client::{ClientServices, ClientWorkletServices},
     client_resources::RasterClientResources,
-    engine_core::NativeEngineCore,
-    engine_queries::{CallScopedSchedulerQueries, NativeFactoryPictureState},
+    core_services::{CoreConfig, CoreServices, CpuNoGpuCapabilities, RenderingStats},
+    engine_core::EngineCore,
+    engine_queries::{CallScopedSchedulerQueries, FactoryPictureState},
     execution::{EngineTask, EngineTaskQueue},
+    frame_build::FrameBuildServices,
+    host_action::HostActionServices,
+    host_core::{HostCoreOwners, ImageAnimationDispatch, OsSurfaceTokenSource},
+    host_frame_sink::{HostFrameSinkCallbacks, HostFrameSinkConfig, HostFrameSinkServices},
+    host_lifecycle::{HostLifecycle, HostLifecycleEffects},
+    host_metadata::{HostMetadataConfig, HostMetadataServices},
+    host_picture_services::{
+        CpuHostPictureMutationServices, CpuHostPictureTileServices, CpuPictureLayerServices,
+        HostPictureEnvironment, HostPictureFeatures, HostPictureState,
+    },
     host_services::{CpuHostServices, HostInit},
+    images::{CheckerImageClient, CpuImageServices, ImageDecodeCacheRegistry},
+    latency_info_swap_promise_monitor::LatencyMonitorRegistry,
+    layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
     main_endpoint::EngineMainEndpoint,
     main_host::CpuMainLayerHost,
-    native_activation::NativeActivationServices,
-    native_animation::NativeAnimationOwner,
-    native_animation_services::{NativeAnimationServices, NativeScrollbarRegistrationServices},
-    native_begin_frame::NativeBeginFrameServices,
-    native_client::{NativeClientServices, NativeClientWorkletServices},
-    native_core_services::{
-        CpuNoGpuCapabilities, NativeCoreConfig, NativeCoreServices, NativeRenderingStats,
-    },
-    native_frame_build::NativeFrameBuildServices,
-    native_frame_sink::NativeFrameSinkEndpoint,
-    native_host_action::NativeHostActionServices,
-    native_host_core::{NativeHostCoreOwners, NativeImageAnimationDispatch, OsSurfaceTokenSource},
-    native_host_frame_sink::{
-        NativeHostFrameSinkCallbacks, NativeHostFrameSinkConfig, NativeHostFrameSinkServices,
-    },
-    native_host_lifecycle::{HostLifecycleEffects, NativeHostLifecycle},
-    native_host_metadata::{NativeHostMetadataConfig, NativeHostMetadataServices},
-    native_host_picture::{
-        NativeHostPictureEnvironment, NativeHostPictureFeatures, NativeHostPictureMutationServices,
-        NativeHostPictureState, NativeHostPictureTileServices, NativePictureLayerServices,
-    },
-    native_images::{CpuNativeImageServices, NativeCheckerImageClient, NativeImageDecodeCaches},
-    native_latency::NativeLatencyMonitorRegistry,
-    native_metrics::{NativeMetricsConfig, NativeMetricsServices},
-    native_render::{NativeRenderConfig, NativeRenderServices},
-    native_resource_events::NativeResourceEffects,
-    native_resources::{NativePictureReleaseServices, NativeResourceServices},
-    native_scheduler::{
-        NativeSchedulerConfig, NativeSchedulerEffects, NativeSchedulerHost, NativeTimingHistory,
-    },
-    native_scrollbar::NativeScrollbarLayerServices,
-    native_services::{
-        NativeBrowserControlsServices, NativeDiagnosticConfig, NativeDiagnosticServices,
-        NativeEventSink, NativeInputConfig, NativeInputEnvironmentServices,
-        NativeTaskRunnerServices,
-    },
-    native_tree_environment::{NativeTreeEnvironmentConfig, NativeTreeEnvironmentServices},
-    native_ui::{NativeUiRasterServices, NativeUiServices},
-    native_worklet::NativeWorkletServices,
+    metrics::{MetricsConfig, MetricsServices},
     paint_services::CpuPaintServices,
+    render::{RenderConfig, RenderServices},
+    resource_events::ResourceEffects,
+    resource_services::{PictureReleaseServices, ResourceServices},
+    scheduler_services::{EngineSchedulerHost, SchedulerConfig, SchedulerEffects, TimingHistory},
+    scrollbar::ScrollbarLayerServices,
+    services::{
+        BrowserControlsServices, DiagnosticConfig, DiagnosticServices, EventSink, InputConfig,
+        InputEnvironmentServices, TaskRunnerServices,
+    },
     skia::SkRegion,
     tile_execution::TileExecution,
+    tree_environment::{TreeEnvironmentConfig, TreeEnvironmentServices},
     types::{LocalSurfaceId, MainMutatorHostIdentity},
+    ui::{UiRasterServices, UiResourceServices},
+    worklet::WorkletServices,
 };
 use crate::{
     adapter::{
@@ -65,56 +58,56 @@ use crate::{
         trees::layer_tree_settings::LayerTreeSettings,
     },
     engine::{CompositorConfig, CompositorError, CompositorExecutors},
-    NativeCompositorTypes,
+    CompositorTypes,
 };
 use std::sync::{Arc, Mutex};
 
-/// Explicit native feature/configuration values. These are ownerless process
+/// Explicit capabilities feature/configuration values. These are ownerless process
 /// settings, not synthesized Layer/Host state or a Page callback registry.
-pub(crate) struct NativeFactoryOptions {
+pub(crate) struct FactoryOptions {
     pub settings: LayerTreeSettings,
-    pub core: NativeCoreConfig,
-    pub picture: Arc<NativeHostPictureFeatures>,
-    pub frame_sink: NativeHostFrameSinkConfig,
-    pub metadata: NativeHostMetadataConfig,
-    pub render: NativeRenderConfig,
-    pub scheduler: NativeSchedulerConfig,
-    pub metrics: NativeMetricsConfig,
-    pub diagnostics: NativeDiagnosticConfig,
-    pub input: NativeInputConfig,
-    pub events: Arc<dyn NativeEventSink>,
+    pub core: CoreConfig,
+    pub picture: Arc<HostPictureFeatures>,
+    pub frame_sink: HostFrameSinkConfig,
+    pub metadata: HostMetadataConfig,
+    pub render: RenderConfig,
+    pub scheduler: SchedulerConfig,
+    pub metrics: MetricsConfig,
+    pub diagnostics: DiagnosticConfig,
+    pub input: InputConfig,
+    pub events: Arc<dyn EventSink>,
     pub frame_trace_categories: std::collections::BTreeSet<String>,
-    pub tree_environment: NativeTreeEnvironmentConfig,
+    pub tree_environment: TreeEnvironmentConfig,
 }
 
 /// All shared objects here are independent external capabilities. In
 /// particular this allocation cannot contain a PAC/MainHost/Host/Tree/Tile or a
-/// callable owner endpoint. Thin native facades clone the same capability Arc;
+/// callable owner endpoint. Thin capabilities facades clone the same capability Arc;
 /// none creates a second resource table, image cache or animation state.
-pub(crate) struct NativeFactoryCapabilities {
-    pub tree_environment: NativeTreeEnvironmentConfig,
-    pub rendering_stats: Arc<NativeRenderingStats>,
-    pub ui_raster: Arc<dyn NativeUiRasterServices>,
-    pub diagnostics: NativeDiagnosticConfig,
+pub(crate) struct FactoryCapabilities {
+    pub tree_environment: TreeEnvironmentConfig,
+    pub rendering_stats: Arc<RenderingStats>,
+    pub ui_raster: Arc<dyn UiRasterServices>,
+    pub diagnostics: DiagnosticConfig,
     pub frame_trace_categories: std::collections::BTreeSet<String>,
-    pub events: Arc<dyn NativeEventSink>,
-    pub lifecycle: Arc<NativeHostLifecycle>,
+    pub events: Arc<dyn EventSink>,
+    pub lifecycle: Arc<HostLifecycle>,
     pub resources: RasterClientResources,
-    pub frame_sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
+    pub frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
     pub tile_execution: Arc<Mutex<TileExecution<SkRegion>>>,
-    pub main_animations: NativeAnimationOwner,
-    pub animations: NativeAnimationOwner,
-    pub latency_monitors: NativeLatencyMonitorRegistry,
-    pub runners: Arc<NativeTaskRunnerServices>,
+    pub main_animations: AnimationHostOwner,
+    pub animations: AnimationHostOwner,
+    pub latency_monitors: LatencyMonitorRegistry,
+    pub runners: Arc<TaskRunnerServices>,
     pub commands: EngineTaskQueue,
-    pub render: NativeRenderServices,
-    pub picture: Arc<NativeHostPictureFeatures>,
-    pub timing: Arc<NativeTimingHistory>,
-    pub resource_effects: NativeResourceEffects,
+    pub render: RenderServices,
+    pub picture: Arc<HostPictureFeatures>,
+    pub timing: Arc<TimingHistory>,
+    pub resource_effects: ResourceEffects,
     pub scheduler_queries: Arc<CallScopedSchedulerQueries>,
 }
 struct ImageAnimationDelivery(EngineTaskQueue);
-impl NativeImageAnimationDispatch for ImageAnimationDelivery {
+impl ImageAnimationDispatch for ImageAnimationDelivery {
     fn Dispatch(&self, task: crate::adapter::image_animation::ImageAnimationTask) {
         self.0.Push(EngineTask::ImageAnimation(task));
     }
@@ -124,7 +117,7 @@ struct CheckerDelivery {
     // Only source routing identity. No manager/host can be recovered here.
     owner: HostImplDelegateId,
 }
-impl NativeCheckerImageClient for CheckerDelivery {
+impl CheckerImageClient for CheckerDelivery {
     fn NeedsInvalidationForCheckerImagedTiles(&self) {
         self.commands.Push(EngineTask::CheckerNeedsInvalidation {
             delegate: self.owner,
@@ -132,14 +125,14 @@ impl NativeCheckerImageClient for CheckerDelivery {
     }
 }
 
-/// The embedding's native implementation supplies Paint's pure value/recording
+/// The embedding's capabilities implementation supplies Paint's pure value/recording
 /// primitives inside this crate; these are never arguments to public Commit.
 pub(crate) fn Create(
     config: CompositorConfig,
     executors: CompositorExecutors,
-    options: NativeFactoryOptions,
+    options: FactoryOptions,
     paint: Arc<CpuPaintServices<SkRegion>>,
-) -> Result<super::engine_assembly::NativeEngineAssembly, CompositorError> {
+) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
             reason: "separate main/impl Proxy transport is not yet constructed",
@@ -148,25 +141,28 @@ pub(crate) fn Create(
     // The factory owns identity generation; Page never passes internal IDs.
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let owner = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    assert!(owner <= i32::MAX as u64, "native engine identity exhausted");
+    assert!(
+        owner <= i32::MAX as u64,
+        "capabilities engine identity exhausted"
+    );
     let commands = EngineTaskQueue::default();
     let lifecycle_effects = HostLifecycleEffects::default();
-    let lifecycle = Arc::new(NativeHostLifecycle::new(lifecycle_effects.clone()));
+    let lifecycle = Arc::new(HostLifecycle::new(lifecycle_effects.clone()));
     let queries = Arc::new(CallScopedSchedulerQueries::default());
     let resources = RasterClientResources::new();
     let sink_id = HostImplFrameSinkId(owner);
-    let sink = Arc::new(Mutex::new(NativeFrameSinkEndpoint::new(
+    let sink = Arc::new(Mutex::new(FrameSinkEndpoint::new(
         sink_id,
         resources.clone(),
     )));
-    let runners = Arc::new(NativeTaskRunnerServices::new_threaded_on_single_executor(
+    let runners = Arc::new(TaskRunnerServices::new_threaded_on_single_executor(
         executors.compositor.clone(),
     ));
-    let main_animations = NativeAnimationOwner::default();
-    let impl_animations = NativeAnimationOwner::default();
-    let latency_monitors = NativeLatencyMonitorRegistry::default();
-    let scheduler_effects = NativeSchedulerEffects::default();
-    let scheduler_host = Arc::new(NativeSchedulerHost::new(
+    let main_animations = AnimationHostOwner::default();
+    let impl_animations = AnimationHostOwner::default();
+    let latency_monitors = LatencyMonitorRegistry::default();
+    let scheduler_effects = SchedulerEffects::default();
+    let scheduler_host = Arc::new(EngineSchedulerHost::new(
         owner,
         executors.compositor.clone(),
         commands.clone(),
@@ -174,7 +170,7 @@ pub(crate) fn Create(
         options.events.clone(),
         options.scheduler,
     ));
-    let timing = Arc::new(NativeTimingHistory::new(
+    let timing = Arc::new(TimingHistory::new(
         UMACategory::RENDERER_UMA,
         executors.compositor.clone(),
         options.events.clone(),
@@ -183,9 +179,9 @@ pub(crate) fn Create(
         commands: commands.clone(),
         owner: HostImplDelegateId(owner),
     });
-    let caches = NativeImageDecodeCaches::default();
+    let caches = ImageDecodeCacheRegistry::default();
     let image_decode = super::host_owners::ImageDecodeFactory(Box::new(
-        super::native_software_images::NativeSoftwareImageDecodeFactory::new(
+        super::software_image_decode_cache::CpuSoftwareImageDecodeFactory::new(
             caches.clone(),
             Arc::new(super::raster_resources::EngineRasterFailure(
                 commands.clone(),
@@ -193,7 +189,7 @@ pub(crate) fn Create(
             paint.PaintValues(),
         ),
     ));
-    let images = CpuNativeImageServices::new(caches, checker);
+    let images = CpuImageServices::new(caches, checker);
     let tile_execution = Arc::new(Mutex::new(TileExecution::new(
         images,
         executors.raster_provider.clone(),
@@ -203,8 +199,8 @@ pub(crate) fn Create(
         options.events.clone(),
         config.raster_worker_limit,
     )));
-    let stats = Arc::new(NativeRenderingStats::new(HostImplRenderingStatsId(owner)));
-    let native = Arc::new(NativeFactoryCapabilities {
+    let stats = Arc::new(RenderingStats::new(HostImplRenderingStatsId(owner)));
+    let capabilities = Arc::new(FactoryCapabilities {
         main_animations: main_animations.clone(),
         tree_environment: options.tree_environment,
         rendering_stats: stats.clone(),
@@ -220,22 +216,22 @@ pub(crate) fn Create(
         latency_monitors,
         runners: runners.clone(),
         commands: commands.clone(),
-        render: NativeRenderServices::new(options.render, options.events.clone()),
+        render: RenderServices::new(options.render, options.events.clone()),
         picture: options.picture.clone(),
         timing: timing.clone(),
-        resource_effects: NativeResourceEffects::default(),
+        resource_effects: ResourceEffects::default(),
         scheduler_queries: queries.clone(),
     });
 
-    let core_owners = NativeHostCoreOwners::new(
-        NativeMetricsServices::new(options.metrics, options.events.clone()),
+    let core_owners = HostCoreOwners::new(
+        MetricsServices::new(options.metrics, options.events.clone()),
         impl_animations.clone(),
-        NativeTaskRunnerServices::new_threaded_on_single_executor(executors.compositor.clone()),
+        TaskRunnerServices::new_threaded_on_single_executor(executors.compositor.clone()),
         commands.clone(),
         Arc::new(ImageAnimationDelivery(commands.clone())),
         Arc::new(OsSurfaceTokenSource),
     );
-    let core = NativeCoreServices::new(
+    let core = CoreServices::new(
         core_owners,
         lifecycle.clone(),
         resources.clone(),
@@ -249,7 +245,7 @@ pub(crate) fn Create(
     );
     let tile_execution_for_g = tile_execution.clone();
     let g = || {
-        NativeHostFrameSinkServices::new(
+        HostFrameSinkServices::new(
             sink.clone(),
             lifecycle.clone(),
             options.events.clone(),
@@ -262,87 +258,87 @@ pub(crate) fn Create(
             impl_animations.clone(),
         )
     };
-    let services = CpuHostServices::<NativeCompositorTypes> {
+    let services = CpuHostServices::<CompositorTypes> {
         tile_execution,
-        client: Some(Box::new(NativeClientServices::new(native.clone()))),
-        client_worklet: Box::new(NativeClientWorkletServices::new(native.clone())),
-        picture_environment: Box::new(NativeHostPictureEnvironment::new(
+        client: Some(Box::new(ClientServices::new(capabilities.clone()))),
+        client_worklet: Box::new(ClientWorkletServices::new(capabilities.clone())),
+        picture_environment: Box::new(HostPictureEnvironment::new(
             options.picture.clone(),
-            Arc::new(NativeFactoryPictureState::new(
+            Arc::new(FactoryPictureState::new(
                 sink.clone(),
                 queries.clone(),
                 HostImplDelegateId(owner),
             )),
         )),
-        picture_services: Box::new(NativePictureLayerServices::new(
+        picture_services: Box::new(CpuPictureLayerServices::new(
             options.picture.clone(),
             options.events.clone(),
             resources.clone(),
         )),
-        picture_tile_services: Box::new(NativeHostPictureTileServices::new(options.events.clone())),
-        picture_mutation_services: Box::new(NativeHostPictureMutationServices::new(
+        picture_tile_services: Box::new(CpuHostPictureTileServices::new(options.events.clone())),
+        picture_mutation_services: Box::new(CpuHostPictureMutationServices::new(
             lifecycle.clone(),
-            native.tile_execution.clone(),
+            capabilities.tile_execution.clone(),
         )),
-        picture_registration_services: Box::new(NativeScrollbarRegistrationServices {
+        picture_registration_services: Box::new(ScrollbarRegistrationServices {
             animations: impl_animations.clone(),
             executor: executors.compositor.clone(),
             commands: commands.clone(),
             events: options.events.clone(),
         }),
-        picture_release_services: Box::new(NativePictureReleaseServices::new(native.clone())),
+        picture_release_services: Box::new(PictureReleaseServices::new(capabilities.clone())),
         core: Box::new(core),
-        debug: Box::new(NativeDiagnosticServices::new(
+        debug: Box::new(DiagnosticServices::new(
             options.diagnostics,
             options.events.clone(),
         )),
-        ui: Box::new(NativeUiServices::new(native.clone())),
-        animation: Some(Box::new(NativeAnimationServices::new(
+        ui: Box::new(UiResourceServices::new(capabilities.clone())),
+        animation: Some(Box::new(AnimationServices::new(
             impl_animations.clone(),
-            native.resource_effects.clone(),
+            capabilities.resource_effects.clone(),
             options.frame_trace_categories.clone(),
             options.events.clone(),
         ))),
-        scrollbar_layer: Box::new(NativeScrollbarLayerServices::new(
-            native.clone(),
+        scrollbar_layer: Box::new(ScrollbarLayerServices::new(
+            capabilities.clone(),
             options.settings.clone(),
         )),
-        worklet: Box::new(NativeWorkletServices::new(native.clone())),
-        begin_frame: Box::new(NativeBeginFrameServices::new(native.clone())),
-        activation: Box::new(NativeActivationServices::new(native.clone(), image_decode)),
-        lifecycle: Box::new(NativeHostActionServices::new(native.clone())),
-        input_environment: Box::new(NativeInputEnvironmentServices::new(
+        worklet: Box::new(WorkletServices::new(capabilities.clone())),
+        begin_frame: Box::new(BeginFrameServices::new(capabilities.clone())),
+        activation: Box::new(ActivationServices::new(capabilities.clone(), image_decode)),
+        lifecycle: Box::new(HostActionServices::new(capabilities.clone())),
+        input_environment: Box::new(InputEnvironmentServices::new(
             options.input,
             options.events.clone(),
         )),
-        scrollbar_registration: Box::new(NativeScrollbarRegistrationServices {
+        scrollbar_registration: Box::new(ScrollbarRegistrationServices {
             animations: impl_animations.clone(),
             executor: executors.compositor.clone(),
             commands: commands.clone(),
             events: options.events.clone(),
         }),
-        browser_controls: Box::new(NativeBrowserControlsServices::new(options.events.clone())),
-        frame_build: Box::new(NativeFrameBuildServices::new(native.clone())),
-        resources: Box::new(NativeResourceServices::new(native.clone())),
+        browser_controls: Box::new(BrowserControlsServices::new(options.events.clone())),
+        frame_build: Box::new(FrameBuildServices::new(capabilities.clone())),
+        resources: Box::new(ResourceServices::new(capabilities.clone())),
         frame_sink: Box::new(g()),
-        tree_environment: Box::new(NativeTreeEnvironmentServices::new(
-            native.clone(),
+        tree_environment: Box::new(TreeEnvironmentServices::new(
+            capabilities.clone(),
             LayerTreeHostId(owner),
             HostImplTaskRunnerProviderId(owner),
         )),
-        metadata: Box::new(NativeHostMetadataServices::new(
+        metadata: Box::new(HostMetadataServices::new(
             sink.clone(),
             lifecycle.clone(),
             options.events.clone(),
             options.metadata,
         )),
-        task_runners: Box::new(NativeTaskRunnerServices::new_threaded_on_single_executor(
+        task_runners: Box::new(TaskRunnerServices::new_threaded_on_single_executor(
             executors.compositor.clone(),
         )),
         resource_returns: Box::new(g()),
         frame_sink_callbacks: Box::new(g()),
-        draw: Box::new(native.render.clone()),
-        surface: Box::new(native.render.clone()),
+        draw: Box::new(capabilities.render.clone()),
+        surface: Box::new(capabilities.render.clone()),
     };
     let endpoint = Arc::new(EngineMainEndpoint::new(
         executors.compositor.clone(),
@@ -371,7 +367,7 @@ pub(crate) fn Create(
             alpha: 0.0,
         };
     }
-    let image_worker_task_runner: <NativeCompositorTypes as HostImplTypes>::ImageWorkerTaskRunner =
+    let image_worker_task_runner: <CompositorTypes as HostImplTypes>::ImageWorkerTaskRunner =
         Arc::new(super::execution::EngineSequencedTaskRunner::new(
             executors.compositor.clone(),
             commands.clone(),
@@ -383,7 +379,7 @@ pub(crate) fn Create(
         task_runner_provider: HostImplTaskRunnerProviderId(owner),
         rendering_stats: HostImplRenderingStatsId(owner),
         task_graph_runner: HostImplTaskGraphRunnerId(Arc::as_ptr(
-            &native
+            &capabilities
                 .tile_execution
                 .lock()
                 .expect("tile execution")
@@ -398,12 +394,10 @@ pub(crate) fn Create(
     let local_surface_id = LocalSurfaceId {
         parent_sequence_number: 1,
         child_sequence_number: 1,
-        embed_token: super::native_host_core::NativeSurfaceTokenSource::NextEmbedToken(
-            &OsSurfaceTokenSource,
-        ),
+        embed_token: super::host_core::SurfaceTokenSource::NextEmbedToken(&OsSurfaceTokenSource),
     };
-    let input_client = Arc::new(super::native_input_client::NativeInputHandlerClient::default());
-    let core = NativeEngineCore::new(
+    let input_client = Arc::new(super::input_client::QueuedInputHandlerClient::default());
+    let core = EngineCore::new(
         services,
         init,
         main,
@@ -416,7 +410,7 @@ pub(crate) fn Create(
         owner + 1,
         input_client.clone(),
     )?;
-    super::engine_assembly::NativeEngineAssembly::new(
+    super::engine_assembly::EngineAssembly::new(
         core,
         scheduler_settings,
         scheduler_host,
@@ -424,28 +418,28 @@ pub(crate) fn Create(
         commands,
         lifecycle_effects,
         scheduler_effects,
-        native.render.clone(),
-        native.resource_effects.clone(),
-        native.latency_monitors.clone(),
+        capabilities.render.clone(),
+        capabilities.resource_effects.clone(),
+        capabilities.latency_monitors.clone(),
         input_client,
     )
 }
 
-/// Default capability construction is admitted only after the native Paint
+/// Default capability construction is admitted only after the capabilities Paint
 /// value/tracking/recording constructors and every Host facet are closed.
 
-impl NativeFactoryOptions {
+impl FactoryOptions {
     /// Explicit desktop CPU embedding configuration. Optional GPU/Viz/trace
     /// capabilities are disabled here; canonical settings retain their defaults.
     pub(crate) fn cpu_default(config: &CompositorConfig) -> Self {
-        let picture = Arc::new(NativeHostPictureFeatures {
+        let picture = Arc::new(HostPictureFeatures {
             use_layer_lists_by_default: false,
             trees_in_viz: false,
             tree_animations_in_viz: false,
             defer_impl_invalidation: true,
             defer_impl_invalidation_frames: 4,
             scroll_event_dispatch_mode: "DispatchScrollEventsUntilDeadline".into(),
-            // NativeInputHandlerClient is the embedding's CTEQ boundary. It
+            // QueuedInputHandlerClient is the embedding's CTEQ boundary. It
             // reports queued precision-wheel updates and InputHandler drains
             // them from WillBeginImplFrame before the deadline decision.
             wait_for_late_scroll_events: true,
@@ -459,6 +453,48 @@ impl NativeFactoryOptions {
             raw_draw_tile_size_factor: 1.,
         });
         let mut settings = LayerTreeSettings::new(picture.as_ref());
+        // Source: ui/base/ui_base_switches_util.cc and Blink's
+        // layer_tree_settings.cc. Apple platforms enable root elastic
+        // overscroll; the compositor keeps the live helper/controller state.
+        settings.enable_elastic_overscroll_on_root = cfg!(target_vendor = "apple");
+        // Blink selects 512 px macOS tiles for its GPU-backed production
+        // raster path. This embedding currently supplies CPU raster buffers,
+        // where the same choice makes each task four times larger and delays
+        // visible tiles during a fast scroll. Keep cc's 256 px CPU default;
+        // the GPU embedding can apply Blink's platform choice when it owns
+        // the corresponding raster capability.
+        // Chromium's default 3000/2000 px interest-area/skewport pair is
+        // tuned for its production GPU raster latency. Keep the identical
+        // priority-rect algorithm for this CPU embedding, but give it the
+        // larger source-supported runway so required tiles can finish before
+        // a high-velocity precision-wheel scroll reaches them. The 3:2 ratio
+        // is the invariant used by Blink's GetTilingInterestAreaSizes().
+        settings.tiling_interest_area_padding = 18000;
+        settings.skewport_extrapolation_limit_in_screen_pixels = 12000;
+        // PictureLayerTiling otherwise turns content farther than 1000
+        // screen pixels into image-decode-only work. At 2x scale that is only
+        // 500 CSS px, shorter than one fast precision-wheel frame. Let the CPU
+        // backend raster content across the same 12000 px skewport runway.
+        settings.max_preraster_distance_in_screen_pixels = 12000;
+        // Source: third_party/blink/renderer/platform/widget/compositing/
+        //         layer_tree_settings.cc:135-204,559-561. Desktop renderers
+        // admit nice-to-have prepaint tiles and retain at least 512 MiB. The
+        // old generic 64 MiB default repeatedly evicted the skewport during
+        // fast back-and-forth scrolling.
+        let width = config.initial_viewport_size.width().max(0) as f64;
+        let height = config.initial_viewport_size.height().max(0) as f64;
+        let scale = f64::from(config.initial_device_scale_factor.max(1.0));
+        let display_pixels = width * scale * height * scale;
+        let large_resolution_pixels = 2056.0 * 1329.0 * 2.0 * 2.0;
+        let memory_mebibytes = (1152.0 * display_pixels / large_resolution_pixels)
+            .round()
+            .max(512.0) as usize;
+        settings.memory_policy =
+            crate::cc::trees::managed_memory_policy::ManagedMemoryPolicy::WithLimits(
+                memory_mebibytes.saturating_mul(1024 * 1024),
+                crate::adapter::resource_types::PriorityCutoff::CUTOFF_ALLOW_NICE_TO_HAVE,
+                crate::cc::trees::managed_memory_policy::ManagedMemoryPolicy::kDefaultNumResourcesLimit,
+            );
         // Source: third_party/blink/renderer/platform/widget/compositing/layer_tree_settings.cc:364.
         settings.use_layer_lists = true;
         // Source: third_party/blink/renderer/platform/widget/compositing/
@@ -475,7 +511,7 @@ impl NativeFactoryOptions {
         settings.commit_fractional_scroll_deltas = false;
         // Source: third_party/blink/renderer/platform/widget/compositing/
         //         layer_tree_settings.cc:65-85,472-493 and
-        //         ui/native_theme/overlay_scrollbar_constants.cc:12-20.
+        //         ui/theme/overlay_scrollbar_constants.cc:12-20.
         // The browser constraint theme uses desktop overlay scrollbars, so cc
         // owns their visibility and fade lifecycle rather than leaving the
         // solid-color thumb permanently visible.
@@ -494,7 +530,7 @@ impl NativeFactoryOptions {
         Self {
             settings,
             picture,
-            core: NativeCoreConfig {
+            core: CoreConfig {
                 report_android_scroll_jank: false,
                 scroll_snap_animation: false,
                 height_change_cancel_animations: true,
@@ -503,7 +539,7 @@ impl NativeFactoryOptions {
                 new_content_per_scroll: false,
                 image_animation_trace_enabled: false,
             },
-            frame_sink: NativeHostFrameSinkConfig {
+            frame_sink: HostFrameSinkConfig {
                 send_explicit_decode_requests_immediately: true,
                 new_content_per_frame: true,
                 pool: super::pool_services::RasterPoolConfig {
@@ -511,18 +547,18 @@ impl NativeFactoryOptions {
                     invalidate_resources_on_size_change: false,
                 },
             },
-            metadata: NativeHostMetadataConfig {
+            metadata: HostMetadataConfig {
                 checkerboard_mode: HostCheckerboardMode::kPerFrame,
                 is_new_trace: false,
                 trees_in_viz: false,
             },
-            render: NativeRenderConfig {
+            render: RenderConfig {
                 size_oopif_effect_surfaces_at_external_scale: true,
                 allow_undamaged_nonroot_render_pass_to_skip: true,
                 view_transitions_new_rounding_change: true,
                 trace_enabled: false,
             },
-            scheduler: NativeSchedulerConfig {
+            scheduler: SchedulerConfig {
                 features: crate::adapter::scheduler::SchedulerFeatures {
                     is_android: cfg!(target_os = "android"),
                     is_desktop_android: false,
@@ -550,19 +586,19 @@ impl NativeFactoryOptions {
                 registered_trace_categories: Default::default(),
                 enabled_trace_categories: Default::default(),
             },
-            metrics: NativeMetricsConfig {
+            metrics: MetricsConfig {
                 reporting_enabled: false,
                 frame_sequence_metrics_enabled: true,
                 lag_tracking_enabled: true,
                 event_metrics_enabled: true,
             },
-            diagnostics: NativeDiagnosticConfig {
+            diagnostics: DiagnosticConfig {
                 maximum_vlog_level: None,
                 client_name_for_metrics: Some("Renderer".into()),
                 dump_compositor_frame_switch: None,
                 allow_debug_file_output: false,
             },
-            input: NativeInputConfig {
+            input: InputConfig {
                 // Keep this capability in lockstep with the picture feature
                 // and the queue-aware InputHandlerClient above.
                 wait_for_late_scroll_events: true,
@@ -572,9 +608,9 @@ impl NativeFactoryOptions {
                 scroll_event_dispatch_mode: "DispatchScrollEventsUntilDeadline".into(),
                 late_scroll_deadline_ratio: 0.333,
             },
-            events: Arc::new(super::native_services::NoopNativeEventSink),
+            events: Arc::new(super::services::NoopEventSink),
             frame_trace_categories: Default::default(),
-            tree_environment: NativeTreeEnvironmentConfig {
+            tree_environment: TreeEnvironmentConfig {
                 selection_edge_visibility_uses_full_edge: true,
                 view_transition_capture_and_display: false,
             },
@@ -584,14 +620,14 @@ impl NativeFactoryOptions {
 pub(crate) fn CreateDefault(
     config: CompositorConfig,
     executors: CompositorExecutors,
-) -> Result<super::engine_assembly::NativeEngineAssembly, CompositorError> {
+) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
             reason: "separate main/impl Proxy transport is not yet constructed",
         });
     }
-    let options = NativeFactoryOptions::cpu_default(&config);
-    let paint = CpuPaintServices::<SkRegion>::new_native(
+    let options = FactoryOptions::cpu_default(&config);
+    let paint = CpuPaintServices::<SkRegion>::new_cpu(
         super::paint_services::CpuPaintFeatures {
             cc_slimming: true,
             singular_transform_fix: true,
@@ -606,7 +642,7 @@ pub(crate) fn CreateDefault(
             paint_under_invalidation_checking: false,
             layer_merge_distance_limit: 0x10000000,
         },
-        super::paint::CpuNativePaintDiagnostics {
+        super::paint::SkiaPaintDiagnostics {
             trace: std::env::var_os("RECHROM_DIAG_STACKING").is_some(),
             verbose_level: 0,
             histogram: false,

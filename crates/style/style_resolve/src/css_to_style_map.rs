@@ -170,7 +170,7 @@ pub trait CSSToStyleMapBackend: StyleResolverStateBackend {
         state: &StyleResolverState<'_, Self>,
         value: &ResolverValue<Self>,
     ) -> TimelineInset;
-    /// Ownership-only bridge: roots this exact image for the built native style,
+    /// Ownership-only bridge: roots this exact image for the built computed style style,
     /// including after the resolver state dies. A FillLayer may already be
     /// borrowed from the builder, so this operation must not reborrow that
     /// builder's RefCell or mutate layer/property data.
@@ -251,7 +251,7 @@ pub trait CSSToStyleMapBackend: StyleResolverStateBackend {
     ) -> Rc<Self::StyleTriggerAttachmentVector>;
 }
 
-// Shared source-local native conversion, css_to_style_map.cc:617-627.
+// Shared source-local computed style conversion, css_to_style_map.cc:617-627.
 pub fn BorderImageSliceSideFromResolved(value: f64, percentage: bool) -> Length {
     if percentage {
         Length::Percent(value)
@@ -259,7 +259,7 @@ pub fn BorderImageSliceSideFromResolved(value: f64, percentage: bool) -> Length 
         Length::Fixed(value.round())
     }
 }
-// css_to_style_map.cc:669-681, with already-converted real native sides.
+// css_to_style_map.cc:669-681, with already-converted real computed style sides.
 pub fn NinePieceImageQuadFromSides(sides: &[BorderImageLength; 4]) -> BorderImageLengthBox {
     BorderImageLengthBox::new(&sides[0], &sides[1], &sides[2], &sides[3])
 }

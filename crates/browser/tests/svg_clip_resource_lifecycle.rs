@@ -1,15 +1,16 @@
 //! Document-owned SVG clip resources survive canonical style and frame updates.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use layoutng_assembly::{
-    fragment_tree::FragmentPaintData,
+    fragment_tree::{FragmentPaintData, LayoutResultHandle},
     internal::{
         layout_input::FontFace, layout_object::LayoutObject,
         layout_pass_scope::LayoutObjectFactoryScope,
     },
+    layout_engine::PaintFragmentCursor,
 };
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
@@ -138,14 +139,17 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     panic!("missing native layout object {name}")
 }
 
-fn find_fragment(node: &FragmentPaintData, wanted: u64) -> Option<&FragmentPaintData> {
-    if node.node_id == wanted {
-        Some(node)
-    } else {
-        node.children
-            .iter()
-            .find_map(|child| find_fragment(child, wanted))
+fn find_fragment(handle: &LayoutResultHandle, wanted: u64) -> Option<&FragmentPaintData> {
+    fn find(node: PaintFragmentCursor<'_>, wanted: u64) -> Option<PaintFragmentCursor<'_>> {
+        if node.PaintData().node_id == wanted {
+            Some(node)
+        } else {
+            node.Children()
+                .into_iter()
+                .find_map(|child| find(child, wanted))
+        }
     }
+    find(PaintFragmentCursor::FromHandle(handle), wanted).map(PaintFragmentCursor::PaintData)
 }
 
 fn fragment<'a>(page: &'a Page, name: &str) -> &'a FragmentPaintData {
@@ -183,7 +187,7 @@ const CLIPPED: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" hei
 
 #[test]
 fn canonical_clip_reference_retains_document_resource() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let p = fixture(CLIPPED);
         let clip = fragment(&p, "target")
@@ -204,7 +208,7 @@ fn canonical_clip_reference_retains_document_resource() {
 
 #[test]
 fn unreferenced_clip_definition_has_no_ordinary_pixels() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let p = fixture(
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><clipPath id="unused"><rect id="geometry" width="40" height="40" fill="red"/></clipPath><rect x="50" y="50" width="10" height="10" fill="blue"/></svg>"##,
@@ -241,7 +245,7 @@ fn animate(page: &mut Page, name: &str, declarations: &str, time: f64) {
 
 #[test]
 fn resource_mutations_refresh_unchanged_consumers_and_keep_old_frames() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(CLIPPED);
         let old = p.CurrentFrame().unwrap().display_items.clone();
@@ -301,7 +305,7 @@ fn page_replace_children(page: &mut Page, name: &str, markup: &str) {
 
 #[test]
 fn valid_empty_missing_wrong_kind_and_fetched_clip_are_distinct() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(CLIPPED);
         page_replace_children(&mut p, "clip", "");
@@ -333,7 +337,7 @@ fn valid_empty_missing_wrong_kind_and_fetched_clip_are_distinct() {
 
 #[test]
 fn paint_only_animation_preserves_resource_binding_and_old_artifact() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(CLIPPED);
         let old = p.CurrentFrame().unwrap().display_items.clone();
@@ -373,7 +377,7 @@ fn paint_only_animation_preserves_resource_binding_and_old_artifact() {
 
 #[test]
 fn resource_units_transforms_visibility_and_use_target_refresh() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><rect id="source" width="20" height="40"/><rect id="other" width="40" height="20"/></defs><clipPath id="clip"><use id="instance" href="#source"/></clipPath><rect id="target" width="80" height="80" fill="blue" clip-path="url(#clip)"/></svg>"##,
@@ -399,7 +403,7 @@ fn resource_units_transforms_visibility_and_use_target_refresh() {
 
 #[test]
 fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         use dom::persistent_document::DOMAttribute;
         use layoutng_assembly::layout_engine::{LayoutEngine, LayoutMutation};
         let _heap = foundation::LayoutHeapScope::new();
@@ -455,7 +459,7 @@ fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
                     .GetDocument()
                     .ResolvedStyleFor(target)
                     .unwrap()
-                    .native_style
+                    .style
                     .Get()
             }
             .Opacity(),
@@ -525,7 +529,7 @@ fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
 
 #[test]
 fn canonical_inherited_reference_keeps_originating_scope_across_shadow_root() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
         use layoutng_assembly::internal::paint_input::SvgClipGeometry;
         use layoutng_assembly::layout_engine::{LayoutEngine, LayoutMutation};
@@ -650,7 +654,7 @@ fn canonical_inherited_reference_keeps_originating_scope_across_shadow_root() {
 
 #[test]
 fn percentage_resource_uses_its_viewport_and_bbox_transform_order() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg id="viewport" xmlns="http://www.w3.org/2000/svg" width="100" height="120"><clipPath id="clip"><rect width="50%" height="100%"/></clipPath><rect id="target" width="80" height="40" fill="blue" clip-path="url(#clip)"/><rect id="second" y="60" width="40" height="40" fill="blue" clip-path="url(#clip)"/></svg>"##,
@@ -706,7 +710,7 @@ fn percentage_resource_uses_its_viewport_and_bbox_transform_order() {
 
 #[test]
 fn canonical_css_geometry_and_zoomed_clip_translation_refresh() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(
             r##"<svg xmlns="http://www.w3.org/2000/svg" style="zoom:2" width="80" height="80"><clipPath id="clip"><rect id="geometry" width="20" height="20" transform="translate(10 0)"/></clipPath><rect id="target" width="60" height="40" fill="blue" clip-path="url(#clip)"/></svg>"##,
@@ -725,7 +729,7 @@ fn canonical_css_geometry_and_zoomed_clip_translation_refresh() {
 
 #[test]
 fn foundation_asset_inline_and_fetched_retains_real_clip_content() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let asset = r###"<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="-1 -1 1026 1026" id="Wikimedia-logo_black"><clipPath id="ga"><path d="m0-33 471 471v363h82V438l471-471v1057H0" /></clipPath><g clip-path="url(#ga)"><path d="M511 224a288 288 0 1 0 2 0" /><path fill="none" stroke="#000" stroke-width="116" d="M511 102a410 410 0 1 0 2 0" /></g><path d="M511 28a158 158 0 1 0 2 0z" /></svg>"###;
         let inline = fixture(asset);
@@ -757,7 +761,7 @@ fn foundation_asset_inline_and_fetched_retains_real_clip_content() {
 
 #[test]
 fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         use layoutng_assembly::layout_engine::{LayoutEngine, LayoutMutation};
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(&format!(
@@ -804,10 +808,10 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
             .paint
             .glyph_runs
             .clone();
-        let native_label = engine.GetLayoutTree().unwrap().Root();
-        let mut object = native_label as *const LayoutObject;
+        let label = engine.GetLayoutTree().unwrap().Root();
+        let mut object = label as *const LayoutObject;
         while unsafe { &*object }.OwnerNodeIdDefault() as u64 != label_id {
-            object = unsafe { &*object }.NextInPreOrder(native_label);
+            object = unsafe { &*object }.NextInPreOrder(label);
             assert!(!object.is_null());
         }
         let bound_font = unsafe { &*object }.StyleRef().GetFont();
@@ -974,7 +978,9 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
 mod active_filter_inventory {
     use super::*;
     use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
-    use layoutng_assembly::internal::paint_input::{SvgFilterGraph, SvgFilterPrimitiveKind};
+    use layoutng_assembly::internal::paint_input::{
+        SvgFilterGraph, SvgFilterInput, SvgFilterPrimitiveKind, SvgLightSource, SvgTransferFunction,
+    };
 
     fn element(
         owner: &mut dom::DOM,
@@ -1027,26 +1033,266 @@ mod active_filter_inventory {
             layout.ApplyMutation(mutation)
         });
         layout.Layout();
-        layout
-            .GetLayoutResult()
-            .unwrap()
+        PaintFragmentCursor::FromHandle(layout.GetLayoutResult().unwrap())
+            .PaintData()
             .paint
             .style
             .svg_filter_graphs
             .clone()
     }
-    fn offset(owner: &mut dom::DOM, id: &str) -> f64 {
+    fn set_dom_attribute(owner: &mut dom::DOM, node: usize, name: &str, value: &str) {
+        owner.GetDocumentMut().SetAttribute(
+            node,
+            DOMAttribute {
+                local_name: name.into(),
+                value: value.into(),
+                ..Default::default()
+            },
+        );
+    }
+    fn first_offset(owner: &mut dom::DOM, id: &str) -> f64 {
         let graphs = graphs(owner);
         let graph = graphs.iter().find(|graph| graph.id == id).unwrap();
         assert!(graph.unsupported.is_none(), "{:?}", graph.unsupported);
         match graph.primitives[0].kind {
             SvgFilterPrimitiveKind::kOffset { dx, .. } => dx,
-            _ => panic!("expected inherited offset"),
+            _ => panic!("expected offset primitive"),
         }
     }
     #[test]
-    fn attached_filters_and_href_follow_connection_tree_order_and_scope() {
-        native_test_thread::run(|| {
+    fn filter_lengths_keep_specified_initials_and_absolute_units() {
+        test_thread::run(|| {
+            let _heap = foundation::LayoutHeapScope::new();
+            let mut owner = dom::DOM::new();
+            let root = owner.GetDocument().Root();
+            let svg = element(&mut owner, Some(root), "svg", "", None, None);
+            let filter = element(&mut owner, Some(svg), "filter", "lengths", None, None);
+            // SVGFilterBuilder skips direct SVG children whose runtime type is
+            // not SVGFilterPrimitiveStandardAttributes, even when their tag
+            // happens to start with `fe`.
+            element(&mut owner, Some(filter), "feMergeNode", "", None, None);
+            element(&mut owner, Some(filter), "feWhatever", "", None, None);
+            let primitive = element(&mut owner, Some(filter), "feOffset", "", Some("1"), None);
+            for (node, name, value) in [
+                (filter, "x", "invalid"),
+                (filter, "y", "2.54cm"),
+                (filter, "width", "50%"),
+                (filter, "height", "12PX"),
+                (primitive, "x", "invalid"),
+                (primitive, "width", "invalid"),
+                (primitive, "in", " SourceAlpha "),
+            ] {
+                owner.GetDocumentMut().SetAttribute(
+                    node,
+                    DOMAttribute {
+                        local_name: name.into(),
+                        value: value.into(),
+                        ..Default::default()
+                    },
+                );
+            }
+            let relative = element(&mut owner, Some(svg), "filter", "relative", None, None);
+            owner.GetDocumentMut().SetAttribute(
+                relative,
+                DOMAttribute {
+                    local_name: "x".into(),
+                    value: "1em".into(),
+                    ..Default::default()
+                },
+            );
+            let drop_filter = element(&mut owner, Some(svg), "filter", "drop", None, None);
+            let drop_shadow = element(
+                &mut owner,
+                Some(drop_filter),
+                "feDropShadow",
+                "",
+                None,
+                None,
+            );
+            for (name, value) in [
+                ("stdDeviation", "-1 3"),
+                ("flood-color", "#204060"),
+                ("flood-opacity", ".5"),
+            ] {
+                owner.GetDocumentMut().SetAttribute(
+                    drop_shadow,
+                    DOMAttribute {
+                        local_name: name.into(),
+                        value: value.into(),
+                        ..Default::default()
+                    },
+                );
+            }
+            let graphs = graphs(&mut owner);
+            let graph = graphs.iter().find(|graph| graph.id == "lengths").unwrap();
+            assert!(graph.unsupported.is_none(), "{:?}", graph.unsupported);
+            assert_eq!(graph.region.x.unwrap().value, -10.0);
+            assert!(graph.region.x.unwrap().percentage);
+            assert!((graph.region.y.unwrap().value - 96.0).abs() < 0.0001);
+            assert!(!graph.region.y.unwrap().percentage);
+            assert_eq!(graph.region.width.unwrap().value, 50.0);
+            assert!(graph.region.width.unwrap().percentage);
+            assert_eq!(graph.region.height.unwrap().value, 12.0);
+            assert!(!graph.region.height.unwrap().percentage);
+            assert_eq!(graph.primitives[0].region.x.unwrap().value, 0.0);
+            assert!(graph.primitives[0].region.x.unwrap().percentage);
+            assert_eq!(graph.primitives[0].region.width.unwrap().value, 100.0);
+            assert!(graph.primitives[0].region.width.unwrap().percentage);
+            assert_eq!(
+                graph.primitives[0].input,
+                layoutng_assembly::internal::paint_input::SvgFilterInput::kNamed(
+                    " SourceAlpha ".into()
+                )
+            );
+            let relative = graphs.iter().find(|graph| graph.id == "relative").unwrap();
+            assert!(relative
+                .unsupported
+                .as_deref()
+                .is_some_and(|error| error.contains("relative SVG filter length")));
+            let drop = graphs.iter().find(|graph| graph.id == "drop").unwrap();
+            assert!(drop.unsupported.is_none(), "{:?}", drop.unsupported);
+            match drop.primitives[0].kind {
+                SvgFilterPrimitiveKind::kDropShadow {
+                    sigma_x,
+                    sigma_y,
+                    dx,
+                    dy,
+                    color,
+                } => {
+                    assert_eq!((sigma_x, sigma_y, dx, dy), (0.0, 3.0, 2.0, 2.0));
+                    assert!((color.red - 32.0 / 255.0).abs() < 0.0001);
+                    assert!((color.green - 64.0 / 255.0).abs() < 0.0001);
+                    assert!((color.blue - 96.0 / 255.0).abs() < 0.0001);
+                    assert!((color.alpha - 0.5).abs() < 0.0001);
+                }
+                _ => panic!("expected drop-shadow primitive"),
+            }
+        });
+    }
+    #[test]
+    fn nested_filter_entities_require_the_svg_runtime_type() {
+        test_thread::run(|| {
+            let _heap = foundation::LayoutHeapScope::new();
+            let mut owner = dom::DOM::new();
+            let root = owner.GetDocument().Root();
+            let svg = element(&mut owner, Some(root), "svg", "", None, None);
+            let filter = element(
+                &mut owner,
+                Some(svg),
+                "filter",
+                "typed-children",
+                None,
+                None,
+            );
+
+            let merge = element(&mut owner, Some(filter), "feMerge", "", None, None);
+            let foreign_merge_node = owner
+                .GetDocumentMut()
+                .CreateElementDefault(DOMNamespace::kHTML, "feMergeNode".into());
+            set_dom_attribute(&mut owner, foreign_merge_node, "in", "SourceAlpha");
+            owner
+                .GetDocumentMut()
+                .AppendChild(merge, foreign_merge_node);
+            let merge_node = element(&mut owner, Some(merge), "feMergeNode", "", None, None);
+            set_dom_attribute(&mut owner, merge_node, "in", "SourceGraphic");
+
+            let transfer = element(
+                &mut owner,
+                Some(filter),
+                "feComponentTransfer",
+                "",
+                None,
+                None,
+            );
+            let function = element(&mut owner, Some(transfer), "feFuncR", "", None, None);
+            set_dom_attribute(&mut owner, function, "type", "linear");
+            set_dom_attribute(&mut owner, function, "slope", ".75");
+            let foreign_function = owner
+                .GetDocumentMut()
+                .CreateElementDefault(DOMNamespace::kHTML, "feFuncR".into());
+            set_dom_attribute(&mut owner, foreign_function, "type", "linear");
+            set_dom_attribute(&mut owner, foreign_function, "slope", ".25");
+            owner
+                .GetDocumentMut()
+                .AppendChild(transfer, foreign_function);
+
+            let lighting = element(
+                &mut owner,
+                Some(filter),
+                "feDiffuseLighting",
+                "",
+                None,
+                None,
+            );
+            let foreign_light = owner
+                .GetDocumentMut()
+                .CreateElementDefault(DOMNamespace::kHTML, "feDistantLight".into());
+            set_dom_attribute(&mut owner, foreign_light, "azimuth", "90");
+            owner.GetDocumentMut().AppendChild(lighting, foreign_light);
+            let point = element(&mut owner, Some(lighting), "fePointLight", "", None, None);
+            set_dom_attribute(&mut owner, point, "x", "1");
+            set_dom_attribute(&mut owner, point, "y", "2");
+            set_dom_attribute(&mut owner, point, "z", "3");
+            let flood = element(&mut owner, Some(filter), "feFlood", "", None, None);
+            set_dom_attribute(
+                &mut owner,
+                flood,
+                "color-interpolation-filters",
+                "linearRGB",
+            );
+            let image = element(&mut owner, Some(filter), "feImage", "", None, None);
+            set_dom_attribute(
+                &mut owner,
+                image,
+                "color-interpolation-filters",
+                "linearRGB",
+            );
+
+            let inventory = graphs(&mut owner);
+            let graph = inventory
+                .iter()
+                .find(|graph| graph.id == "typed-children")
+                .unwrap();
+            assert!(graph.unsupported.is_none(), "{:?}", graph.unsupported);
+            assert_eq!(graph.primitives.len(), 5);
+            match &graph.primitives[0].kind {
+                SvgFilterPrimitiveKind::kMerge { inputs } => {
+                    assert_eq!(inputs, &[SvgFilterInput::kSourceGraphic]);
+                }
+                kind => panic!("expected merge primitive, got {kind:?}"),
+            }
+            match &graph.primitives[1].kind {
+                SvgFilterPrimitiveKind::kComponentTransfer { functions } => {
+                    assert!(matches!(
+                        &functions[0],
+                        SvgTransferFunction::kLinear { slope, intercept }
+                            if *slope == 0.75 && *intercept == 0.0
+                    ));
+                }
+                kind => panic!("expected component-transfer primitive, got {kind:?}"),
+            }
+            match &graph.primitives[2].kind {
+                SvgFilterPrimitiveKind::kLighting {
+                    light: Some(SvgLightSource::kPoint { x, y, z }),
+                    ..
+                } => assert_eq!((*x, *y, *z), (1.0, 2.0, 3.0)),
+                kind => panic!("expected point-light primitive, got {kind:?}"),
+            }
+            assert!(!graph.primitives[3].linear_rgb);
+            assert!(matches!(
+                graph.primitives[3].kind,
+                SvgFilterPrimitiveKind::kFlood { .. }
+            ));
+            assert!(!graph.primitives[4].linear_rgb);
+            assert!(matches!(
+                graph.primitives[4].kind,
+                SvgFilterPrimitiveKind::kImage { .. }
+            ));
+        });
+    }
+    #[test]
+    fn attached_filter_inventory_uses_tree_order_and_filter_href_does_not_inherit() {
+        test_thread::run(|| {
             let _heap = foundation::LayoutHeapScope::new();
             let mut owner = dom::DOM::new();
             let detached = element(&mut owner, None, "filter", "base", None, None);
@@ -1068,29 +1314,34 @@ mod active_filter_inventory {
                 2,
                 "detached filters are not resources"
             );
-            assert_eq!(offset(&mut owner, "derived"), 3.);
+            assert_eq!(first_offset(&mut owner, "base"), 3.);
+            let inventory = graphs(&mut owner);
+            let derived = inventory
+                .iter()
+                .find(|graph| graph.id == "derived")
+                .unwrap();
+            assert!(derived.primitives.is_empty());
+            assert!(derived.unsupported.is_none());
             let first = element(&mut owner, None, "filter", "base", None, None);
             element(&mut owner, Some(first), "feOffset", "", Some("5"), None);
             owner.GetDocumentMut().InsertBefore(svg, first, base);
             assert_eq!(
-                offset(&mut owner, "derived"),
+                first_offset(&mut owner, "base"),
                 5.,
                 "tree order, not arena order"
             );
             owner.GetDocumentMut().Remove(first);
-            assert_eq!(offset(&mut owner, "derived"), 3.);
+            assert_eq!(first_offset(&mut owner, "base"), 3.);
             owner.GetDocumentMut().Remove(base);
-            assert!(
-                graphs(&mut owner)
-                    .iter()
-                    .find(|graph| graph.id == "derived")
-                    .unwrap()
-                    .unsupported
-                    .is_some(),
-                "detached old ids cannot satisfy href"
-            );
+            let inventory = graphs(&mut owner);
+            let derived = inventory
+                .iter()
+                .find(|graph| graph.id == "derived")
+                .unwrap();
+            assert!(derived.primitives.is_empty());
+            assert!(derived.unsupported.is_none());
             owner.GetDocumentMut().AppendChild(svg, detached);
-            assert_eq!(offset(&mut owner, "derived"), 9.);
+            assert_eq!(first_offset(&mut owner, "base"), 9.);
             let host = owner
                 .GetDocumentMut()
                 .CreateElementDefault(DOMNamespace::kHTML, "x-host".into());
@@ -1116,7 +1367,14 @@ mod active_filter_inventory {
                 None,
                 Some("#base"),
             );
-            assert_eq!(offset(&mut owner, "shadow-derived"), 7.);
+            assert_eq!(first_offset(&mut owner, "base"), 9.);
+            let inventory = graphs(&mut owner);
+            let shadow_derived = inventory
+                .iter()
+                .find(|graph| graph.id == "shadow-derived")
+                .unwrap();
+            assert!(shadow_derived.primitives.is_empty());
+            assert!(shadow_derived.unsupported.is_none());
             // Default primitive regions must not crop an offset SVG shape
             // to its original object bounds; retained frames keep old graphs.
             let mut page = fixture(

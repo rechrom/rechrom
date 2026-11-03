@@ -1,6 +1,6 @@
 //! Synchronous source delegate query bridge. No Scheduler/Host pointer is held.
 //! Source: cc/trees/layer_tree_host_impl.cc:6241-6243.
-use super::native_frame_sink::NativeFrameSinkEndpoint;
+use super::layer_tree_frame_sink_endpoint::FrameSinkEndpoint;
 use crate::adapter::layer_tree_host_impl::{
     HostImplContextProviderId, HostImplDelegateId, HostImplFrameSinkId,
 };
@@ -45,14 +45,14 @@ impl Drop for SchedulerQueryScope {
         *current = None;
     }
 }
-pub(crate) struct NativeFactoryPictureState {
-    sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
+pub(crate) struct FactoryPictureState {
+    sink: Arc<Mutex<FrameSinkEndpoint>>,
     queries: Arc<CallScopedSchedulerQueries>,
     delegate: HostImplDelegateId,
 }
-impl NativeFactoryPictureState {
+impl FactoryPictureState {
     pub(crate) fn new(
-        sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
+        sink: Arc<Mutex<FrameSinkEndpoint>>,
         queries: Arc<CallScopedSchedulerQueries>,
         delegate: HostImplDelegateId,
     ) -> Self {
@@ -63,7 +63,7 @@ impl NativeFactoryPictureState {
         }
     }
 }
-impl super::native_host_picture::NativeHostPictureState for NativeFactoryPictureState {
+impl super::host_picture_services::HostPictureState for FactoryPictureState {
     fn FrameSinkContextProvider(
         &self,
         sink: HostImplFrameSinkId,

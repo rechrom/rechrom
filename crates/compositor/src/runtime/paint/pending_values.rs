@@ -18,6 +18,56 @@ fn metadata(chunk: &PaintChunk) -> &paint::paint_engine::PaintChunkCompositorDat
         .as_deref()
         .expect("PaintInput validates native chunk derived data")
 }
+
+/// Concrete resident cc layer owner carried through Paint's type-erased
+/// `scoped_refptr` boundary. Bounds are captured from the same layer at record
+/// time, exactly when Blink's ForeignLayerDisplayItem constructor reads them.
+#[derive(Clone)]
+pub struct CpuForeignLayer<R: CpuSkiaBackend> {
+    layer: crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>>,
+    bounds: paint::paint_engine::ForeignLayerSize,
+}
+
+impl<R: CpuSkiaBackend> CpuForeignLayer<R> {
+    pub fn new(
+        layer: crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>>,
+        c: &crate::adapter::main_layer::LayerContext<'_, CpuCompositorTypes<R>>,
+    ) -> Self {
+        let bounds = *layer.bounds(c);
+        Self {
+            layer,
+            bounds: paint::paint_engine::ForeignLayerSize {
+                width: bounds.width() as f64,
+                height: bounds.height() as f64,
+            },
+        }
+    }
+
+    pub fn Layer(&self) -> &crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
+        &self.layer
+    }
+}
+
+impl<R: CpuSkiaBackend> paint::paint_engine::ForeignLayer for CpuForeignLayer<R> {
+    fn LayerId(&self) -> i32 {
+        self.layer.id()
+    }
+
+    fn Bounds(&self) -> paint::paint_engine::ForeignLayerSize {
+        self.bounds
+    }
+
+    fn EqualsLayer(&self, other: &dyn paint::paint_engine::ForeignLayer) -> bool {
+        other
+            .AsAny()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.layer == other.layer)
+    }
+
+    fn AsAny(&self) -> &dyn std::any::Any {
+        self
+    }
+}
 pub trait CpuLoggingCanvasValue<R: CpuSkiaBackend>: CpuPaintCanvas<R> {
     fn IntoLog(self: Box<Self>) -> serde_json::Value;
 }
@@ -59,16 +109,16 @@ where
 }
 #[derive(Clone)]
 pub struct CpuCanvasChildPaintRecord<R: CpuSkiaBackend> {
-    pub state: Arc<native::PaintCanvasChildState>,
+    pub state: Arc<paint_property_tree::PaintCanvasChildState>,
     pub record: CpuPaintRecord<R>,
 }
 impl crate::adapter::content_layer_client_impl::CanvasChildPaintState
-    for Arc<native::PaintCanvasChildState>
+    for Arc<paint_property_tree::PaintCanvasChildState>
 {
     fn reference_box_offset(&self) -> Vector2dF {
         Vector2dF::new(
-            self.reference_box_offset.x as f32,
-            self.reference_box_offset.y as f32,
+            self.paint_state.reference_box_offset.x as f32,
+            self.paint_state.reference_box_offset.y as f32,
         )
     }
 }
@@ -87,7 +137,7 @@ where
         metadata(self).hit_test_data.is_some()
     }
     fn PropertiesUnalias(&self) -> PropertyTreeState<R> {
-        PropertyTreeState::from_native(&self.properties)
+        PropertyTreeState::from_source(&self.properties)
     }
     fn client_id(&self) -> usize {
         self.id.client_id as usize
@@ -127,7 +177,7 @@ where
         metadata(self).text_known_to_be_on_opaque_background
     }
     fn DrawsContent(&self) -> bool {
-        !self.effectively_invisible && !self.drawable_bounds.is_empty()
+        paint::paint_engine::PaintChunk::DrawsContent(self)
     }
     fn display_item_count(&self) -> usize {
         self.size() as usize
@@ -140,7 +190,7 @@ where
             .map(|n| TransformNode::from_arc(n.clone()))
     }
     fn Matches(&self, other: &Self) -> bool {
-        self.matches(other)
+        paint::paint_engine::PaintChunk::Matches(self, other)
     }
     fn first_display_item_is_foreign_layer_video(&self, a: &PaintArtifact) -> bool {
         a.display_items[self.begin_index as usize].id.r#type
@@ -165,18 +215,10 @@ where
         self.chunks.get(index)
     }
     fn ClientDebugName(&self, client: usize) -> String {
-        self.client_debug_names
-            .get(&client)
-            .map(|v| v.to_string())
-            .unwrap_or_default()
+        self.ClientDebugName(client).to_string()
     }
     fn ClientOwnerNodeId(&self, client: usize) -> crate::runtime::types::NodeId {
-        crate::runtime::types::NodeId(
-            self.client_owner_node_ids
-                .get(&client)
-                .copied()
-                .unwrap_or(0),
-        )
+        crate::runtime::types::NodeId(self.ClientOwnerNodeId(client))
     }
     fn PaintChunkCount(&self) -> usize {
         self.chunks.len()
@@ -187,7 +229,12 @@ impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayIte
         rect(self.visual_rect)
     }
     fn ForeignLayer(&self) -> crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
-        unreachable!("PaintInput rejects missing foreign-layer native owner")
+        self.GetForeignLayer()
+            .AsAny()
+            .downcast_ref::<CpuForeignLayer<R>>()
+            .expect("ForeignLayerDisplayItem owner must match the active compositor backend")
+            .Layer()
+            .clone()
     }
     fn IsScrollbar(&self) -> bool {
         matches!(self.kind, RecordedDisplayItemKind::Scrollbar) && self.scrollbar.is_some()
@@ -207,16 +254,16 @@ impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayIte
             .scrollbar
             .as_ref()
             .expect("ScrollbarDisplayItem retains its cc scrollbar inputs");
-        let native = super::NativeScrollbar::from_paint(data);
-        let needs_display = native.NeedsUpdateDisplay();
+        let scrollbar = super::Scrollbar::from_paint(data);
+        let needs_display = self.NeedsUpdateDisplay();
         let layer = ScrollbarLayerBase::<CpuCompositorTypes<R>>::CreateOrReuse(
-            Arc::new(native),
+            Arc::new(scrollbar),
             old.as_ref().map(|layer| layer.borrow()),
             c,
         )
         .expect("solid-color scrollbar constructor is registered");
         layer.SetIsDrawable(true, c);
-        layer.SetContentsOpaque(!data.overlay && data.thumb_color.alpha >= 1.0, c);
+        layer.SetContentsOpaque(self.IsOpaque(), c);
         let opaqueness = match data.hit_test_opaqueness {
             paint::paint_engine::PaintHitTestOpaqueness::Transparent => {
                 crate::cc::input::hit_test_opaqueness::HitTestOpaqueness::kTransparent
@@ -229,7 +276,7 @@ impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayIte
             }
         };
         layer.SetHitTestOpaqueness(opaqueness, c);
-        layer.SetElementId(ElementId::new(data.element_id.GetInternalValue()), c);
+        layer.SetElementId(ElementId::new(self.ElementId().GetInternalValue()), c);
         let scroll_element_id = self
             .scroll_translation
             .as_ref()

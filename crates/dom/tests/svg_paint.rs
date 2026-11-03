@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::internal::layout_input::{ComputedStyle, Offset};
+use layoutng_assembly::internal::layout_input::Offset;
 use layoutng_assembly::internal::paint_input::{PaintShaderKind, PaintSpreadMethod};
 use std::collections::HashMap;
 
@@ -47,8 +47,8 @@ fn update(engine: &mut style::StyleEngine, owner: &mut dom::DOM) {
     engine.Update(owner, &media(), &[]).expect("style update");
 }
 
-fn check_gradient(style: &ComputedStyle) {
-    let fill = style.paint.svg_fill_server.as_ref().unwrap();
+fn check_gradient(resources: &dom::persistent_document::ResolvedStyleResources) {
+    let fill = resources.svg_fill_server.as_ref().unwrap();
     assert_eq!(fill.kind, PaintShaderKind::kLinearGradient);
     assert_eq!(fill.end.x, 0.5);
     assert_eq!(fill.stops.len(), 2);
@@ -61,7 +61,7 @@ fn check_gradient(style: &ComputedStyle) {
     );
     assert_eq!(fill.stops[1].color.alpha, 0.5);
     assert_eq!(fill.stops[1].color.blue, 1.0);
-    let stroke = style.paint.svg_stroke_server.as_ref().unwrap();
+    let stroke = resources.svg_stroke_server.as_ref().unwrap();
     assert_eq!(stroke.kind, PaintShaderKind::kRadialGradient);
     assert_eq!(stroke.spread, PaintSpreadMethod::kReflect);
     assert!(!stroke.unit_coordinates);
@@ -83,18 +83,15 @@ fn gradients_use_cascaded_stops_and_template_attributes() {
     update(&mut engine, &mut owner);
     let ids = ids(owner.GetDocument());
     let shape = owner.GetDocument().ResolvedStyleFor(ids["shape"]).unwrap();
-    let native = unsafe { &*shape.native_style.Get() };
-    assert!(native.FillPaint().HasUrl());
-    assert_eq!(native.FillPaint().GetUrl().Utf8(), "#MixedCase");
-    assert!(native.StrokePaint().HasUrl());
-    assert_eq!(native.StrokePaint().GetUrl().Utf8(), "#radial");
-    check_gradient(&shape.style);
+    let source = unsafe { &*shape.computed_style_owner.Get() };
+    assert!(source.FillPaint().HasUrl());
+    assert_eq!(source.FillPaint().GetUrl().Utf8(), "#MixedCase");
+    assert!(source.StrokePaint().HasUrl());
+    assert_eq!(source.StrokePaint().GetUrl().Utf8(), "#radial");
+    check_gradient(owner.GetDocument().ResolvedStyleResourcesFor(ids["shape"]));
     assert!(owner
         .GetDocument()
-        .ResolvedStyleFor(ids["fallback"])
-        .unwrap()
-        .style
-        .paint
+        .ResolvedStyleResourcesFor(ids["fallback"])
         .svg_fill_server
         .is_none());
     assert!(
@@ -131,13 +128,7 @@ fn gradients_refresh_when_resource_stops_change() {
     let ids = ids(owner.GetDocument());
     let mut engine = style::StyleEngine::new(&owner);
     update(&mut engine, &mut owner);
-    check_gradient(
-        &owner
-            .GetDocument()
-            .ResolvedStyleFor(ids["shape"])
-            .unwrap()
-            .style,
-    );
+    check_gradient(owner.GetDocument().ResolvedStyleResourcesFor(ids["shape"]));
     owner.GetDocumentMut().SetAttribute(
         ids["first"],
         dom::persistent_document::DOMAttribute {
@@ -149,10 +140,7 @@ fn gradients_refresh_when_resource_stops_change() {
     update(&mut engine, &mut owner);
     let fill = owner
         .GetDocument()
-        .ResolvedStyleFor(ids["shape"])
-        .unwrap()
-        .style
-        .paint
+        .ResolvedStyleResourcesFor(ids["shape"])
         .svg_fill_server
         .as_ref()
         .unwrap();
@@ -189,7 +177,7 @@ fn generated_properties_report_unsupported_without_losing_valid_declarations() {
                     .ResolvedStyleFor(div)
                     .unwrap_or_else(|| panic!("missing queried style for {property}:{value}"))
                     .style
-                    .native_style
+                    .style
                     .is_null(),
                 "{property}:{value}"
             );

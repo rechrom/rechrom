@@ -1,56 +1,145 @@
 //! Software window target backed by softbuffer and winit native handles.
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use renderer_skia::PixelFormat;
-use std::{io, num::NonZeroU32, sync::Arc};
+use renderer_skia::{HostPixelStorage, PixelFormat};
+use std::{any::Any, io, num::NonZeroU32, sync::Arc};
 pub(crate) type WindowTarget =
     WindowSurface<std::sync::Arc<winit::window::Window>, std::sync::Arc<winit::window::Window>>;
 
 /// Host allocation/presentation choice. Both targets consume the one completed
 /// window-level Renderer output; offscreen owns ordinary CPU memory.
 pub(crate) enum DisplayTarget {
-    Native(WindowTarget),
-    Offscreen,
+    Window(WindowTarget),
+    Offscreen { pixels: Vec<u32> },
 }
 
 pub(crate) enum PreparedDisplayTarget {
-    Native(PreparedWindowFrame),
-    Offscreen { pixels: Vec<u32>, row_stride: usize },
+    Window(PreparedWindowFrame),
+    Offscreen {
+        pixels: Vec<u32>,
+        row_stride: usize,
+        retained: bool,
+    },
 }
 
 impl PreparedDisplayTarget {
+    fn pixels(&self) -> &[u32] {
+        match self {
+            Self::Window(frame) => frame.pixels(),
+            Self::Offscreen { pixels, .. } => pixels,
+        }
+    }
+
+    fn pixels_mut(&mut self) -> &mut [u32] {
+        match self {
+            Self::Window(frame) => frame.pixels_mut(),
+            Self::Offscreen { pixels, .. } => pixels,
+        }
+    }
+
+    pub(crate) fn row_stride(&self) -> usize {
+        match self {
+            Self::Window(frame) => frame.row_stride(),
+            Self::Offscreen { row_stride, .. } => *row_stride,
+        }
+    }
+
+    pub(crate) fn format(&self) -> PixelFormat {
+        match self {
+            Self::Window(frame) => frame.format(),
+            Self::Offscreen { .. } => PixelFormat::Bgra8888,
+        }
+    }
+
+    pub(crate) fn retained(&self) -> bool {
+        match self {
+            Self::Window(frame) => frame.retained(),
+            Self::Offscreen { retained, .. } => *retained,
+        }
+    }
+
+    pub(crate) fn finish_render(
+        &mut self,
+        viewport: crate::engine::Viewport,
+        present_sequence: u64,
+    ) {
+        static OPTICAL_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let optical_probe = *OPTICAL_PROBE.get_or_init(|| {
+            std::env::var_os("BROWSER_PRESENTATION_PROBE").is_some_and(|v| v == "1")
+        });
+        if optical_probe {
+            let stride = self.row_stride();
+            let format = self.format();
+            paint_optical_sequence(
+                self.pixels_mut(),
+                stride,
+                viewport.width,
+                viewport.height,
+                viewport.scale,
+                format,
+                present_sequence,
+            );
+        }
+    }
+
     pub(crate) fn take_readback_rgba(
         &mut self,
         viewport: crate::engine::Viewport,
     ) -> io::Result<crate::engine::WindowFrame> {
         match self {
-            Self::Native(frame) => frame.readback_rgba(viewport),
-            Self::Offscreen { pixels, row_stride } => {
-                readback_pixels(pixels, *row_stride, true, viewport)
-            }
+            Self::Window(frame) => frame.readback_rgba(viewport),
+            Self::Offscreen {
+                pixels, row_stride, ..
+            } => readback_pixels(pixels, *row_stride, true, viewport),
         }
     }
 }
 
-impl DisplayTarget {
-    pub(crate) fn is_native(&self) -> bool {
-        matches!(self, Self::Native(_))
+impl HostPixelStorage for PreparedDisplayTarget {
+    fn pixels(&self) -> &[u32] {
+        self.pixels()
     }
 
-    pub(crate) fn prepare_rendered_pixels(
+    fn pixels_mut(&mut self) -> &mut [u32] {
+        self.pixels_mut()
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+impl DisplayTarget {
+    pub(crate) fn is_window(&self) -> bool {
+        matches!(self, Self::Window(_))
+    }
+
+    pub(crate) fn invalidate_pending_presentations(&mut self) {
+        if let Self::Window(target) = self {
+            target.invalidate_pending_presentations();
+        }
+    }
+
+    pub(crate) fn prepare_render_target(
         &mut self,
-        pixels: &[u32],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
-        damage_pixels: usize,
+        damage: &[compositor::adapter::geometry::Rect],
     ) -> io::Result<PreparedDisplayTarget> {
         match self {
-            Self::Native(target) => target
-                .prepare_rendered_pixels(pixels, viewport, present_sequence, damage_pixels)
-                .map(PreparedDisplayTarget::Native),
-            Self::Offscreen => Ok(PreparedDisplayTarget::Offscreen {
-                pixels: pixels.to_vec(),
-                row_stride: viewport.width as usize,
-            }),
+            Self::Window(target) => target
+                .prepare_render_target(viewport, present_sequence, damage)
+                .map(PreparedDisplayTarget::Window),
+            Self::Offscreen { pixels } => {
+                let length = viewport.width as usize * viewport.height as usize;
+                let retained = pixels.len() == length;
+                let mut pixels = std::mem::take(pixels);
+                pixels.resize(length, 0);
+                Ok(PreparedDisplayTarget::Offscreen {
+                    pixels,
+                    row_stride: viewport.width as usize,
+                    retained,
+                })
+            }
         }
     }
 
@@ -61,10 +150,15 @@ impl DisplayTarget {
         on_complete: softbuffer::PresentCallback,
     ) -> io::Result<()> {
         match (self, prepared) {
-            (Self::Native(target), PreparedDisplayTarget::Native(frame)) => {
+            (Self::Window(target), PreparedDisplayTarget::Window(frame)) => {
                 target.present_prepared(frame, sequence, on_complete)
             }
-            (Self::Offscreen, PreparedDisplayTarget::Offscreen { .. }) => {
+            (
+                Self::Offscreen { pixels },
+                PreparedDisplayTarget::Offscreen {
+                    pixels: completed, ..
+                },
+            ) => {
                 // A memory swap completes synchronously. The caller registers
                 // the swap before presenting and posts its completion token to
                 // the Display owner, just like an asynchronous native target.
@@ -74,6 +168,7 @@ impl DisplayTarget {
                     "OffscreenFrameComplete",
                     &[("present_sequence", sequence as f64)],
                 );
+                *pixels = completed;
                 on_complete(now, now);
                 Ok(())
             }
@@ -228,6 +323,64 @@ pub(crate) struct PreparedWindowFrame {
 }
 
 impl PreparedWindowFrame {
+    fn pixels(&self) -> &[u32] {
+        #[cfg(target_os = "macos")]
+        {
+            self.buffer.pixels()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            &self.pixels
+        }
+    }
+
+    fn pixels_mut(&mut self) -> &mut [u32] {
+        #[cfg(target_os = "macos")]
+        {
+            self.buffer.pixels_mut()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            &mut self.pixels
+        }
+    }
+
+    fn row_stride(&self) -> usize {
+        #[cfg(target_os = "macos")]
+        {
+            self.buffer.row_stride()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.row_stride
+        }
+    }
+
+    fn format(&self) -> PixelFormat {
+        #[cfg(target_os = "macos")]
+        {
+            match self.buffer.pixel_format() {
+                softbuffer::BufferFormat::Xrgb8888 => PixelFormat::Bgrx8888,
+                softbuffer::BufferFormat::Argb8888 => PixelFormat::Bgra8888,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            PixelFormat::Bgrx8888
+        }
+    }
+
+    fn retained(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.buffer.retained()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     /// Copy the completed software compositor target before native color
     /// management/presentation. This is enabled only by headless diagnostics.
     pub(crate) fn readback_rgba(
@@ -300,13 +453,17 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         Ok(())
     }
 
-    /// Copy the completed window Renderer target into a prepared native buffer.
-    pub(crate) fn prepare_rendered_pixels(
+    pub(crate) fn invalidate_pending_presentations(&mut self) {
+        #[cfg(target_os = "macos")]
+        self.surface.invalidate_pending_prepared_presentations();
+    }
+
+    /// Acquire the host-owned target that Renderer will bind directly.
+    pub(crate) fn prepare_render_target(
         &mut self,
-        rendered_pixels: &[u32],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
-        damage_pixels: usize,
+        damage: &[compositor::adapter::geometry::Rect],
     ) -> io::Result<PreparedWindowFrame> {
         let mut frame_trace = browser_tracing::span("present", "PrepareWindowFrame");
         frame_trace.set("present_sequence", present_sequence as f64);
@@ -319,55 +476,46 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         }
         let acquire_trace = browser_tracing::span("present", "AcquirePreparedBuffer");
         #[cfg(target_os = "macos")]
-        let mut buffer = self.surface.prepared_buffer().map_err(error)?;
+        let buffer = {
+            let bounds = compositor::adapter::geometry::Rect::new(
+                0,
+                0,
+                viewport.width as i32,
+                viewport.height as i32,
+            );
+            let native_damage: Vec<_> = damage
+                .iter()
+                .filter_map(|damage| {
+                    let mut damage = *damage;
+                    damage.Intersect(bounds);
+                    (!damage.IsEmpty()).then(|| softbuffer::Rect {
+                        x: damage.x as u32,
+                        y: damage.y as u32,
+                        width: NonZeroU32::new(damage.width as u32)
+                            .expect("non-empty damage width"),
+                        height: NonZeroU32::new(damage.height as u32)
+                            .expect("non-empty damage height"),
+                    })
+                })
+                .collect();
+            let buffer = self
+                .surface
+                .prepared_buffer_with_damage(&native_damage)
+                .map_err(error)?;
+            buffer
+        };
         #[cfg(not(target_os = "macos"))]
-        let mut buffer = vec![0u32; self.width as usize * self.height as usize];
-        #[cfg(target_os = "macos")]
-        let row_stride = buffer.row_stride();
+        let buffer = vec![0u32; self.width as usize * self.height as usize];
         #[cfg(not(target_os = "macos"))]
         let row_stride = self.width as usize;
         drop(acquire_trace);
-        #[cfg(target_os = "macos")]
-        let format = match buffer.pixel_format() {
-            softbuffer::BufferFormat::Xrgb8888 => PixelFormat::Bgrx8888,
-            softbuffer::BufferFormat::Argb8888 => PixelFormat::Bgra8888,
-        };
-        #[cfg(not(target_os = "macos"))]
-        let format = PixelFormat::Bgrx8888;
-        #[cfg(target_os = "macos")]
-        let pixels = buffer.pixels_mut();
-        #[cfg(not(target_os = "macos"))]
-        let pixels = buffer.as_mut_slice();
-        if rendered_pixels.len() < viewport.width as usize * viewport.height as usize {
-            return Err(io::Error::other("incomplete Renderer target"));
-        }
-        for (source, target) in rendered_pixels
-            .chunks_exact(viewport.width as usize)
-            .zip(pixels.chunks_exact_mut(row_stride))
-        {
-            target[..viewport.width as usize].copy_from_slice(source);
-            if format == PixelFormat::Bgrx8888 {
-                for pixel in &mut target[..viewport.width as usize] {
-                    *pixel &= 0x00ff_ffff;
-                }
-            }
-        }
-        static OPTICAL_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let optical_probe = *OPTICAL_PROBE.get_or_init(|| {
-            std::env::var_os("BROWSER_PRESENTATION_PROBE").is_some_and(|v| v == "1")
-        });
-        if optical_probe {
-            paint_optical_sequence(
-                pixels,
-                row_stride,
-                viewport.width,
-                viewport.height,
-                viewport.scale,
-                format,
-                present_sequence,
-            );
-        }
-        frame_trace.set("damage_pixels", damage_pixels as f64);
+        frame_trace.set(
+            "damage_pixels",
+            damage
+                .iter()
+                .map(|damage| damage.width.max(0) as f64 * damage.height.max(0) as f64)
+                .sum(),
+        );
 
         frame_trace.set("succeeded", 1.0);
         #[cfg(target_os = "macos")]
@@ -398,7 +546,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         trace.set("succeeded", 0.0);
         let callback: softbuffer::PresentCallback = Box::new(move |started, finished| {
             let _context = browser_tracing::scope(context);
-            browser_tracing::interval("present", "NativePresentQueue", ready_at, started, &[]);
+            browser_tracing::interval("present", "PresentQueue", ready_at, started, &[]);
             browser_tracing::interval(
                 "present",
                 "PresentReturn",
@@ -422,7 +570,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
                 .present_prepared_with_transaction_observer(
                     prepared.buffer,
                     callback,
-                    native_transaction_observer(context, present_sequence),
+                    transaction_observer(context, present_sequence),
                 )
                 .map_err(error)?;
         } else {
@@ -452,7 +600,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
     }
 }
 
-fn native_transaction_observer(
+fn transaction_observer(
     context: browser_tracing::Context,
     present_sequence: u64,
 ) -> softbuffer::NativeTransactionObserver {
@@ -678,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_resize_surface_keeps_native_size_and_exposes_gutter() {
+    fn stale_resize_surface_keeps_source_size_and_exposes_gutter() {
         let frame = page_frame(2, 2, vec![1, 2, 3, 4]);
         let placement = crate::page_presentation::DeviceRect::new(0, 0, 4, 2);
         let viewport = crate::engine::Viewport {
@@ -712,6 +860,7 @@ mod tests {
             let mut prepared = PreparedDisplayTarget::Offscreen {
                 pixels,
                 row_stride: 4,
+                retained: false,
             };
             let frame = prepared.take_readback_rgba(viewport).unwrap();
             assert_eq!(frame.content.size(), (4, 3));
@@ -730,9 +879,9 @@ mod tests {
     }
 
     #[test]
-    fn offscreen_completion_acknowledges_once_without_native_target() {
-        let mut target = DisplayTarget::Offscreen;
-        assert!(!target.is_native());
+    fn offscreen_completion_acknowledges_once_without_window_target() {
+        let mut target = DisplayTarget::Offscreen { pixels: Vec::new() };
+        assert!(!target.is_window());
         let completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = completions.clone();
         target
@@ -740,6 +889,7 @@ mod tests {
                 PreparedDisplayTarget::Offscreen {
                     pixels: vec![0],
                     row_stride: 1,
+                    retained: false,
                 },
                 42,
                 Box::new(move |started, finished| {

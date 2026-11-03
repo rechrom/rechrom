@@ -13,7 +13,7 @@ use crate::service::surfaces::surface_dependency_deadline::SurfaceDependencyDead
 use compositor_core::adapter::geometry::Rect;
 use compositor_core::runtime::frame::RenderPassId;
 use compositor_core::runtime::resources::RasterReturnedResource;
-use compositor_core::{NativeCompositorFrame, NativeTransferableResource};
+use compositor_core::{CompositorFrame, TransferableResource};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
 
@@ -66,7 +66,7 @@ impl PresentationHelper {
 // Source: components/viz/service/surfaces/surface.h:340-359
 // Source: components/viz/service/surfaces/surface.cc:476-492
 pub struct FrameData {
-    pub frame: NativeCompositorFrame,
+    pub frame: CompositorFrame,
     pub frame_index: u32,
     pub submission: u64,
     pub producer_token: u32,
@@ -187,7 +187,7 @@ impl Surface {
         }
         QueueFrameResult::ACCEPTED_PENDING
     }
-    fn FrameMatchesSurface(&self, frame: &NativeCompositorFrame) -> bool {
+    fn FrameMatchesSurface(&self, frame: &CompositorFrame) -> bool {
         let Some(root) = frame.render_pass_list.last() else {
             return false;
         };
@@ -247,7 +247,7 @@ impl Surface {
     pub fn active_frame_mut(&mut self) -> Option<&mut FrameData> {
         self.active_frame_data_.as_mut()
     }
-    pub fn SetActiveFrameForViewTransition(&mut self, frame: NativeCompositorFrame) -> bool {
+    pub fn SetActiveFrameForViewTransition(&mut self, frame: CompositorFrame) -> bool {
         let Some(active) = self.active_frame_data_.as_mut() else {
             return false;
         };
@@ -478,7 +478,7 @@ impl Surface {
             .frame
             .resource_list
             .iter()
-            .map(NativeTransferableResource::ToReturnedResource)
+            .map(TransferableResource::ToReturnedResource)
             .collect()
     }
 

@@ -183,7 +183,7 @@ pub struct JSContext {
     array_ctor: JSValue,
     regexp_ctor: JSValue,
     promise_ctor: JSValue,
-    native_error_proto: [JSValue; JS_NATIVE_ERROR_COUNT],
+    error_proto: [JSValue; JS_NATIVE_ERROR_COUNT],
     iterator_ctor: JSValue,
     async_iterator_proto: JSValue,
     array_proto_values: JSValue,

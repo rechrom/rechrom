@@ -28,7 +28,7 @@ mod tests {
     use super::*;
     use crate::production_css_value as values;
     #[test]
-    fn hidden_text_box_inset_and_spacing_apply_to_real_native_fields() {
+    fn hidden_text_box_inset_and_spacing_apply_to_real_computed_style_fields() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);
@@ -263,7 +263,7 @@ pub(super) fn ApplyInternal(
             b.SetTextAutospace(val);
         }
         // generated longhands.cc:1060-1068 uses FontBuilder's description field.
-        // StageFontDescription preserves all other native font attributes.
+        // StageFontDescription preserves all other computed style font attributes.
         kTextSpacingTrim => {
             let trim = if initial {
                 TextSpacingTrim::kInitial
@@ -336,7 +336,7 @@ pub(super) fn ApplyInternal(
             };
             b.SetTextFit(&fit);
         }
-        // This hidden property's same-zoom native branch is translated, with
+        // This hidden property's same-zoom computed style branch is translated, with
         // the source's changed standardized-browser-zoom owner left Unsupported.
         kTextDecorationInset => {
             let inset = if initial {

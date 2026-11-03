@@ -49,6 +49,12 @@ enum PendingStyle {
         render_blocking: bool,
         metadata: StyleSheetOwnerMetadata,
     },
+    Parsed {
+        sheet: cssom::CSSStyleSheet,
+        base: String,
+        imports: document_loader::StyleSheetImportLoad,
+        render_blocking: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -75,11 +81,17 @@ struct ParserResources {
     current_url: String,
     base_url: String,
     base_seen: bool,
-    // Rechrom currently keeps parser sheets in the initial rendering barrier.
-    // Chromium separately tracks pre-body render blockers and post-body parser
-    // blockers. Do not change this flag alone without translating that parser
-    // pause.
+    // Chromium's RenderBlockingResourceManager::AddPendingStylesheet stops
+    // admitting ordinary parser-created sheets once Document::body() exists.
+    // In-body sheets remain parser/script blocking, but do not delay first paint.
+    body_seen: bool,
     rendering_has_begun: bool,
+    /// cpp: third_party/blink/renderer/core/html/link_style.cc:283-308
+    /// cpp: third_party/blink/renderer/core/css/style_element.cc:247-264
+    /// Blink makes a sheet critical only when its parsed media query matches
+    /// the frame's current media environment. Keep the evaluator supplied by
+    /// the Page so loading and style resolution cannot disagree.
+    render_blocking_media_matches: Rc<dyn Fn(&str) -> bool>,
     styles: VecDeque<PendingStyle>,
     // StyleSheetResource owns parsed StyleSheetContents in Blink. ResourceEngine
     // already coalesces the bytes; retain the corresponding parsed projection
@@ -94,6 +106,13 @@ struct ParserResources {
     preloads: crate::preload::Preloads,
     preload_csp_seen: bool,
 }
+
+fn ShouldBlockRendering(resources: &ParserResources, alternate: bool, media: &str) -> bool {
+    !resources.body_seen
+        && !resources.rendering_has_begun
+        && !alternate
+        && (resources.render_blocking_media_matches)(media)
+}
 struct ParserHost(Rc<RefCell<ParserResources>>);
 impl HTMLParserHost for ParserHost {
     // cpp: browser/browser.cc:852-892
@@ -102,6 +121,9 @@ impl HTMLParserHost for ParserHost {
         let attr = |name| node.FindAttribute(name).map_or("", |a| a.value.as_str());
         let mut resources = self.0.borrow_mut();
         if event.phase == ParserElementPhase::kInserted {
+            if node.IsHTMLElement("body") {
+                resources.body_seen = true;
+            }
             if node.IsHTMLElement("meta") {
                 if attr("http-equiv").eq_ignore_ascii_case("content-security-policy") {
                     resources.preload_csp_seen = true;
@@ -153,7 +175,8 @@ impl HTMLParserHost for ParserHost {
                     ..Default::default()
                 };
                 let resource = resources.resources.Start(request);
-                let render_blocking = !resources.rendering_has_begun && !disposition.alternate;
+                let render_blocking =
+                    ShouldBlockRendering(&resources, disposition.alternate, attr("media"));
                 browser_tracing::instant_with_text(
                     "loading",
                     "ParserStyleSheetQueued",
@@ -192,7 +215,7 @@ impl HTMLParserHost for ParserHost {
             }
         } else if node.IsHTMLElement("style") {
             let base = resources.base_url.clone();
-            let render_blocking = !resources.rendering_has_begun;
+            let render_blocking = ShouldBlockRendering(&resources, false, attr("media"));
             browser_tracing::instant(
                 "loading",
                 "ParserStyleSheetQueued",
@@ -348,13 +371,42 @@ fn PollParserStyleSheets(
         let Some(pending) = pending else {
             return Ok(true);
         };
-        let (mut sheet, base) = match pending {
+        let (mut sheet, base, imports_complete, render_blocking) = match pending {
+            PendingStyle::Parsed {
+                sheet,
+                base,
+                mut imports,
+                render_blocking,
+            } => {
+                let page = resources
+                    .borrow()
+                    .page
+                    .clone()
+                    .expect("parsed stylesheet imports require Page resources");
+                let poll = page.PollStyleSheetImportLoad(&mut imports);
+                for failure in poll.failures {
+                    client.DidFailResource(&failure.url, &failure.error);
+                }
+                if !poll.complete {
+                    resources
+                        .borrow_mut()
+                        .styles
+                        .push_front(PendingStyle::Parsed {
+                            sheet,
+                            base,
+                            imports,
+                            render_blocking,
+                        });
+                    return Ok(false);
+                }
+                (sheet, base, true, render_blocking)
+            }
             PendingStyle::Inline {
                 node,
                 base,
                 sheet,
                 metadata,
-                ..
+                render_blocking,
             } => {
                 let read = |d: &Document| {
                     let mut css = String::new();
@@ -372,7 +424,7 @@ fn PollParserStyleSheets(
                     },
                 };
                 metadata.Apply(&mut sheet);
-                (sheet, base)
+                (sheet, base, false, render_blocking)
             }
             PendingStyle::External {
                 url,
@@ -448,7 +500,7 @@ fn PollParserStyleSheets(
                     metadata.Apply(&mut sheet);
                     (sheet, base)
                 }) {
-                    Ok(loaded) => loaded,
+                    Ok((sheet, base)) => (sheet, base, false, render_blocking),
                     Err(error) => {
                         browser_tracing::instant_with_text(
                             "loading",
@@ -464,6 +516,27 @@ fn PollParserStyleSheets(
         };
         let owner_node = sheet.owner_node_id;
         let page = resources.borrow().page.clone();
+        if !imports_complete {
+            if let Some(page) = &page {
+                let mut imports = page.StartStyleSheetImportLoad(&sheet, &base)?;
+                let poll = page.PollStyleSheetImportLoad(&mut imports);
+                for failure in poll.failures {
+                    client.DidFailResource(&failure.url, &failure.error);
+                }
+                if !poll.complete {
+                    resources
+                        .borrow_mut()
+                        .styles
+                        .push_front(PendingStyle::Parsed {
+                            sheet,
+                            base,
+                            imports,
+                            render_blocking,
+                        });
+                    return Ok(false);
+                }
+            }
+        }
         if page.is_none() {
             ResolveCSSStyleSheetURLs(&mut sheet, &base)?;
         }
@@ -572,7 +645,9 @@ impl ScriptScheduler {
                 base_url: current_url.clone(),
                 current_url,
                 base_seen: false,
+                body_seen: false,
                 rendering_has_begun: false,
+                render_blocking_media_matches: Rc::new(|_| true),
                 styles: VecDeque::new(),
                 parsed_styles: HashMap::new(),
                 page: None,
@@ -615,6 +690,10 @@ impl ScriptScheduler {
         page.SetBaseURL(self.resources.borrow().base_url.clone());
         self.resources.borrow_mut().page = Some(page);
         Ok(())
+    }
+
+    pub fn SetRenderBlockingMediaEvaluator(&self, evaluator: Rc<dyn Fn(&str) -> bool>) {
+        self.resources.borrow_mut().render_blocking_media_matches = evaluator;
     }
 
     pub fn StartedScripts(&self) -> crate::dynamic_scripts::StartedScripts {
@@ -905,6 +984,31 @@ impl ScriptScheduler {
                 break;
             };
             let loaded = match pending {
+                PendingStyle::Parsed {
+                    sheet,
+                    base,
+                    mut imports,
+                    ..
+                } => {
+                    let page = self
+                        .resources
+                        .borrow()
+                        .page
+                        .clone()
+                        .expect("parsed stylesheet imports require Page resources");
+                    loop {
+                        let poll = page.PollStyleSheetImportLoad(&mut imports);
+                        for failure in poll.failures {
+                            client.DidFailResource(&failure.url, &failure.error);
+                        }
+                        if poll.complete {
+                            break;
+                        }
+                        self.run_async(parser.as_deref_mut(), runtime, realm, client)?;
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Ok((sheet, base, true))
+                }
                 PendingStyle::Inline {
                     node,
                     base,
@@ -930,7 +1034,7 @@ impl ScriptScheduler {
                         read(self.document.borrow().GetDocument())
                     };
                     metadata.Apply(&mut sheet);
-                    Ok((sheet, base))
+                    Ok((sheet, base, false))
                 }
                 PendingStyle::External {
                     url,
@@ -951,7 +1055,7 @@ impl ScriptScheduler {
                         let css = DecodeText(&response)?;
                         let mut sheet = style::ParseCSSWithBase(&css, &base);
                         metadata.Apply(&mut sheet);
-                        Ok((sheet, base))
+                        Ok((sheet, base, false))
                     }) {
                         Ok(loaded) => Ok(loaded),
                         Err(error) => {
@@ -961,8 +1065,24 @@ impl ScriptScheduler {
                     }
                 }
             };
-            if let Ok((mut sheet, base)) = loaded {
+            if let Ok((mut sheet, base, imports_complete)) = loaded {
                 let page = self.resources.borrow().page.clone();
+                if !imports_complete {
+                    if let Some(page) = &page {
+                        let mut imports = page.StartStyleSheetImportLoad(&sheet, &base)?;
+                        loop {
+                            let poll = page.PollStyleSheetImportLoad(&mut imports);
+                            for failure in poll.failures {
+                                client.DidFailResource(&failure.url, &failure.error);
+                            }
+                            if poll.complete {
+                                break;
+                            }
+                            self.run_async(parser.as_deref_mut(), runtime, realm, client)?;
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                    }
+                }
                 if page.is_none() {
                     ResolveCSSStyleSheetURLs(&mut sheet, &base)?;
                 }
@@ -1296,25 +1416,6 @@ impl ScriptScheduler {
             .and_then(|d| d.upgrade())
             .is_some_and(|dynamic| dynamic.PendingLoads() != 0)
     }
-    pub fn TraceLoadingState(&self) {
-        let resources = self.resources.borrow();
-        let dynamic = resources.dynamic.as_ref().and_then(|d| d.upgrade());
-        eprintln!(
-            "script-loading-state parsing_finished={} content_loaded={} async={:?} defer={:?} styles={} dynamic={}",
-            self.parsing_finished,
-            self.content_loaded,
-            self.async_scripts
-                .iter()
-                .map(|s| s.node_id)
-                .collect::<Vec<_>>(),
-            self.deferred_scripts
-                .iter()
-                .map(|s| s.node_id)
-                .collect::<Vec<_>>(),
-            resources.styles.len(),
-            dynamic.as_ref().map_or(0, |d| d.PendingLoads())
-        );
-    }
     pub fn StopModuleLoading(&self) {
         self.resources.borrow().modules.StopLoading();
     }
@@ -1331,6 +1432,9 @@ impl ScriptScheduler {
                     render_blocking, ..
                 }
                 | PendingStyle::External {
+                    render_blocking, ..
+                }
+                | PendingStyle::Parsed {
                     render_blocking, ..
                 } => *render_blocking,
             })
@@ -1386,8 +1490,8 @@ impl ScriptScheduler {
             // before the next VSync arrives. Keep deferred script execution
             // behind the first rendering opportunity so a long script cannot
             // overtake the styled first frame that the preceding resource task
-            // just made possible.
-            self.ConsumeTaskBudget();
+            // just made possible. Waiting is not a script task: leave this
+            // turn's budget available to the independent Window task sources.
             return Ok(false);
         }
         // Preserve document order. Only already-ready deferred scripts execute.
@@ -1528,7 +1632,9 @@ impl ParserResourceDiscovery {
                 current_url: current_url.clone(),
                 base_url: current_url,
                 base_seen: false,
+                body_seen: false,
                 rendering_has_begun: false,
+                render_blocking_media_matches: Rc::new(|_| true),
                 styles: VecDeque::new(),
                 parsed_styles: HashMap::new(),
                 page: Some(page),
@@ -1547,6 +1653,9 @@ impl ParserResourceDiscovery {
         resources.resources.SetDocumentURL(url.clone());
         resources.current_url = url.clone();
         resources.base_url = url;
+    }
+    pub fn SetRenderBlockingMediaEvaluator(&self, evaluator: Rc<dyn Fn(&str) -> bool>) {
+        self.resources.borrow_mut().render_blocking_media_matches = evaluator;
     }
     pub fn BeginDocumentLoader(&mut self, loader: &mut DocumentLoader) -> io::Result<()> {
         let mut host = ParserHost(self.resources.clone());
@@ -1591,6 +1700,9 @@ impl ParserResourceDiscovery {
                     render_blocking, ..
                 }
                 | PendingStyle::External {
+                    render_blocking, ..
+                }
+                | PendingStyle::Parsed {
                     render_blocking, ..
                 } => *render_blocking,
             })
@@ -1703,7 +1815,31 @@ impl ParserResourceDiscovery {
             let Some(pending) = pending else {
                 return Ok(());
             };
-            let (sheet, base) = match pending {
+            let (sheet, base, imports_complete) = match pending {
+                PendingStyle::Parsed {
+                    sheet,
+                    base,
+                    mut imports,
+                    ..
+                } => {
+                    let page = self
+                        .resources
+                        .borrow()
+                        .page
+                        .clone()
+                        .expect("parsed stylesheet imports require Page resources");
+                    loop {
+                        let poll = page.PollStyleSheetImportLoad(&mut imports);
+                        for failure in poll.failures {
+                            client.DidFailResource(&failure.url, &failure.error);
+                        }
+                        if poll.complete {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    (sheet, base, true)
+                }
                 PendingStyle::Inline {
                     node,
                     base,
@@ -1722,7 +1858,7 @@ impl ParserResourceDiscovery {
                         sheet
                     });
                     metadata.Apply(&mut sheet);
-                    (sheet, base)
+                    (sheet, base, false)
                 }
                 PendingStyle::External {
                     url,
@@ -1745,7 +1881,7 @@ impl ParserResourceDiscovery {
                         Ok((sheet, base))
                     });
                     match loaded {
-                        Ok(loaded) => loaded,
+                        Ok((sheet, base)) => (sheet, base, false),
                         Err(error) => {
                             client.DidFailResource(&url, &error.to_string());
                             continue;
@@ -1759,6 +1895,19 @@ impl ParserResourceDiscovery {
                 .page
                 .clone()
                 .expect("no-runtime page resources");
+            if !imports_complete {
+                let mut imports = page.StartStyleSheetImportLoad(&sheet, &base)?;
+                loop {
+                    let poll = page.PollStyleSheetImportLoad(&mut imports);
+                    for failure in poll.failures {
+                        client.DidFailResource(&failure.url, &failure.error);
+                    }
+                    if poll.complete {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
             page.AddParsedStyleSheet(sheet, &base)?;
             client.DidApplyStyleSheet(&base);
         }
@@ -1886,6 +2035,36 @@ mod tests {
             self.skipped += 1;
         }
     }
+
+    #[test]
+    fn render_blocking_stylesheet_uses_the_document_media_environment() {
+        let document = Rc::new(RefCell::new(DOM::new()));
+        let bindings = Rc::new(RefCell::new(DOMJavaScriptBindings::new(
+            document.clone(),
+            Box::new(|_| {}),
+        )));
+        let scheduler = ScriptScheduler::new(
+            document,
+            bindings,
+            Rc::new(RefCell::new(MockLoader(Rc::new(RefCell::new(Vec::new()))))),
+            "https://test.test/".into(),
+        );
+        scheduler.SetRenderBlockingMediaEvaluator(Rc::new(|media| media != "print"));
+
+        let resources = scheduler.resources.borrow();
+        assert!(ShouldBlockRendering(&resources, false, "screen"));
+        assert!(!ShouldBlockRendering(&resources, false, "print"));
+        assert!(!ShouldBlockRendering(&resources, true, "screen"));
+        drop(resources);
+
+        scheduler.DidBeginRendering();
+        assert!(!ShouldBlockRendering(
+            &scheduler.resources.borrow(),
+            false,
+            "screen"
+        ));
+    }
+
     #[test]
     fn external_classic_order_base_styles_and_failure_recovery() {
         let document = Rc::new(RefCell::new(DOM::new()));

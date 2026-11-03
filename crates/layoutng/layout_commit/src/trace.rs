@@ -1,11 +1,11 @@
-//! Package-owned trace names for commit work and its native adapters.
+//! Package-owned trace names for commit work and its source adapters.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TracePhase {
     CommitPaint,
     ValidateAuxiliaryClients,
-    CommitNativeClients,
-    CollectNativeClients,
+    CommitClients,
+    CollectClients,
     RefreshFragmentClients,
     CommitPrePaintInputs,
     PublishPaintResult,
@@ -24,8 +24,8 @@ impl TracePhase {
         match self {
             Self::CommitPaint => "layout_commit.CommitPaint",
             Self::ValidateAuxiliaryClients => "layout_commit.ValidateAuxiliaryClients",
-            Self::CommitNativeClients => "layout_commit.CommitNativeClients",
-            Self::CollectNativeClients => "layout_commit.CollectNativeClients",
+            Self::CommitClients => "layout_commit.CommitClients",
+            Self::CollectClients => "layout_commit.CollectClients",
             Self::RefreshFragmentClients => "layout_commit.RefreshFragmentClients",
             Self::CommitPrePaintInputs => "layout_commit.CommitPrePaintInputs",
             Self::PublishPaintResult => "layout_commit.PublishPaintResult",
@@ -51,7 +51,7 @@ mod tests {
         let recording = browser_tracing::start(Default::default()).unwrap();
         drop(span(TracePhase::PublishLayoutResult));
         drop(span(TracePhase::CommitPrePaintInputs));
-        drop(span(TracePhase::CollectNativeClients));
+        drop(span(TracePhase::CollectClients));
         drop(span(TracePhase::RefreshFragmentClients));
         drop(span(TracePhase::RunLayoutWithoutPublication));
         browser_tracing::stop().unwrap();
@@ -71,7 +71,7 @@ mod tests {
         assert!(snapshot
             .spans
             .iter()
-            .any(|trace| trace.name == "layout_commit.CollectNativeClients"));
+            .any(|trace| trace.name == "layout_commit.CollectClients"));
         assert!(snapshot
             .spans
             .iter()

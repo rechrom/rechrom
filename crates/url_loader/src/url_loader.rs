@@ -23,6 +23,16 @@ pub enum RequestDefer {
     Lazy,
 }
 
+/// Script kind used by Blink's `ResourceFetcher::ComputeLoadPriority`.
+/// Module graph fetches keep the script type's high base priority even though
+/// `ModuleScriptLoader` marks them lazy; only lazy classic scripts are lowered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScriptType {
+    #[default]
+    Classic,
+    Module,
+}
+
 // cpp: resource_loader/resource_loader.h:23-30
 #[derive(Clone, Debug)]
 pub struct URLRequest {
@@ -32,6 +42,7 @@ pub struct URLRequest {
     pub referrer_policy: Option<crate::ReferrerPolicy>,
     pub destination: RequestDestination,
     pub defer: RequestDefer,
+    pub script_type: ScriptType,
     pub method: String,
     // C++ std::string can contain arbitrary POST bytes.
     pub body: Vec<u8>,
@@ -46,6 +57,7 @@ impl Default for URLRequest {
             referrer_policy: None,
             destination: RequestDestination::kDocument,
             defer: RequestDefer::None,
+            script_type: ScriptType::Classic,
             method: "GET".to_owned(),
             body: Vec::new(),
             headers: Vec::new(),
@@ -59,6 +71,7 @@ pub struct URLResponse {
     pub final_url: String,
     pub status_code: i64,
     pub mime_type: String,
+    pub content_dpr: Option<f64>,
     pub text_encoding: String,
     pub referrer_policy: Option<crate::ReferrerPolicy>,
     /// Enforced policies only; report-only headers do not gate preloads.
@@ -72,6 +85,7 @@ impl Default for URLResponse {
             final_url: String::new(),
             status_code: 0,
             mime_type: String::new(),
+            content_dpr: None,
             text_encoding: "utf-8".to_owned(),
             referrer_policy: None,
             content_security_policy: Vec::new(),
@@ -85,6 +99,16 @@ pub trait URLLoadOperation {
     /// A reused resource can acquire a more urgent consumer. Scheduling does
     /// not change resource identity or create a second byte transfer.
     fn SetDefer(&mut self, _defer: RequestDefer) {}
+    /// A coalesced consumer can raise an in-flight request's scheduling
+    /// priority without changing the cached resource identity.
+    fn SetScheduling(
+        &mut self,
+        _destination: RequestDestination,
+        defer: RequestDefer,
+        _script_type: ScriptType,
+    ) {
+        self.SetDefer(defer);
+    }
     fn Poll(&mut self) -> io::Result<Option<URLResponse>>;
     /// Notify the embedding event loop when a previously pending complete
     /// response becomes pollable. Resident/synchronous loaders may invoke the

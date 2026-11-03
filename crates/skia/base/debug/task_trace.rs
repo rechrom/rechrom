@@ -1,6 +1,6 @@
 // Source: base/debug/task_trace.h; base/debug/task_trace.cc
 use super::stack_trace::StackTrace;
-use crate::base::strings::native_ostream::{NativeOStream, StdStringStorage};
+use crate::base::strings::ostream::{OStream, StdStringStorage};
 use core::ffi::c_void;
 // Native owning member order reversed for parent/member destruction; no extra
 // holder or synthetic task context. StackTrace itself is the actual pointer array.
@@ -45,7 +45,7 @@ impl TaskTrace {
         self.stack_trace_.is_none()
     }
     // Source: base/debug/task_trace.cc:75
-    pub unsafe fn OutputToStream<S: StdStringStorage>(&self, os: &mut NativeOStream<'_>) {
+    pub unsafe fn OutputToStream<S: StdStringStorage>(&self, os: &mut OStream<'_>) {
         unsafe {
             os.insert_cstr(c"Task trace:".as_ptr().cast());
         }
@@ -77,10 +77,7 @@ impl TaskTrace {
         current_addresses.len()
     }
 }
-pub unsafe fn insert_task_trace<S: StdStringStorage>(
-    os: &mut NativeOStream<'_>,
-    task_trace: &TaskTrace,
-) {
+pub unsafe fn insert_task_trace<S: StdStringStorage>(os: &mut OStream<'_>, task_trace: &TaskTrace) {
     unsafe {
         task_trace.OutputToStream::<S>(os);
     }
@@ -97,22 +94,22 @@ impl TaskTrace {
     pub unsafe fn Print<S: StdStringStorage>(&self) {
         unsafe {
             let raw = core::ptr::NonNull::new_unchecked(rechrom_debug_task_default_ostream());
-            let mut os = NativeOStream::from_native(raw);
+            let mut os = OStream::from_native(raw);
             self.OutputToStream::<S>(&mut os);
         }
     }
     // Source: base/debug/task_trace.cc:89
     pub unsafe fn ToString_at<
-        SS: crate::base::strings::native_ostream::StringStreamStorage,
+        SS: crate::base::strings::ostream::StringStreamStorage,
         DS: StdStringStorage,
     >(
         &self,
-        dst: *mut crate::base::strings::native_ostream::NativeStdString<DS>,
+        dst: *mut crate::base::strings::ostream::StdString<DS>,
     ) {
-        use crate::base::strings::native_ostream::NativeStringStream;
-        let mut stream = core::mem::MaybeUninit::<NativeStringStream<SS>>::uninit();
+        use crate::base::strings::ostream::StringStream;
+        let mut stream = core::mem::MaybeUninit::<StringStream<SS>>::uninit();
         unsafe {
-            NativeStringStream::initialize_at_assuming_native_abi(stream.as_mut_ptr());
+            StringStream::initialize_at_assuming_native_abi(stream.as_mut_ptr());
         }
         let mut pinned = unsafe { core::pin::Pin::new_unchecked(stream.assume_init_mut()) };
         unsafe {

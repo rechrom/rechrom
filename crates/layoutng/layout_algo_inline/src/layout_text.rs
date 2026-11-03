@@ -2,10 +2,11 @@
 // type owned by //src/layoutng; linked in the shared assembly.
 #![allow(non_snake_case)]
 
-use font_engine::text::native::character_break_iterator::LengthOfGraphemeCluster;
+use font_engine::text::implementation::character_break_iterator::LengthOfGraphemeCluster;
 use font_engine::Font;
 use foundation::{
-    DynamicTo, ETextSecurity, ETextTransform, String, StringView, TextOffsetMap, To, Visitor,
+    graphics_types::graphics::paint::display_item_client::DisplayItemClient, DynamicTo,
+    ETextSecurity, ETextTransform, String, StringView, TextOffsetMap, To, Visitor,
 };
 use layout_fragment::fragment_items::FragmentItems;
 use layout_fragment::inline_cursor::InlineCursor;
@@ -20,7 +21,35 @@ use layoutng::internal::variable_length_transform_result::VariableLengthTransfor
 use layoutng_geometry::geometry::logical_offset::LogicalOffset;
 use layoutng_style::style::computed_style::ComputedStyle;
 use layoutng_style::style::style_difference::StyleDifference;
+use std::collections::HashMap;
 use std::ffi::c_char;
+use std::sync::{Mutex, OnceLock};
+
+use crate::layout_text_fragment::LayoutTextFragment;
+
+type SelectionDisplayItemClientMap = HashMap<usize, Box<DisplayItemClient>>;
+
+// cpp: third_party/blink/renderer/core/layout/layout_text.cc:151-164
+fn selection_display_item_clients() -> &'static Mutex<SelectionDisplayItemClientMap> {
+    static CLIENTS: OnceLock<Mutex<SelectionDisplayItemClientMap>> = OnceLock::new();
+    CLIENTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+// cpp: third_party/blink/renderer/core/editing/layout_selection.cc:572-589
+pub(crate) fn layout_text_is_selected(this: &LayoutText) -> bool {
+    if this.IsTextFragment() {
+        let fragment = unsafe { &*(this as *const LayoutText).cast::<LayoutTextFragment>() };
+        let text = fragment.AssociatedTextNode();
+        if text.is_null() {
+            return false;
+        }
+        let object = unsafe { &*text }.GetLayoutObject();
+        return !object.is_null()
+            && unsafe { &*object }.GetSelectionState()
+                != layoutng::internal::selection_state::SelectionState::kNone;
+    }
+    this.GetSelectionState() != layoutng::internal::selection_state::SelectionState::kNone
+}
 
 // cpp: layoutng_inline/layout_text.cc:31-41
 #[unsafe(no_mangle)]
@@ -33,19 +62,6 @@ pub extern "Rust" fn LayoutTextNew(node: *mut Node, text: String) -> LayoutText 
 pub extern "Rust" fn LayoutTextTrace(this: &LayoutText, visitor: &mut Visitor<'_>) {
     this.inline_items_.Trace(visitor);
     LayoutObject::Trace(this, visitor);
-}
-
-// cpp: layoutng_inline/layout_text.cc:48-50
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextScaledFont(this: &LayoutText) -> *const Font {
-    if this.RuntimeClass() == layoutng::internal::layout_object::LayoutObjectClass::SvgInlineText {
-        let objects = layoutng::internal::layout_pass_scope::LayoutObjectFactoryScope::Objects();
-        let scaled = unsafe { objects.as_ref() }
-            .and_then(|objects| objects.svg_inline_text_scaled_font)
-            .expect("SVG inline text scaled font is not installed");
-        return scaled(this);
-    }
-    this.StyleRef().GetFont()
 }
 
 // cpp: layoutng_inline/layout_text.cc:52-55
@@ -107,9 +123,44 @@ pub extern "Rust" fn LayoutTextStyleDidChange(
 #[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutTextWillBeDestroyed(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
+    selection_display_item_clients()
+        .lock()
+        .expect("selection display-item client map poisoned")
+        .remove(&(this as *const LayoutText as usize));
     this.RemoveAndDestroyTextBoxes();
     this.valid_ng_items_ = false;
     this.Remove();
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_text.cc:1400-1422
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutTextGetSelectionDisplayItemClient(
+    this: &LayoutText,
+) -> *const DisplayItemClient {
+    this.CheckIsNotDestroyed();
+    if !this.IsInLayoutNGInlineFormattingContext() {
+        return std::ptr::null();
+    }
+
+    let parent = this.Parent();
+    if !parent.is_null() && unsafe { &*parent }.IsLayoutTextCombine() {
+        let text_combine = unsafe { &*parent.cast::<LayoutTextCombine>() };
+        if text_combine.NeedsAffineTransformInPaint() {
+            return parent.cast::<DisplayItemClient>();
+        }
+    }
+    if !layout_text_is_selected(this) {
+        return std::ptr::null();
+    }
+
+    let key = this as *const LayoutText as usize;
+    let mut clients = selection_display_item_clients()
+        .lock()
+        .expect("selection display-item client map poisoned");
+    let client = clients
+        .entry(key)
+        .or_insert_with(|| Box::new(DisplayItemClient::default()));
+    &**client
 }
 
 // cpp: layoutng_inline/layout_text.cc:90-97
@@ -518,14 +569,4 @@ pub extern "Rust" fn LayoutTextSetPreviousLogicalStartingPoint(
 ) {
     this.CheckIsNotDestroyed();
     this.previous_logical_starting_point_.set(*point);
-}
-
-// cpp: layoutng_inline/layout_text.cc:372-378
-#[cfg(debug_assertions)]
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextRecalcVisualOverflow(this: &mut LayoutText) {
-    if this.IsInline() && this.IsInLayoutNGInlineFormattingContext() {
-        panic!("LayoutText::RecalcVisualOverflow is unreachable in inline formatting context");
-    }
-    LayoutObject::RecalcVisualOverflow(this);
 }

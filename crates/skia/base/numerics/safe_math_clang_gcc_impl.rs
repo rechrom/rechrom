@@ -1,6 +1,6 @@
 //! Original native compiler/ARM branch selection, not Rust target-env inference.
 #![allow(non_snake_case, non_upper_case_globals)]
-use super::native_overflow_builtins::BuiltinTriple;
+use super::overflow_builtins::BuiltinTriple;
 use super::safe_conversions_impl::{Cast, Input, Integer, Numeric, Promote};
 use core::{marker::PhantomData, mem::MaybeUninit, ops::Mul};
 
@@ -173,7 +173,7 @@ macro_rules! neg_dispatch {($($t:ty),* $(,)?)=>{$(
 )*}}
 neg_dispatch!(i8, u8, i16, u16, i32, u32, i64, u64, isize, usize);
 
-#[cfg(not(base_numeric_native_inputs_configured))]
+#[cfg(not(base_numeric_inputs_configured))]
 compile_error!("native safe-math input configuration not supplied");
 #[cfg(not(any(base_numeric_compiler_clang, base_numeric_compiler_gcc)))]
 compile_error!("Only the actual native Clang/GCC builtin domain is mapped here");

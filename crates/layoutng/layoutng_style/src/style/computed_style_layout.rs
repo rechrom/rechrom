@@ -11,8 +11,7 @@ use super::applied_text_decoration::{AppliedTextDecoration, AppliedTextDecoratio
 use super::basic_shapes::ShapeType;
 use super::computed_style::ComputedStyle;
 use super::computed_style_base::ComputedStyleBase;
-use super::computed_style_constants::{EFillAttachment, EFillBox, OffsetRotationType, PseudoId};
-use super::fill_layer::FillLayer;
+use super::computed_style_constants::{OffsetRotationType, PseudoId};
 use super::forward::Element;
 use super::gap_data_list::GapDataList;
 use super::offset_path_operation::{OperationType, ShapeOffsetPathOperation};
@@ -20,7 +19,7 @@ use super::style_cached_data::StyleCachedData;
 use super::style_ray::StyleRay;
 use super::style_transform::MotionPathBox;
 use crate::css::style_color::StyleColor;
-use crate::text_transform_services::CurrentNativeTextTransformResolver;
+use crate::text_transform_services::CurrentTextTransformResolver;
 
 // cpp: layoutng_style/style/computed_style_layout.cc:34-48
 #[allow(non_snake_case)]
@@ -100,7 +99,7 @@ impl ComputedStyle {
         if self.TextTransform() == ETextTransform::kNone {
             return text.clone();
         }
-        let resolver = CurrentNativeTextTransformResolver();
+        let resolver = CurrentTextTransformResolver();
         let Some(resolver) = resolver else {
             return text.clone();
         };
@@ -179,14 +178,23 @@ impl ComputedStyle {
             return true;
         }
         // Composite background-color animation state is not represented yet;
-        // the ordinary native image predicate is the final Chromium branch.
+        // the ordinary source image predicate is the final Chromium branch.
         self.HasBackgroundImage()
     }
 
     // cpp: layoutng_style/style/computed_style.h:722
-    // cpp: layoutng_style/style/computed_style_layout.cc:142-146
-    pub fn HasCustomScrollbarStyle(&self, _element: *mut Element) -> bool {
-        false
+    // cpp: core/style/computed_style.cc:2394-2411
+    pub fn HasCustomScrollbarStyle(&self, element: *mut Element) -> bool {
+        if element.is_null() {
+            return false;
+        }
+
+        // PreferDefaultScrollbarStyles is disabled by default in Chromium's
+        // runtime_enabled_features.json5. The host does not currently expose
+        // an ExecutionContext override, so the ordinary source branch is the
+        // complete represented behavior here.
+        self.HasPseudoElementStyle(PseudoId::kPseudoIdScrollbar)
+            && !self.UsesStandardScrollbarStyle()
     }
 
     // cpp: layoutng_style/style/computed_style.h:1210
@@ -523,65 +531,5 @@ impl ComputedStyleBase {
                 .set_is_stacking_context_without_containment_bits(0b10 | (u32::from(value) & 1));
         }
         self.data_.is_stacking_context_without_containment_bits() & 1 != 0
-    }
-}
-
-#[allow(non_snake_case)]
-impl FillLayer {
-    // cpp: layoutng_style/style/computed_style_layout.cc:230-254
-    pub(crate) fn ComputeCachedProperties(&self) {
-        debug_assert!(!self.cached_properties_.get().computed);
-        let image = unsafe { self.GetImage().as_ref() };
-        let effective_clip = self.Clip();
-        let mut cache = self.cached_properties_.get();
-        cache.layers_clip_max = effective_clip;
-        cache.any_layer_uses_content_box =
-            effective_clip == EFillBox::kContent || self.Origin() == EFillBox::kContent;
-        cache.any_layer_has_image = image.is_some();
-        cache.any_layer_has_url_image = image.is_some_and(|image| {
-            // StyleImage::CssValue returns its live CSS value, as in Blink.
-            unsafe { &*image.CssValue() }.MayContainUrl()
-        });
-        cache.any_layer_has_local_attachment = self.Attachment() == EFillAttachment::kLocal;
-        cache.any_layer_has_fixed_attachment_image =
-            cache.any_layer_has_image && self.Attachment() == EFillAttachment::kFixed;
-        cache.any_layer_has_default_attachment_image =
-            cache.any_layer_has_image && self.Attachment() == EFillAttachment::kScroll;
-        // StyleGeneratedImage::DependsOnCurrentColor overrides the base with
-        // IsUsingCurrentColor; use that real virtual dispatch after its tag check.
-        cache.any_layer_uses_current_color =
-            image.is_some_and(|image| image.IsGeneratedImage() && image.DependsOnCurrentColor());
-        cache.computed = true;
-        self.cached_properties_.set(cache);
-
-        let next = self.Next();
-        if !next.is_null() {
-            let next = unsafe { &*next };
-            next.ComputeCachedPropertiesIfNeeded();
-            let current_clip = self.LayersClipMax();
-            let next_clip = next.LayersClipMax();
-            cache.layers_clip_max = if (current_clip as u32) < (next_clip as u32) {
-                next_clip
-            } else {
-                current_clip
-            };
-            cache.any_layer_uses_content_box |=
-                next.cached_properties_.get().any_layer_uses_content_box;
-            cache.any_layer_has_image |= next.cached_properties_.get().any_layer_has_image;
-            cache.any_layer_has_url_image |= next.cached_properties_.get().any_layer_has_url_image;
-            cache.any_layer_has_local_attachment |=
-                next.cached_properties_.get().any_layer_has_local_attachment;
-            cache.any_layer_has_fixed_attachment_image |= next
-                .cached_properties_
-                .get()
-                .any_layer_has_fixed_attachment_image;
-            cache.any_layer_has_default_attachment_image |= next
-                .cached_properties_
-                .get()
-                .any_layer_has_default_attachment_image;
-            cache.any_layer_uses_current_color |=
-                next.cached_properties_.get().any_layer_uses_current_color;
-            self.cached_properties_.set(cache);
-        }
     }
 }

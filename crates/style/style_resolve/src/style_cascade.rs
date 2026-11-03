@@ -514,7 +514,8 @@ pub trait StyleCascadeBackend: StyleResolverStateBackend {
         properties: &MatchedProperties,
         document: &Self::Document,
         index: usize,
-    ) -> Vec<(CascadePriority, CSSPropertyName)>;
+        visitor: &mut dyn FnMut(CascadePriority, CSSPropertyName),
+    );
     fn PropertyValueAt(
         &self,
         set: &dyn MatchedPropertySet,
@@ -524,7 +525,7 @@ pub trait StyleCascadeBackend: StyleResolverStateBackend {
         &self,
         map: &Self::ActiveInterpolationsMap,
     ) -> Vec<(CSSPropertyName, Rc<Self::ActiveInterpolations>)>;
-    fn NativePropertyHandle(&self, property: &CSSProperty) -> Self::PropertyHandle;
+    fn CSSPropertyHandle(&self, property: &CSSProperty) -> Self::PropertyHandle;
     fn CustomPropertyHandle(&self, name: &AtomicString) -> Self::PropertyHandle;
     fn FindInterpolation(
         &self,
@@ -880,7 +881,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
         self.ApplyHighPriority(&mut resolver);
         self.state_.UpdateFont();
         if self.map_.NativeBitset().Has(CSSPropertyID::kLineHeight) {
-            self.LookupAndApplyNative(CSSPropertyID::kLineHeight, &mut resolver);
+            self.LookupAndApplyById(CSSPropertyID::kLineHeight, &mut resolver);
         }
         self.state_.UpdateLineHeight();
         self.ApplyWideOverlapping(&mut resolver);
@@ -1000,19 +1001,30 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
     fn CollectFromMatchResult(&mut self) {
         self.AddExplicitDefaults();
         for index in 0..self.match_result_.GetMatchedProperties().len() {
-            let declarations = self.backend_.ExpandCascade(
+            let backend = self.backend_;
+            let builder = self.state_.StyleBuilder();
+            let direction =
+                WritingDirectionMode::new(builder.GetWritingMode(), builder.Direction());
+            let mut depends_on_cascade_affecting_property = false;
+            let map = &mut self.map_;
+            backend.ExpandCascade(
                 &self.match_result_.GetMatchedProperties()[index],
-                self.GetDocument(),
+                self.state_.GetDocument(),
                 index,
+                &mut |priority, name| {
+                    if name.IsCustomProperty() {
+                        map.AddCustom(name.ToAtomicString().clone(), priority);
+                    } else {
+                        let mut property = *CSSProperty::Get(name.Id());
+                        if property.IsSurrogate() {
+                            depends_on_cascade_affecting_property = true;
+                            property = backend.SurrogateFor(&property, direction);
+                        }
+                        map.Add(property.PropertyID(), priority);
+                    }
+                },
             );
-            for (priority, name) in declarations {
-                if name.IsCustomProperty() {
-                    self.map_.AddCustom(name.ToAtomicString().clone(), priority);
-                } else {
-                    let property = self.ResolveSurrogate(*CSSProperty::Get(name.Id()));
-                    self.map_.Add(property.PropertyID(), priority);
-                }
-            }
+            self.depends_on_cascade_affecting_property_ |= depends_on_cascade_affecting_property;
         }
     }
     // cpp: style_cascade.cc:496-531
@@ -1103,7 +1115,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
             CSSPropertyID::kZoom,
         ] {
             if self.map_.NativeBitset().Has(id) {
-                self.LookupAndApplyNative(id, resolver);
+                self.LookupAndApplyById(id, resolver);
             }
         }
         let mut recollect = false;
@@ -1140,7 +1152,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
             CSSPropertyID::kScrollbarWidth,
         ] {
             if self.map_.NativeBitset().Has(id) {
-                self.LookupAndApplyNative(id, resolver);
+                self.LookupAndApplyById(id, resolver);
             }
         }
         let to_subtract = {
@@ -1168,7 +1180,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
         while bits != 0 {
             let index = bits.trailing_zeros();
             bits &= bits - 1;
-            self.LookupAndApplyNative(ConvertToCSSPropertyID(index as i32), resolver);
+            self.LookupAndApplyById(ConvertToCSSPropertyID(index as i32), resolver);
         }
     }
     // cpp: style_cascade.cc:708-804
@@ -1236,8 +1248,8 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
     }
     // cpp: style_cascade.cc:810-852
     fn ApplyMatchResult(&mut self, resolver: &mut B::CascadeResolver) {
-        let native: Vec<_> = self.map_.NativeBitset().BeginAfterHighPriority().collect();
-        for id in native {
+        let properties: Vec<_> = self.map_.NativeBitset().BeginAfterHighPriority().collect();
+        for id in properties {
             let name = CSSPropertyName::new(id);
             let priority = self.map_.At(&name);
             if priority.IsAlreadyApplied() || Self::IsInterpolation(priority) {
@@ -1351,7 +1363,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
         let property = self.PropertyMetadata(name);
         self.LookupAndApplyProperty(name, &property, resolver);
     }
-    fn LookupAndApplyNative(&mut self, id: CSSPropertyID, resolver: &mut B::CascadeResolver) {
+    fn LookupAndApplyById(&mut self, id: CSSPropertyID, resolver: &mut B::CascadeResolver) {
         self.LookupAndApplyProperty(&CSSPropertyName::new(id), CSSProperty::Get(id), resolver);
     }
     // cpp: style_cascade.cc:943-960
@@ -1477,7 +1489,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
         if id == CSSPropertyID::kVariable {
             self.backend_.CustomPropertyHandle(name.ToAtomicString())
         } else {
-            self.backend_.NativePropertyHandle(CSSProperty::Get(id))
+            self.backend_.CSSPropertyHandle(CSSProperty::Get(id))
         }
     }
     // cpp: style_cascade.cc:195-207

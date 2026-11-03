@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::fonts::font::Font;
-use crate::text::native::bidi_paragraph::BidiParagraph;
+use crate::text::implementation::bidi_paragraph::BidiParagraph;
 use foundation::StringView;
 
 use super::harfbuzz_shaper::HarfBuzzShaper;

@@ -110,17 +110,34 @@ pub struct PreparedBuffer {
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
 impl PreparedBuffer {
     /// Visible width of the prepared target.
-    pub fn width(&self) -> NonZeroU32 { self.inner.width() }
+    pub fn width(&self) -> NonZeroU32 {
+        self.inner.width()
+    }
     /// Visible height of the prepared target.
-    pub fn height(&self) -> NonZeroU32 { self.inner.height() }
+    pub fn height(&self) -> NonZeroU32 {
+        self.inner.height()
+    }
     /// Number of `u32` entries between rows.
-    pub fn row_stride(&self) -> usize { self.inner.row_stride() }
+    pub fn row_stride(&self) -> usize {
+        self.inner.row_stride()
+    }
     /// Pixel storage for inspection.
-    pub fn pixels(&self) -> &[u32] { self.inner.pixels() }
+    pub fn pixels(&self) -> &[u32] {
+        self.inner.pixels()
+    }
     /// Pixel storage for CPU drawing.
-    pub fn pixels_mut(&mut self) -> &mut [u32] { self.inner.pixels_mut() }
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        self.inner.pixels_mut()
+    }
     /// Prepared macOS surfaces use premultiplied BGRA storage.
-    pub fn pixel_format(&self) -> BufferFormat { BufferFormat::Argb8888 }
+    pub fn pixel_format(&self) -> BufferFormat {
+        BufferFormat::Argb8888
+    }
+    /// The target contains the previous submitted frame outside the damage
+    /// supplied when it was acquired.
+    pub fn retained(&self) -> bool {
+        self.inner.retained()
+    }
 }
 
 impl<D: HasDisplayHandle, W: HasWindowHandle> Surface<D, W> {
@@ -190,7 +207,31 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> Surface<D, W> {
     #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
     pub fn prepared_buffer(&mut self) -> Result<PreparedBuffer, SoftBufferError> {
         let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
-        Ok(PreparedBuffer { inner: surface.prepared_buffer()? })
+        Ok(PreparedBuffer {
+            inner: surface.prepared_buffer()?,
+        })
+    }
+
+    /// Acquire a native IOSurface and preserve the previous submitted pixels
+    /// outside `damage`, matching Chromium SoftwareOutputDeviceMac's rotating
+    /// buffer damage accumulation.
+    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+    pub fn prepared_buffer_with_damage(
+        &mut self,
+        damage: &[Rect],
+    ) -> Result<PreparedBuffer, SoftBufferError> {
+        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
+        Ok(PreparedBuffer {
+            inner: surface.prepared_buffer_with_damage(damage)?,
+        })
+    }
+
+    /// Invalidate native IOSurface updates that were queued for the window
+    /// thread but have not entered a Core Animation transaction yet.
+    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+    pub fn invalidate_pending_prepared_presentations(&mut self) {
+        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
+        surface.invalidate_pending_prepared_presentations();
     }
 
     /// Submit a previously prepared IOSurface without copying its pixels.
@@ -362,9 +403,13 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> Buffer<'_, D, W> {
     /// Present with transaction timing and optional Core Animation phase diagnostics.
     /// Phase callbacks identify the submitted surface update, not a displayed frame.
     /// This does not flush transactions or change presentation scheduling.
-    pub fn present_with_transaction_observer(self, callback: PresentCallback,
-        observer: NativeTransactionObserver) -> Result<(), SoftBufferError> {
-        self.buffer_impl.present_with_callback(callback, Some(observer))
+    pub fn present_with_transaction_observer(
+        self,
+        callback: PresentCallback,
+        observer: NativeTransactionObserver,
+    ) -> Result<(), SoftBufferError> {
+        self.buffer_impl
+            .present_with_callback(callback, Some(observer))
     }
 
     /// Presents buffer to the window, with damage regions.

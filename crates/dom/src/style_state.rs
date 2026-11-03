@@ -3,6 +3,71 @@
 #![allow(non_snake_case)]
 use std::collections::{HashMap, HashSet};
 
+/// A deduplicated node work list that keeps first-insertion order.
+///
+/// Style recalculation is already parent-first. Keeping that order lets the
+/// Layout boundary apply ordinary `SetStyle` work without rebuilding DOM depth
+/// for every changed node. Removal leaves a tombstone so the common consume
+/// path stays O(1); a later insertion compacts only after tombstones dominate.
+#[derive(Clone, Default)]
+pub struct OrderedNodeSet {
+    entries: Vec<Option<u64>>,
+    positions: HashMap<u64, usize>,
+}
+
+impl OrderedNodeSet {
+    pub fn insert(&mut self, node: u64) -> bool {
+        if self.positions.contains_key(&node) {
+            return false;
+        }
+        if self.entries.len() > self.positions.len().saturating_mul(2).saturating_add(32) {
+            self.compact();
+        }
+        let position = self.entries.len();
+        self.entries.push(Some(node));
+        self.positions.insert(node, position);
+        true
+    }
+
+    pub fn remove(&mut self, node: &u64) -> bool {
+        let Some(position) = self.positions.remove(node) else {
+            return false;
+        };
+        self.entries[position] = None;
+        true
+    }
+
+    pub fn contains(&self, node: &u64) -> bool {
+        self.positions.contains_key(node)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &u64> {
+        self.entries.iter().filter_map(Option::as_ref)
+    }
+
+    pub fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.positions.clear();
+    }
+
+    fn compact(&mut self) {
+        self.entries.retain(Option::is_some);
+        self.positions.clear();
+        for (position, node) in self.entries.iter().enumerate() {
+            self.positions
+                .insert(node.expect("retained node"), position);
+        }
+    }
+}
+
 /// ContainerNode::ChildrenChange's element boundaries. Unknown boundaries
 /// (for example a batched slot reassignment) retain conservative invalidation.
 #[derive(Clone, Copy, Debug)]
@@ -121,24 +186,24 @@ pub struct StyleState {
     /// whose structural pseudo state may have changed after an append.
     pub inserted_style_subtrees: HashSet<usize>,
     pub append_affected_subtrees: HashSet<usize>,
-    /// Unknown/document-wide native input changes require full tree attachment.
+    /// Unknown/document-wide source input changes require full tree attachment.
     pub layout_inputs_require_tree: bool,
     /// Known dirty attachment roots. An unknown or document-wide input still
     /// sets layout_inputs_require_tree; these identities never replace DOM.
     pub layout_tree_roots: HashSet<u64>,
-    /// Style's NeedsReattachLayoutTree result for individual native objects.
+    /// Style's NeedsReattachLayoutTree result for individual source objects.
     pub layout_reattach_nodes: HashSet<u64>,
     pub impact: StyleUpdateImpact,
     pub stats: StyleUpdateStats,
     /// Style inputs not yet delivered to resident LayoutObjects. A synchronous
     /// layout consumes this delta independently of the frame's paint work.
-    pub layout_style_nodes: HashSet<u64>,
+    pub layout_style_nodes: OrderedNodeSet,
     /// Style clients whose fragments/paint still need updating this frame.
     /// Cleared by Paint commit, not by synchronous layout or a second recalc.
     pub paint_style_nodes: HashSet<u64>,
     /// Generated/flattened paint input changes need ordinary fragment export.
     pub paint_style_requires_export: bool,
-    /// Geometry-query inputs changed during native style resolution or DOM
+    /// Geometry-query inputs changed during source style resolution or DOM
     /// flat-tree attachment or rendered character data. Equal-style
     /// redistribution still revokes geometry;
     /// paint-only changes retain their ordinary layout/paint impact.

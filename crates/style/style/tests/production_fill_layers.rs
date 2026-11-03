@@ -29,12 +29,12 @@ fn node(owner: &DOM, name: &str) -> usize {
         })
         .unwrap()
 }
-fn native(owner: &DOM, name: &str) -> Persistent<ComputedStyle> {
+fn computed_style(owner: &DOM, name: &str) -> Persistent<ComputedStyle> {
     owner
         .GetDocument()
         .ResolvedStyleFor(node(owner, name))
         .unwrap()
-        .native_style
+        .computed_style_owner
         .clone()
 }
 fn layers(first: &FillLayer) -> Vec<&FillLayer> {
@@ -58,7 +58,7 @@ fn set_style(owner: &mut DOM, name: &str, css: &str) {
 const IMAGES: &str = "linear-gradient(transparent,transparent),url(sprite.svg),none";
 
 #[test]
-fn background_lists_cycle_all_native_fill_fields_in_production() {
+fn background_lists_cycle_all_computed_style_fill_fields_in_production() {
     let _heap = foundation::LayoutHeapScope::new();
     let css = format!(
         "background-image:{IMAGES};background-position:right 2px bottom 3px,left 7px top 8px;\
@@ -72,7 +72,7 @@ fn background_lists_cycle_all_native_fill_fields_in_production() {
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     for id in ["a", "b"] {
-        let style = native(&owner, id);
+        let style = computed_style(&owner, id);
         let items = layers(unsafe { &*style.Get() }.BackgroundLayers());
         assert_eq!(items.len(), 3);
         for (i, item) in items.iter().enumerate() {
@@ -171,7 +171,7 @@ fn mask_lists_cycle_and_excess_layers_are_culled_in_production() {
     let mut owner = html::html_parser::ParseHTML(&format!("<!doctype html><div id=a style='mask-image:{IMAGES};mask-position:4px 9px;mask-size:20px 40px;mask-repeat:no-repeat;mask-origin:content-box;mask-clip:padding-box'></div><div id=b style='background-image:url(sprite.svg);background-position:1px 2px,3px 4px,5px 6px;mask-image:url(sprite.svg);mask-position:1px 2px,3px 4px'></div>"));
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let a = native(&owner, "a");
+    let a = computed_style(&owner, "a");
     let masks = layers(unsafe { &*a.Get() }.MaskLayers());
     assert_eq!(masks.len(), 3);
     for item in masks {
@@ -184,13 +184,13 @@ fn mask_lists_cycle_and_excess_layers_are_culled_in_production() {
         assert_eq!(item.Origin(), EFillBox::kContent);
         assert_eq!(item.Clip(), EFillBox::kPadding);
     }
-    let b = native(&owner, "b");
+    let b = computed_style(&owner, "b");
     assert_eq!(layers(unsafe { &*b.Get() }.BackgroundLayers()).len(), 1);
     assert_eq!(layers(unsafe { &*b.Get() }.MaskLayers()).len(), 1);
 }
 
 #[test]
-fn fill_layer_mutation_preserves_old_native_snapshots_and_cached_siblings() {
+fn fill_layer_mutation_preserves_old_computed_style_snapshots_and_cached_siblings() {
     let _heap = foundation::LayoutHeapScope::new();
     let initial = "background-image:linear-gradient(transparent,transparent),url(sprite.svg);background-position:0 -20px;background-repeat:no-repeat";
     let mut owner = html::html_parser::ParseHTML(&format!(
@@ -198,7 +198,7 @@ fn fill_layer_mutation_preserves_old_native_snapshots_and_cached_siblings() {
     ));
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let old = native(&owner, "a");
+    let old = computed_style(&owner, "a");
     let old_second = unsafe { &*old.Get() }.BackgroundLayers().Next();
     assert_eq!(unsafe { &*old_second }.PositionY().Pixels(), -20.0);
     set_style(
@@ -207,12 +207,12 @@ fn fill_layer_mutation_preserves_old_native_snapshots_and_cached_siblings() {
         &format!("{initial};background-position:0 -40px"),
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let changed = native(&owner, "a");
+    let changed = computed_style(&owner, "a");
     for layer in layers(unsafe { &*changed.Get() }.BackgroundLayers()) {
         assert_eq!(layer.PositionY().Pixels(), -40.0);
     }
     assert_eq!(unsafe { &*old_second }.PositionY().Pixels(), -20.0);
-    let sibling = native(&owner, "b");
+    let sibling = computed_style(&owner, "b");
     for layer in layers(unsafe { &*sibling.Get() }.BackgroundLayers()) {
         assert_eq!(layer.PositionY().Pixels(), -20.0);
     }
@@ -222,7 +222,7 @@ fn fill_layer_mutation_preserves_old_native_snapshots_and_cached_siblings() {
         "background-image:url(sprite.svg);background-position:0 -60px,0 -80px,0 -100px",
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let culled = native(&owner, "a");
+    let culled = computed_style(&owner, "a");
     assert_eq!(
         layers(unsafe { &*culled.Get() }.BackgroundLayers()).len(),
         1
@@ -239,7 +239,7 @@ fn five_image_layers_repeat_independent_numeric_patterns() {
     let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=a style='background-image:url(a.svg),none,url(b.svg),none,url(c.svg);background-position:2px 3px,7px 8px;background-size:20px 40px;background-repeat:no-repeat'></div>");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    let style = native(&owner, "a");
+    let style = computed_style(&owner, "a");
     let items = layers(unsafe { &*style.Get() }.BackgroundLayers());
     assert_eq!(items.len(), 5);
     for (i, item) in items.iter().enumerate() {

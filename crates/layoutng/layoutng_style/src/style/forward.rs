@@ -1,5 +1,5 @@
 // Untranslated engine classes remain pointer-facing opaque declarations.
-// Image and CSSValue have concrete native value implementations below.
+// Image and CSSValue have concrete source value implementations below.
 
 // cpp: layoutng_style/style/computed_style.h:99-101
 pub use super::css_timing_data::{CSSAnimationData, CSSTransitionData};
@@ -78,7 +78,7 @@ pub struct CountersAttachmentContext {
     _private: [u8; 0],
 }
 
-// The native CSS operation value owner now supplies this formerly forward-
+// The source CSS operation value owner now supplies this formerly forward-
 // declared base; dependent headers keep their original declaration path.
 pub use super::filter_operation::FilterOperation;
 

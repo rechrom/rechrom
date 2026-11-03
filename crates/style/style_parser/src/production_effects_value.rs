@@ -153,6 +153,16 @@ pub struct CSSBasicShapeRectValue {
     pub radii: Option<[[Rc<Value>; 2]; 4]>, // tl, tr, br, bl; horizontal, vertical
 }
 
+/// css_basic_shape_values.h:283-345. `xywh()` retains its origin and
+/// non-negative size until computed-value conversion lowers it to inset().
+pub struct CSSBasicShapeXYWHValue {
+    pub x: Rc<Value>,
+    pub y: Rc<Value>,
+    pub width: Rc<Value>,
+    pub height: Rc<Value>,
+    pub radii: Option<[[Rc<Value>; 2]; 4]>, // tl, tr, br, bl; horizontal, vertical
+}
+
 impl CSSValueSubclass for CSSBasicShapeInsetValue {
     fn CustomCSSText(&self) -> String {
         fn four(values: &[Rc<Value>; 4]) -> Vec<&Rc<Value>> {
@@ -267,6 +277,65 @@ impl CSSValueSubclass for CSSBasicShapeRectValue {
 impl CSSValueRandom for CSSBasicShapeRectValue {
     fn HasRandomFunctions(&self) -> bool {
         self.sides.iter().any(|value| value.HasRandomFunctions())
+            || self.radii.as_ref().is_some_and(|radii| {
+                radii
+                    .iter()
+                    .flatten()
+                    .any(|value| value.HasRandomFunctions())
+            })
+    }
+}
+
+impl CSSValueSubclass for CSSBasicShapeXYWHValue {
+    fn CustomCSSText(&self) -> String {
+        let mut text = format!(
+            "xywh({} {} {} {})",
+            self.x.CssText().Utf8(),
+            self.y.CssText().Utf8(),
+            self.width.CssText().Utf8(),
+            self.height.CssText().Utf8(),
+        );
+        if let Some(radii) = &self.radii {
+            let horizontal = radii
+                .iter()
+                .map(|pair| pair[0].CssText().Utf8())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let vertical = radii
+                .iter()
+                .map(|pair| pair[1].CssText().Utf8())
+                .collect::<Vec<_>>()
+                .join(" ");
+            text.pop();
+            text.push_str(" round ");
+            text.push_str(&horizontal);
+            if radii
+                .iter()
+                .any(|pair| pair[0].as_ref() != pair[1].as_ref())
+            {
+                text.push_str(" / ");
+                text.push_str(&vertical);
+            }
+            text.push(')');
+        }
+        String::from(text.as_str())
+    }
+
+    fn Equals(&self, other: &Self) -> bool {
+        self.x == other.x
+            && self.y == other.y
+            && self.width == other.width
+            && self.height == other.height
+            && self.radii == other.radii
+    }
+}
+
+impl CSSValueRandom for CSSBasicShapeXYWHValue {
+    fn HasRandomFunctions(&self) -> bool {
+        self.x.HasRandomFunctions()
+            || self.y.HasRandomFunctions()
+            || self.width.HasRandomFunctions()
+            || self.height.HasRandomFunctions()
             || self.radii.as_ref().is_some_and(|radii| {
                 radii
                     .iter()

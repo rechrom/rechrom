@@ -53,7 +53,7 @@ pub trait AnalysisFlags {
     fn nothingToDraw(&self) -> bool;
     fn isFullyTransparent(&self) -> bool;
 }
-/// Native no-pixels device and field projections. RasterState must execute the
+/// Chromium no-pixels device and field projections. RasterState must execute the
 /// supplied state op against this canvas, including original-CTM SetMatrix;
 /// it cannot classify solids, skip ops, scan pixels, or traverse a record.
 pub trait SolidColorBackend<B: PaintOpBufferView + ?Sized> {
@@ -308,7 +308,7 @@ impl SolidColorAnalyzer {
             match op.GetType() {
                 kDrawRecord => {
                     // Rust's source-empty record has no allocation. This is
-                    // exactly the native empty CompositeIterator's zero visits.
+                    // exactly the source empty CompositeIterator's zero visits.
                     if let Some(record) = op.RecordBuffer() {
                         stack.push(Frame {
                             iter: CompositeIterator::new(record, None),

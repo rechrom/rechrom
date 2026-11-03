@@ -13,11 +13,11 @@ pub use foundation_base::blink_geometry::geometry::{
 };
 pub use foundation_base::gfx_geometry::Point;
 pub use foundation_base::layout_features::runtime_enabled_features::RuntimeEnabledFeatures;
-pub use foundation_base::text::native::east_asian_spacing_type::EastAsianSpacingType;
-pub use foundation_base::text::native::han_kerning_char_type::HanKerningCharType;
-pub use foundation_base::text::native::text_justify::TextJustify;
-pub use foundation_base::text::native::unicode_bidi::{IsIsolated, IsOverride, UnicodeBidi};
-pub use foundation_base::text::native::{
+pub use foundation_base::text::primitives::east_asian_spacing_type::EastAsianSpacingType;
+pub use foundation_base::text::primitives::han_kerning_char_type::HanKerningCharType;
+pub use foundation_base::text::primitives::text_justify::TextJustify;
+pub use foundation_base::text::primitives::unicode_bidi::{IsIsolated, IsOverride, UnicodeBidi};
+pub use foundation_base::text::primitives::{
     text_direction::{DirectionFromLevel, IsLtr, IsRtl},
     writing_mode::{
         IsFlippedBlocksWritingMode, IsFlippedLinesWritingMode, IsHorizontalTypographicMode,
@@ -29,7 +29,7 @@ pub use foundation_base::text::native::{
 pub use foundation_base::unsupported_layout::UnsupportedLayout;
 pub use gfx_ext::RectF;
 pub use path_forward::{Path, PointAndTangent};
-pub use physical_conversions::{ToFlooredPoint, ToFlooredSize, ToRoundedSize};
+pub use physical_conversions::{ToFlooredPoint, ToFlooredSize, ToRoundedPoint, ToRoundedSize};
 pub use physical_rect::PhysicalRect;
 pub use physical_rect::{SnapSizeToPixel, ToPixelSnappedRect};
 pub const RULE_NONZERO: WindRule = WindRule::RULE_NONZERO;
@@ -98,6 +98,7 @@ pub mod physical_conversions;
 mod physical_rect;
 pub mod quotes_data;
 pub mod rapidhash;
+pub mod resolved_underline_position;
 pub mod scoped_css_name;
 pub mod scoped_refptr;
 pub mod string_statics;
@@ -112,6 +113,7 @@ pub use blink_string::BlinkString;
 pub use color::{Color, ColorSpace, HueInterpolationMethod, RGBA32};
 pub use compositor_element_id::{
     CompositorElementId, CompositorElementIdFromUniqueObjectId, CompositorElementIdNamespace,
+    NamespaceFromCompositorElementId,
 };
 pub use css_bitset::{CSSBitset, CSSBitsetBase, CSSBitsetIterator};
 pub use gc_heap::{
@@ -128,7 +130,10 @@ pub use graphics_enums::InterpolationQuality::kInterpolationNone;
 pub use graphics_enums::{
     BlendMode, CompositeOperator, InterpolationQuality, RespectImageOrientationEnum,
 };
-pub use graphics_types::graphics::compositing_reasons::{CompositingReason, CompositingReasons};
+pub use graphics_types::graphics::compositing_reasons::{
+    CompositingReason, CompositingReasonCombos, CompositingReasons, Descriptions, ShortNames,
+    ToString,
+};
 pub use hash_containers::{HashMap, HashSet, IntWithZeroKeyHashTraits};
 pub use heap_hash_containers::{
     BasicHeapHashMap, BasicHeapHashSet, GCedHeapHashMap, GCedHeapHashSet, HeapHashMap, HeapHashSet,
@@ -160,7 +165,7 @@ pub use overlay_scrollbar_clip_behavior::OverlayScrollbarClipBehavior;
 pub use paint_invalidation_reason::{
     IsFullPaintInvalidationReason, IsLayoutFullPaintInvalidationReason,
     IsLayoutPaintInvalidationReason, IsNonLayoutFullPaintInvalidationReason,
-    PaintInvalidationReason,
+    PaintInvalidationReason, PaintInvalidationReasonToString,
 };
 pub use paint_property_update_reason::SubtreePaintPropertyUpdateReason;
 pub use string_statics::InitStringStatics;
@@ -178,6 +183,7 @@ pub mod style_flags;
 pub mod style_initial_letter;
 pub mod style_name_scope;
 pub mod style_values;
+pub mod text_decoration_geometry;
 pub mod text_decoration_thickness;
 pub mod text_offset_map;
 pub mod threading_traits;
@@ -206,6 +212,7 @@ pub use hash_functions::{
     HashInts, HashPointer, NormalizeSign,
 };
 pub use quotes_data::QuotesData;
+pub use resolved_underline_position::ResolvedUnderlinePosition;
 pub use scoped_css_name::{
     ScopedCSSName, ScopedCSSNameList, ScopedCSSNameWrapperPtrHashTraits, TreeScope,
 };
@@ -215,6 +222,10 @@ pub use style_constants::*;
 pub use style_flags::*;
 pub use style_initial_letter::StyleInitialLetter;
 pub use style_name_scope::{StyleNameScope, StyleNameScopeType};
+pub use text_decoration_geometry::{
+    DecorationGeometry, DecorationLineBounds, MakeWave, StrokeStyle, WaveDefinition, WavyPaintRect,
+    WavyPatternBounds,
+};
 pub use text_decoration_thickness::TextDecorationThickness;
 pub use text_offset_map::{TextOffsetMap, TextOffsetMapEntry};
 pub use threading_traits::{ThreadAffinity, ThreadingTrait};

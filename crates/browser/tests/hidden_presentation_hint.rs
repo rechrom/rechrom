@@ -1,6 +1,6 @@
 //! Hidden presentation hints through production Style, flat-tree attachment and Page.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
@@ -68,7 +68,7 @@ fn fixture() -> Page {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         Some(ScriptEnvironment {
-            runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+            runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                 4 * 1024 * 1024,
             )),
             xhr: Box::new(XHR),
@@ -145,16 +145,23 @@ fn count(root: &FragmentPaintData, id: u64) -> usize {
             .sum::<usize>()
 }
 
-fn native_display(page: &Page, name: &str) -> foundation::EDisplay {
+fn display(page: &Page, name: &str) -> foundation::EDisplay {
     let owner = page.Document();
     let document = owner.GetDocument();
     let index = document.FindNodeById(id(page, name)).unwrap();
-    unsafe { &*document.ResolvedStyleFor(index).unwrap().native_style.Get() }.Display()
+    unsafe {
+        &*document
+            .ResolvedStyleFor(index)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    }
+    .Display()
 }
 
 #[test]
 fn hidden_slot_suppresses_assigned_subtree_and_retains_control_and_old_frames() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -174,7 +181,7 @@ fn hidden_slot_suppresses_assigned_subtree_and_retains_control_and_old_frames() 
         "#,
         );
         assert_eq!(
-            native_display(&page, "panel-slot"),
+            display(&page, "panel-slot"),
             foundation::EDisplay::kContents
         );
         let panel_id = id(&page, "panel");
@@ -187,7 +194,7 @@ fn hidden_slot_suppresses_assigned_subtree_and_retains_control_and_old_frames() 
                 "slot.hidden = true; check(slot.hasAttribute('hidden'), 'hidden reflected');",
             );
             assert_eq!(
-                native_display(&page, "panel-slot"),
+                display(&page, "panel-slot"),
                 foundation::EDisplay::kNone,
                 "HTML hidden must enter the native computed style before attachment"
             );
@@ -205,7 +212,7 @@ fn hidden_slot_suppresses_assigned_subtree_and_retains_control_and_old_frames() 
             "#,
             );
             assert_eq!(
-                native_display(&page, "panel-slot"),
+                display(&page, "panel-slot"),
                 foundation::EDisplay::kContents
             );
             assert_eq!(
@@ -226,7 +233,7 @@ fn hidden_slot_suppresses_assigned_subtree_and_retains_control_and_old_frames() 
         assert!(find(&page.CurrentFrame().unwrap().fragments, panel_id).is_none());
         evaluate(&mut page, "slot.style.display = 'contents';");
         assert_eq!(
-            native_display(&page, "panel-slot"),
+            display(&page, "panel-slot"),
             foundation::EDisplay::kContents,
             "author style overrides hidden presentational hint"
         );
@@ -236,7 +243,7 @@ fn hidden_slot_suppresses_assigned_subtree_and_retains_control_and_old_frames() 
 
 #[test]
 fn hidden_slot_suppresses_fallback_and_ordinary_hidden_subtrees() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -251,11 +258,7 @@ fn hidden_slot_suppresses_fallback_and_ordinary_hidden_subtrees() {
         "#,
         );
         for name in ["fallback-slot", "ordinary"] {
-            assert_eq!(
-                native_display(&page, name),
-                foundation::EDisplay::kNone,
-                "{name}"
-            );
+            assert_eq!(display(&page, name), foundation::EDisplay::kNone, "{name}");
         }
         for name in ["fallback", "ordinary", "nested"] {
             assert!(
@@ -268,7 +271,7 @@ fn hidden_slot_suppresses_fallback_and_ordinary_hidden_subtrees() {
             "slot.removeAttribute('hidden'); ordinary.removeAttribute('hidden');",
         );
         assert_eq!(
-            native_display(&page, "fallback-slot"),
+            display(&page, "fallback-slot"),
             foundation::EDisplay::kContents
         );
         assert_eq!(

@@ -33,7 +33,7 @@ fn width(owner: &DOM, id: &str) -> f64 {
             .GetDocument()
             .ResolvedStyleFor(node(owner, id))
             .unwrap()
-            .native_style
+            .computed_style_owner
             .Get()
     }
     .Width()
@@ -82,8 +82,12 @@ fn production_inherited_variable_maps_share_backing_until_override() {
     let sibling = engine.custom_properties[&node(&owner, "sibling")].clone();
     assert!(CustomPropertiesEquivalent(&previous, &sibling));
     let mut equal_copy = (*previous).clone();
-    equal_copy.values = Rc::new((*previous.values).clone());
-    assert!(!Rc::ptr_eq(&previous.values, &equal_copy.values));
+    equal_copy.values = previous
+        .values
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    assert!(!previous.values.ptr_eq(&equal_copy.values));
     assert!(CustomPropertiesEquivalent(&previous, &equal_copy));
     assert!(!CustomPropertiesEquivalent(
         &previous,
@@ -91,6 +95,31 @@ fn production_inherited_variable_maps_share_backing_until_override() {
     ));
 
     let root = node(&owner, "root");
+    let previous_owners = ["root", "a", "b", "override", "c", "sibling"]
+        .map(|id| (id, engine.custom_properties[&node(&owner, id)].clone()));
+    let reordered_declarations = (0..256)
+        .rev()
+        .map(|i| format!("--v{i}:{}px;", i + 1))
+        .collect::<std::string::String>();
+    owner.GetDocumentMut().SetAttribute(
+        root,
+        DOMAttribute {
+            local_name: "style".into(),
+            value: reordered_declarations,
+            ..Default::default()
+        },
+    );
+    update(&mut engine, &mut owner);
+    for (id, previous_owner) in previous_owners {
+        assert!(
+            Rc::ptr_eq(
+                &previous_owner,
+                &engine.custom_properties[&node(&owner, id)]
+            ),
+            "logically equal recomputation must retain the canonical owner: {id}"
+        );
+    }
+
     owner.GetDocumentMut().SetAttribute(
         root,
         DOMAttribute {
@@ -141,15 +170,14 @@ fn production_registered_noninherited_reset_preserves_cow_and_values() {
         key_pointer(&engine, &owner, "b"),
         "already-reset descendants retain immutable maps"
     );
-    assert!(Rc::ptr_eq(
-        &engine.custom_properties[&node(&owner, "a")].registered_values,
-        &engine.custom_properties[&node(&owner, "b")].registered_values
-    ));
+    assert!(engine.custom_properties[&node(&owner, "a")]
+        .registered_values
+        .ptr_eq(&engine.custom_properties[&node(&owner, "b")].registered_values));
     let child = &engine.custom_properties[&node(&owner, "a")];
     let mut different_registered = (**child).clone();
     different_registered.registered_values = engine.custom_properties[&node(&owner, "root")]
         .registered_values
         .clone();
-    assert!(Rc::ptr_eq(&child.values, &different_registered.values));
+    assert!(child.values.ptr_eq(&different_registered.values));
     assert!(!CustomPropertiesEquivalent(child, &different_registered));
 }

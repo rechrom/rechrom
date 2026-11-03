@@ -1,8 +1,8 @@
 //! Author shadow/slot attachment through the production Page and QuickJS lifecycle.
 //! Use native HTML createElement nodes: ShadowRoot.innerHTML's fragment namespace
 //! behavior is a separate parser concern and must not hide attachment regressions.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
@@ -70,7 +70,7 @@ fn fixture() -> Page {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         Some(ScriptEnvironment {
-            runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
+            runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
                 4 * 1024 * 1024,
             )),
             xhr: Box::new(XHR),
@@ -149,7 +149,7 @@ fn count(root: &FragmentPaintData, id: u64) -> usize {
 
 // Inline owners can legitimately have no separate FragmentPaintData. Inspect the
 // retained native tree when checking uniqueness of the file status span.
-fn native_count(page: &Page, id: u64) -> usize {
+fn layout_object_count(page: &Page, id: u64) -> usize {
     use layoutng_assembly::internal::{
         layout_object::LayoutObject, layout_pass_scope::LayoutObjectFactoryScope,
     };
@@ -176,8 +176,8 @@ fn published<'a>(page: &'a Page, name: &str) -> &'a FragmentPaintData {
 }
 
 #[test]
-fn open_and_closed_nested_shadow_buttons_publish_native_fragments() {
-    native_test_thread::run(|| {
+fn open_and_closed_nested_shadow_buttons_publish_source_fragments() {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -225,7 +225,7 @@ fn open_and_closed_nested_shadow_buttons_publish_native_fragments() {
 
 #[test]
 fn attaching_empty_shadow_root_detaches_previously_published_light_subtree() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -264,7 +264,7 @@ fn attaching_empty_shadow_root_detaches_previously_published_light_subtree() {
 
 #[test]
 fn slots_publish_only_assigned_or_fallback_children_and_keep_slot_boxes() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -373,7 +373,7 @@ fn slots_publish_only_assigned_or_fallback_children_and_keep_slot_boxes() {
 
 #[test]
 fn equal_style_slot_redistribution_updates_measurement_before_the_next_frame() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -468,8 +468,8 @@ fn equal_style_slot_redistribution_updates_measurement_before_the_next_frame() {
 }
 
 #[test]
-fn manual_slot_assignment_moves_and_reorders_the_published_native_children() {
-    native_test_thread::run(|| {
+fn manual_slot_assignment_moves_and_reorders_the_published_source_children() {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -524,7 +524,7 @@ fn manual_slot_assignment_moves_and_reorders_the_published_native_children() {
 
 #[test]
 fn shadow_style_width_and_text_mutations_preserve_older_published_frames() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -653,7 +653,7 @@ fn glyph_ids(root: &FragmentPaintData) -> Vec<u32> {
 
 #[test]
 fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -697,7 +697,7 @@ fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
                 )
             })
             .collect();
-        let (button_id, status_id, native_editors) = {
+        let (button_id, status_id, editors) = {
             let owner = page.Document();
             let document = owner.GetDocument();
             let file = document.FindNodeById(id(&page, "file")).unwrap();
@@ -707,7 +707,7 @@ fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
             let status_id = document
                 .Node(document.FileStatusElement(file).unwrap())
                 .Id();
-            let native_editors: Vec<_> = ["text", "search", "textarea"]
+            let editors: Vec<_> = ["text", "search", "textarea"]
                 .iter()
                 .map(|name| {
                     let host = document.FindNodeById(id(&page, name)).unwrap();
@@ -716,7 +716,7 @@ fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
                         .Id()
                 })
                 .collect();
-            (button_id, status_id, native_editors)
+            (button_id, status_id, editors)
         };
         for _ in 0..2 {
             let fragments = &page.CurrentFrame().unwrap().fragments;
@@ -726,24 +726,23 @@ fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
                 "UA file button is emitted exactly once"
             );
             assert_eq!(
-                native_count(&page, status_id),
+                layout_object_count(&page, status_id),
                 1,
                 "UA file status retains exactly one native layout owner"
             );
-            for (name, native_editor) in ["text", "search", "textarea"].iter().zip(&native_editors)
-            {
+            for (name, editor) in ["text", "search", "textarea"].iter().zip(&editors) {
                 assert_eq!(
-                    native_count(&page, id(&page, name) | (1 << 54)),
+                    layout_object_count(&page, id(&page, name) | (1 << 54)),
                     1,
                     "{name} retains one specialized editor"
                 );
                 assert_eq!(
-                    native_count(&page, id(&page, name) | (1 << 53)),
+                    layout_object_count(&page, id(&page, name) | (1 << 53)),
                     1,
                     "{name} retains one specialized value text owner"
                 );
                 assert_eq!(
-                    count(fragments, *native_editor),
+                    count(fragments, *editor),
                     0,
                     "generic UA traversal must not duplicate {name}'s specialized editor"
                 );
@@ -785,7 +784,7 @@ fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
 
 #[test]
 fn slot_first_letter_uses_the_active_assigned_or_fallback_text() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -858,7 +857,7 @@ fn slot_first_letter_uses_the_active_assigned_or_fallback_text() {
 
 #[test]
 fn slotted_whitespace_only_nodes_do_not_create_flex_or_grid_items() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(
             &mut page,
@@ -923,7 +922,7 @@ fn slotted_whitespace_only_nodes_do_not_create_flex_or_grid_items() {
 #[test]
 #[ignore = "pre-existing meter UA pseudo selector calls pending GetComputedStyle collaborator"]
 fn meter_ua_selector_collaborator_diagnostic() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture();
         evaluate(&mut page, "element('meter', 'meter', 'width:100px;height:20px', document.body).setAttribute('value', '0.4');");
         assert!(published(&page, "meter").size.width > 0.0);

@@ -3,7 +3,7 @@ use font_engine::{Font, FontDescription, FontOrientation, SimpleFontData};
 use super::layout_input::{FontSmoothing, FontVariation, WritingMode};
 
 // cpp: layoutng/internal/layout_font_resolver.h:18-31
-pub struct NativeFontRequest<'a> {
+pub struct FontRequest<'a> {
     /// The immutable computed description produced by Style. Layout only
     /// rebinds it to the ConstraintSpace's resolved faces; it must not rebuild
     /// the description from the smaller face-selection key.
@@ -21,7 +21,7 @@ pub struct NativeFontRequest<'a> {
     pub smoothing: FontSmoothing,
 }
 
-impl<'a> NativeFontRequest<'a> {
+impl<'a> FontRequest<'a> {
     // cpp: layoutng/internal/layout_font_resolver.h:30-30
     pub fn new_auto(
         size: f64,
@@ -67,8 +67,8 @@ impl<'a> NativeFontRequest<'a> {
 
 // cpp: layoutng/internal/layout_font_resolver.h:33-42
 #[allow(non_snake_case)]
-pub trait NativeFontResolver {
-    fn Resolve(&mut self, request: &NativeFontRequest<'_>) -> &mut Font;
+pub trait FontResolver {
+    fn Resolve(&mut self, request: &FontRequest<'_>) -> &mut Font;
 
     fn FaceIndex(&self, _font_data: *const SimpleFontData) -> usize {
         0
@@ -80,14 +80,14 @@ pub trait NativeFontResolver {
 }
 
 // cpp: layoutng/internal/layout_font_resolver.h:44-44
-// The current resolver is installed by boundary/native_input during a layout pass.
-pub use super::boundary::native_input::CurrentNativeFontResolver;
+// The current resolver is installed by boundary/input during a layout pass.
+pub use super::boundary::input::CurrentFontResolver;
 
 // Layout carries writing-mode context, while font selection only needs the
 // resolved orientation. Matching and caching belong entirely to FontEngine.
-impl NativeFontResolver for font_engine::FontEngine {
+impl FontResolver for font_engine::FontEngine {
     #[inline(never)]
-    fn Resolve(&mut self, request: &NativeFontRequest<'_>) -> &mut Font {
+    fn Resolve(&mut self, request: &FontRequest<'_>) -> &mut Font {
         font_engine::FontEngine::ResolveFont(
             self,
             &font_engine::resolver::FontRequest {

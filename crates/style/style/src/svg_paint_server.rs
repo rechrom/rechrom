@@ -4,7 +4,7 @@
 //! `LayoutSVGResourcePaintServer`; gradient elements then collect the first
 //! specified value for each attribute along their href chain.  Rechrom freezes
 //! the resulting backend-neutral shader at the existing Style -> Layout paint
-//! boundary, while the canonical native `ComputedStyle` remains the URI owner.
+//! boundary, while the canonical computed style `ComputedStyle` remains the URI owner.
 
 use dom::{
     persistent_document::{DOMNamespace, DOMNodeType},
@@ -22,7 +22,7 @@ use layoutng::internal::{
         SvgPatternImage, SvgPatternReferenceFilter, SvgPatternText,
     },
 };
-use layoutng_style::style::svg_paint::SVGPaintType;
+use layoutng_style::style::{computed_style::ComputedStyle, svg_paint::SVGPaintType};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -31,6 +31,29 @@ use dom::persistent_document::ResolvedNodeStyle;
 // Borrow the current recalc batch; a resource traversal never owns or copies
 // ordinary element styles. The document supplies unchanged nodes.
 pub(crate) type PendingStyles<'a> = HashMap<usize, &'a ResolvedNodeStyle>;
+
+#[derive(Clone, Copy)]
+pub(crate) struct SVGContextPaint<'a> {
+    fill: Option<layoutng::internal::layout_input_types::Color>,
+    stroke: Option<layoutng::internal::layout_input_types::Color>,
+    fill_server: &'a Option<PaintShader>,
+    stroke_server: &'a Option<PaintShader>,
+}
+
+impl<'a> SVGContextPaint<'a> {
+    pub(crate) fn new(
+        paint: &PaintStyleData,
+        fill_server: &'a Option<PaintShader>,
+        stroke_server: &'a Option<PaintShader>,
+    ) -> Self {
+        Self {
+            fill: paint.svg_fill,
+            stroke: paint.svg_stroke,
+            fill_server,
+            stroke_server,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum LengthAxis {
@@ -71,8 +94,8 @@ fn Style<'a>(
         // A getComputedStyle cache in display:none is not a render resource.
         // cpp: ComputedStyle::NullifyEnsured / SVGResource::ResourceContainer.
         .filter(|style| {
-            !unsafe { style.native_style.Get().as_ref() }
-                .is_some_and(|native| native.IsEnsuredInDisplayNone())
+            !unsafe { style.computed_style_owner.Get().as_ref() }
+                .is_some_and(|computed_style| computed_style.IsEnsuredInDisplayNone())
         })
 }
 
@@ -313,10 +336,10 @@ fn Stops(
             .clamp(previous, 1.0);
         previous = offset;
         let style = Style(document, pending, child)?;
-        let native = unsafe { style.native_style.Get().as_ref() }?;
-        let resolved = native.StopColor().Resolve(
-            native.GetCurrentColor(None),
-            native.UsedColorScheme(),
+        let computed_style = unsafe { style.computed_style_owner.Get().as_ref() }?;
+        let resolved = computed_style.StopColor().Resolve(
+            computed_style.GetCurrentColor(None),
+            computed_style.UsedColorScheme(),
             None,
         );
         let (red, green, blue) = resolved.ToSRGB();
@@ -324,7 +347,7 @@ fn Stops(
             red,
             green,
             blue,
-            alpha: resolved.Alpha() * native.StopOpacity() * paint_opacity,
+            alpha: resolved.Alpha() * computed_style.StopOpacity() * paint_opacity,
         };
         result.push(PaintColorStop {
             offset,
@@ -713,6 +736,20 @@ enum PatternContentError {
     UnsupportedElement,
 }
 
+fn PatternComputedStyle(style: &ResolvedNodeStyle) -> Result<&ComputedStyle, PatternContentError> {
+    unsafe { style.computed_style_owner.Get().as_ref() }
+        .ok_or(PatternContentError::UnsupportedElement)
+}
+
+fn PatternPaint(
+    style: &ResolvedNodeStyle,
+) -> Result<layoutng::internal::paint_input::PaintStyleData, PatternContentError> {
+    Ok(layoutng::internal::boundary::paint_style_export::Export(
+        PatternComputedStyle(style)?,
+        None,
+    ))
+}
+
 fn PatternFilters(
     filters: &[layoutng::internal::paint_input::PaintFilterOperation],
 ) -> Result<Vec<layoutng::internal::paint_input::PaintFilterOperation>, PatternContentError> {
@@ -806,11 +843,11 @@ fn PatternMask(
     paint: &layoutng::internal::paint_input::PaintStyleData,
     resolving: &mut HashSet<usize>,
 ) -> Result<Option<Arc<SvgMaskGraph>>, PatternContentError> {
-    // Consume the same native projection as ordinary Layout/Paint. The older
+    // Consume the same computed style projection as ordinary Layout/Paint. The older
     // layout-style projection intentionally omits effect/stroke/mask fields.
     let canonical = Style(document, pending, node)
-        .and_then(|style| unsafe { style.native_style.Get().as_ref() })
-        .map(|style| layoutng::internal::boundary::native_paint_style::Export(style, None));
+        .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
+        .map(|style| layoutng::internal::boundary::paint_style_export::Export(style, None));
     let paint = canonical.as_ref().unwrap_or(paint);
     if paint.mask_images.is_empty() {
         return Ok(None);
@@ -852,7 +889,7 @@ fn PatternMask(
         }
     };
     let mode = Style(document, pending, target)
-        .and_then(|style| unsafe { style.native_style.Get().as_ref() })
+        .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
         .map_or(PaintMaskMode::kLuminance, |style| match style.MaskType() {
             foundation::EMaskType::kAlpha => PaintMaskMode::kAlpha,
             foundation::EMaskType::kLuminance => PaintMaskMode::kLuminance,
@@ -884,7 +921,7 @@ fn PatternPrimitives(
     pending: &PendingStyles<'_>,
     root: usize,
     resolving: &mut HashSet<usize>,
-    context_paint: Option<&PaintStyleData>,
+    context_paint: Option<&SVGContextPaint<'_>>,
     context_bounds: Option<&SvgPaintServerReferenceBox>,
 ) -> Result<Vec<SvgPatternCommand>, PatternContentError> {
     PatternPrimitivesWithShapes(
@@ -903,7 +940,7 @@ fn PatternPrimitivesWithShapes(
     pending: &PendingStyles<'_>,
     root: usize,
     resolving: &mut HashSet<usize>,
-    context_paint: Option<&PaintStyleData>,
+    context_paint: Option<&SVGContextPaint<'_>>,
     context_bounds: Option<&SvgPaintServerReferenceBox>,
     shapes: Option<&HashMap<usize, SvgShapeData>>,
 ) -> Result<Vec<SvgPatternCommand>, PatternContentError> {
@@ -916,7 +953,7 @@ fn PatternPrimitivesWithShapes(
         instances: &mut HashSet<usize>,
         output: &mut Vec<SvgPatternCommand>,
         instance_root: bool,
-        context_paint: Option<&PaintStyleData>,
+        context_paint: Option<&SVGContextPaint<'_>>,
         context_bounds: Option<&SvgPaintServerReferenceBox>,
         shapes: Option<&HashMap<usize, SvgShapeData>>,
     ) -> Result<(), PatternContentError> {
@@ -931,7 +968,7 @@ fn PatternPrimitivesWithShapes(
             return Ok(());
         }
         if Style(document, pending, node)
-            .and_then(|style| unsafe { style.native_style.Get().as_ref() })
+            .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
             .is_some_and(|style| style.Display() == foundation::EDisplay::kNone)
         {
             return Ok(());
@@ -941,9 +978,10 @@ fn PatternPrimitivesWithShapes(
             // Carry each SVG graphics/container transform through the same
             // retained command transform used by ordinary pattern content.
             let mut resolved = TransformMatrix::default();
-            if let Some(transform) = Style(document, pending, node)
-                .and_then(|style| style.style.paint.transform.as_ref())
-            {
+            let projected_transform = Style(document, pending, node)
+                .and_then(|style| PatternPaint(style).ok())
+                .and_then(|paint| paint.transform);
+            if let Some(transform) = projected_transform.as_ref() {
                 use layoutng::internal::paint_input::PaintTransformOperationKind;
                 for operation in &transform.operations {
                     let operation = match operation.kind {
@@ -985,7 +1023,13 @@ fn PatternPrimitivesWithShapes(
             // that StyleEngine entry exists, only reuse an already-equivalent
             // immutable paint style; guessing which inherited field won would
             // silently change fill/stroke/currentColor.
-            if use_style.style.paint != target_style.style.paint {
+            let use_computed = PatternComputedStyle(use_style)?;
+            let target_computed = PatternComputedStyle(target_style)?;
+            if layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
+                use_computed,
+                target_computed,
+            ) != 0
+            {
                 instances.remove(&target);
                 return Err(PatternContentError::UseStyleRequiresInstanceCascade);
             }
@@ -1051,13 +1095,14 @@ fn PatternPrimitivesWithShapes(
             let Some(style) = Style(document, pending, node) else {
                 return Ok(());
             };
-            let native = unsafe { style.native_style.Get().as_ref() };
-            if !style.style.paint.visible
-                || native.is_some_and(|style| style.Display() == foundation::EDisplay::kNone)
+            let computed_style = PatternComputedStyle(style)?;
+            if computed_style.Visibility() != foundation::EVisibility::kVisible
+                || computed_style.Display() == foundation::EDisplay::kNone
             {
                 return Ok(());
             }
-            let paint = &style.style.paint;
+            let paint = PatternPaint(style)?;
+            let paint = &paint;
             ValidatePatternEffects(paint)?;
             let filters = PatternFilters(&paint.filters)?;
             let clip = PatternClip(paint)?;
@@ -1067,8 +1112,8 @@ fn PatternPrimitivesWithShapes(
             let has_blend = paint.blend_mode
                 != layoutng::internal::paint_input::PaintBlendMode::kNormal
                 || paint.isolate_blending;
-            let fill_opacity = native.map_or(1.0, |style| style.FillOpacity());
-            let stroke_opacity = native.map_or(1.0, |style| style.StrokeOpacity());
+            let fill_opacity = computed_style.FillOpacity();
+            let stroke_opacity = computed_style.StrokeOpacity();
             let mut fill_server = paint.svg_fill_reference.as_deref().and_then(|reference| {
                 ResolveInner(document, node, pending, reference, fill_opacity, resolving)
             });
@@ -1086,30 +1131,30 @@ fn PatternPrimitivesWithShapes(
             let mut stroke = paint.svg_stroke;
             let mut fill_is_context = false;
             let mut stroke_is_context = false;
-            if let (Some(native), Some(context)) = (native, context_paint) {
-                match native.FillPaint().paint_type {
+            if let Some(context) = context_paint {
+                match computed_style.FillPaint().paint_type {
                     SVGPaintType::kContextFill => {
                         fill_is_context = true;
-                        fill = context.svg_fill;
-                        fill_server = context.svg_fill_server.clone();
+                        fill = context.fill;
+                        fill_server = context.fill_server.clone();
                     }
                     SVGPaintType::kContextStroke => {
                         fill_is_context = true;
-                        fill = context.svg_stroke;
-                        fill_server = context.svg_stroke_server.clone();
+                        fill = context.stroke;
+                        fill_server = context.stroke_server.clone();
                     }
                     _ => {}
                 }
-                match native.StrokePaint().paint_type {
+                match computed_style.StrokePaint().paint_type {
                     SVGPaintType::kContextFill => {
                         stroke_is_context = true;
-                        stroke = context.svg_fill;
-                        stroke_server = context.svg_fill_server.clone();
+                        stroke = context.fill;
+                        stroke_server = context.fill_server.clone();
                     }
                     SVGPaintType::kContextStroke => {
                         stroke_is_context = true;
-                        stroke = context.svg_stroke;
-                        stroke_server = context.svg_stroke_server.clone();
+                        stroke = context.stroke;
+                        stroke_server = context.stroke_server.clone();
                     }
                     _ => {}
                 }
@@ -1180,9 +1225,9 @@ fn PatternPrimitivesWithShapes(
             "image" => {
                 let style = Style(document, pending, node)
                     .ok_or(PatternContentError::ImageResourceLifecycle)?;
-                let native = unsafe { style.native_style.Get().as_ref() };
-                if !style.style.paint.visible
-                    || native.is_some_and(|style| style.Display() == foundation::EDisplay::kNone)
+                let computed_style = PatternComputedStyle(style)?;
+                if computed_style.Visibility() != foundation::EVisibility::kVisible
+                    || computed_style.Display() == foundation::EDisplay::kNone
                 {
                     return Ok(());
                 }
@@ -1232,7 +1277,8 @@ fn PatternPrimitivesWithShapes(
                 ) {
                     return Err(PatternContentError::ImageResourceLifecycle);
                 }
-                let paint = &style.style.paint;
+                let paint = PatternPaint(style)?;
+                let paint = &paint;
                 ValidatePatternEffects(paint)?;
                 let filters = PatternFilters(&paint.filters)?;
                 let filter_layers = filters.len();
@@ -1292,18 +1338,18 @@ fn PatternPrimitivesWithShapes(
             "g" | "svg" | "symbol" | "a" | "switch" => {}
             _ => return Err(PatternContentError::UnsupportedElement),
         }
-        if let Some(style) = Style(document, pending, node) {
-            let paint = &style.style.paint;
-            if !instance_root
-                && unsafe { style.native_style.Get().as_ref() }
-                    .is_some_and(|style| style.Display() == foundation::EDisplay::kNone)
-                || !paint.visible
+        let pattern_style = Style(document, pending, node);
+        let pattern_computed_style = pattern_style.map(PatternComputedStyle).transpose()?;
+        let pattern_paint = pattern_style.map(PatternPaint).transpose()?;
+        if let (Some(style), Some(paint)) = (pattern_computed_style, pattern_paint.as_ref()) {
+            if !instance_root && style.Display() == foundation::EDisplay::kNone
+                || style.Visibility() != foundation::EVisibility::kVisible
             {
                 return Ok(());
             }
             ValidatePatternEffects(paint)?;
         }
-        let pattern_paint = Style(document, pending, node).map(|style| &style.style.paint);
+        let pattern_paint = pattern_paint.as_ref();
         let opacity = pattern_paint.map_or(1.0, |paint| paint.opacity);
         let blend_mode = pattern_paint.map_or(
             layoutng::internal::paint_input::PaintBlendMode::kNormal,
@@ -1319,8 +1365,8 @@ fn PatternPrimitivesWithShapes(
         if opacity != 1.0 {
             output.push(SvgPatternCommand::SaveLayerOpacity(opacity));
         }
-        let filters = Style(document, pending, node)
-            .map(|style| PatternFilters(&style.style.paint.filters))
+        let filters = pattern_paint
+            .map(|paint| PatternFilters(&paint.filters))
             .transpose()?
             .unwrap_or_default();
         let filter_layers = PushPatternFilters(output, &filters);
@@ -1341,20 +1387,30 @@ fn PatternPrimitivesWithShapes(
             output.push(SvgPatternCommand::SaveLayerMask(mask));
         }
         if matches!(element.Name(), "text" | "tspan" | "textPath") {
-            let style =
-                Style(document, pending, node).ok_or(PatternContentError::TextRequiresShaping)?;
             let text = DirectSvgText(document, node);
             if !text.is_empty() {
-                let native = unsafe { style.native_style.Get().as_ref() }
-                    .ok_or(PatternContentError::TextRequiresShaping)?;
-                let paint = &style.style.paint;
-                let text_style = style
-                    .style
-                    .extended
-                    .as_ref()
-                    .ok_or(PatternContentError::TextRequiresShaping)?;
-                let fill_opacity = native.FillOpacity();
-                let stroke_opacity = native.StrokeOpacity();
+                let computed_style =
+                    pattern_computed_style.ok_or(PatternContentError::TextRequiresShaping)?;
+                let paint = pattern_paint.ok_or(PatternContentError::TextRequiresShaping)?;
+                let font = computed_style.GetFontDescription();
+                let mut font_families = Vec::new();
+                let mut family = font.Family() as *const font_engine::FontFamily;
+                while let Some(current) = unsafe { family.as_ref() } {
+                    if !current.FamilyName().empty() {
+                        font_families.push(current.FamilyName().Utf8());
+                    }
+                    family = current.Next();
+                }
+                let zoom = f64::from(computed_style.EffectiveZoom());
+                let unzoom = |value: f32| {
+                    if zoom > 0.0 {
+                        f64::from(value) / zoom
+                    } else {
+                        f64::from(value)
+                    }
+                };
+                let fill_opacity = computed_style.FillOpacity();
+                let stroke_opacity = computed_style.StrokeOpacity();
                 let fill_server = paint.svg_fill_reference.as_deref().and_then(|reference| {
                     ResolveInner(document, node, pending, reference, fill_opacity, resolving)
                 });
@@ -1368,7 +1424,7 @@ fn PatternPrimitivesWithShapes(
                         resolving,
                     )
                 });
-                let anchor = match native.TextAnchor() {
+                let anchor = match computed_style.TextAnchor() {
                     foundation::ETextAnchor::kMiddle => SvgClipTextAnchor::kMiddle,
                     foundation::ETextAnchor::kEnd => SvgClipTextAnchor::kEnd,
                     _ => SvgClipTextAnchor::kStart,
@@ -1386,14 +1442,14 @@ fn PatternPrimitivesWithShapes(
                             .ok_or(PatternContentError::TextRequiresShaping)?,
                         rotate: SvgTextNumberList(document, node, "rotate")
                             .ok_or(PatternContentError::TextRequiresShaping)?,
-                        font_families: text_style.font_families.clone(),
-                        font_size: text_style.font_size,
-                        font_weight: text_style.font_weight,
-                        italic: text_style.font_italic,
-                        letter_spacing: text_style.letter_spacing,
-                        word_spacing: text_style.word_spacing,
-                        rtl: style.style.direction == TextDirection::kRtl,
-                        language: text_style.language.clone(),
+                        font_families,
+                        font_size: f64::from(font.SpecifiedSize()),
+                        font_weight: f64::from(font.Weight().ToFloat()),
+                        italic: font.Style().ToFloat() != 0.0,
+                        letter_spacing: unzoom(font.LetterSpacing()),
+                        word_spacing: unzoom(font.WordSpacing()),
+                        rtl: computed_style.Direction() == foundation::TextDirection::kRtl,
+                        language: computed_style.Locale().Utf8(),
                         anchor,
                         text_path: PatternTextPath(document, node)?,
                     },
@@ -1699,7 +1755,7 @@ fn ResolveMarkerResource(
     reference: &str,
     placement: MarkerPlacement,
     stroke_width: f64,
-    context_paint: &PaintStyleData,
+    context_paint: &SVGContextPaint<'_>,
     context_bounds: &SvgPaintServerReferenceBox,
 ) -> Option<SvgMarkerInstance> {
     let target = FindById(document, origin, LocalFragment(reference)?)?;
@@ -1775,7 +1831,7 @@ fn ResolveMarkerResource(
         &Multiply(&Rotation(angle), &Scale(units, units)),
     );
     let clips_viewport = Style(document, pending, target)
-        .and_then(|style| unsafe { style.native_style.Get().as_ref() })
+        .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
         .is_none_or(|style| {
             style.OverflowX() != foundation::EOverflow::kVisible
                 || style.OverflowY() != foundation::EOverflow::kVisible
@@ -1799,7 +1855,7 @@ pub(crate) fn ResolveMarkers(
     document: &Document,
     pending: &PendingStyles<'_>,
     node: usize,
-    context_paint: &PaintStyleData,
+    context_paint: SVGContextPaint<'_>,
     start_reference: Option<&str>,
     mid_reference: Option<&str>,
     end_reference: Option<&str>,
@@ -1832,7 +1888,7 @@ pub(crate) fn ResolveMarkers(
                 reference,
                 placement,
                 stroke_width,
-                context_paint,
+                &context_paint,
                 &context_bounds,
             )
         })
@@ -1978,7 +2034,13 @@ fn ResolveElement(
         unit_coordinates: object_bounding_box,
         object_bounding_box_coordinates: object_bounding_box,
         transform: collected.transform.unwrap_or_default(),
-        interpolate_premultiplied: true,
+        // Source: layout_svg_resource_linear_gradient.cc:68-73 and
+        // layout_svg_resource_radial_gradient.cc:81-87. SVG paint-server
+        // gradients interpolate unpremultiplied colors; this is distinct from
+        // CSS generated-image gradients. In particular, an opaque color stop
+        // fading to the same transparent color must only uncover the existing
+        // backdrop, not darken it through premultiplied RGB interpolation.
+        interpolate_premultiplied: false,
         ..PaintShader::default()
     };
     let length = |value: Option<String>, default: &str, axis| {
@@ -2031,15 +2093,15 @@ fn ResolveElement(
 
 /// LayoutSVGResourceMasker::CreatePaintRecord equivalent in the existing
 /// immutable resource recorder. Uses the same command recording traversal as
-/// patterns, fed canonical native shape/style inputs. Unsupported collaborators
+/// patterns, fed canonical computed style shape/style inputs. Unsupported collaborators
 /// are retained on the graph, never reported as an empty successful mask.
 pub(crate) fn ResolveMaskDefinition(
     document: &Document,
     pending: &PendingStyles<'_>,
     target: usize,
 ) -> Arc<SvgMaskGraph> {
-    let style =
-        Style(document, pending, target).and_then(|s| unsafe { s.native_style.Get().as_ref() });
+    let style = Style(document, pending, target)
+        .and_then(|s| unsafe { s.computed_style_owner.Get().as_ref() });
     let mut graph = SvgMaskGraph {
         id: Attribute(document, target, "id").unwrap_or_default(),
         mask_units: if Attribute(document, target, "maskUnits").as_deref() == Some("userSpaceOnUse")
@@ -2093,7 +2155,6 @@ pub(crate) fn ResolveMaskDefinition(
             pending: &PendingStyles<'_>,
             node: usize,
             shapes: &mut HashMap<usize, SvgShapeData>,
-            canonical: &mut HashMap<usize, ResolvedNodeStyle>,
         ) -> Result<(), String> {
             let element = document.Node(node);
             if element.Type() != DOMNodeType::kElement {
@@ -2104,41 +2165,38 @@ pub(crate) fn ResolveMaskDefinition(
             let Some(style) = Style(document, pending, node) else {
                 return Ok(());
             };
-            let native =
-                unsafe { style.native_style.Get().as_ref() }.ok_or("missing native mask style")?;
-            if native.Display() == foundation::EDisplay::kNone {
+            let computed_style = unsafe { style.computed_style_owner.Get().as_ref() }
+                .ok_or("missing computed_style mask style")?;
+            if computed_style.Display() == foundation::EDisplay::kNone {
                 return Ok(());
             }
             if !style.own_generates_box {
                 return Err("mask content without its own layout box".into());
             }
-            let native_paint =
-                layoutng::internal::boundary::native_paint_style::Export(native, None);
-            let paint = &native_paint;
-            let mut record_style = style.clone();
-            *record_style.style.paint = native_paint.clone();
-            canonical.insert(node, record_style);
+            let paint =
+                layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
+            let paint = &paint;
             if !matches!(
-                native.FillPaint().paint_type,
+                computed_style.FillPaint().paint_type,
                 SVGPaintType::kColor | SVGPaintType::kNone
             ) || !matches!(
-                native.StrokePaint().paint_type,
+                computed_style.StrokePaint().paint_type,
                 SVGPaintType::kColor | SVGPaintType::kNone
             ) {
                 return Err("context/resource mask paint".into());
             }
-            if paint.svg_non_scaling_stroke || native.PaintOrder()!=layoutng_style::style::computed_style_constants::EPaintOrder::kPaintOrderNormal || element.FindAttribute("pathLength").is_some() {return Err("mask non-scaling stroke, paint order or pathLength".into());}
-            if !native.StrokeWidth().length().IsFixed()
-                || !native.StrokeDashOffset().IsFixed()
-                || unsafe { native.StrokeDashArray().as_ref() }
+            if paint.svg_non_scaling_stroke || computed_style.PaintOrder()!=layoutng_style::style::computed_style_constants::EPaintOrder::kPaintOrderNormal || element.FindAttribute("pathLength").is_some() {return Err("mask non-scaling stroke, paint order or pathLength".into());}
+            if !computed_style.StrokeWidth().length().IsFixed()
+                || !computed_style.StrokeDashOffset().IsFixed()
+                || unsafe { computed_style.StrokeDashArray().as_ref() }
                     .is_some_and(|a| a.iter().any(|l| !l.IsFixed()))
             {
                 return Err("mask percentage/expression stroke metrics".into());
             }
-            if native.EffectiveZoom() != 1.0 {
+            if computed_style.EffectiveZoom() != 1.0 {
                 return Err("zoomed mask content recording".into());
             }
-            if native.HasOffset() {
+            if computed_style.HasOffset() {
                 return Err("offset mask content recording".into());
             }
             if !paint.filters.is_empty()
@@ -2147,9 +2205,9 @@ pub(crate) fn ResolveMaskDefinition(
                 || !paint.backdrop_filters.is_empty()
                 || paint.svg_fill_reference.is_some()
                 || paint.svg_stroke_reference.is_some()
-                || !native.MarkerStartResource().is_null()
-                || !native.MarkerMidResource().is_null()
-                || !native.MarkerEndResource().is_null()
+                || !computed_style.MarkerStartResource().is_null()
+                || !computed_style.MarkerMidResource().is_null()
+                || !computed_style.MarkerEndResource().is_null()
             {
                 return Err("mask content effect/paint-server collaborator".into());
             }
@@ -2161,25 +2219,22 @@ pub(crate) fn ResolveMaskDefinition(
                     return Err("hidden mask group with descendant visibility overrides".into());
                 }
             } else {
-                let shape = dom::layout_mapping::SVGMaskShape(document, node, native)?
+                let shape = dom::layout_mapping::SVGMaskShape(document, node, computed_style)?
                     .ok_or_else(|| format!("unsupported mask child {}", element.Name()))?;
                 shapes.insert(node, shape);
             }
             for &child in element.Children() {
-                collect(document, pending, child, shapes, canonical)?;
+                collect(document, pending, child, shapes)?;
             }
             Ok(())
         }
         let mut shapes = HashMap::new();
-        let mut canonical = HashMap::new();
         for &child in document.Node(target).Children() {
-            collect(document, pending, child, &mut shapes, &mut canonical)?;
+            collect(document, pending, child, &mut shapes)?;
         }
-        let mut record_styles = pending.clone();
-        record_styles.extend(canonical.iter().map(|(node, style)| (*node, style)));
         PatternPrimitivesWithShapes(
             document,
-            &record_styles,
+            pending,
             target,
             &mut HashSet::new(),
             None,

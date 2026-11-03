@@ -3,7 +3,7 @@ use compositor_core::{
         geometry::Size,
         layer_tree_host_impl::{HostUICanvas, HostUISourceBitmap, HostUISurface},
     },
-    runtime::native_ui::NativeUiRasterServices,
+    runtime::ui::UiRasterServices,
 };
 use raster::RasterEngine;
 

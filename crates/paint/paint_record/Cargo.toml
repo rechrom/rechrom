@@ -14,3 +14,10 @@ paint_chunk = { path = "../paint_chunk" }
 paint_model = { path = "../paint_model" }
 paint_reuse = { path = "../paint_reuse" }
 prepaint = { path = "../prepaint" }
+serde_json = "1"
+
+[dev-dependencies]
+# Tests exercise the same assembled Layout providers used by Browser. The
+# production dependency remains feature-minimal; Cargo unifies this only for
+# the paint_record test target so the extern virtual-dispatch providers link.
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly", features = ["translation_in_progress"] }

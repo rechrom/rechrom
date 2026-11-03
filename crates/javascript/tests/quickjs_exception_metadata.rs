@@ -8,16 +8,16 @@ struct Host {
 }
 impl JavaScriptHostBindings for Host {
     fn GlobalNames(&self) -> Vec<String> {
-        ["nativeGetter", "nativeObject", "capture"]
+        ["hostGetter", "hostObject", "capture"]
             .map(str::to_owned)
             .to_vec()
     }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult {
         match (call.operation, call.receiver, call.member) {
-            (HostOperation::kGet, 0, "nativeGetter") => {
-                HostResult::Failure(JavaScriptExceptionKind::kTypeError, "native getter failure")
+            (HostOperation::kGet, 0, "hostGetter") => {
+                HostResult::Failure(JavaScriptExceptionKind::kTypeError, "host getter failure")
             }
-            (HostOperation::kGet, 0, "nativeObject") => HostResult {
+            (HostOperation::kGet, 0, "hostObject") => HostResult {
                 value: HostValue::Object(HostObjectRef { id: 1 }),
                 ..Default::default()
             },
@@ -28,10 +28,9 @@ impl JavaScriptHostBindings for Host {
                 }),
                 ..Default::default()
             },
-            (HostOperation::kCall, 1, "valueOf") => HostResult::Failure(
-                JavaScriptExceptionKind::kTypeError,
-                "native coercion failure",
-            ),
+            (HostOperation::kCall, 1, "valueOf") => {
+                HostResult::Failure(JavaScriptExceptionKind::kTypeError, "host coercion failure")
+            }
             (HostOperation::kGet, 0, "capture") => HostResult {
                 value: HostValue::Method(HostMethodRef {
                     receiver: 0,
@@ -80,8 +79,8 @@ fn actual_exception_fields_match_original_cpp_v8() {
         ("rethrow","try {\n throw 'caught';\n} catch(e) {\n throw e;\n}"),
         ("finally","try {\n throw 'original';\n} finally {\n var cleanup=1;\n}"),
         ("iterator-cleanup","for(const x of {[Symbol.iterator](){return {next(){return {value:1,done:false}},return(){throw 'cleanup'}}}}){\n throw 'original';\n}"),
-        ("getter","\nnativeGetter;"),
-        ("coercion","\n+nativeObject;"),
+        ("getter","\nhostGetter;"),
+        ("coercion","\n+hostObject;"),
         ("nested","function inner(){\n throw 'inner';\n}\nfunction outer(){inner()}\nouter();"),
     ];
     let mut rows = Vec::new();

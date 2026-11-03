@@ -1,5 +1,5 @@
-//! V8 console formatter behavior implemented over QuickJS's native callables.
-use super::native::*;
+//! V8 console formatter behavior implemented over QuickJS's host callables.
+use super::adapter::*;
 use std::rc::Rc;
 
 struct Method {

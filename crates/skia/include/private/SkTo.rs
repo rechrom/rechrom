@@ -31,7 +31,7 @@ const impl<D: [const] SkCastFrom<S>, S> SkToCast<S> for D {
 pub const fn SkTo<D: [const] SkToCast<S>, S>(source: S) -> D {
     D::sk_to_cast(source)
 }
-macro_rules! native_cast {
+macro_rules! cast {
     ($name:ident,$d:ty) => {
         pub const fn $name<S>(source: S) -> $d
         where
@@ -42,27 +42,27 @@ macro_rules! native_cast {
     };
 }
 // Source: include/private/SkTo.h:21
-native_cast!(SkToS8, i8);
+cast!(SkToS8, i8);
 // Source: include/private/SkTo.h:22
-native_cast!(SkToU8, u8);
+cast!(SkToU8, u8);
 // Source: include/private/SkTo.h:23
-native_cast!(SkToS16, i16);
+cast!(SkToS16, i16);
 // Source: include/private/SkTo.h:24
-native_cast!(SkToU16, u16);
+cast!(SkToU16, u16);
 // Source: include/private/SkTo.h:25
-native_cast!(SkToS32, i32);
+cast!(SkToS32, i32);
 // Source: include/private/SkTo.h:26
-native_cast!(SkToU32, u32);
+cast!(SkToU32, u32);
 // Source: include/private/SkTo.h:27
-native_cast!(SkToS64, i64);
+cast!(SkToS64, i64);
 // Source: include/private/SkTo.h:28
-native_cast!(SkToU64, u64);
+cast!(SkToU64, u64);
 // Source: include/private/SkTo.h:29
-native_cast!(SkToInt, core::ffi::c_int);
+cast!(SkToInt, core::ffi::c_int);
 // Source: include/private/SkTo.h:30
-native_cast!(SkToUInt, core::ffi::c_uint);
+cast!(SkToUInt, core::ffi::c_uint);
 // Source: include/private/SkTo.h:31
-native_cast!(SkToSizeT, usize);
+cast!(SkToSizeT, usize);
 
 /// Projection of C++'s bool conversion, preserving its original borrowed input.
 pub const trait SkBoolCast {

@@ -22,11 +22,6 @@ pub trait RasterInvalidationItem {
     fn ScrollbarNeedsUpdateDisplay(&self) -> Option<bool>;
     fn VisualRect(&self) -> Rect;
     fn GetPaintInvalidationReason(&self) -> PaintInvalidationReason;
-    /// Exact immutable image contents sampled by this display item. The source
-    /// PaintController expresses the same transition through client
-    /// invalidation; retained Rust artifacts need a value proof so A -> B -> A
-    /// presentation remains symmetric.
-    fn ImageContentRevisions(&self) -> &[(u64, u64)];
 }
 pub trait RasterInvalidationChunk<M: RasterInvalidationTypes + ?Sized>: PaintChunkView<M> {
     type Id: Clone + Eq;
@@ -44,6 +39,8 @@ pub trait RasterInvalidationChunk<M: RasterInvalidationTypes + ?Sized>: PaintChu
 pub trait RasterInvalidationArtifact<M: RasterInvalidationTypes + ?Sized> {
     fn Chunk(&self, index: usize) -> &M::Chunk;
     fn DisplayItemsInChunk(&self, index: usize) -> &[M::Item];
+    fn ImageContentRevisionsInChunk(&self, index: usize) -> &[Vec<(u64, u64)>];
+    fn ChunkHasResourceChange(&self, index: usize) -> bool;
     fn ClientDebugName(&self, id: DisplayItemClientId) -> &str;
 }
 pub trait RasterInvalidationSubset<M: RasterInvalidationTypes + ?Sized> {

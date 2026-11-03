@@ -10,10 +10,13 @@ use crate::adapter::{
     property_tree::PropertyTreeTransform,
     property_types::PropertyTransform,
 };
-use std::{cell::Cell, sync::Mutex};
-thread_local! {static S_GLOBAL_GENERATION:Cell<u32>=const{Cell::new(1)};}
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Mutex,
+};
+static S_GLOBAL_GENERATION: AtomicU32 = AtomicU32::new(1);
 fn global_generation() -> u32 {
-    S_GLOBAL_GENERATION.with(Cell::get)
+    S_GLOBAL_GENERATION.load(Ordering::Relaxed)
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:173-237.
 struct PlaneRootTransform<N: TransformCacheNode> {
@@ -73,7 +76,7 @@ impl<N: TransformCacheNode> Default for GeometryMapperTransformCache<N> {
 impl<N: TransformCacheNode> GeometryMapperTransformCache<N> {
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.cc:18-24.
     pub fn ClearCache() {
-        S_GLOBAL_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
+        S_GLOBAL_GENERATION.fetch_add(1, Ordering::Relaxed);
     }
     pub fn IsValid(&self) -> bool {
         self.cache_generation_ == global_generation()

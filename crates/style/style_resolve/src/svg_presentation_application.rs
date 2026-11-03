@@ -1,5 +1,5 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
-//! Native SVG style slots; resource/path owners remain explicit boundaries.
+//! Canonical SVG style slots; resource/path owners remain explicit boundaries.
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{LineCap, LineJoin, Member};
@@ -148,7 +148,7 @@ pub(super) fn Apply(
             };
             b.SetStrokeMiterLimit(number);
         }
-        // generated:19258-19268, converter:2898-3010 shared native StyleColor.
+        // generated:19258-19268, converter:2898-3010 shared computed style StyleColor.
         kWebkitTextStrokeColor => {
             let color = if initial {
                 StyleColor::CurrentColor()

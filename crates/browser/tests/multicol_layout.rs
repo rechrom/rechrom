@@ -1,7 +1,7 @@
 //! UA button alignment must survive the canonical cascade and subsequent
 //! author/style mutations. Check both ComputedStyle and published geometry.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::{
@@ -60,7 +60,7 @@ fn fixture(css: &str, children: &str) -> Page {
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -117,7 +117,7 @@ fn item(page: &Page, name: &str) -> (Offset, layoutng_assembly::internal::layout
 const ITEMS: &str = "<div class=item id=a></div><div class=item id=b></div><div class=item id=c></div><div class=item id=d></div>";
 #[test]
 fn balanced_columns_publish_real_column_geometry() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture("", ITEMS);
         assert_eq!(item(&page, "columns").1.height, 40.0);
@@ -157,7 +157,7 @@ fn column_fragments(page: &Page) -> &FragmentPaintData {
 
 #[test]
 fn column_width_and_count_resolve_against_available_inline_size() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for css in [
             "column-count:auto;column-width:100px",
@@ -172,7 +172,7 @@ fn column_width_and_count_resolve_against_available_inline_size() {
 
 #[test]
 fn empty_multicol_retains_one_anonymous_fragmentainer() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             "column-fill:auto;height:100px;width:210px;column-gap:10px",
@@ -190,7 +190,7 @@ fn empty_multicol_retains_one_anonymous_fragmentainer() {
 
 #[test]
 fn fixed_height_fragments_one_block_and_allows_overflow_columns() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (height, expected) in [(150., vec![100., 50.]), (250., vec![100., 100., 50.])] {
             let page = fixture(
@@ -218,7 +218,7 @@ fn fixed_height_fragments_one_block_and_allows_overflow_columns() {
 
 #[test]
 fn balancing_honors_box_edges_and_min_max_height() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (constraint, container_height, column_height, count) in [
             ("", 60., 50., 3),
@@ -245,7 +245,7 @@ fn balancing_honors_box_edges_and_min_max_height() {
 
 #[test]
 fn balancing_stretches_for_unbreakable_children_and_forced_breaks() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page=fixture("", "<div style='height:30px;break-inside:avoid'></div><div style='height:30px;break-inside:avoid'></div><div style='height:30px;break-inside:avoid'></div>");
         assert_eq!(item(&page, "columns").1.height, 60.);
@@ -260,7 +260,7 @@ fn balancing_stretches_for_unbreakable_children_and_forced_breaks() {
 
 #[test]
 fn columns_use_logical_direction_and_subpixel_progression() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture("direction:rtl", ITEMS);
         assert_eq!(item(&page, "a").0, Offset { x: 120., y: 0. });
@@ -279,7 +279,7 @@ fn columns_use_logical_direction_and_subpixel_progression() {
 
 #[test]
 fn inline_content_fragments_in_columns() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             "font:16px/20px ButtonFixture",
@@ -294,7 +294,7 @@ fn inline_content_fragments_in_columns() {
 
 #[test]
 fn column_layout_survives_style_content_and_width_mutations() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture("", ITEMS);
         assert_eq!(item(&page, "c").0, Offset { x: 120., y: 0. });
@@ -328,7 +328,7 @@ fn column_layout_survives_style_content_and_width_mutations() {
 
 #[test]
 fn untranslated_column_branches_fail_explicitly() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for (css, children, reason) in [
             ("column-rule:1px solid red", ITEMS, "gap decorations"),
             ("column-wrap:wrap", ITEMS, "column wrapping"),
@@ -365,8 +365,8 @@ fn untranslated_column_branches_fail_explicitly() {
 }
 
 #[test]
-fn column_intrinsic_width_and_percentage_gaps_use_native_values() {
-    native_test_thread::run(|| {
+fn column_intrinsic_width_and_percentage_gaps_use_source_values() {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (css, width) in [
             ("display:inline-block;width:auto", 220.),
@@ -383,7 +383,7 @@ fn column_intrinsic_width_and_percentage_gaps_use_native_values() {
 
 #[test]
 fn ordinary_list_content_keeps_ids_across_fragmentainers() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page=fixture("font:16px/20px ButtonFixture", "<ul style='list-style:none;margin:0;padding:0'><li id=a>One</li><li id=b>Two</li><li id=c>Three</li><li id=d>Four</li></ul>");
         assert_eq!(item(&page, "a").0, Offset { x: 0., y: 0. });
@@ -399,7 +399,7 @@ fn ordinary_list_content_keeps_ids_across_fragmentainers() {
 
 #[test]
 fn formatting_context_change_rechecks_real_spanner_candidates() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page=fixture("", "<div id=fc style='display:flow-root'><div style='column-span:all;height:40px'></div></div>");
         assert!(page.CurrentFrame().is_some());

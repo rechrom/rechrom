@@ -5,12 +5,12 @@ use style::{
     parser::{css_parser_mode::CSSParserMode, production_property_parser::ParseProperty},
     production_css_value as values, StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let n = (0..d.NodeCount())
         .find(|&n| d.Node(n).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(n).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(n).unwrap().computed_style_owner.Get() }
 }
 fn update(owner: &mut dom::DOM) {
     let mut e = StyleEngine::new(owner);
@@ -31,7 +31,7 @@ use font_engine::fonts::font_description::{
     FontSynthesisSmallCaps as C, FontSynthesisStyle as S, FontSynthesisWeight as W,
 };
 #[test]
-fn font_synthesis_expands_all_source_longhands_and_stages_native_font() {
+fn font_synthesis_expands_all_source_longhands_and_stages_computed_style_font() {
     let _heap = foundation::LayoutHeapScope::new();
     let expanded = parse(P::kFontSynthesis, "small-caps weight");
     assert_eq!(
@@ -58,7 +58,7 @@ fn font_synthesis_expands_all_source_longhands_and_stages_native_font() {
     );
     update(&mut owner);
     for id in ["p", "c", "u"] {
-        let d = native(&owner, id).GetFontDescription();
+        let d = computed_style(&owner, id).GetFontDescription();
         assert_eq!(d.GetFontSynthesisWeight(), W::kAutoFontSynthesisWeight);
         assert_eq!(d.GetFontSynthesisStyle(), S::kNoneFontSynthesisStyle);
         assert_eq!(
@@ -66,28 +66,28 @@ fn font_synthesis_expands_all_source_longhands_and_stages_native_font() {
             C::kAutoFontSynthesisSmallCaps
         );
     }
-    let reset = native(&owner, "reset").GetFontDescription();
+    let reset = computed_style(&owner, "reset").GetFontDescription();
     assert_eq!(reset.GetFontSynthesisWeight(), W::kAutoFontSynthesisWeight);
     assert_eq!(reset.GetFontSynthesisStyle(), S::kNoneFontSynthesisStyle);
     assert_eq!(
         reset.GetFontSynthesisSmallCaps(),
         C::kNoneFontSynthesisSmallCaps
     );
-    let n = native(&owner, "n").GetFontDescription();
+    let n = computed_style(&owner, "n").GetFontDescription();
     assert_eq!(n.GetFontSynthesisWeight(), W::kNoneFontSynthesisWeight);
     assert_eq!(n.GetFontSynthesisStyle(), S::kNoneFontSynthesisStyle);
     assert_eq!(
         n.GetFontSynthesisSmallCaps(),
         C::kNoneFontSynthesisSmallCaps
     );
-    let i = native(&owner, "i").GetFontDescription();
+    let i = computed_style(&owner, "i").GetFontDescription();
     assert_eq!(i.GetFontSynthesisWeight(), W::kAutoFontSynthesisWeight);
     assert_eq!(i.GetFontSynthesisStyle(), S::kAutoFontSynthesisStyle);
     assert_eq!(
         i.GetFontSynthesisSmallCaps(),
         C::kAutoFontSynthesisSmallCaps
     );
-    let parts = native(&owner, "parts").GetFontDescription();
+    let parts = computed_style(&owner, "parts").GetFontDescription();
     assert_eq!(parts.GetFontSynthesisWeight(), W::kNoneFontSynthesisWeight);
     assert_eq!(parts.GetFontSynthesisStyle(), S::kAutoFontSynthesisStyle);
     assert_eq!(
@@ -96,7 +96,7 @@ fn font_synthesis_expands_all_source_longhands_and_stages_native_font() {
     );
 }
 #[test]
-fn math_depth_parent_auto_add_integer_math_and_native_clamp() {
+fn math_depth_parent_auto_add_integer_math_and_computed_style_clamp() {
     let _heap = foundation::LayoutHeapScope::new();
     let v = parse(P::kMathDepth, "add(calc(-1.5))");
     assert!(
@@ -121,7 +121,7 @@ fn math_depth_parent_auto_add_integer_math_and_native_clamp() {
         ("literalhi", i16::MAX),
         ("literaIlo", i16::MIN),
     ] {
-        assert_eq!(native(&owner, id).MathDepth(), depth, "{id}");
+        assert_eq!(computed_style(&owner, id).MathDepth(), depth, "{id}");
     }
 }
 #[test]
@@ -140,7 +140,7 @@ fn ordinal_group_positive_integer_math_css_wide_and_invalid_declarations() {
         ("calc", 3),
         ("clamped", 1),
     ] {
-        assert_eq!(native(&owner, id).BoxOrdinalGroup(), value, "{id}");
+        assert_eq!(computed_style(&owner, id).BoxOrdinalGroup(), value, "{id}");
     }
     for (id, text) in [
         (P::kFontSynthesis, "weight weight"),

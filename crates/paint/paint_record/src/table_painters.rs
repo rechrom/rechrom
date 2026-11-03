@@ -481,9 +481,9 @@ fn PaintColumnStyle(
     positioning: &PaintRect,
     cell_clip: &PaintRect,
 ) {
-    let style = &*column.style;
-    if !style.visible
-        || (style.background_color.alpha <= 0.0 && style.background_images.is_empty())
+    let style = &column.style;
+    if !style.visible()
+        || (style.background_color().alpha <= 0.0 && !style.has_background_images())
         || !IsVisible(table_node, cell_clip)
     {
         return;
@@ -508,7 +508,7 @@ fn PaintColumnStyle(
         table_node,
     );
     let has_blended_layer = style
-        .background_images
+        .background_images()
         .iter()
         .any(|layer: &BackgroundImageLayer| layer.blend_mode != PaintBlendMode::kNormal);
     if has_blended_layer {
@@ -523,20 +523,20 @@ fn PaintColumnStyle(
             table_node,
         );
     }
-    if style.background_color.alpha > 0.0 {
+    if style.background_color().alpha > 0.0 {
         context.borrow_mut().Append(
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase: info.phase,
                 node_id: column.node_id,
                 rect: *cell_clip,
-                color: style.background_color,
+                color: style.background_color(),
                 ..Default::default()
             },
             table_node,
         );
     }
-    for layer in style.background_images.iter().rev() {
+    for layer in style.background_images().iter().rev() {
         if layer.shader.is_none() && layer.resource_id == 0 {
             continue;
         }
@@ -549,10 +549,18 @@ fn PaintColumnStyle(
         } else {
             Some(FindImage(table_node, layer.resource_id))
         };
+        let image_orientation = image.map_or(image_resource::ImageOrientation::kDefault, |image| {
+            if style.respect_image_orientation() {
+                image.orientation
+            } else {
+                image_resource::ImageOrientation::kDefault
+            }
+        });
         let tile_size = ResolveBackgroundTileSize(
             layer,
             positioning,
             image,
+            image_orientation,
             f64::from(table_fragment.paint.effective_zoom),
         );
         let resolved = ResolveBackgroundTile(layer, positioning, tile_size);
@@ -560,9 +568,11 @@ fn PaintColumnStyle(
         let repeat_x = resolved.repeat_x;
         let repeat_y = resolved.repeat_y;
         let bitmap_tile_scale = if let Some(image) = image {
+            let (width, height) =
+                image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
             Offset {
-                x: tile.width / image.width as f64,
-                y: tile.height / image.height as f64,
+                x: tile.width / width,
+                y: tile.height / height,
             }
         } else {
             resolved.tile_scale
@@ -576,8 +586,8 @@ fn PaintColumnStyle(
                 },
                 f64::from(table_fragment.paint.effective_zoom),
                 table_fragment.paint.resources.as_deref(),
-                (!style.color_scheme_flags_is_normal)
-                    .then_some(u8::from(style.used_dark_color_scheme)),
+                (!style.color_scheme_flags_is_normal())
+                    .then_some(u8::from(style.used_dark_color_scheme())),
             )
         });
         if let Some(shader) = layer.shader.as_ref() {
@@ -625,6 +635,8 @@ fn PaintColumnStyle(
             context.borrow_mut().Append(item, table_node);
         } else if repeat_x || repeat_y {
             let image = image.expect("bitmap column background requires image");
+            let (source_width, source_height) =
+                image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
             context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawTiledImage,
@@ -634,12 +646,13 @@ fn PaintColumnStyle(
                     source_rect: PaintRect {
                         x: 0.0,
                         y: 0.0,
-                        width: image.width as f64,
-                        height: image.height as f64,
+                        width: source_width,
+                        height: source_height,
                     },
                     tile_rect: tile,
                     resource_id: image.id,
-                    image_interpolation_quality: style.image_interpolation_quality,
+                    image_interpolation_quality: style.image_interpolation_quality(),
+                    image_orientation,
                     document_image_container_key: document_image_container_key.clone(),
                     repeat_x,
                     repeat_y,
@@ -654,6 +667,8 @@ fn PaintColumnStyle(
             );
         } else {
             let image = image.expect("bitmap column background requires image");
+            let (source_width, source_height) =
+                image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
             context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawImageRect,
@@ -663,11 +678,12 @@ fn PaintColumnStyle(
                     source_rect: PaintRect {
                         x: 0.0,
                         y: 0.0,
-                        width: image.width as f64,
-                        height: image.height as f64,
+                        width: source_width,
+                        height: source_height,
                     },
                     resource_id: image.id,
-                    image_interpolation_quality: style.image_interpolation_quality,
+                    image_interpolation_quality: style.image_interpolation_quality(),
+                    image_orientation,
                     document_image_container_key,
                     background_repeat_x: resolved.rule_x,
                     background_repeat_y: resolved.rule_y,

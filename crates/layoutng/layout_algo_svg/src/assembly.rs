@@ -7,6 +7,7 @@ use layoutng_assembly::internal::inline_node::InlineNode;
 use layoutng_assembly::internal::layout_input::NodeKind;
 use layoutng_assembly::internal::layout_node_metadata::{Element, Node, Text};
 use layoutng_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layoutng_assembly::internal::layout_text::RegisterSvgInlineTextFontVirtuals;
 use layoutng_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layoutng_assembly::internal::svg_text_attributes_request::{
     SvgTextAttributesBuildRequest, SvgTextAttributesBuildResult,
@@ -211,6 +212,7 @@ fn SvgIsChildAllowed(
 pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
     assembly.algorithms.svg_support.performance_owner = Some("layout_algo_svg");
     layoutng_assembly::RegisterSvgRootChildren(SvgRootChildren);
+    RegisterSvgInlineTextFontVirtuals(SvgInlineTextScaledFont, SvgInlineTextScalingFactor);
     assembly.objects.svg = Some(CreateSvgObject);
     assembly.objects.svg_block_text_scale = Some(SquaredLocalSvgTextScale);
     assembly.objects.update_svg_block_style = Some(UpdateSvgBlockStyle);
@@ -232,6 +234,8 @@ pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
     assembly.algorithms.svg_support.update_object = Some(UpdateSvgObjectLayout);
     assembly.algorithms.svg_support.local_to_parent_transform = Some(SvgLocalToParentTransform);
     assembly.algorithms.svg_support.paint_geometry = Some(SvgPaintGeometry);
+    assembly.algorithms.svg_support.text_object_bounding_box =
+        Some(crate::svg_text_visual_rect::ObjectBoundingBox);
     assembly.algorithms.svg_support.text_visual_rect =
         Some(crate::svg_text_visual_rect::VisualRectInLocalSVGCoordinates);
     assembly.algorithms.svg_support.viewport_size = Some(crate::svg_viewport::ResolveViewport);
@@ -270,6 +274,7 @@ fn SvgPaintGeometry(
 ) -> (
     Option<layoutng_assembly::internal::layout_input::TransformMatrix>,
     Option<layoutng_assembly::fragment_tree::SvgViewportGeometry>,
+    Option<foundation::gfx::RectF>,
 ) {
     match object.RuntimeClass() {
         LayoutObjectClass::SvgViewportContainer => {
@@ -280,6 +285,7 @@ fn SvgPaintGeometry(
                     viewport.LocalToSVGParentTransform(),
                 )),
                 Some(viewport.PaintGeometry()),
+                Some(crate::svg_container_layout::VisualRect(object)),
             )
         }
         LayoutObjectClass::SvgGroup => (
@@ -287,6 +293,7 @@ fn SvgPaintGeometry(
                 object,
             ))),
             None,
+            Some(crate::svg_container_layout::VisualRect(object)),
         ),
         LayoutObjectClass::SvgRoot => (
             None,
@@ -294,7 +301,8 @@ fn SvgPaintGeometry(
                 unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() }
                     .PaintGeometry(),
             ),
+            None,
         ),
-        _ => (None, None),
+        _ => (None, None, None),
     }
 }

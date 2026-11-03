@@ -1,14 +1,17 @@
 use std::cell::Cell;
 
 use foundation::{
-    BlendMode, CompositeOperator, Length, LengthSize, MakeGarbageCollected, Member, Visitor,
+    gfx::SizeF, BlendMode, CompositeOperator, Length, LengthSize, MakeGarbageCollected, Member,
+    RespectImageOrientationEnum, ValuesEquivalent, Visitor,
 };
 
+use super::computed_style::ComputedStyle;
 use super::computed_style_constants::{
     BackgroundEdgeOrigin, CompositingOperator, EFillAttachment, EFillBox, EFillLayerType,
-    EFillMaskMode, EFillRepeat, EFillSizeType,
+    EFillMaskMode, EFillRepeat, EFillSizeType, EnclosingFillBox,
 };
 use super::style_image::StyleImage;
+use super::style_mask_source_image::{MaskSourceImage, StyleMaskSourceImage};
 
 impl foundation::Traceable for FillLayer {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
@@ -130,6 +133,99 @@ pub struct FillLayer {
     pub(crate) cached_properties_: Cell<FillLayerCachedProperties>,
 }
 
+// cpp: core/style/fill_layer.cc:49-91
+impl FillLayer {
+    pub fn new_without_initial_values(type_: EFillLayerType) -> Self {
+        Self::new(type_, false)
+    }
+
+    pub fn new(type_: EFillLayerType, use_initial_values: bool) -> Self {
+        Self {
+            next_: Member::default(),
+            image_: Member::from_ptr(Self::InitialFillImage(type_)),
+            position_x_: Self::InitialFillPositionX(type_),
+            position_y_: Self::InitialFillPositionY(type_),
+            size_length_: Self::InitialFillSizeLength(type_),
+            repeat_: Self::InitialFillRepeat(type_),
+            attachment_: Self::InitialFillAttachment(type_),
+            clip_: Self::InitialFillClip(type_),
+            origin_: Self::InitialFillOrigin(type_),
+            compositing_operator_: Self::InitialFillCompositingOperator(type_),
+            size_type_: if use_initial_values {
+                Self::InitialFillSizeType(type_)
+            } else {
+                EFillSizeType::kSizeNone
+            },
+            blend_mode_: Self::InitialFillBlendMode(type_),
+            background_x_origin_: BackgroundEdgeOrigin::kLeft,
+            background_y_origin_: BackgroundEdgeOrigin::kTop,
+            mask_mode_: Self::InitialFillMaskMode(type_),
+            image_set_: use_initial_values,
+            attachment_set_: use_initial_values,
+            clip_set_: use_initial_values,
+            origin_set_: use_initial_values,
+            repeat_set_: use_initial_values,
+            mask_mode_set_: use_initial_values,
+            pos_x_set_: use_initial_values,
+            pos_y_set_: use_initial_values,
+            background_x_origin_set_: false,
+            background_y_origin_set_: false,
+            compositing_operator_set_: use_initial_values || type_ == EFillLayerType::kMask,
+            blend_mode_set_: use_initial_values,
+            type_: type_,
+            cached_properties_: Cell::new(FillLayerCachedProperties::default()),
+        }
+    }
+
+    // cpp: core/style/fill_layer.cc:132-135
+    pub fn Trace(&self, visitor: &mut Visitor) {
+        visitor.Trace(&self.next_);
+        visitor.Trace(&self.image_);
+    }
+}
+
+// cpp: core/style/fill_layer.cc:93-130
+impl Clone for FillLayer {
+    fn clone(&self) -> Self {
+        let next = self.next_.Get();
+        Self {
+            next_: if next.is_null() {
+                Member::default()
+            } else {
+                Member::from_ptr(MakeGarbageCollected(unsafe { (&*next).clone() }))
+            },
+            image_: self.image_.clone(),
+            position_x_: self.position_x_.clone(),
+            position_y_: self.position_y_.clone(),
+            size_length_: self.size_length_.clone(),
+            repeat_: self.repeat_,
+            attachment_: self.attachment_,
+            clip_: self.clip_,
+            origin_: self.origin_,
+            compositing_operator_: self.compositing_operator_,
+            size_type_: self.size_type_,
+            blend_mode_: self.blend_mode_,
+            background_x_origin_: self.background_x_origin_,
+            background_y_origin_: self.background_y_origin_,
+            mask_mode_: self.mask_mode_,
+            image_set_: self.image_set_,
+            attachment_set_: self.attachment_set_,
+            clip_set_: self.clip_set_,
+            origin_set_: self.origin_set_,
+            repeat_set_: self.repeat_set_,
+            mask_mode_set_: self.mask_mode_set_,
+            pos_x_set_: self.pos_x_set_,
+            pos_y_set_: self.pos_y_set_,
+            background_x_origin_set_: self.background_x_origin_set_,
+            background_y_origin_set_: self.background_y_origin_set_,
+            compositing_operator_set_: self.compositing_operator_set_,
+            blend_mode_set_: self.blend_mode_set_,
+            type_: self.type_,
+            cached_properties_: Cell::new(FillLayerCachedProperties::default()),
+        }
+    }
+}
+
 #[allow(non_snake_case)]
 impl FillLayer {
     // cpp: layoutng_style/style/fill_layer.h:71
@@ -188,9 +284,30 @@ impl FillLayer {
     }
 
     // cpp: layoutng_style/style/fill_layer.h:92
-    // No definition exists in the supplied C++ tree.
+    // cpp: third_party/blink/renderer/core/style/fill_layer.cc:514-553
     pub fn Composite(&self) -> CompositeOperator {
-        unsafe { FillLayerComposite(self) }
+        match self.CompositingOperator() {
+            CompositingOperator::kAdd | CompositingOperator::kSourceOver => {
+                CompositeOperator::kCompositeSourceOver
+            }
+            CompositingOperator::kSubtract | CompositingOperator::kSourceOut => {
+                CompositeOperator::kCompositeSourceOut
+            }
+            CompositingOperator::kIntersect | CompositingOperator::kSourceIn => {
+                CompositeOperator::kCompositeSourceIn
+            }
+            CompositingOperator::kExclude | CompositingOperator::kXOR => {
+                CompositeOperator::kCompositeXOR
+            }
+            CompositingOperator::kClear => CompositeOperator::kCompositeClear,
+            CompositingOperator::kCopy => CompositeOperator::kCompositeCopy,
+            CompositingOperator::kSourceAtop => CompositeOperator::kCompositeSourceAtop,
+            CompositingOperator::kDestinationOver => CompositeOperator::kCompositeDestinationOver,
+            CompositingOperator::kDestinationIn => CompositeOperator::kCompositeDestinationIn,
+            CompositingOperator::kDestinationOut => CompositeOperator::kCompositeDestinationOut,
+            CompositingOperator::kDestinationAtop => CompositeOperator::kCompositeDestinationAtop,
+            CompositingOperator::kPlusLighter => CompositeOperator::kCompositePlusLighter,
+        }
     }
 
     // cpp: layoutng_style/style/fill_layer.h:93
@@ -430,34 +547,135 @@ impl FillLayer {
 
 #[allow(non_snake_case)]
 impl FillLayer {
-    // cpp: layoutng_style/style/fill_layer.h:209
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:137-176
     pub fn copy_from(&mut self, other: &Self) {
-        unsafe { FillLayerCopyAssign(self, other) }
+        if self.next_.Get() != other.next_.Get() {
+            let next = other.next_.Get();
+            self.next_ = if next.is_null() {
+                Member::default()
+            } else {
+                Member::from_ptr(MakeGarbageCollected(unsafe { (&*next).clone() }))
+            };
+        }
+        self.image_ = other.image_.clone();
+        self.position_x_ = other.position_x_.clone();
+        self.position_y_ = other.position_y_.clone();
+        self.background_x_origin_ = other.background_x_origin_;
+        self.background_y_origin_ = other.background_y_origin_;
+        self.mask_mode_ = other.mask_mode_;
+        self.background_x_origin_set_ = other.background_x_origin_set_;
+        self.background_y_origin_set_ = other.background_y_origin_set_;
+        self.size_length_ = other.size_length_.clone();
+        self.attachment_ = other.attachment_;
+        self.clip_ = other.clip_;
+        self.compositing_operator_ = other.compositing_operator_;
+        self.blend_mode_ = other.blend_mode_;
+        self.origin_ = other.origin_;
+        self.repeat_ = other.repeat_;
+        self.size_type_ = other.size_type_;
+        self.image_set_ = other.image_set_;
+        self.attachment_set_ = other.attachment_set_;
+        self.clip_set_ = other.clip_set_;
+        self.compositing_operator_set_ = other.compositing_operator_set_;
+        self.blend_mode_set_ = other.blend_mode_set_;
+        self.origin_set_ = other.origin_set_;
+        self.repeat_set_ = other.repeat_set_;
+        self.mask_mode_set_ = other.mask_mode_set_;
+        self.pos_x_set_ = other.pos_x_set_;
+        self.pos_y_set_ = other.pos_y_set_;
+        self.type_ = other.type_;
+        self.cached_properties_
+            .set(FillLayerCachedProperties::default());
     }
 
-    // cpp: layoutng_style/style/fill_layer.h:214
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:195-207
     pub fn VisuallyEqual(&self, other: &Self) -> bool {
-        unsafe { FillLayerVisuallyEqual(self, other) }
+        if !self.image_.Get().is_null() || !other.image_.Get().is_null() {
+            if !self.LayerPropertiesEqual(other) {
+                return false;
+            }
+        } else if self.clip_ != other.clip_ {
+            return false;
+        }
+        match (unsafe { self.next_.Get().as_ref() }, unsafe {
+            other.next_.Get().as_ref()
+        }) {
+            (Some(a), Some(b)) => a.layer.VisuallyEqual(&b.layer),
+            (None, None) => true,
+            _ => false,
+        }
     }
 
-    // cpp: layoutng_style/style/fill_layer.h:216
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:415-417
     pub fn ClipOccludesNextLayers(&self) -> bool {
-        unsafe { FillLayerClipOccludesNextLayers(self) }
+        self.Clip() == self.LayersClipMax()
     }
 
-    // cpp: layoutng_style/style/fill_layer.h:217
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:419-464
+    pub fn ImageOccludesNextLayers(&self, style: &ComputedStyle) -> bool {
+        let Some(image) = (unsafe { self.GetImage().as_ref() }) else {
+            return false;
+        };
+        if !image.CanRender() {
+            return false;
+        }
+        let image_tiles_layer = || {
+            matches!(
+                self.Repeat().x,
+                EFillRepeat::kRepeatFill | EFillRepeat::kRoundFill
+            ) && matches!(
+                self.Repeat().y,
+                EFillRepeat::kRepeatFill | EFillRepeat::kRoundFill
+            )
+        };
+        match self.Composite() {
+            CompositeOperator::kCompositeClear | CompositeOperator::kCompositeCopy => {
+                image_tiles_layer()
+            }
+            CompositeOperator::kCompositeSourceOver => {
+                self.GetBlendMode() == BlendMode::kNormal
+                    && image_tiles_layer()
+                    && image.KnownToBeOpaque(style)
+                    && !image
+                        .ImageSize(
+                            style.EffectiveZoom(),
+                            &SizeF::default(),
+                            RespectImageOrientationEnum::kRespectImageOrientation,
+                        )
+                        .IsEmpty()
+            }
+            _ => false,
+        }
+    }
+
+    // cpp: core/style/fill_layer.cc:466-479
     pub fn AllImagesAreInvalid(&self) -> bool {
-        unsafe { FillLayerAllImagesAreInvalid(self) }
+        let mut has_any_image = false;
+        let mut layer = self as *const Self;
+        while let Some(current) = unsafe { layer.as_ref() } {
+            if let Some(image) = unsafe { current.GetImage().as_ref() } {
+                has_any_image = true;
+                if image.CanRender() && image.IsLoaded() {
+                    return false;
+                }
+            }
+            layer = current.Next();
+        }
+        has_any_image
     }
 
-    // cpp: layoutng_style/style/fill_layer.h:218-220
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:481-495
     pub fn AnyImageIsLoading(&self) -> bool {
-        unsafe { FillLayerAnyImageIsLoading(self) }
+        let mut layer = self as *const Self;
+        while let Some(current) = unsafe { layer.as_ref() } {
+            if let Some(image) = unsafe { current.GetImage().as_ref() } {
+                if !image.IsLoaded() && !image.ErrorOccurred() {
+                    return true;
+                }
+            }
+            layer = current.Next();
+        }
+        false
     }
 
     // cpp: layoutng_style/style/fill_layer.h:222
@@ -558,10 +776,17 @@ impl FillLayer {
         }
     }
 
-    // cpp: layoutng_style/style/fill_layer.h:227
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:497-512
     pub fn ImagesIdentical(first: *const Self, second: *const Self) -> bool {
-        unsafe { FillLayerImagesIdentical(first, second) }
+        let (mut first, mut second) = (first, second);
+        while !first.is_null() && !second.is_null() {
+            if unsafe { &*first }.GetImage() != unsafe { &*second }.GetImage() {
+                return false;
+            }
+            first = unsafe { &*first }.Next();
+            second = unsafe { &*second }.Next();
+        }
+        first.is_null() && second.is_null()
     }
 
     // cpp: layoutng_style/style/fill_layer.h:229-232
@@ -715,22 +940,36 @@ impl FillLayer {
         }
     }
 
-    // cpp: layoutng_style/style/fill_layer.h:320
-    // No definition exists in the supplied C++ tree.
-    fn ImageTilesLayer(&self) -> bool {
-        unsafe { FillLayerImageTilesLayer(self) }
-    }
-
-    // cpp: layoutng_style/style/fill_layer.h:321
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:178-188
     fn LayerPropertiesEqual(&self, other: &Self) -> bool {
-        unsafe { FillLayerLayerPropertiesEqual(self, other) }
+        ValuesEquivalent(&self.image_, &other.image_)
+            && self.position_x_ == other.position_x_
+            && self.position_y_ == other.position_y_
+            && self.background_x_origin_ == other.background_x_origin_
+            && self.background_y_origin_ == other.background_y_origin_
+            && self.mask_mode_ == other.mask_mode_
+            && self.attachment_ == other.attachment_
+            && self.clip_ == other.clip_
+            && self.compositing_operator_ == other.compositing_operator_
+            && self.blend_mode_ == other.blend_mode_
+            && self.origin_ == other.origin_
+            && self.repeat_ == other.repeat_
+            && self.size_type_ == other.size_type_
+            && self.size_length_ == other.size_length_
+            && self.type_ == other.type_
     }
 
-    // cpp: layoutng_style/style/fill_layer.h:323
-    // No definition exists in the supplied C++ tree.
+    // cpp: core/style/fill_layer.cc:367-377
     fn EffectiveClip(&self) -> EFillBox {
-        unsafe { FillLayerEffectiveClip(self) }
+        if self.GetType() == EFillLayerType::kMask
+            && unsafe { self.GetImage().as_ref() }
+                .and_then(MaskSourceImage)
+                .is_some_and(StyleMaskSourceImage::HasSVGMask)
+        {
+            EFillBox::kNoClip
+        } else {
+            self.Clip()
+        }
     }
 
     // cpp: layoutng_style/style/fill_layer.h:324-328
@@ -739,13 +978,60 @@ impl FillLayer {
             self.ComputeCachedProperties();
         }
     }
+
+    // cpp: core/style/fill_layer.cc:379-413
+    pub(crate) fn ComputeCachedProperties(&self) {
+        debug_assert!(!self.cached_properties_.get().computed);
+        let image = unsafe { self.GetImage().as_ref() };
+        let effective_clip = self.EffectiveClip();
+        let mut cache = self.cached_properties_.get();
+        cache.layers_clip_max = effective_clip;
+        cache.any_layer_uses_content_box =
+            effective_clip == EFillBox::kContent || self.Origin() == EFillBox::kContent;
+        cache.any_layer_has_image = image.is_some();
+        cache.any_layer_has_url_image =
+            image.is_some_and(|image| unsafe { &*image.CssValue() }.MayContainUrl());
+        cache.any_layer_has_local_attachment = self.Attachment() == EFillAttachment::kLocal;
+        cache.any_layer_has_fixed_attachment_image =
+            cache.any_layer_has_image && self.Attachment() == EFillAttachment::kFixed;
+        cache.any_layer_has_default_attachment_image =
+            cache.any_layer_has_image && self.Attachment() == EFillAttachment::kScroll;
+        cache.any_layer_uses_current_color =
+            image.is_some_and(|image| image.IsGeneratedImage() && image.DependsOnCurrentColor());
+        cache.computed = true;
+        self.cached_properties_.set(cache);
+
+        if let Some(next) = unsafe { self.Next().as_ref() } {
+            next.ComputeCachedPropertiesIfNeeded();
+            cache.layers_clip_max = EnclosingFillBox(self.LayersClipMax(), next.LayersClipMax());
+            let next_cache = next.cached_properties_.get();
+            cache.any_layer_uses_content_box |= next_cache.any_layer_uses_content_box;
+            cache.any_layer_has_image |= next_cache.any_layer_has_image;
+            cache.any_layer_has_url_image |= next_cache.any_layer_has_url_image;
+            cache.any_layer_has_local_attachment |= next_cache.any_layer_has_local_attachment;
+            cache.any_layer_has_fixed_attachment_image |=
+                next_cache.any_layer_has_fixed_attachment_image;
+            cache.any_layer_has_default_attachment_image |=
+                next_cache.any_layer_has_default_attachment_image;
+            cache.any_layer_uses_current_color |= next_cache.any_layer_uses_current_color;
+            self.cached_properties_.set(cache);
+        }
+    }
 }
 
-// cpp: layoutng_style/style/fill_layer.h:212
-// No definition exists in the supplied C++ tree.
+// cpp: core/style/fill_layer.cc:190-193
 impl PartialEq for FillLayer {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { FillLayerEqual(self, other) }
+        if !self.LayerPropertiesEqual(other) {
+            return false;
+        }
+        match (unsafe { self.Next().as_ref() }, unsafe {
+            other.Next().as_ref()
+        }) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => true,
+            _ => false,
+        }
     }
 }
 
@@ -768,18 +1054,4 @@ impl FillLayerWrapper {
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.layer);
     }
-}
-
-unsafe extern "Rust" {
-    fn FillLayerComposite(value: &FillLayer) -> CompositeOperator;
-    fn FillLayerCopyAssign(value: &mut FillLayer, other: &FillLayer);
-    fn FillLayerEqual(value: &FillLayer, other: &FillLayer) -> bool;
-    fn FillLayerVisuallyEqual(value: &FillLayer, other: &FillLayer) -> bool;
-    fn FillLayerClipOccludesNextLayers(value: &FillLayer) -> bool;
-    fn FillLayerAllImagesAreInvalid(value: &FillLayer) -> bool;
-    fn FillLayerAnyImageIsLoading(value: &FillLayer) -> bool;
-    fn FillLayerImagesIdentical(first: *const FillLayer, second: *const FillLayer) -> bool;
-    fn FillLayerImageTilesLayer(value: &FillLayer) -> bool;
-    fn FillLayerLayerPropertiesEqual(value: &FillLayer, other: &FillLayer) -> bool;
-    fn FillLayerEffectiveClip(value: &FillLayer) -> EFillBox;
 }

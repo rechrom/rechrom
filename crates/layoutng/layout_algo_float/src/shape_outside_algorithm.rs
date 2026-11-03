@@ -13,7 +13,6 @@ use layoutng_assembly::internal::layout_input::{
 };
 use layoutng_assembly::internal::layout_replaced::LayoutReplaced;
 use layoutng_assembly::internal::length_utils::ComputePhysicalMarginsForSpace;
-use layoutng_assembly::internal::paint_input::{PaintCornerRadii, PaintCornerRadius};
 use layoutng_assembly::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
 use layoutng_assembly::internal::shapes::shape_image_services::CurrentShapeImage;
 use layoutng_assembly::layout_result::LayoutResult;
@@ -520,48 +519,28 @@ fn LogicalRadii(mut physical: [gfx::SizeF; 4], writing_mode: WritingMode) -> [gf
 
 // cpp: layoutng_float/shape_outside_algorithm.cc:405-420
 fn InputBorderRadii(box_: &LayoutBox, physical_size: PhysicalSize) -> [gfx::SizeF; 4] {
-    let node = box_.GetNode();
-    assert!(!node.is_null());
-    let paint = &unsafe { &*node }.InputStyle().paint;
-    let fallback = PaintCornerRadius {
-        x: paint.border_radius,
-        y: paint.border_radius,
-    };
-    let radii = paint.border_radii.unwrap_or(PaintCornerRadii {
-        top_left: fallback,
-        top_right: fallback,
-        bottom_right: fallback,
-        bottom_left: fallback,
-    });
-    let percentages = paint.border_radii_percentages;
-    let width = physical_size.width.ToFloat() as f64;
-    let height = physical_size.height.ToFloat() as f64;
-    let size = |radius: PaintCornerRadius, percentage: PaintCornerRadius| {
+    let style = box_.StyleRef();
+    let width = physical_size.width.ToFloat();
+    let height = physical_size.height.ToFloat();
+    let size = |radius: &foundation::LengthSize| {
         gfx::SizeF::new(
-            (radius.x + percentage.x * width / 100.0).max(0.0) as f32,
-            (radius.y + percentage.y * height / 100.0).max(0.0) as f32,
+            FloatValueForLength(radius.Width(), width).max(0.0),
+            FloatValueForLength(radius.Height(), height).max(0.0),
         )
     };
     [
-        size(radii.top_left, percentages.top_left),
-        size(radii.top_right, percentages.top_right),
-        size(radii.bottom_right, percentages.bottom_right),
-        size(radii.bottom_left, percentages.bottom_left),
+        size(style.BorderTopLeftRadius()),
+        size(style.BorderTopRightRadius()),
+        size(style.BorderBottomRightRadius()),
+        size(style.BorderBottomLeftRadius()),
     ]
 }
 
 // cpp: layoutng_float/shape_outside_algorithm.cc:422-429
-fn InputGeometry(box_: &LayoutBox) -> &ShapeOutsideGeometry {
+fn InputGeometry(box_: &LayoutBox) -> ShapeOutsideGeometry {
     let node = box_.GetNode();
     assert!(!node.is_null());
-    let input = unsafe { &*node }.InputStyle();
-    let extended = input
-        .extended
-        .as_ref()
-        .expect("shape outside extended style");
-    extended
-        .shape_outside
-        .as_ref()
+    layoutng_assembly::style_projection::ReadShapeOutside(unsafe { &*node }.ComputedStyleRef())
         .expect("shape outside geometry")
 }
 
@@ -686,7 +665,7 @@ pub fn CreateShapeOutside(
         // cpp: layoutng_float/shape_outside_algorithm.cc:513-517
         ShapeOutsideKind::kImage => CreateImageShape(
             box_,
-            geometry,
+            &geometry,
             reference_size,
             writing_mode,
             margin,

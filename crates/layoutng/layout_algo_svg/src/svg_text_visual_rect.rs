@@ -7,16 +7,22 @@ use layoutng_assembly::internal::layout_object::LayoutObject;
 use crate::layout_svg_inline::LayoutSVGInline;
 use crate::layout_svg_text::LayoutSVGText;
 
-// core/layout/svg/layout_svg_inline.cc:115-120, layout_svg_text.cc:328-337.
-// The query is a pure read of the completed layout snapshot. The existing
-// SvgLayoutSupport assembly slot carries this derived-class operation.
-pub(crate) fn VisualRectInLocalSVGCoordinates(object: &LayoutObject) -> gfx::RectF {
-    let mut bounds = if object.IsSVGText() {
+// core/layout/svg/layout_svg_inline.cc:76-105,
+// core/layout/svg/layout_svg_text.cc:328-337.
+pub(crate) fn ObjectBoundingBox(object: &LayoutObject) -> gfx::RectF {
+    if object.IsSVGText() {
         unsafe { &*To::<LayoutSVGText>(object) }.ObjectBoundingBox()
     } else {
         assert!(object.IsSVGInline());
         unsafe { &*To::<LayoutSVGInline>(object) }.ObjectBoundingBox()
-    };
+    }
+}
+
+// core/layout/svg/layout_svg_inline.cc:115-120, layout_svg_text.cc:328-337.
+// The query is a pure read of the completed layout snapshot. The existing
+// SvgLayoutSupport assembly slot carries this derived-class operation.
+pub(crate) fn VisualRectInLocalSVGCoordinates(object: &LayoutObject) -> gfx::RectF {
+    let mut bounds = ObjectBoundingBox(object);
     if bounds.IsEmpty() {
         return bounds;
     }

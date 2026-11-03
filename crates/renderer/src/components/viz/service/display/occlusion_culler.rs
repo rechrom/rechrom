@@ -15,18 +15,16 @@ use compositor_core::{
         occlusion::OcclusionTransform as _,
         property_types::PropertyTransform as _,
     },
-    cc::base::{math_util::MathUtil, region::Region},
+    cc::base::{math_util::MathUtil, region::Region as GenericRegion},
     runtime::{frame::QuadMaterial, skia::SkRegion},
 };
 use std::collections::BTreeSet;
 use viz::{
-    common::quads::aggregated_render_pass::{
-        NativeDrawQuad, NativeSharedQuadState, NativeTransform,
-    },
-    native::AggregatedFrame,
+    adapter::AggregatedFrame,
+    common::quads::aggregated_render_pass::{DrawQuad, SharedQuadState, Transform},
 };
 
-type NativeRegion = Region<SkRegion>;
+type Region = GenericRegion<SkRegion>;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OcclusionCullStats {
@@ -51,7 +49,7 @@ impl OcclusionCuller {
         }
     }
 
-    fn CanContributeToOcclusion(sqs: &NativeSharedQuadState, is_render_pass: bool) -> bool {
+    fn CanContributeToOcclusion(sqs: &SharedQuadState, is_render_pass: bool) -> bool {
         !is_render_pass
             && sqs.opacity == 1.0
             && sqs.are_contents_opaque
@@ -69,15 +67,15 @@ impl OcclusionCuller {
             && !sqs.mask_filter_info.HasRoundedCorners()
     }
 
-    fn IsRenderPass(quad: &NativeDrawQuad) -> bool {
+    fn IsRenderPass(quad: &DrawQuad) -> bool {
         matches!(quad.material, QuadMaterial::CompositorRenderPass { .. })
     }
 
-    fn IsSimpleInvertible(transform: &NativeTransform) -> bool {
+    fn IsSimpleInvertible(transform: &Transform) -> bool {
         transform.NonDegeneratePreserves2dAxisAlignment() && transform.IsInvertible()
     }
 
-    fn RegionArea(region: &NativeRegion) -> i64 {
+    fn RegionArea(region: &Region) -> i64 {
         region
             .into_iter()
             .map(|rect| i64::from(rect.width.max(0)) * i64::from(rect.height.max(0)))
@@ -86,14 +84,14 @@ impl OcclusionCuller {
 
     fn AddOccluder(
         &self,
-        sqs: &NativeSharedQuadState,
+        sqs: &SharedQuadState,
         is_render_pass: bool,
-        occlusion: &mut NativeRegion,
+        occlusion: &mut Region,
     ) -> bool {
         if !Self::CanContributeToOcclusion(sqs, is_render_pass) {
             return false;
         }
-        let mut region = NativeRegion::new(MathUtil::MapEnclosedRectWith2dAxisAlignedTransform(
+        let mut region = Region::new(MathUtil::MapEnclosedRectWith2dAxisAlignedTransform(
             &sqs.quad_to_target_transform,
             sqs.visible_quad_layer_rect,
         ));
@@ -108,7 +106,7 @@ impl OcclusionCuller {
         true
     }
 
-    fn ReduceOccluderComplexity(&self, region: &mut NativeRegion) {
+    fn ReduceOccluderComplexity(&self, region: &mut Region) {
         while region.GetRegionComplexity() > self.settings.maximum_occluder_complexity {
             let Some(smallest) = region
                 .into_iter()
@@ -120,7 +118,7 @@ impl OcclusionCuller {
         }
     }
 
-    fn ReducedVisibleRects(&self, region: &NativeRegion) -> Option<Vec<Rect>> {
+    fn ReducedVisibleRects(&self, region: &Region) -> Option<Vec<Rect>> {
         let mut reduced = Vec::<Rect>::new();
         for rect in region {
             if let Some(existing) = reduced.iter_mut().find(|other| SharesEdge(**other, rect)) {
@@ -172,8 +170,8 @@ impl OcclusionCuller {
                 continue;
             }
 
-            let mut occlusion = NativeRegion::default();
-            let mut occlusion_in_content = NativeRegion::default();
+            let mut occlusion = Region::default();
+            let mut occlusion_in_content = Region::default();
             let mut last_sqs_index: Option<usize> = None;
             let mut last_sqs_is_render_pass = false;
             let mut current_sqs_intersects = false;
@@ -238,7 +236,7 @@ impl OcclusionCuller {
                 }
 
                 if !is_render_pass && occlusion_in_content.Intersects(&visible) {
-                    let mut visible_region = NativeRegion::new(visible);
+                    let mut visible_region = Region::new(visible);
                     visible_region.Subtract(&occlusion_in_content);
                     let bounds = visible_region.bounds();
                     pass.quad_list[index].geometry.visible_rect = bounds;

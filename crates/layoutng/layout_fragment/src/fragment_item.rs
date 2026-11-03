@@ -1,20 +1,20 @@
+use foundation::graphics_types;
 use std::cell::{Cell, UnsafeCell};
 use std::mem::ManuallyDrop;
-use foundation::graphics_types;
 
-use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use font_engine::{AdjustMidCluster, Font, FontHeight, ShapeResultView, TextFragmentPaintInfo};
+use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::{
     gfx, DynamicTo, IsHorizontalWritingMode, LayoutUnit, MakeGarbageCollected, Member,
     PhysicalOffset, PhysicalRect, PhysicalSize, String, StringBuilder, StringView, TextDirection,
-    To, Visitor, WritingMode,
+    To, UnsupportedLayout, Visitor, WritingMode,
 };
 use graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use layoutng::internal::ink_overflow::{InkOverflow, InkOverflowType};
-use layoutng::internal::layout_node_metadata::Node;
 use layoutng::internal::inline_item::InlineItem;
 use layoutng::internal::layout_block_flow::LayoutBlockFlow;
 use layoutng::internal::layout_box::LayoutBox;
+use layoutng::internal::layout_node_metadata::Node;
 use layoutng::internal::layout_object::LayoutObject;
 use layoutng::internal::layout_text::LayoutText;
 use layoutng::internal::style_variant::StyleVariant;
@@ -29,6 +29,7 @@ use layoutng_style::style::computed_style::ComputedStyle;
 
 use crate::inline_break_token::InlineBreakToken;
 use crate::inline_cursor::InlineCursor;
+use crate::inline_paint_context::InlinePaintContext;
 use crate::logical_line_item::LogicalLineItem;
 use crate::physical_box_fragment::PhysicalBoxFragment;
 use crate::physical_line_box_fragment::{LineBoxType, PhysicalLineBoxFragment};
@@ -222,8 +223,17 @@ impl MutableForPainting<'_> {
         self.item_.InvalidateInkOverflow();
     }
 
-    // RecalcInkOverflow is declared by the supplied header but its C++ body
-    // is absent from all supplied source packages; see translation status.
+    // Source: core/layout/inline/fragment_item.h:353-371 and
+    // core/layout/inline/fragment_item.cc:975-1078.
+    pub fn RecalcInkOverflow(
+        &self,
+        cursor: &InlineCursor,
+        inline_context: &mut InlinePaintContext,
+        self_and_contents_rect_out: &mut PhysicalRect,
+    ) {
+        self.item_
+            .RecalcInkOverflow(cursor, inline_context, self_and_contents_rect_out);
+    }
 }
 
 #[allow(non_snake_case)]
@@ -246,6 +256,163 @@ const _: () =
 impl FragmentItem {
     pub const kInvalid: ItemType = ItemType::kInvalid;
     pub const kText: ItemType = ItemType::kText;
+
+    // Source: core/layout/inline/fragment_item.cc:946-973.
+    pub fn RecalcInkOverflowForCursor(
+        cursor: &mut InlineCursor,
+        inline_context: &mut InlinePaintContext,
+    ) -> PhysicalRect {
+        debug_assert!(cursor.IsNull() || cursor.IsAtFirst());
+        let mut contents_ink_overflow = PhysicalRect::default();
+        while cursor.IsNotNull() {
+            let item = unsafe { &*cursor.CurrentItem() };
+            if !item.IsLayoutObjectDestroyedOrMoved() && !item.HasSelfPaintingLayer() {
+                let mut child_rect = PhysicalRect::default();
+                item.GetMutableForPainting().RecalcInkOverflow(
+                    cursor,
+                    inline_context,
+                    &mut child_rect,
+                );
+                if !child_rect.IsEmpty() {
+                    child_rect.offset += *item.OffsetInContainerFragment();
+                    contents_ink_overflow.Unite(&child_rect);
+                }
+            }
+            cursor.MoveToNextSkippingChildren();
+        }
+        contents_ink_overflow
+    }
+
+    // Source: core/layout/inline/fragment_item.cc:975-1078.
+    fn RecalcInkOverflow(
+        &self,
+        cursor: &InlineCursor,
+        inline_context: &mut InlinePaintContext,
+        self_and_contents_rect_out: &mut PhysicalRect,
+    ) {
+        debug_assert_eq!(self as *const Self, cursor.CurrentItem());
+        debug_assert!(!self.IsLayoutObjectDestroyedOrMoved());
+
+        if self.IsText() {
+            if self.IsInkOverflowComputed() {
+                *self_and_contents_rect_out = self.SelfInkOverflowRect();
+                return;
+            }
+            let paint_info = self.TextPaintInfo(cursor.Items());
+            if !paint_info.shape_result.is_null() {
+                let svg_data = self.GetSvgFragmentData();
+                if !svg_data.is_null() {
+                    let svg_data = unsafe { &*svg_data };
+                    let transform = self.BuildSvgTransformForBoundingBox();
+                    let overflow_type = unsafe { &mut *self.ink_overflow_.get() }
+                        .SetSvgTextInkOverflow(
+                            self.InkOverflowType(),
+                            cursor,
+                            &paint_info,
+                            self.Style(),
+                            &svg_data.rect,
+                            self.SvgScalingFactor(),
+                            svg_data.length_adjust_scale,
+                            &transform,
+                            self_and_contents_rect_out,
+                        );
+                    self.set_bits(Self::INK_OVERFLOW_BITS, 3, overflow_type as u32);
+                    return;
+                }
+                let scoped_inline_item = inline_context.ScopeInlineItem(self);
+                let overflow_type = unsafe { &mut *self.ink_overflow_.get() }.SetTextInkOverflow(
+                    self.InkOverflowType(),
+                    cursor,
+                    &paint_info,
+                    self.Style(),
+                    self.RectInContainerFragment(),
+                    Some(&scoped_inline_item),
+                    self_and_contents_rect_out,
+                );
+                self.set_bits(Self::INK_OVERFLOW_BITS, 3, overflow_type as u32);
+                return;
+            }
+            let overflow_type =
+                unsafe { &mut *self.ink_overflow_.get() }.Reset(self.InkOverflowType());
+            self.set_bits(Self::INK_OVERFLOW_BITS, 3, overflow_type as u32);
+            *self_and_contents_rect_out = self.LocalRect();
+            return;
+        }
+
+        if self.Type() == ItemType::kBox {
+            let box_fragment = self.PostLayoutBoxFragment();
+            if box_fragment.is_null() {
+                return;
+            }
+            let box_fragment = unsafe { &*box_fragment };
+            if !box_fragment.IsInlineBox() {
+                debug_assert!(!self.HasChildren());
+                if box_fragment.CanUseFragmentsForInkOverflow() {
+                    box_fragment.GetMutableForPainting().RecalcInkOverflow();
+                    *self_and_contents_rect_out = box_fragment.InkOverflowRect();
+                    return;
+                }
+                let owner_box = self.MutableInkOverflowOwnerBox();
+                debug_assert!(!owner_box.is_null());
+                unsafe { &mut *owner_box }.RecalcNormalFlowChildVisualOverflowIfNeeded();
+                *self_and_contents_rect_out = unsafe { &*owner_box }.VisualOverflowRect();
+                return;
+            }
+
+            let mut scoped_inline_item = inline_context.ScopeInlineItem(self);
+            let contents_rect =
+                self.RecalcInkOverflowForDescendantsOf(cursor, &mut scoped_inline_item);
+            debug_assert!(box_fragment.Children().is_empty());
+            debug_assert_eq!(box_fragment.Size(), self.Size());
+            box_fragment
+                .GetMutableForPainting()
+                .RecalcInkOverflowWithContents(contents_rect);
+            *self_and_contents_rect_out = box_fragment.InkOverflowRect();
+            return;
+        }
+
+        if self.Type() == ItemType::kLine {
+            if self.LineBoxFragment().is_null() {
+                inline_context.ClearLineBox();
+            }
+            let mut scoped_line_box = inline_context.ScopeLineBox(cursor);
+            let mut contents_rect =
+                self.RecalcInkOverflowForDescendantsOf(cursor, &mut scoped_line_box);
+            let layout_object = self.GetLayoutObject();
+            if !layout_object.is_null() && unsafe { &*layout_object }.IsLayoutTextCombine() {
+                let objects = unsafe { &*layout_object }.FactorySet();
+                let adjust = unsafe { objects.as_ref() }
+                    .and_then(|objects| objects.adjust_text_combine_bounding_box)
+                    .expect("source text-combine bounding-box dispatch is not installed");
+                contents_rect = adjust(unsafe { &*layout_object }, &contents_rect);
+            }
+            let mut combined = self.LocalRect();
+            combined.Unite(&contents_rect);
+            *self_and_contents_rect_out = combined;
+            let overflow_type = unsafe { &mut *self.ink_overflow_.get() }.SetContents(
+                self.InkOverflowType(),
+                &contents_rect,
+                &self.Size(),
+            );
+            self.set_bits(Self::INK_OVERFLOW_BITS, 3, overflow_type as u32);
+            return;
+        }
+
+        unreachable!("invalid FragmentItem ink-overflow type");
+    }
+
+    // Source: core/layout/inline/fragment_item.cc:1080-1092.
+    fn RecalcInkOverflowForDescendantsOf(
+        &self,
+        cursor: &InlineCursor,
+        inline_context: &mut InlinePaintContext,
+    ) -> PhysicalRect {
+        let mut descendants_cursor = cursor.CursorForDescendants();
+        let mut contents_rect =
+            Self::RecalcInkOverflowForCursor(&mut descendants_cursor, inline_context);
+        contents_rect.offset -= *self.OffsetInContainerFragment();
+        contents_rect
+    }
     pub const kGeneratedText: ItemType = ItemType::kGeneratedText;
     pub const kLine: ItemType = ItemType::kLine;
     pub const kBox: ItemType = ItemType::kBox;
@@ -1463,16 +1630,25 @@ impl FragmentItem {
         match self.GetWritingMode() {
             WritingMode::kHorizontalTb => {
                 y += font_data.GetFontMetrics().FixedAscent(baseline).ToFloat();
-                transform.Translate((-data.rect.width() / 2.0) as f64, data.baseline_shift as f64);
+                transform.Translate(
+                    (-data.rect.width() / 2.0) as f64,
+                    data.baseline_shift as f64,
+                );
             }
             WritingMode::kVerticalLr | WritingMode::kVerticalRl | WritingMode::kSidewaysRl => {
                 x += font_data.GetFontMetrics().FixedDescent(baseline).ToFloat();
-                transform.Translate(data.baseline_shift as f64, (-data.rect.height() / 2.0) as f64);
+                transform.Translate(
+                    data.baseline_shift as f64,
+                    (-data.rect.height() / 2.0) as f64,
+                );
             }
             WritingMode::kSidewaysLr => {
                 x += font_data.GetFontMetrics().FixedAscent(baseline).ToFloat();
                 y = data.rect.bottom();
-                transform.Translate((-data.baseline_shift) as f64, (data.rect.height() / 2.0) as f64);
+                transform.Translate(
+                    (-data.baseline_shift) as f64,
+                    (data.rect.height() / 2.0) as f64,
+                );
             }
         }
         transform.PreConcat(*length_adjust);
@@ -1711,8 +1887,7 @@ impl FragmentItem {
                 height = LayoutUnit::from_f32(data.rect.height());
             } else {
                 width = LayoutUnit::from_f32(data.rect.width());
-                height =
-                    LayoutUnit::from_f32(data.rect.height() / data.length_adjust_scale);
+                height = LayoutUnit::from_f32(data.rect.height() / data.length_adjust_scale);
             }
         }
         if start_offset == self.StartOffset() && end_offset == self.EndOffset() {

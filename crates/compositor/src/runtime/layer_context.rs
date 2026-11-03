@@ -924,7 +924,7 @@ where
         .host
         .WithPictureContextParts(selected, &mut |read_host, host, services, _| {
             layers.WithStorageAndTracking(|_, tracking| {
-                let mut native = LayerContextTree {
+                let mut context_tree = LayerContextTree {
                     fields: fields.reborrow(),
                     tracking: tracking.reborrow(),
                     read_host,
@@ -934,7 +934,7 @@ where
                 output = Some(callback.take().expect("one synchronous native ctor scope")(
                     selected,
                     &mut LayerImplContext {
-                        tree: &mut native,
+                        tree: &mut context_tree,
                         services,
                     },
                 ));

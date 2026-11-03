@@ -2,7 +2,7 @@ use crate::{grid_layout_algorithm::GridLayoutAlgorithm, layout_grid::LayoutGrid}
 use foundation::{MakeGarbageCollected, To};
 use layoutng_assembly::{
     internal::{
-        algorithm_entry::NativeAlgorithmEntry,
+        algorithm_entry::LayoutAlgorithmEntryFor,
         layout_block::LayoutBlock,
         layout_node_metadata::{Element, Node},
         layout_object::LayoutObject,
@@ -24,5 +24,5 @@ fn CreateAnonymousGridObject() -> *mut LayoutBlock {
 pub fn InstallGridAlgorithm(assembly: &mut LayoutAssembly) {
     assembly.objects.grid = Some(CreateGridObject);
     assembly.objects.anonymous_grid = Some(CreateAnonymousGridObject);
-    assembly.algorithms.grid = NativeAlgorithmEntry::<GridLayoutAlgorithm>("layout_algo_grid");
+    assembly.algorithms.grid = LayoutAlgorithmEntryFor::<GridLayoutAlgorithm>("layout_algo_grid");
 }

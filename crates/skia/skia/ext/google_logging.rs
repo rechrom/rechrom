@@ -1,18 +1,18 @@
 //! Actual FileLine producer algorithms. The native compiler shim only owns the
 //! C variadic va_start/va_end protocol; no logging algorithm/provider is native.
 use crate::include::private::SkLogPriority::SkLogPriority;
-#[cfg(sk_native_ostream_abi_configured)]
-use crate::interop::native_ostream::ConfiguredStdString;
+#[cfg(sk_ostream_abi_configured)]
+use crate::interop::ostream::ConfiguredStdString;
 use core::{
     ffi::{c_int, c_void, VaList},
     mem::{ManuallyDrop, MaybeUninit},
     pin::Pin,
 };
-#[cfg(not(sk_native_ostream_abi_configured))]
+#[cfg(not(sk_ostream_abi_configured))]
 compile_error!("FileLine logging requires genuine supplied native string/stream ABI and the real LogMessage owner");
 
 // Source: skia/ext/google_logging.cc:13-17
-// Actual explicit C shim symbols, defined in interop/native_ostream.cpp. No
+// Actual explicit C shim symbols, defined in interop/ostream.cpp. No
 // guessed ordinary C++ mangled symbol or Rust auto-va_start before filtering.
 unsafe extern "C" {
     #[link_name = "rechrom_google_sklog_fileline"]
@@ -103,7 +103,7 @@ impl<T> Drop for StackValue<'_, T> {
 /// ap_slot is the actual native va_list object created after filtering in the
 /// explicit shim. Rust tells the real compiler to end that same slot exactly
 /// at line47/66, before constructing the complete-expression LogMessage.
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rechrom_google_log_body(
     file: *const u8,
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn rechrom_google_log_body(
         crate::base::strings::stringprintf::StringAppendV(msg.value.as_mut(), format, &ap);
     }
     unsafe {
-        crate::interop::native_ostream::rechrom_native_va_end_slot(ap_slot);
+        crate::interop::ostream::rechrom_native_va_end_slot(ap_slot);
     }
     {
         let mut log_slot =
@@ -161,7 +161,7 @@ pub unsafe extern "C" fn rechrom_google_log_body(
 }
 
 // Source: skia/ext/google_logging.cc:73-84
-#[cfg(sk_native_ostream_abi_configured)]
+#[cfg(sk_ostream_abi_configured)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rechrom_google_abort_body(
     file: *const u8,
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn rechrom_google_abort_body(
         crate::base::strings::stringprintf::StringAppendV(msg.value.as_mut(), format, &ap);
     }
     unsafe {
-        crate::interop::native_ostream::rechrom_native_va_end_slot(ap_slot);
+        crate::interop::ostream::rechrom_native_va_end_slot(ap_slot);
     }
     {
         let mut log_slot =

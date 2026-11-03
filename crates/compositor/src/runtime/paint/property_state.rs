@@ -21,7 +21,7 @@ use crate::{
     runtime::types::CpuSkiaBackend,
     third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache,
 };
-use paint::paint_property_tree as native;
+use paint::paint_property_tree;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TransformCompositingBoundaryType {
@@ -53,32 +53,18 @@ fn nearest_composited_scroll_translation<R: CpuSkiaBackend>(
 }
 
 fn requires_compositing_for_fixed_position_only<R>(node: &TransformNode<R>) -> bool {
-    let reasons = &node.node().direct_compositing_reasons;
-    reasons.contains(&"FixedPosition")
-        && reasons.iter().all(|reason| {
-            matches!(
-                *reason,
-                "FixedPosition"
-                    | "UndoOverscroll"
-                    | "AffectedByOuterViewportBoundsDelta"
-                    | "AffectedBySafeAreaBottom"
-            )
-        })
+    node.node().RequiresCompositingForFixedPositionOnly()
 }
 
 fn requires_compositing_for_sticky_position_only<R>(node: &TransformNode<R>) -> bool {
-    node.node().direct_compositing_reasons.as_slice() == ["StickyPosition"]
+    node.node().RequiresCompositingForStickyPositionOnly()
 }
 
 fn can_merge_for_fixed_position<R: CpuSkiaBackend>(
     first: &TransformNode<R>,
     second: &TransformNode<R>,
 ) -> bool {
-    first.node().direct_compositing_reasons == second.node().direct_compositing_reasons
-        && requires_compositing_for_fixed_position_only(first)
-        && requires_compositing_for_fixed_position_only(second)
-        && first.ScrollParentScrollTranslation() == second.ScrollParentScrollTranslation()
-        && first.UnaliasedParent() == second.UnaliasedParent()
+    first.node().CanMergeForFixedPosition(second.node())
 }
 
 fn source_rect(value: paint::paint_engine::PaintRect) -> Rect {
@@ -141,9 +127,9 @@ fn can_merge_for_sticky_position<R: CpuSkiaBackend>(
         first_constraint.y_scroll_ancestor_element_id,
         second_constraint.y_scroll_ancestor_element_id,
     ) {
-        let contents = source_rect(scroll_node.contents_rect);
-        let container = source_rect(scroll_node.container_rect);
-        let mut range = source_rect(scroll_node.compositor.scrolling_contents_cull_rect);
+        let contents = source_rect(scroll_node.ContentsRect());
+        let container = source_rect(scroll_node.ContainerRect());
+        let mut range = source_rect(scroll_node.ScrollingContentsCullRect());
         range.Intersect(contents);
         range = Rect::new(
             range.x.saturating_sub(contents.x),
@@ -220,7 +206,7 @@ fn clip_chain_in_transform_compositing_boundary<R: CpuSkiaBackend>(
 ) -> bool {
     let mut current = node.clone();
     while current != *ancestor {
-        let local = TransformNode::from_arc(current.node().local_transform_space.clone());
+        let local = TransformNode::from_arc(current.node().LocalTransformSpace().clone());
         if in_same_transform_compositing_boundary(
             transform,
             &local,
@@ -240,7 +226,7 @@ fn clip_chain_in_transform_compositing_boundary<R: CpuSkiaBackend>(
 }
 
 impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
-    type PaintPropertyChange = native::PaintPropertyChangeType;
+    type PaintPropertyChange = paint_property_tree::PaintPropertyChangeType;
     type TransformNode = TransformNode<R>;
     type ClipNode = ClipNode<R>;
     type EffectNode = EffectNode<R>;
@@ -248,21 +234,13 @@ impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
     fn EffectRequiresCompositingForBackdropFilterMask(&self) -> bool {
         self.effect_
             .node()
-            .direct_compositing_reasons
-            .contains(&"BackdropFilterMask")
+            .RequiresCompositingForBackdropFilterMask()
     }
     fn EffectRequiresCompositingForCanvasChild(&self) -> bool {
-        self.effect_
-            .node()
-            .direct_compositing_reasons
-            .contains(&"CanvasChild")
+        self.effect_.node().RequiresCompositingForCanvasChild()
     }
     fn ChangedToRoot(&self, change: Self::PaintPropertyChange) -> bool {
-        paint::property_node_geometry::PropertyStateChanged(
-            &self.native(),
-            change,
-            &native::PropertyTreeState::default(),
-        )
+        self.as_source().ChangedToRoot(change)
     }
     fn SameEffectNode(&self, other: &Self) -> bool {
         self.effect_ == other.effect_
@@ -276,9 +254,7 @@ impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
             .is_some_and(|parent| parent.lifecycle.same_node(&self.effect_.node().lifecycle))
     }
     fn EffectIsOpacityOnly(&self) -> bool {
-        self.EffectBlendMode() == BlendMode::kSrcOver
-            && !self.effect_.node().compositor.has_filter_info
-            && !self.effect_.node().compositor.has_backdrop_filter_info
+        self.effect_.node().IsOpacityOnly()
     }
     fn EffectOpacity(&self) -> f32 {
         self.effect_.node().opacity
@@ -365,10 +341,7 @@ impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
             == nearest_directly_composited_ancestor(&other.transform_)
     }
     fn ToDebugString(&self) -> String {
-        format!(
-            "t:{:?} c:{:?} e:{:?}",
-            self.transform_, self.clip_, self.effect_
-        )
+        self.as_source().ToString()
     }
     fn TransformNode(&self) -> Self::TransformNode {
         self.transform_.clone()

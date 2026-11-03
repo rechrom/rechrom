@@ -9,8 +9,8 @@ use font_engine::fonts::shaping::ng_shape_cache::{ShapeCacheKey, ShaperResult};
 use font_engine::fonts::shaping::shape_options::ShapeOptions;
 use font_engine::fonts::shaping::shape_result::ShapeRange;
 use font_engine::fonts::shaping::text_spacing_trim::ShouldTrimStartOfParagraph;
-use font_engine::text::native::bidi_paragraph::BidiParagraph;
-use font_engine::text::native::character::Character;
+use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
+use font_engine::text::implementation::character::Character;
 use font_engine::{
     Font, FontFallbackPriority, FontOrientation, HarfBuzzShaper, RenderOrientation, RunSegmenter,
     RunSegmenterRange, ShapeResult, ShapeResultSpacing,

@@ -1,7 +1,7 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
 //! Stable TimelineTrigger: longhands_custom.cc:714-861; css_parsing_utils.cc:5010-5104.
 //! Selected source audit: effective 625, mapped 560, omitted 24, remaining 41.
-//! Parser: 267/248/16/3; Apply/map: 222/177/7/38; native: 136/135/1/0.
+//! Parser: 267/248/16/3; Apply/map: 222/177/7/38; computed style: 136/135/1/0.
 //! Effective excludes comments, blank/preprocessor/namespace/using/visibility/
 //! brace-only lines. Omitted lines are DCHECK and continuation only. Remaining
 //! selected lines: utils 4719-4723 (view/scroll CSSValue owners); map 359,
@@ -17,7 +17,7 @@
 //! css_to_style_map:350-387,400-423,740-754,762-774,776-784,786-800.
 //! generated longhands:16994-17024,17051-17081,17108-17138,17165-17195,
 //! 17222-17247,17274-17299 (ApplyInitial/Inherit/Value only).
-//! native css_animation_data.h:29,33,38-44,76-99,130-149,186-201,220-227;
+//! computed style css_animation_data.h:29,33,38-44,76-99,130-149,186-201,220-227;
 //! css_animation_data.cc:13-30,42-51,56,73-89,106-110,122-151;
 //! timeline_offset.h:67-82,87-88. Trigger attachments are excluded from this batch.
 //! Runtime defaults: runtime_enabled_features.json5:6347-6348 stable;

@@ -40,7 +40,9 @@ pub const kPunctuation_FinalQuote: CharCategory = 1 << 29;
 pub fn HasLineBreakingPropertyComplexContext(c: i32) -> bool {
     const UCHAR_LINE_BREAK: i32 = 0x1008;
     const U_LB_COMPLEX_CONTEXT: i32 = 24;
-    unsafe { icu_bidi::native::u_getIntPropertyValue(c, UCHAR_LINE_BREAK) == U_LB_COMPLEX_CONTEXT }
+    unsafe {
+        icu_bidi::ubidi_ffi::u_getIntPropertyValue(c, UCHAR_LINE_BREAK) == U_LB_COMPLEX_CONTEXT
+    }
 }
 
 // cpp: foundation/blink_base/wtf/text/unicode.h:173-177
@@ -50,7 +52,7 @@ pub fn IsSpaceOrNewline(c: u16) -> bool {
         // cpp: foundation/blink_base/wtf/text/ascii_ctype.h:102-104
         c <= b' ' as u16 && (c == b' ' as u16 || (0x09..=0x0d).contains(&c))
     } else {
-        unsafe { icu_bidi::native::u_charDirection(c as i32) == 9 }
+        unsafe { icu_bidi::ubidi_ffi::u_charDirection(c as i32) == 9 }
     }
 }
 
@@ -65,7 +67,7 @@ fn WordClass(character: char) -> WordBoundaryClass {
     // ICU UCharCategory values. Letters, combining marks and numbers form a
     // word; connector punctuation keeps identifiers such as `foo_bar`
     // together. Space separators form their own selection unit.
-    let category = unsafe { icu_bidi::native::u_charType(character as i32) };
+    let category = unsafe { icu_bidi::ubidi_ffi::u_charType(character as i32) };
     if (1..=11).contains(&category) || category == 22 {
         WordBoundaryClass::Word
     } else if (12..=14).contains(&category) || character.is_whitespace() {

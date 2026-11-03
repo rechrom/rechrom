@@ -22,16 +22,16 @@ use style::{
     },
     StyleEngine,
 };
-fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
     let node = (0..d.NodeCount())
         .find(|&i| d.Node(i).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
-    unsafe { &*d.ResolvedStyleFor(node).unwrap().native_style.Get() }
+    unsafe { &*d.ResolvedStyleFor(node).unwrap().computed_style_owner.Get() }
 }
 
 #[test]
-fn circle_ellipse_and_path_reach_typed_native_shapes() {
+fn circle_ellipse_and_path_reach_typed_shapes() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=c style=\"clip-path:circle(farthest-side at right 10px bottom 20%) padding-box\"></div><div id=e style=\"clip-path:ellipse(20% closest-corner at 25% 75%) content-box\"></div><div id=p style=\"clip-path:path(evenodd, 'M1 2h3v4s5 6 7 8t9 10a15 16 20 0 1 17 18z') view-box\"></div>",
@@ -44,7 +44,7 @@ fn circle_ellipse_and_path_reach_typed_native_shapes() {
                 as *const ShapeClipPathOperation)
         }
     };
-    let circle_operation = shape_operation(native(&owner, "c"));
+    let circle_operation = shape_operation(computed_style(&owner, "c"));
     assert_eq!(circle_operation.GetGeometryBox(), GeometryBox::kPaddingBox);
     let circle = unsafe {
         &*(circle_operation.GetBasicShape()
@@ -54,7 +54,7 @@ fn circle_ellipse_and_path_reach_typed_native_shapes() {
     assert_eq!(circle.Radius().GetType(), RadiusType::kFarthestSide);
     assert!(circle.HasExplicitCenter());
 
-    let ellipse_operation = shape_operation(native(&owner, "e"));
+    let ellipse_operation = shape_operation(computed_style(&owner, "e"));
     assert_eq!(ellipse_operation.GetGeometryBox(), GeometryBox::kContentBox);
     let ellipse = unsafe {
         &*(ellipse_operation.GetBasicShape()
@@ -64,7 +64,7 @@ fn circle_ellipse_and_path_reach_typed_native_shapes() {
     assert_eq!(ellipse.RadiusX().GetType(), RadiusType::kValue);
     assert_eq!(ellipse.RadiusY().GetType(), RadiusType::kClosestCorner);
 
-    let path_operation = shape_operation(native(&owner, "p"));
+    let path_operation = shape_operation(computed_style(&owner, "p"));
     assert_eq!(path_operation.GetGeometryBox(), GeometryBox::kViewBox);
     let path = unsafe {
         &*(path_operation.GetBasicShape()
@@ -75,13 +75,13 @@ fn circle_ellipse_and_path_reach_typed_native_shapes() {
     assert!(!path.ByteStream().IsEmpty());
 }
 #[test]
-fn local_clip_path_url_reaches_typed_native_reference() {
+fn local_clip_path_url_reaches_typed_computed_style_reference() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<svg><clipPath id=clip><rect width=10 height=10 /></clipPath></svg><div id=target style='clip-path:url(#clip)'></div>",
     );
     update(&mut owner);
-    let operation = unsafe { &*native(&owner, "target").ClipPath().unwrap() };
+    let operation = unsafe { &*computed_style(&owner, "target").ClipPath().unwrap() };
     assert_eq!(operation.GetType(), ClipType::kReference);
     let reference = unsafe {
         &*(operation as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
@@ -101,11 +101,11 @@ fn update(owner: &mut dom::DOM) {
     );
 }
 #[test]
-fn all_css_filter_functions_reach_native_operations_with_defaults_clamping_and_math() {
+fn all_css_filter_functions_reach_computed_style_operations_with_defaults_clamping_and_math() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=p style='filter:grayscale(200%) sepia() saturate(2) hue-rotate(.5turn) invert(calc(2)) opacity(25%) brightness(250%) contrast(0.5) blur(calc(1px + 2px)) drop-shadow(2px 3px 4px red);backdrop-filter:blur() hue-rotate()'><div id=c style='filter:inherit;backdrop-filter:inherit'></div><div id=i style='filter:initial;backdrop-filter:unset'></div></div>");
     update(&mut owner);
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     let filters = p.Filter();
     assert_eq!(filters.size(), 10);
     for (index, kind, amount) in [
@@ -149,8 +149,8 @@ fn all_css_filter_functions_reach_native_operations_with_defaults_clamping_and_m
         (2.0, 3.0, 4.0, 0.0)
     );
     assert!(p.Filter().HasFilterThatMovesPixels());
-    assert!(p.Filter() == native(&owner, "c").Filter());
-    assert!(p.BackdropFilter() == native(&owner, "c").BackdropFilter());
+    assert!(p.Filter() == computed_style(&owner, "c").Filter());
+    assert!(p.BackdropFilter() == computed_style(&owner, "c").BackdropFilter());
     assert_eq!(
         unsafe { &*(p.BackdropFilter().at(0) as *const BlurFilterOperation) }
             .StdDeviation()
@@ -162,15 +162,16 @@ fn all_css_filter_functions_reach_native_operations_with_defaults_clamping_and_m
         0.0
     );
     assert!(
-        native(&owner, "i").Filter().IsEmpty() && native(&owner, "i").BackdropFilter().IsEmpty()
+        computed_style(&owner, "i").Filter().IsEmpty()
+            && computed_style(&owner, "i").BackdropFilter().IsEmpty()
     );
 }
 #[test]
-fn polygon_and_box_clipping_and_shape_outside_preserve_native_owners() {
+fn polygon_and_box_clipping_and_shape_outside_preserve_computed_style_owners() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=p style='clip-path:content-box polygon(evenodd round 2px,0 0,100% 0,calc(50% + 1px) 100%);shape-outside:polygon(0 0,10px 0,10px 20px) padding-box;shape-image-threshold:calc(3 / 4)'><div id=c style='clip-path:inherit;shape-outside:inherit;shape-image-threshold:inherit'></div><div id=i style='clip-path:initial;shape-outside:unset;shape-image-threshold:initial'></div></div><div id=b style='clip-path:fill-box;shape-outside:margin-box;shape-image-threshold:200%'></div><div id=n style='shape-image-threshold:-1'></div>");
     update(&mut owner);
-    let p = native(&owner, "p");
+    let p = computed_style(&owner, "p");
     let clip = unsafe { &*p.ClipPath().unwrap() };
     assert_eq!(clip.GetType(), ClipType::kShape);
     let clip = unsafe {
@@ -192,14 +193,14 @@ fn polygon_and_box_clipping_and_shape_outside_preserve_native_owners() {
     assert_eq!(outside.GetType(), ShapeValueType::kShape);
     assert_eq!(outside.CssBox(), ShapeBox::kPaddingBox);
     assert_eq!(p.ShapeImageThreshold(), 0.75);
-    let c = native(&owner, "c");
+    let c = computed_style(&owner, "c");
     assert!(p.ClipPath().unwrap() == c.ClipPath().unwrap());
     assert_eq!(p.ShapeOutside(), c.ShapeOutside());
     assert_eq!(c.ShapeImageThreshold(), 0.75);
-    let i = native(&owner, "i");
+    let i = computed_style(&owner, "i");
     assert!(i.ClipPath().is_none() && i.ShapeOutside().is_null());
     assert_eq!(i.ShapeImageThreshold(), 0.0);
-    let b = native(&owner, "b");
+    let b = computed_style(&owner, "b");
     let clip = unsafe { &*b.ClipPath().unwrap() };
     assert_eq!(clip.GetType(), ClipType::kGeometryBox);
     assert_eq!(
@@ -215,21 +216,21 @@ fn polygon_and_box_clipping_and_shape_outside_preserve_native_owners() {
         ShapeValueType::kBox
     );
     assert_eq!(b.ShapeImageThreshold(), 1.0);
-    assert_eq!(native(&owner, "n").ShapeImageThreshold(), 0.0);
+    assert_eq!(computed_style(&owner, "n").ShapeImageThreshold(), 0.0);
 }
 #[test]
 fn cursor_keywords_clear_images_and_follow_source_inheritance_flags() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=p style='cursor:-webkit-grab'><div id=c style='cursor:inherit'></div><div id=i style='cursor:initial'></div><div id=v style='cursor:nwse-resize'></div><div id=u style='cursor:unset'></div></div>");
     update(&mut owner);
-    assert_eq!(native(&owner, "p").Cursor(), ECursor::kGrab);
-    assert_eq!(native(&owner, "c").Cursor(), ECursor::kGrab);
-    assert!(native(&owner, "c").CursorIsInherited());
-    assert!(native(&owner, "c").Cursors().is_null());
-    assert_eq!(native(&owner, "i").Cursor(), ECursor::kAuto);
-    assert!(!native(&owner, "i").CursorIsInherited());
-    assert_eq!(native(&owner, "v").Cursor(), ECursor::kNwseResize);
-    assert_eq!(native(&owner, "u").Cursor(), ECursor::kGrab);
+    assert_eq!(computed_style(&owner, "p").Cursor(), ECursor::kGrab);
+    assert_eq!(computed_style(&owner, "c").Cursor(), ECursor::kGrab);
+    assert!(computed_style(&owner, "c").CursorIsInherited());
+    assert!(computed_style(&owner, "c").Cursors().is_null());
+    assert_eq!(computed_style(&owner, "i").Cursor(), ECursor::kAuto);
+    assert!(!computed_style(&owner, "i").CursorIsInherited());
+    assert_eq!(computed_style(&owner, "v").Cursor(), ECursor::kNwseResize);
+    assert_eq!(computed_style(&owner, "u").Cursor(), ECursor::kGrab);
     let property = ParseProperty(
         CSSPropertyID::kCursor,
         &String::from("hand"),
@@ -240,7 +241,7 @@ fn cursor_keywords_clear_images_and_follow_source_inheritance_flags() {
     assert_eq!(property[0].Value().CssText().Utf8(), "pointer");
 }
 #[test]
-fn invalid_supported_effect_values_and_missing_native_owners_are_typed() {
+fn invalid_supported_effect_values_and_missing_computed_style_owners_are_typed() {
     for (id, text) in [
         (CSSPropertyID::kFilter, "blur(-1px)"),
         (CSSPropertyID::kFilter, "blur(10%)"),

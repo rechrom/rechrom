@@ -1,5 +1,5 @@
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use layoutng_assembly::{
     fragment_tree::FragmentPaintData,
@@ -67,7 +67,7 @@ fn layout_geometry(engine: &mut LayoutEngine) -> Vec<(u64, f64, f64, f64, f64)> 
 
 #[test]
 fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let space = browser::CreateBrowserConstraints(320, 240);
         let mut engine = new_engine(&space);
         for ids in [
@@ -123,7 +123,7 @@ fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
 
 #[test]
 fn retained_style_inputs_survive_dom_replacement_and_collection() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut owner = html::html_parser::ParseHTML(
             "<html><head><style>html:active {color:red}</style></head>\
              <body><p>Retained layout must own its previous style.</p></body></html>",
@@ -151,7 +151,7 @@ fn retained_style_inputs_survive_dom_replacement_and_collection() {
                 .GetDocument()
                 .ResolvedStyleFor(html)
                 .unwrap()
-                .native_style
+                .style
                 .Get();
             old = foundation::WeakPersistent::from_ptr(canonical);
             assert_ne!(
@@ -173,7 +173,7 @@ fn retained_style_inputs_survive_dom_replacement_and_collection() {
                     .GetDocument()
                     .ResolvedStyleFor(html)
                     .unwrap()
-                    .native_style
+                    .style
                     .Get(),
                 old.Get(),
                 "DOM must have replaced the canonical style before GC"
@@ -202,7 +202,7 @@ fn retained_style_inputs_survive_dom_replacement_and_collection() {
 
 #[test]
 fn complete_dom_projection_matches_fresh_after_input_changes() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         use dom::persistent_document::{DOMAttribute, DOMNamespace};
         let mut owner = html::html_parser::ParseHTML(
@@ -375,7 +375,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
 
 #[test]
 fn dirty_subtree_updates_match_fresh_and_retain_clean_sibling_identity() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         fn branch(
             tree: &mut LayoutTreeUpdate<'_>,

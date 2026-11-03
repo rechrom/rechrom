@@ -79,7 +79,7 @@ impl<T: Clone + Default, F: Clone + Default, P: Clone, Q, S, Timing: Clone, L> F
 }
 /// One root-family constraint makes all canonical material adapters use this
 /// exact owned pass/state/quad storage and the existing unique native IDs.
-pub trait NativeFrameTypes:
+pub trait FrameTypes:
     FrameValueTypes<
         FrameTransform = <Self as LayerTreeTypes>::Transform,
         FrameFilters = <Self as LayerTreeTypes>::Filters,
@@ -481,7 +481,7 @@ impl<V: FrameValueTypes> FrameDataRenderPass for CompositorRenderPass<V> {
         value.EndArray();
     }
 }
-impl<B: NativeFrameTypes> LayerImplRenderPass<B> for CompositorRenderPass<B> {
+impl<B: FrameTypes> LayerImplRenderPass<B> for CompositorRenderPass<B> {
     fn AppendDebugBorderQuad(
         &mut self,
         state: SharedQuadStateHandle,
@@ -507,9 +507,7 @@ impl<B: NativeFrameTypes> LayerImplRenderPass<B> for CompositorRenderPass<B> {
         );
     }
 }
-impl<B: NativeFrameTypes + SolidColorLayerImplTypes> SolidColorRenderPass<B>
-    for CompositorRenderPass<B>
-{
+impl<B: FrameTypes + SolidColorLayerImplTypes> SolidColorRenderPass<B> for CompositorRenderPass<B> {
     fn CreateAndAppendSharedQuadState(&mut self) -> SharedQuadStateHandle {
         self.AppendSharedQuadState()
     }
@@ -551,9 +549,7 @@ impl<B: NativeFrameTypes + SolidColorLayerImplTypes> SolidColorRenderPass<B>
         );
     }
 }
-impl<B: NativeFrameTypes + TileBasedLayerImplTypes> TileBasedRenderPass<B>
-    for CompositorRenderPass<B>
-{
+impl<B: FrameTypes + TileBasedLayerImplTypes> TileBasedRenderPass<B> for CompositorRenderPass<B> {
     fn DrawQuad(&self, id: DrawQuadHandle) -> &DrawQuad<B::PictureDisplayItemList> {
         &self.quad_list[id.0]
     }
@@ -624,9 +620,7 @@ impl<B: NativeFrameTypes + TileBasedLayerImplTypes> TileBasedRenderPass<B>
         );
     }
 }
-impl<B: NativeFrameTypes + RenderSurfaceTypes> RenderSurfaceRenderPass<B>
-    for CompositorRenderPass<B>
-{
+impl<B: FrameTypes + RenderSurfaceTypes> RenderSurfaceRenderPass<B> for CompositorRenderPass<B> {
     fn SetNew(
         &mut self,
         id: RenderPassId,
@@ -848,7 +842,7 @@ impl<V: FrameValueTypes> crate::adapter::layer_tree_host_impl::HostMetadataPass
 }
 impl<B> crate::adapter::layer_tree_host_impl::HostDrawPass<B> for CompositorRenderPass<B>
 where
-    B: NativeFrameTypes + crate::adapter::layer_tree_host_impl::HostImplTypes,
+    B: FrameTypes + crate::adapter::layer_tree_host_impl::HostImplTypes,
 {
     fn Create() -> Box<Self> {
         Box::new(Self::default())
@@ -988,7 +982,7 @@ impl<B> crate::adapter::layer_tree_host_impl::HostCompositorFrame<B>
         B::TransferableResource,
     >
 where
-    B: NativeFrameTypes + crate::adapter::layer_tree_host_impl::HostImplDTypes,
+    B: FrameTypes + crate::adapter::layer_tree_host_impl::HostImplDTypes,
 {
     fn metadata(&self) -> &B::CompositorFrameMetadata {
         &self.metadata
@@ -1026,7 +1020,7 @@ pub trait ViewTransitionGeometry: FrameValueTypes {
 }
 
 impl<B> crate::adapter::picture_layer_impl::PictureRenderPass<B> for CompositorRenderPass<B>
-where B:NativeFrameTypes+crate::adapter::picture_layer_impl::PictureLayerImplTypes+FrameValueTypes<PictureDisplayItemList=<<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource as crate::adapter::picture_layer_impl::PictureRasterSource>::DisplayItemList>
+where B:FrameTypes+crate::adapter::picture_layer_impl::PictureLayerImplTypes+FrameValueTypes<PictureDisplayItemList=<<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource as crate::adapter::picture_layer_impl::PictureRasterSource>::DisplayItemList>
 {
  fn CreateAndAppendPictureDrawQuad(&mut self)->DrawQuadHandle {
   // Native default construction before SetNew. No fabricated display content.

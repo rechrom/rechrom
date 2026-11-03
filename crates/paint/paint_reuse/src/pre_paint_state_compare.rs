@@ -1,6 +1,6 @@
 //! Compare inherited builder context before persistence/canonicalization.
-//! Blink reuses native property-node slots; this builder instead creates raw
-//! snapshots. Native owner + role identifies that same slot, and every typed
+//! Blink reuses source property-node slots; this builder instead creates raw
+//! snapshots. Chromium owner + role identifies that same slot, and every typed
 //! value/link must still match before a clean child can reuse its context.
 //! Sources: pre_paint_tree_walk.cc:398-447 and
 //! paint_property_tree_builder.cc:4731-4770. This comparison itself neither
@@ -269,6 +269,8 @@ impl Compare<'_> {
             local_transform_space,
             output_clip,
             filter_reference_box,
+            filter_viewport,
+            filter_space_origin,
             filter_reference_scale,
             opacity,
             blend_mode,
@@ -292,6 +294,8 @@ impl Compare<'_> {
             && filters.is_finite()
             && filters == &b.filters
             && filter_reference_box == &b.filter_reference_box
+            && filter_viewport == &b.filter_viewport
+            && filter_space_origin == &b.filter_space_origin
             && filter_reference_scale == &b.filter_reference_scale
             && backdrop_filters.is_finite()
             && backdrop_filters == &b.backdrop_filters

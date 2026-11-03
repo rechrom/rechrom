@@ -14,7 +14,7 @@ pub enum NativePropertyType {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WorkletPropertyKey {
     Custom(String, ElementId),
-    Native(NativePropertyType, ElementId),
+    Property(NativePropertyType, ElementId),
 }
 // Source: cc/paint/paint_worklet_input.h:65-80; .cc:64-85.
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -5,6 +5,7 @@
 extern crate self as layout_algo_inline;
 extern crate self as layout_fragment;
 extern crate self as layoutng;
+extern crate self as layoutng_assembly;
 
 pub use foundation::UnsupportedLayout;
 
@@ -23,6 +24,18 @@ pub mod layout_algo_inline_package {
 }
 pub use layout_algo_inline_package::*;
 
+// Inline ink-overflow traversal is mutually recursive with Paint's decorating
+// box context in Chromium. Keep the Paint-owned sources at their physical path
+// and compile them once at this existing reciprocal assembly boundary.
+#[path = "../../../paint/paint_record/src/decorating_box.rs"]
+pub mod decorating_box;
+#[path = "../../../paint/paint_record/src/inline_paint_context.rs"]
+pub mod inline_paint_context;
+#[path = "../../../paint/paint_record/src/line_relative_rect.rs"]
+pub mod line_relative_rect;
+#[path = "../../../paint/paint_record/src/text_decoration_info.rs"]
+pub mod text_decoration_info;
+
 // CSS value parsers refer to LayoutNG-owned value types. Compile the owning
 // css_parser source once at this reciprocal assembly boundary.
 #[path = "../../../css_parser/src/color_parser.rs"]
@@ -32,7 +45,8 @@ mod block_virtual_dispatch;
 pub use block_virtual_dispatch::RegisterFlexStitchedRowGapIndex;
 pub use block_virtual_dispatch::{
     GridObjectVirtuals, RegisterGridObjectVirtuals, RegisterGridStyleDidChange,
-    RegisterSvgRootChildren,
+    RegisterImageStyleDidChange, RegisterReplacedRecalcVisualOverflow,
+    RegisterReplacedStyleDidChange, RegisterSvgRootChildren,
 };
 mod layout_invalidation_reason_symbols;
 mod out_of_flow_element_data;
@@ -193,9 +207,9 @@ mod package_contract_tests {
             }
             let relative = source.strip_prefix(&core).expect("relative core source");
             if relative == Path::new("algorithm_entry.rs")
-                && contents.contains("pub fn RunNativeAlgorithm<A: NativeAlgorithm>")
-                && contents.contains("pub fn MeasureNativeAlgorithm<A: NativeAlgorithm>")
-                && contents.contains("pub fn TraceNativeAlgorithmRoot<A: NativeAlgorithm>")
+                && contents.contains("pub fn RunAlgorithm<A: LayoutAlgorithmImplementation>")
+                && contents.contains("pub fn MeasureAlgorithm<A: LayoutAlgorithmImplementation>")
+                && contents.contains("pub fn TraceAlgorithmRoot<A: LayoutAlgorithmImplementation>")
             {
                 continue;
             }
@@ -203,7 +217,7 @@ mod package_contract_tests {
                 relative,
                 path if path == Path::new("layout_font_resolver.rs")
                     || path == Path::new("boundary/font_from_selector.rs")
-                    || path == Path::new("boundary/native_layout_environment.rs")
+                    || path == Path::new("boundary/layout_environment.rs")
             ) {
                 continue;
             }
@@ -347,7 +361,7 @@ mod package_contract_tests {
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "fragmentation/src/native_fragmentation_utils.rs"
+            "fragmentation/src/fragmentation_utils.rs"
         )))
         .expect("read fragmentation algorithm owner");
         for sampled_entry in [
@@ -371,23 +385,22 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/fragmentation_utils.rs"))
                 .expect("read fragmentation compatibility facade");
         assert!(
-            facade.contains("fragmentation/src/native_fragmentation_utils.rs")
-                && facade
-                    .contains("pub use layout_algo_fragmentation_native_fragmentation_utils::*;")
+            facade.contains("fragmentation/src/fragmentation_utils.rs")
+                && facade.contains("pub use layout_algo_fragmentation_fragmentation_utils::*;")
                 && !facade.contains("pub fn FinishFragmentation"),
             "core fragmentation_utils must remain a re-export-only facade"
         );
         for (facade_file, owner_file, module_name, owned_type) in [
             (
                 "early_break.rs",
-                "native_early_break.rs",
-                "layout_algo_fragmentation_native_early_break",
+                "early_break.rs",
+                "layout_algo_fragmentation_early_break",
                 "pub struct EarlyBreak",
             ),
             (
                 "break_appeal.rs",
-                "native_break_appeal.rs",
-                "layout_algo_fragmentation_native_break_appeal",
+                "break_appeal.rs",
+                "layout_algo_fragmentation_break_appeal",
                 "pub enum BreakAppeal",
             ),
         ] {
@@ -421,8 +434,8 @@ mod package_contract_tests {
             .expect("read shared constraint-space schema");
         assert!(
             core.contains("#[inline(always)]\n    fn clone(&self) -> Self")
-                && core.contains("fragmentation/src/native_constraint_space_fragmentation.rs")
-                && core.contains("inline/src/native_constraint_space_block_in_inline.rs")
+                && core.contains("fragmentation/src/constraint_space_fragmentation.rs")
+                && core.contains("inline/src/constraint_space_block_in_inline.rs")
                 && !core.contains("pub fn CloneWithoutFragmentation")
                 && !core.contains("pub fn CloneForBlockInInlineIfNeeded"),
             "ConstraintSpace must keep only its inline shared clone and owner-module loaders"
@@ -430,7 +443,7 @@ mod package_contract_tests {
 
         let fragmentation = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "fragmentation/src/native_constraint_space_fragmentation.rs"
+            "fragmentation/src/constraint_space_fragmentation.rs"
         )))
         .expect("read fragmentation constraint-space projection");
         assert!(
@@ -441,7 +454,7 @@ mod package_contract_tests {
 
         let inline = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "inline/src/native_constraint_space_block_in_inline.rs"
+            "inline/src/constraint_space_block_in_inline.rs"
         )))
         .expect("read block-in-inline constraint-space projection");
         assert!(
@@ -450,10 +463,9 @@ mod package_contract_tests {
             "block-in-inline projection must keep an inline fast path and package-qualified sampled slow path"
         );
 
-        let float = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "float/src/native_exclusion_space.rs"
-        )))
+        let float = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "float/src/exclusion_space.rs")),
+        )
         .expect("read float exclusion-space owner");
         assert!(
             float.contains("impl Clone for ExclusionSpace {")
@@ -469,7 +481,7 @@ mod package_contract_tests {
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "sizing/src/native_length_utils.rs")),
+            root.join(concat!("layout_algo_", "sizing/src/length_utils.rs")),
         )
         .expect("read sizing algorithm owner");
         for sampled_entry in [
@@ -490,24 +502,23 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/length_utils.rs"))
             .expect("read sizing compatibility facade");
         assert!(
-            facade.contains("sizing/src/native_length_utils.rs")
-                && facade.contains("pub use layout_algo_sizing_native_length_utils::*;")
+            facade.contains("sizing/src/length_utils.rs")
+                && facade.contains("pub use layout_algo_sizing_length_utils::*;")
                 && !facade.contains("pub fn ComputeMinMaxBlockSizes"),
             "core length_utils must remain a re-export-only layout_algo_sizing facade"
         );
 
         let space_owner = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "sizing/src/native_space_utils.rs")),
+            root.join(concat!("layout_algo_", "sizing/src/space_utils.rs")),
         )
         .expect("read constraint-space sizing owner");
         assert!(
             space_owner.contains("#[inline(never)]\npub fn SetOrthogonalFallbackInlineSize"),
             "orthogonal fallback sizing must retain a layout_algo_sizing sampling frame"
         );
-        let baseline_owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "sizing/src/native_baseline_utils.rs"
-        )))
+        let baseline_owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "sizing/src/baseline_utils.rs")),
+        )
         .expect("read baseline sizing owner");
         for inline_helper in [
             "DetermineBaselineWritingMode",
@@ -522,13 +533,13 @@ mod package_contract_tests {
         for (facade_file, owner_file, module_name) in [
             (
                 "space_utils.rs",
-                "native_space_utils.rs",
-                "layout_algo_sizing_native_space_utils",
+                "space_utils.rs",
+                "layout_algo_sizing_space_utils",
             ),
             (
                 "baseline_utils.rs",
-                "native_baseline_utils.rs",
-                "layout_algo_sizing_native_baseline_utils",
+                "baseline_utils.rs",
+                "layout_algo_sizing_baseline_utils",
             ),
         ] {
             let facade =
@@ -543,7 +554,7 @@ mod package_contract_tests {
 
         let builder_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "sizing/src/native_min_max_constraint_space_builder.rs"
+            "sizing/src/min_max_constraint_space_builder.rs"
         )))
         .expect("read min/max constraint-space builder owner");
         assert!(
@@ -556,10 +567,9 @@ mod package_contract_tests {
         )
         .expect("read min/max constraint-space builder facade");
         assert!(
-            builder_facade.contains("sizing/src/native_min_max_constraint_space_builder.rs")
-                && builder_facade.contains(
-                    "pub use layout_algo_sizing_native_min_max_constraint_space_builder::*;"
-                )
+            builder_facade.contains("sizing/src/min_max_constraint_space_builder.rs")
+                && builder_facade
+                    .contains("pub use layout_algo_sizing_min_max_constraint_space_builder::*;")
                 && !builder_facade.contains("pub struct MinMaxConstraintSpaceBuilder"),
             "core min/max constraint-space builder must remain a re-export-only facade"
         );
@@ -629,13 +639,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_custom_layout_state_resolves_to_the_custom_algorithm_owner() {
+    fn custom_layout_state_resolves_to_the_custom_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let payload = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "custom/src/native_custom_layout_payload.rs"
+            "custom/src/custom_layout_payload.rs"
         )))
         .expect("read custom layout payload owner");
         assert!(
@@ -648,7 +658,7 @@ mod package_contract_tests {
 
         let custom_data = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "custom/src/native_constraint_space_custom_data.rs"
+            "custom/src/constraint_space_custom_data.rs"
         )))
         .expect("read custom constraint-space state owner");
         for owned_policy in [
@@ -671,12 +681,12 @@ mod package_contract_tests {
         for (facade_file, owner_file, leaked_policy) in [
             (
                 "custom_layout_payload.rs",
-                "native_custom_layout_payload.rs",
+                "custom_layout_payload.rs",
                 "pub struct CustomLayoutPayload",
             ),
             (
                 "constraint_space_custom_data.rs",
-                "native_constraint_space_custom_data.rs",
+                "constraint_space_custom_data.rs",
                 "pub struct CustomData",
             ),
         ] {
@@ -685,7 +695,7 @@ mod package_contract_tests {
                     .unwrap_or_else(|_| panic!("read custom compatibility facade {facade_file}"));
             assert!(
                 facade.contains(&format!("custom/src/{owner_file}"))
-                    && facade.contains("pub use layout_algo_custom_native_")
+                    && facade.contains("pub use layout_algo_custom_")
                     && !facade.contains(leaked_policy),
                 "{facade_file} must remain a re-export-only layout_algo_custom facade"
             );
@@ -693,14 +703,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_frame_set_layout_data_resolves_to_the_fragment_owner() {
+    fn frame_set_layout_data_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_frame_set_layout_data.rs"),
-        )
-        .expect("read native frame-set layout-data owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/frame_set_layout_data.rs"))
+                .expect("read source frame-set layout-data owner");
         for owned_policy in [
             "pub struct FrameSetLayoutData",
             "col_sizes: self.col_sizes.clone()",
@@ -722,8 +731,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/frame_set_layout_data.rs"))
                 .expect("read frame-set layout-data facade");
         assert!(
-            facade.contains("layout_fragment/src/native_frame_set_layout_data.rs")
-                && facade.contains("pub use layout_fragment_native_frame_set_layout_data::*")
+            facade.contains("layout_fragment/src/frame_set_layout_data.rs")
+                && facade.contains("pub use layout_fragment_frame_set_layout_data::*")
                 && !facade.contains("pub struct FrameSetLayoutData"),
             "frame-set layout data must be re-exported from layout_fragment"
         );
@@ -740,21 +749,40 @@ mod package_contract_tests {
         assert!(
             source.contains("#[inline(never)]\nfn NaturalSizingInfo")
                 && source.contains(concat!("layout_algo_", "replaced.NaturalSizingInfo"))
-                && source.contains("replaced_sizing.natural_sizing_info = Some(NaturalSizingInfo)"),
+                && source.contains("replaced_sizing.natural_sizing_info = Some(NaturalSizingInfo)")
+                && source.contains("replaced_respects_css_overflow")
+                && source.contains("LayoutReplacedRespectsCSSOverflow")
+                && source.contains("replaced_image_state_updater")
+                && source.contains("UpdateImageState"),
             "replaced intrinsic sizing must retain a package span and out-of-line sampling frame"
         );
 
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "replaced/src/native_layout_replaced.rs"
+            "replaced/src/layout_replaced_interface.rs"
         )))
-        .expect("read native LayoutReplaced owner");
+        .expect("read source LayoutReplaced owner");
         for owned_policy in [
             "pub struct LayoutReplaced",
             "pub struct LayoutInputReplaced",
             "fn LayoutReplacedComputeNaturalSizingInfo",
             "fn ComputeReplacedContentRect",
             "fn ComputeObjectFitAndPositionRect",
+            "cached_resource_priority_",
+            "fn CachedSpeculativeDecodeSize",
+            "fn ComputeSpeculativeDecodeQuality",
+            "fn IsUnsizedImage",
+            "\"LayoutImage\"",
+            "fn DrawsBackgroundOntoContentLayer",
+            "fn IsInSelfHitTestingPhase",
+            "fn PositionForPoint",
+            "image_device_pixel_ratio_",
+            "natural_dimensions_",
+            "is_generated_content_",
+            "fn ImageDevicePixelRatio",
+            "fn NaturalDimensions",
+            "fn IsGeneratedContent",
+            "DowncastFrom<LayoutObject> for LayoutInputReplaced",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -766,21 +794,121 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "replaced/src/native_layout_replaced.rs"
-            )) && facade.contains("pub use layout_algo_replaced_native_layout_replaced::*;")
+                "replaced/src/layout_replaced_interface.rs"
+            )) && facade.contains("pub use layout_algo_replaced_layout_replaced_interface::*;")
                 && !facade.contains("pub struct LayoutReplaced"),
             "LayoutReplaced must be re-exported from the replaced algorithm owner"
         );
+
+        let lifecycle = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "replaced/src/layout_replaced.rs")),
+        )
+        .expect("read LayoutReplaced lifecycle owner");
+        for owned_policy in [
+            "fn LayoutReplacedStyleDidChange",
+            "fn LayoutReplacedNaturalSizeChanged",
+            "fn LayoutReplacedComputeVisualEffectOverflowOutsets",
+            "fn LayoutReplacedAddVisualEffectOverflow",
+            "fn LayoutReplacedRecalcVisualOverflow",
+            "fn LayoutReplacedComputeSpeculativeDecodeSize",
+            "fn LayoutReplacedLocalSelectionVisualRect",
+            "fn LayoutReplacedPositionForPoint",
+            "fn LayoutReplacedHitTestChildren",
+            "fn SelectionTopAndBottom",
+            ".SlowLastChild()",
+            ".HasSelfPaintingLayer()",
+            ".NodeAtPoint(",
+            "fn LayoutInputReplacedStyleDidChange",
+            "diff.border_radius_changed()",
+            "new_style.EffectiveZoom() != old_zoom",
+            "kSizeChanged",
+        ] {
+            assert!(
+                lifecycle.contains(owned_policy),
+                "replaced algorithm lifecycle lost {owned_policy}"
+            );
+        }
+        let cursor = std::fs::read_to_string(root.join("layout_fragment/src/inline_cursor.rs"))
+            .expect("read replaced selection fragment owner");
+        assert!(
+            cursor.contains("fn CurrentLocalSelectionRectForReplaced")
+                && cursor.contains("ExpandSelectionRectToLineHeight(logical_rect"),
+            "replaced inline selection geometry must remain owned by layout_fragment"
+        );
+        let priority = std::fs::read_to_string(
+            root.join("layout_fragment/src/layout_box_resource_priority.rs"),
+        )
+        .expect("read LayoutBox resource-priority owner");
+        for owned_policy in [
+            "fn LayoutBoxComputeResourcePriorityProvider",
+            "LocalToAbsolutePointPhysical",
+            "VisibilityStatus::kVisible",
+            "screen_rect.Width() * screen_rect.Height()",
+        ] {
+            assert!(
+                priority.contains(owned_policy),
+                "layout_fragment resource priority lost {owned_policy}"
+            );
+        }
+        let dispatch =
+            std::fs::read_to_string(root.join("layoutng_assembly/src/block_virtual_dispatch.rs"))
+                .expect("read LayoutObject virtual dispatch");
+        assert!(
+            dispatch.contains("RegisterReplacedStyleDidChange")
+                && dispatch.contains("REPLACED_STYLE_DID_CHANGE")
+                && dispatch.contains("LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot"),
+            "assembly must remain a lifecycle trampoline to layout_algo_replaced"
+        );
+        assert!(
+            dispatch.contains("RegisterImageStyleDidChange")
+                && dispatch.contains("IMAGE_STYLE_DID_CHANGE")
+                && dispatch.contains("LayoutObjectClass::Replaced if IsLayoutImage(object)")
+                && dispatch.contains(
+                    "LayoutObjectClass::Replaced if IsLayoutImage(object) => \"LayoutImage\""
+                ),
+            "assembly must preserve LayoutImage's derived style lifecycle before the replaced base fallback"
+        );
+        assert!(
+            dispatch.contains("RegisterReplacedRecalcVisualOverflow")
+                && dispatch.contains("REPLACED_RECALC_VISUAL_OVERFLOW")
+                && dispatch.contains("runtime_class == LayoutObjectClass::Replaced")
+                && !dispatch.contains(
+                    "runtime_class == LayoutObjectClass::Replaced\n            || runtime_class == LayoutObjectClass::SvgRoot"
+                ),
+            "assembly must dispatch replaced visual overflow to its package without swallowing the SVG root override"
+        );
+
+        let paint = std::fs::read_to_string(
+            root.parent()
+                .expect("crates root")
+                .join("paint/paint_record/src/box_fragment_painter.rs"),
+        )
+        .expect("read replaced-image paint consumer");
+        let paint_replaced = paint
+            .split_once("fn PaintReplaced")
+            .and_then(|(_, tail)| tail.split_once("fn PaintOutline"))
+            .map(|(body, _)| body)
+            .expect("isolate replaced-image paint body");
+        assert!(
+            paint_replaced.contains("source replaced-content geometry"),
+            "replaced-image paint must require LayoutReplaced geometry"
+        );
+        for leaked_layout_policy in ["ObjectFit::", "object_position", "resolution_scale"] {
+            assert!(
+                !paint_replaced.contains(leaked_layout_policy),
+                "paint_record must not recompute LayoutReplaced policy {leaked_layout_policy}"
+            );
+        }
     }
 
     #[test]
-    fn native_multicol_break_token_data_resolves_to_the_multicol_owner() {
+    fn multicol_break_token_data_resolves_to_the_multicol_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "multicol/src/native_multicol_break_token_data.rs"
+            "multicol/src/multicol_break_token_data.rs"
         )))
         .expect("read multicol break-token data owner");
         assert!(
@@ -796,45 +924,41 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "multicol/src/native_multicol_break_token_data.rs"
-            )) && facade
-                .contains("pub use layout_algo_multicol_native_multicol_break_token_data::*;")
+                "multicol/src/multicol_break_token_data.rs"
+            )) && facade.contains("pub use layout_algo_multicol_multicol_break_token_data::*;")
                 && !facade.contains("pub struct MulticolBreakTokenData"),
             "multicol break-token data must be re-exported from its algorithm owner"
         );
     }
 
     #[test]
-    fn native_form_state_resolves_to_the_forms_algorithm_owner() {
+    fn form_state_resolves_to_the_forms_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         for (owner_file, facade_file, owned_policy, reexport) in [
             (
-                "native_form_control_types.rs",
+                "form_control_types.rs",
                 "form_control_types.rs",
                 "pub enum AutofillState",
-                concat!(
-                    "pub use layout_algo_",
-                    "forms_native_form_control_types::*;"
-                ),
+                concat!("pub use layout_algo_", "forms_form_control_types::*;"),
             ),
             (
-                "native_form_control_sizing_service.rs",
+                "form_control_sizing_service.rs",
                 "form_control_sizing_service.rs",
                 "impl ComputedStyleControlSizingExt for ComputedStyle",
                 concat!(
                     "pub use layout_algo_",
-                    "forms_native_form_control_sizing_service::*;"
+                    "forms_form_control_sizing_service::*;"
                 ),
             ),
             (
-                "native_form_node_metadata.rs",
+                "form_node_metadata_interface.rs",
                 "form_node_metadata.rs",
                 "pub struct HTMLFormControlElement",
                 concat!(
                     "pub use layout_algo_",
-                    "forms_native_form_node_metadata::*;"
+                    "forms_form_node_metadata_interface::*;"
                 ),
             ),
         ] {
@@ -861,7 +985,7 @@ mod package_contract_tests {
 
         let metadata = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "forms/src/native_form_node_metadata.rs"
+            "forms/src/form_node_metadata_interface.rs"
         )))
         .expect("read forms metadata owner");
         assert!(
@@ -881,31 +1005,31 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_algorithm_sampling_frames_retain_the_concrete_package_type() {
+    fn algorithm_sampling_frames_retain_the_concrete_package_type() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let source = std::fs::read_to_string(root.join("layoutng/src/internal/algorithm_entry.rs"))
-            .expect("read native algorithm entry");
+            .expect("read source algorithm entry");
         assert!(
-            source.contains("#[inline(never)]\npub fn RunNativeAlgorithm<A: NativeAlgorithm>")
+            source.contains("#[inline(never)]\npub fn RunAlgorithm<A: LayoutAlgorithmImplementation>")
                 && source.contains(
-                    "#[inline(never)]\npub fn MeasureNativeAlgorithm<A: NativeAlgorithm>",
+                    "#[inline(never)]\npub fn MeasureAlgorithm<A: LayoutAlgorithmImplementation>",
                 )
-                && source.contains("layout: Some(RunNativeAlgorithm::<A>)")
-                && source.contains("measure: Some(MeasureNativeAlgorithm::<A>)"),
-            "native algorithm entries must remain out-of-line monomorphizations of the package type"
+                && source.contains("layout: Some(RunAlgorithm::<A>)")
+                && source.contains("measure: Some(MeasureAlgorithm::<A>)"),
+            "source algorithm entries must remain out-of-line monomorphizations of the package type"
         );
     }
 
     #[test]
-    fn native_algorithm_input_environments_keep_concrete_owners() {
+    fn algorithm_input_environments_keep_concrete_owners() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let inline = std::fs::read_to_string(
             root.join("layout_algo_inline")
-                .join("src/native_text_input_environment.rs"),
+                .join("src/text_input_environment.rs"),
         )
         .expect("read inline text-input environment owner");
         for owned_policy in [
@@ -928,12 +1052,12 @@ mod package_contract_tests {
 
         let float = std::fs::read_to_string(
             root.join("layout_algo_float")
-                .join("src/native_shape_image_environment.rs"),
+                .join("src/shape_image_environment.rs"),
         )
         .expect("read float shape-image environment owner");
         for owned_policy in [
             "pub(super) struct InputShapeImageResolver",
-            "impl NativeShapeImageResolver",
+            "impl ShapeImageResolver",
             "BitmapPixels",
             "shape image requires dimensions, scale and RGBA pixels",
         ] {
@@ -945,12 +1069,12 @@ mod package_contract_tests {
 
         let float_services = std::fs::read_to_string(
             root.join("layout_algo_float")
-                .join("src/native_shape_image_services.rs"),
+                .join("src/shape_image_services_interface.rs"),
         )
         .expect("read float shape-image services owner");
         for owned_policy in [
-            "pub trait NativeShapeImageResolver",
-            "pub struct NativeShapeImageResolverScope",
+            "pub trait ShapeImageResolver",
+            "pub struct ShapeImageResolverScope",
             "CURRENT_SHAPE_IMAGE_RESOLVER",
             "pub fn CurrentShapeImageResolver",
             "pub fn CurrentShapeImage",
@@ -972,14 +1096,14 @@ mod package_contract_tests {
         assert!(
             float_services_facade.contains(concat!(
                 "layout_algo_",
-                "float/src/native_shape_image_services.rs"
+                "float/src/shape_image_services_interface.rs"
             )) && float_services_facade
-                .contains("pub use layout_algo_float_native_shape_image_services::*"),
+                .contains("pub use layout_algo_float_shape_image_services_interface::*"),
             "core shape-image services must remain a facade over layout_algo_float"
         );
         for leaked_policy in [
-            "pub trait NativeShapeImageResolver",
-            "pub struct NativeShapeImageResolverScope",
+            "pub trait ShapeImageResolver",
+            "pub struct ShapeImageResolverScope",
             "CURRENT_SHAPE_IMAGE_RESOLVER",
             "pub fn CurrentShapeImageResolver",
         ] {
@@ -991,16 +1115,10 @@ mod package_contract_tests {
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
-                .expect("read native layout boundary adapter");
+                .expect("read source layout boundary adapter");
         for owner in [
-            concat!(
-                "layout_algo_",
-                "inline/src/native_text_input_environment.rs"
-            ),
-            concat!(
-                "layout_algo_",
-                "float/src/native_shape_image_environment.rs"
-            ),
+            concat!("layout_algo_", "inline/src/text_input_environment.rs"),
+            concat!("layout_algo_", "float/src/shape_image_environment.rs"),
         ] {
             assert!(
                 adapter.contains(owner),
@@ -1035,14 +1153,14 @@ mod package_contract_tests {
             "BFC reuse policy must stay out of line in layout_reuse for sampling attribution"
         );
 
-        let adapter = std::fs::read_to_string(root.join("layout_reuse/src/native_layout_utils.rs"))
-            .expect("read native layout reuse adapter owner");
+        let adapter = std::fs::read_to_string(root.join("layout_reuse/src/layout_utils.rs"))
+            .expect("read source layout reuse adapter owner");
         assert!(
             adapter.contains("layout_reuse::calculate_block_formatting_context_reuse")
                 && adapter.contains("#[inline(never)]\npub fn CalculateSizeBasedLayoutCacheStatus")
                 && adapter
                     .contains("#[inline(never)]\npub fn MaySkipLayoutWithinBlockFormattingContext"),
-            "native BFC and size-based reuse admission must retain layout_reuse sampling frames"
+            "source BFC and size-based reuse admission must retain layout_reuse sampling frames"
         );
         for misplaced_helper in [
             "ResolveContentAlignment",
@@ -1072,9 +1190,9 @@ mod package_contract_tests {
         }
 
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_utils.rs"))
-            .expect("read native layout reuse facade");
+            .expect("read source layout reuse facade");
         assert!(
-            facade.contains("layout_reuse/src/native_layout_utils.rs")
+            facade.contains("layout_reuse/src/layout_utils.rs")
                 && facade.contains("CalculateSizeBasedLayoutCacheStatus")
                 && facade.contains("pub use super::layout_alignment_utils")
                 && !facade.contains("calculate_block_formatting_context_reuse"),
@@ -1124,15 +1242,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_cache_lookup_resolves_to_the_reuse_owner() {
+    fn cache_lookup_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let lookup = std::fs::read_to_string(root.join("layout_reuse/src/native_cache_lookup.rs"))
-            .expect("read native cache lookup");
+        let lookup = std::fs::read_to_string(root.join("layout_reuse/src/cache_lookup.rs"))
+            .expect("read source cache lookup");
         assert!(
             lookup.contains("#[inline(never)]") && lookup.contains("pub fn cached_layout_result"),
-            "native cache lookup must stay out of line in the layout_reuse owner"
+            "source cache lookup must stay out of line in the layout_reuse owner"
         );
         for policy_marker in [
             "NeedsOOFPositionedInfoPropagation",
@@ -1142,7 +1260,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 lookup.contains(policy_marker),
-                "layout_reuse native lookup lost {policy_marker}"
+                "layout_reuse source lookup lost {policy_marker}"
             );
         }
 
@@ -1166,12 +1284,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_measure_cache_resolves_to_the_reuse_owner() {
+    fn measure_cache_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join("layout_reuse/src/native_measure_cache.rs"))
-            .expect("read native measure-cache owner");
+        let owner = std::fs::read_to_string(root.join("layout_reuse/src/measure_cache.rs"))
+            .expect("read source measure-cache owner");
         for owned_policy in [
             "pub struct MeasureCache",
             "#[inline(never)]\n    pub fn Find",
@@ -1180,15 +1298,15 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_reuse native measurement cache lost {owned_policy}"
+                "layout_reuse source measurement cache lost {owned_policy}"
             );
         }
 
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/measure_cache.rs"))
-            .expect("read native measure-cache facade");
+            .expect("read source measure-cache facade");
         assert!(
-            facade.contains("layout_reuse/src/native_measure_cache.rs")
-                && facade.contains("pub use layout_reuse_native_measure_cache::MeasureCache"),
+            facade.contains("layout_reuse/src/measure_cache.rs")
+                && facade.contains("pub use layout_reuse_measure_cache::MeasureCache"),
             "core measurement cache must be a reuse-owner facade"
         );
         for leaked_policy in [".touch_where(", "CalculateSizeBasedLayoutCacheStatus("] {
@@ -1200,14 +1318,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_box_result_cache_resolves_to_the_reuse_owner() {
+    fn layout_box_result_cache_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_reuse/src/native_layout_box_result_cache.rs"),
-        )
-        .expect("read native per-box layout-result cache owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_reuse/src/layout_box_result_cache.rs"))
+                .expect("read source per-box layout-result cache owner");
         for owned_policy in [
             "fn LayoutBoxAddMeasureLayoutResult",
             "fn LayoutBoxSetCachedLayoutResult",
@@ -1230,7 +1347,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox facade");
         assert!(
-            facade.contains("layout_reuse/src/native_layout_box_result_cache.rs")
+            facade.contains("layout_reuse/src/layout_box_result_cache.rs")
                 && facade.contains("LayoutBoxSetCachedLayoutResult(self, result, index)")
                 && facade.contains("LayoutBoxGetCachedMeasureResult("),
             "LayoutBox must delegate per-box result caching to layout_reuse"
@@ -1248,13 +1365,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_managed_input_index_resolves_to_the_reuse_owner() {
+    fn managed_input_index_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_reuse/src/native_managed_input_index.rs"))
-                .expect("read native managed-input index owner");
+        let owner = std::fs::read_to_string(root.join("layout_reuse/src/managed_input_index.rs"))
+            .expect("read source managed-input index owner");
         for owned_policy in [
             "fn BuildManagedInputIndex",
             "fn remove_managed_input",
@@ -1280,7 +1396,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read LayoutObject builder facade");
         assert!(
-            facade.contains("layout_reuse/src/native_managed_input_index.rs")
+            facade.contains("layout_reuse/src/managed_input_index.rs")
                 && facade.contains("if let Some(index) = self.input_index.get()")
                 && facade.contains("BuildManagedInputIndex(self)"),
             "LayoutObject builder must keep an inline cache hit and delegate cache construction to layout_reuse"
@@ -1294,14 +1410,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_managed_object_compatibility_resolves_to_the_reuse_owner() {
+    fn managed_object_compatibility_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_reuse/src/native_managed_object_compatibility.rs"),
-        )
-        .expect("read managed-object compatibility owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_reuse/src/managed_object_compatibility.rs"))
+                .expect("read managed-object compatibility owner");
         for owned_policy in [
             "pub(super) fn Compatible",
             "pub(super) fn StyleUpdateCompatible",
@@ -1309,7 +1424,7 @@ mod package_contract_tests {
             "fn managed_object_compatible",
             "fn managed_style_update_compatible",
             "extended.timeline_trigger_names",
-            "NativeComputedStyle::NeedsReinsertLayoutTree",
+            "StyleComputedStyle::NeedsReinsertLayoutTree",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -1326,14 +1441,14 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read LayoutObject builder facade");
         assert!(
-            core.contains("layout_reuse/src/native_managed_object_compatibility.rs"),
+            core.contains("layout_reuse/src/managed_object_compatibility.rs"),
             "LayoutObject builder must load reuse-owned compatibility policy"
         );
         for leaked_policy in [
             "fn ObjectKindCompatible(",
             "fn Compatible(",
             "fn StyleUpdateCompatible(",
-            "NeedsReinsertLayoutTree(old_native, new_native)",
+            "NeedsReinsertLayoutTree(old_style, new_style)",
         ] {
             assert!(
                 !core.contains(leaked_policy),
@@ -1343,15 +1458,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_collapsible_whitespace_resolves_to_the_inline_algorithm_owner() {
+    fn collapsible_whitespace_resolves_to_the_inline_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "inline/src/native_collapsible_whitespace.rs"
+            "inline/src/collapsible_whitespace.rs"
         )))
-        .expect("read native collapsible-whitespace owner");
+        .expect("read source collapsible-whitespace owner");
         for owned_policy in [
             "fn needs_collapsible_whitespace",
             "while !previous.is_null()",
@@ -1375,7 +1490,7 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "inline/src/native_collapsible_whitespace.rs"
+                "inline/src/collapsible_whitespace.rs"
             )) && facade.contains(
                 "layout_algo_inline_collapsible_whitespace::needs_collapsible_whitespace(self, parent)"
             ),
@@ -1394,114 +1509,111 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_inline_state_resolves_to_the_inline_algorithm_owner() {
+    fn inline_state_resolves_to_the_inline_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         for (owner_file, facade_file, owned_type, reexport) in [
             (
-                "native_hyphen_result.rs",
+                "hyphen_result_interface.rs",
                 "hyphen_result.rs",
                 "pub struct HyphenResult {",
-                concat!("pub use layout_algo_", "inline_native_hyphen_result::*;"),
+                concat!("pub use layout_algo_", "inline_hyphen_result_interface::*;"),
             ),
             (
-                "native_inline_item.rs",
+                "inline_item_interface.rs",
                 "inline_item.rs",
                 "pub struct InlineItem {",
-                concat!("pub use layout_algo_", "inline_native_inline_item::*;"),
+                concat!("pub use layout_algo_", "inline_inline_item_interface::*;"),
             ),
             (
-                "native_inline_item_result.rs",
+                "inline_item_result_interface.rs",
                 "inline_item_result.rs",
                 "pub struct InlineItemResult {",
                 concat!(
                     "pub use layout_algo_",
-                    "inline_native_inline_item_result::*;"
+                    "inline_inline_item_result_interface::*;"
                 ),
             ),
             (
-                "native_inline_item_segment.rs",
+                "inline_item_segment_interface.rs",
                 "inline_item_segment.rs",
                 "pub struct InlineItemSegment {",
                 concat!(
                     "pub use layout_algo_",
-                    "inline_native_inline_item_segment::*;"
+                    "inline_inline_item_segment_interface::*;"
                 ),
             ),
             (
-                "native_inline_item_span.rs",
+                "inline_item_span.rs",
                 "inline_item_span.rs",
                 "pub struct InlineItemSpan {",
-                concat!("pub use layout_algo_", "inline_native_inline_item_span::*;"),
+                concat!("pub use layout_algo_", "inline_inline_item_span::*;"),
             ),
             (
-                "native_inline_item_text_index.rs",
+                "inline_item_text_index.rs",
                 "inline_item_text_index.rs",
                 "pub struct InlineItemTextIndex {",
-                concat!(
-                    "pub use layout_algo_",
-                    "inline_native_inline_item_text_index::*;"
-                ),
+                concat!("pub use layout_algo_", "inline_inline_item_text_index::*;"),
             ),
             (
-                "native_inline_node.rs",
+                "inline_node_interface.rs",
                 "inline_node.rs",
                 "pub struct InlineNode {",
-                concat!("pub use layout_algo_", "inline_native_inline_node::*;"),
+                concat!("pub use layout_algo_", "inline_inline_node_interface::*;"),
             ),
             (
-                "native_inline_node_data.rs",
+                "inline_node_data.rs",
                 "inline_node_data.rs",
                 "pub struct InlineNodeData {",
-                concat!("pub use layout_algo_", "inline_native_inline_node_data::*;"),
+                concat!("pub use layout_algo_", "inline_inline_node_data::*;"),
             ),
             (
-                "native_layout_text_combine.rs",
+                "layout_text_combine_interface.rs",
                 "layout_text_combine.rs",
                 "pub struct LayoutTextCombine {",
                 concat!(
                     "pub use layout_algo_",
-                    "inline_native_layout_text_combine::*;"
+                    "inline_layout_text_combine_interface::*;"
                 ),
             ),
             (
-                "native_layout_inline.rs",
+                "layout_inline.rs",
                 "layout_inline.rs",
                 "pub struct LayoutInline {",
-                concat!("pub use layout_algo_", "inline_native_layout_inline::*;"),
+                concat!("pub use layout_algo_", "inline_layout_inline::*;"),
             ),
             (
-                "native_layout_text.rs",
+                "layout_text_interface.rs",
                 "layout_text.rs",
                 "pub struct LayoutText {",
-                concat!("pub use layout_algo_", "inline_native_layout_text::*;"),
+                concat!("pub use layout_algo_", "inline_layout_text_interface::*;"),
             ),
             (
-                "native_text_fit_scale.rs",
+                "text_fit_scale.rs",
                 "text_fit_scale.rs",
                 "pub struct TextFitScale {",
-                concat!("pub use layout_algo_", "inline_native_text_fit_scale::*;"),
+                concat!("pub use layout_algo_", "inline_text_fit_scale::*;"),
             ),
             (
-                "native_text_item_type.rs",
+                "text_item_type.rs",
                 "text_item_type.rs",
                 "pub enum TextItemType",
-                concat!("pub use layout_algo_", "inline_native_text_item_type::*;"),
+                concat!("pub use layout_algo_", "inline_text_item_type::*;"),
             ),
             (
-                "native_used_font.rs",
+                "used_font_interface.rs",
                 "used_font.rs",
                 "pub struct UsedFont {",
-                concat!("pub use layout_algo_", "inline_native_used_font::*;"),
+                concat!("pub use layout_algo_", "inline_used_font_interface::*;"),
             ),
             (
-                "native_variable_length_transform_result.rs",
+                "variable_length_transform_result.rs",
                 "variable_length_transform_result.rs",
                 "pub struct VariableLengthTransformResult {",
                 concat!(
                     "pub use layout_algo_",
-                    "inline_native_variable_length_transform_result::*;"
+                    "inline_variable_length_transform_result::*;"
                 ),
             ),
         ] {
@@ -1526,11 +1638,10 @@ mod package_contract_tests {
             );
         }
 
-        let core_owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "inline/src/native_inline_node_core.rs"
-        )))
-        .expect("read native InlineNode core owner");
+        let core_owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "inline/src/inline_node_core.rs")),
+        )
+        .expect("read source InlineNode core owner");
         assert!(
             core_owner.contains("impl InlineNode")
                 && core_owner.contains("LayoutPassScope::Algorithms()"),
@@ -1540,18 +1651,15 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/inline_node_core.rs"))
                 .expect("read InlineNode core compatibility loader");
         assert!(
-            core_facade.contains(concat!(
-                "layout_algo_",
-                "inline/src/native_inline_node_core.rs"
-            )) && !core_facade.contains("impl InlineNode"),
+            core_facade.contains(concat!("layout_algo_", "inline/src/inline_node_core.rs"))
+                && !core_facade.contains("impl InlineNode"),
             "InlineNode core loader must not regain inline algorithm behavior"
         );
 
-        let text_core = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "inline/src/native_layout_text_core.rs"
-        )))
-        .expect("read native LayoutText core owner");
+        let text_core = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "inline/src/layout_text_core.rs")),
+        )
+        .expect("read source LayoutText core owner");
         assert!(
             text_core.contains("impl LayoutText")
                 && text_core.contains("fn DetachAxHooks")
@@ -1562,10 +1670,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_text_core.rs"))
                 .expect("read LayoutText core compatibility loader");
         assert!(
-            text_core_facade.contains(concat!(
-                "layout_algo_",
-                "inline/src/native_layout_text_core.rs"
-            )) && !text_core_facade.contains("impl LayoutText"),
+            text_core_facade.contains(concat!("layout_algo_", "inline/src/layout_text_core.rs"))
+                && !text_core_facade.contains("impl LayoutText"),
             "LayoutText core loader must not regain inline behavior"
         );
 
@@ -1589,13 +1695,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_variable_length_transform_index_resolves_to_the_inline_owner() {
+    fn variable_length_transform_index_resolves_to_the_inline_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "inline/src/native_layout_view_variable_length_transform_index.rs"
+            "inline/src/layout_view_variable_length_transform_index.rs"
         )))
         .expect("read variable-length transform index owner");
         for owned_policy in [
@@ -1620,7 +1726,7 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "inline/src/native_layout_view_variable_length_transform_index.rs"
+                "inline/src/layout_view_variable_length_transform_index.rs"
             )) && !loader.contains("fn RegisterVariableLengthTransformResult")
                 && !loader.contains("fn UnregisterVariableLengthTransformResult")
                 && !loader.contains("fn GetVariableLengthTransformResult"),
@@ -1629,13 +1735,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_editing_queries_resolve_to_the_inline_owner() {
+    fn layout_object_editing_queries_resolve_to_the_inline_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "inline/src/native_layout_object_editing_queries.rs"
+            "inline/src/layout_object_editing_queries.rs"
         )))
         .expect("read LayoutObject editing-query owner");
         for owned_policy in [
@@ -1670,9 +1776,8 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "inline/src/native_layout_object_editing_queries.rs"
-            )) && loader
-                .contains("pub use layout_algo_inline_native_layout_object_editing_queries::{"),
+                "inline/src/layout_object_editing_queries.rs"
+            )) && loader.contains("pub use layout_algo_inline_layout_object_editing_queries::{"),
             "LayoutObject must load and re-export editing queries from the inline owner"
         );
         for leaked_policy in [
@@ -1697,13 +1802,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_list_marker_queries_resolve_to_the_list_owner() {
+    fn layout_object_list_marker_queries_resolve_to_the_list_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "list/src/native_layout_object_list_marker_queries.rs"
+            "list/src/layout_object_list_marker_queries.rs"
         )))
         .expect("read LayoutObject list-marker-query owner");
         for owned_policy in [
@@ -1727,7 +1832,7 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "list/src/native_layout_object_list_marker_queries.rs"
+                "list/src/layout_object_list_marker_queries.rs"
             )),
             "LayoutObject must load marker queries from the list owner"
         );
@@ -1740,18 +1845,20 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_scroll_input_update_resolves_to_the_fragment_owner() {
+    fn scroll_input_update_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_scroll_input_update.rs"))
-                .expect("read native scroll-input update owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/scroll_input_update.rs"))
+                .expect("read source scroll-input update owner");
         for owned_policy in [
             "fn update_scroll_offset",
+            "fn update_scrollbars_hidden_if_overlay",
             "for key in storage.InputKeys(id).to_vec()",
             "element.scroll_offset = offset",
             "UpdateInputScrollOffset(offset)",
+            "SetScrollbarsHiddenIfOverlayFromOwner(hidden)",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -1767,9 +1874,12 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read LayoutObject builder facade");
         assert!(
-            facade.contains("layout_fragment/src/native_scroll_input_update.rs")
+            facade.contains("layout_fragment/src/scroll_input_update.rs")
                 && facade.contains(
                     "layout_fragment_scroll_input::update_scroll_offset(self, id, offset)"
+                )
+                && facade.contains(
+                    "layout_fragment_scroll_input::update_scrollbars_hidden_if_overlay(self, id, hidden)"
                 ),
             "LayoutObject builder must delegate scroll-input mutation to layout_fragment"
         );
@@ -1785,19 +1895,19 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragmentation_context_resolves_to_the_block_algorithm_owner() {
+    fn fragmentation_context_resolves_to_the_block_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "block/src/native_fragmentation_context.rs"
+            "block/src/fragmentation_context.rs"
         )))
-        .expect("read native fragmentation-context owner");
+        .expect("read source fragmentation-context owner");
         for owned_policy in [
-            "fn native_fragmentation_context",
+            "fn fragmentation_context",
             "while !ancestor.is_null()",
-            "InputStyle().column_count > 1",
+            "ComputedStyleRef().ColumnCount() > 1",
             "FragmentationType::kFragmentColumn",
             "FragmentationType::kFragmentPage",
         ] {
@@ -1814,16 +1924,15 @@ mod package_contract_tests {
         let facade =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read LayoutObject builder facade");
-        let transaction = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_managed_object_update.rs"),
-        )
-        .expect("read invalidation-owned managed-object update");
+        let transaction =
+            std::fs::read_to_string(root.join("layout_invalidation/src/managed_object_update.rs"))
+                .expect("read invalidation-owned managed-object update");
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "block/src/native_fragmentation_context.rs"
+                "block/src/fragmentation_context.rs"
             )) && transaction.contains(
-                "layout_algo_block_fragmentation_context::native_fragmentation_context(parent)"
+                "layout_algo_block_fragmentation_context::fragmentation_context(parent)"
             ),
             "managed-object update must delegate fragmentation-context lookup to the block algorithm"
         );
@@ -1845,15 +1954,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_block_node_traversal_resolves_to_the_block_algorithm_owner() {
+    fn block_node_traversal_resolves_to_the_block_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "block/src/native_block_node_traversal.rs"
-        )))
-        .expect("read native BlockNode traversal owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "block/src/block_node_traversal.rs")),
+        )
+        .expect("read source BlockNode traversal owner");
         for owned_policy in [
             "fn BlockNodeNextBlockSibling",
             "fn BlockNodeFirstChild",
@@ -1872,13 +1980,12 @@ mod package_contract_tests {
             "sibling, first-child, and legend scans must retain block-algorithm sampling frames"
         );
 
-        let node_owner = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "block/src/native_block_node.rs")),
-        )
-        .expect("read native BlockNode owner");
+        let node_owner =
+            std::fs::read_to_string(root.join(concat!("layout_algo_", "block/src/block_node.rs")))
+                .expect("read source BlockNode owner");
         assert!(
             node_owner.contains("pub struct BlockNode")
-                && node_owner.contains("native_block_node_traversal.rs")
+                && node_owner.contains("block_node_traversal.rs")
                 && node_owner.contains("BlockNodeNextBlockSibling(self)")
                 && node_owner.contains("BlockNodeFirstChild(self)")
                 && node_owner.contains("BlockNodeGetRenderedLegend(self)"),
@@ -1887,11 +1994,8 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/block_node.rs"))
             .expect("read BlockNode compatibility facade");
         assert!(
-            facade.contains(concat!("layout_algo_", "block/src/native_block_node.rs"))
-                && facade.contains(concat!(
-                    "pub use layout_algo_",
-                    "block_native_block_node::*;"
-                ))
+            facade.contains(concat!("layout_algo_", "block/src/block_node.rs"))
+                && facade.contains(concat!("pub use layout_algo_", "block_block_node::*;"))
                 && !facade.contains("pub struct BlockNode"),
             "BlockNode interface must be re-exported from the block algorithm owner"
         );
@@ -1908,15 +2012,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_block_traversal_resolves_to_the_block_algorithm_owner() {
+    fn layout_block_traversal_resolves_to_the_block_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "block/src/native_layout_block_traversal.rs"
+            "block/src/layout_block_traversal.rs"
         )))
-        .expect("read native LayoutBlock traversal owner");
+        .expect("read source LayoutBlock traversal owner");
         for owned_policy in [
             "fn LayoutBlockFirstLineStyleParentBlock",
             "fn LayoutBlockNearestInnerBlockWithFirstLine",
@@ -1935,11 +2039,11 @@ mod package_contract_tests {
         );
 
         let facade = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "block/src/native_layout_block.rs")),
+            root.join(concat!("layout_algo_", "block/src/layout_block.rs")),
         )
-        .expect("read native LayoutBlock owner");
+        .expect("read source LayoutBlock owner");
         assert!(
-            facade.contains("native_layout_block_traversal.rs")
+            facade.contains("layout_block_traversal.rs")
                 && facade.contains("LayoutBlockFirstLineStyleParentBlock(self)")
                 && facade.contains("LayoutBlockNearestInnerBlockWithFirstLine(self)"),
             "LayoutBlock must delegate first-line traversal to the block algorithm"
@@ -1957,22 +2061,22 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_block_object_interfaces_resolve_to_the_block_algorithm_owner() {
+    fn block_object_interfaces_resolve_to_the_block_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         for (owner_file, facade_file, owned_type, reexport) in [
             (
-                "native_layout_block.rs",
+                "layout_block.rs",
                 "layout_block.rs",
                 "pub struct LayoutBlock {",
-                concat!("pub use layout_algo_", "block_native_layout_block::*;"),
+                concat!("pub use layout_algo_", "block_layout_block::*;"),
             ),
             (
-                "native_layout_block_flow.rs",
+                "layout_block_flow.rs",
                 "layout_block_flow.rs",
                 "pub struct LayoutBlockFlow {",
-                concat!("pub use layout_algo_", "block_native_layout_block_flow::*;"),
+                concat!("pub use layout_algo_", "block_layout_block_flow::*;"),
             ),
         ] {
             let owner = std::fs::read_to_string(
@@ -1997,15 +2101,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_line_clamp_data_resolves_to_the_block_algorithm_owner() {
+    fn line_clamp_data_resolves_to_the_block_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "block/src/native_line_clamp_data.rs"
-        )))
-        .expect("read native line-clamp owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "block/src/line_clamp_data.rs")),
+        )
+        .expect("read source line-clamp owner");
         for owned_policy in [
             "pub enum State",
             "pub struct LineClampData",
@@ -2023,10 +2126,8 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/line_clamp_data.rs"))
             .expect("read line-clamp compatibility facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "block/src/native_line_clamp_data.rs"
-            )) && facade.contains("pub use layout_algo_block_native_line_clamp_data::*;"),
+            facade.contains(concat!("layout_algo_", "block/src/line_clamp_data.rs"))
+                && facade.contains("pub use layout_algo_block_line_clamp_data::*;"),
             "line-clamp state must be re-exported from the block algorithm owner"
         );
         for leaked_policy in [
@@ -2042,15 +2143,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_grid_style_projection_resolves_to_the_grid_algorithm_owner() {
+    fn grid_style_projection_resolves_to_the_grid_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "grid/src/native_grid_style_projection.rs"
-        )))
-        .expect("read native Grid style-projection owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "grid/src/grid_style_projection.rs")),
+        )
+        .expect("read source Grid style-projection owner");
         for owned_policy in [
             "fn TrackBreadth",
             "fn Tracks",
@@ -2064,7 +2164,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "Grid algorithm native style projection lost {owned_policy}"
+                "Grid algorithm source style projection lost {owned_policy}"
             );
         }
         assert!(
@@ -2072,14 +2172,12 @@ mod package_contract_tests {
             "track expansion, auto-track projection, and template areas must retain Grid sampling frames"
         );
 
-        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/native_input.rs"))
-            .expect("read invalidation-owned native style input");
+        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/input.rs"))
+            .expect("read invalidation-owned source style input");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "grid/src/native_grid_style_projection.rs"
-            )) && facade.contains("AutoTracks, GridPosition, GridTemplateAreas, Tracks"),
-            "native style-input boundary must import Grid projection from its algorithm owner"
+            facade.contains(concat!("layout_algo_", "grid/src/grid_style_projection.rs"))
+                && facade.contains("AutoTracks, GridPosition, GridTemplateAreas, Tracks"),
+            "source style-input boundary must import Grid projection from its algorithm owner"
         );
         for leaked_policy in [
             "fn TrackBreadth(",
@@ -2090,20 +2188,19 @@ mod package_contract_tests {
         ] {
             assert!(
                 !facade.contains(leaked_policy),
-                "native style-input facade still owns Grid projection policy {leaked_policy}"
+                "source style-input facade still owns Grid projection policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_grid_track_list_input_resolves_to_the_grid_algorithm_owner() {
+    fn grid_track_list_input_resolves_to_the_grid_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "grid/src/native_grid_track_list_input.rs"
-        )))
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "grid/src/grid_track_list_input.rs")),
+        )
         .expect("read Grid track-list input owner");
         for owned_policy in [
             "impl GridTrackListInput",
@@ -2123,10 +2220,7 @@ mod package_contract_tests {
         let core = std::fs::read_to_string(root.join("layoutng/src/internal/layout_input.rs"))
             .expect("read shared layout-input schema");
         assert!(
-            core.contains(concat!(
-                "layout_algo_",
-                "grid/src/native_grid_track_list_input.rs"
-            )),
+            core.contains(concat!("layout_algo_", "grid/src/grid_track_list_input.rs")),
             "layout_input must load the Grid-owned track-list implementation"
         );
         for leaked_policy in [
@@ -2142,15 +2236,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_grid_layout_data_resolves_to_the_grid_algorithm_owner() {
+    fn grid_layout_data_resolves_to_the_grid_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "grid/src/native_grid_layout_data.rs"
-        )))
-        .expect("read native Grid layout-data owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "grid/src/grid_layout_data.rs")),
+        )
+        .expect("read source Grid layout-data owner");
         for owned_policy in [
             "pub struct GridLayoutData",
             "pub struct GridTreeNode",
@@ -2170,9 +2263,9 @@ mod package_contract_tests {
         );
 
         let item_owner = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "grid/src/native_grid_item_data.rs")),
+            root.join(concat!("layout_algo_", "grid/src/grid_item_data.rs")),
         )
-        .expect("read native Grid item-data owner");
+        .expect("read source Grid item-data owner");
         for owned_type in [
             "pub struct GridPlacementData",
             "pub struct GridItemData",
@@ -2186,9 +2279,9 @@ mod package_contract_tests {
         }
         let track_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "grid/src/native_grid_track_collection_types.rs"
+            "grid/src/grid_track_collection_types.rs"
         )))
-        .expect("read native Grid track-collection owner");
+        .expect("read source Grid track-collection owner");
         for owned_type in [
             "pub struct GridRangeBuilder",
             "pub struct GridLayoutTrackCollection",
@@ -2200,21 +2293,19 @@ mod package_contract_tests {
                 "Grid algorithm track collection lost {owned_type}"
             );
         }
-        let lanes_owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "grid/src/native_grid_lanes_item_group.rs"
-        )))
-        .expect("read native Grid-lanes item-group owner");
+        let lanes_owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "grid/src/grid_lanes_item_group.rs")),
+        )
+        .expect("read source Grid-lanes item-group owner");
         assert!(
             lanes_owner.contains("pub struct GridLanesItemGroupProperties")
                 && lanes_owner.contains("pub struct GridLanesItemGroup")
                 && lanes_owner.contains("pub struct VirtualItems"),
             "Grid-lanes item grouping must remain Grid-owned"
         );
-        let subtree_owner = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "grid/src/native_grid_subtree.rs")),
-        )
-        .expect("read native Grid subtree owner");
+        let subtree_owner =
+            std::fs::read_to_string(root.join(concat!("layout_algo_", "grid/src/grid_subtree.rs")))
+                .expect("read source Grid subtree owner");
         assert!(
             subtree_owner.contains("pub trait GridSubtreeTree")
                 && subtree_owner.contains("pub struct GridSubtree"),
@@ -2225,10 +2316,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/grid_layout_data.rs"))
                 .expect("read Grid layout-data facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "grid/src/native_grid_layout_data.rs"
-            )) && facade.contains("pub use layout_algo_grid_native_grid_layout_data::*;"),
+            facade.contains(concat!("layout_algo_", "grid/src/grid_layout_data.rs"))
+                && facade.contains("pub use layout_algo_grid_grid_layout_data::*;"),
             "Grid layout data must be re-exported from the Grid algorithm owner"
         );
         for leaked_policy in [
@@ -2247,14 +2336,14 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/grid_track_collection.rs"))
                 .expect("read Grid track-collection facade");
         assert!(
-            item_facade.contains(concat!("layout_algo_", "grid/src/native_grid_item_data.rs"))
-                && item_facade.contains("pub use layout_algo_grid_native_grid_item_data::*;")
+            item_facade.contains(concat!("layout_algo_", "grid/src/grid_item_data.rs"))
+                && item_facade.contains("pub use layout_algo_grid_grid_item_data::*;")
                 && track_facade.contains(concat!(
                     "layout_algo_",
-                    "grid/src/native_grid_track_collection_types.rs"
+                    "grid/src/grid_track_collection_types.rs"
                 ))
                 && track_facade
-                    .contains("pub use layout_algo_grid_native_grid_track_collection_types::*;")
+                    .contains("pub use layout_algo_grid_grid_track_collection_types::*;")
                 && !item_facade.contains("pub struct GridItemData")
                 && !track_facade.contains("pub struct GridLayoutTrackCollection"),
             "Grid item and track types must be re-exported from the Grid algorithm owner"
@@ -2266,14 +2355,10 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/grid_subtree.rs"))
                 .expect("read Grid subtree facade");
         assert!(
-            lanes_facade.contains(concat!(
-                "layout_algo_",
-                "grid/src/native_grid_lanes_item_group.rs"
-            )) && lanes_facade
-                .contains("pub use layout_algo_grid_native_grid_lanes_item_group::*;")
-                && subtree_facade
-                    .contains(concat!("layout_algo_", "grid/src/native_grid_subtree.rs"))
-                && subtree_facade.contains("pub use layout_algo_grid_native_grid_subtree::*;")
+            lanes_facade.contains(concat!("layout_algo_", "grid/src/grid_lanes_item_group.rs"))
+                && lanes_facade.contains("pub use layout_algo_grid_grid_lanes_item_group::*;")
+                && subtree_facade.contains(concat!("layout_algo_", "grid/src/grid_subtree.rs"))
+                && subtree_facade.contains("pub use layout_algo_grid_grid_subtree::*;")
                 && !lanes_facade.contains("pub struct GridLanesItemGroup")
                 && !subtree_facade.contains("pub struct GridSubtree"),
             "Grid-lanes groups and subtree cursor must be re-exported from the Grid owner"
@@ -2281,15 +2366,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_table_constraint_data_resolves_to_the_table_algorithm_owner() {
+    fn table_constraint_data_resolves_to_the_table_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "table/src/native_table_constraint_space_data.rs"
+            "table/src/table_constraint_space_data.rs"
         )))
-        .expect("read native table constraint-space data owner");
+        .expect("read source table constraint-space data owner");
         for owned_policy in [
             "pub struct TableConstraintSpaceData",
             "fn MaySkipRowLayout",
@@ -2307,11 +2392,10 @@ mod package_contract_tests {
             "row and section reuse comparisons must retain table sampling frames"
         );
 
-        let border_owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "table/src/native_table_borders_types.rs"
-        )))
-        .expect("read native table-border type owner");
+        let border_owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "table/src/table_borders_types.rs")),
+        )
+        .expect("read source table-border type owner");
         for owned_type in [
             "pub enum EdgeSource",
             "pub enum EdgeSide",
@@ -2325,18 +2409,18 @@ mod package_contract_tests {
         }
         let column_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "table/src/native_table_column_location.rs"
+            "table/src/table_column_location.rs"
         )))
-        .expect("read native table-column location owner");
+        .expect("read source table-column location owner");
         assert!(
             column_owner.contains("pub struct TableColumnLocation"),
             "table algorithm column-location value was lost"
         );
         let types_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "table/src/native_table_layout_algorithm_types.rs"
+            "table/src/table_layout_algorithm_types_interface.rs"
         )))
-        .expect("read native table layout-type owner");
+        .expect("read source table layout-type owner");
         for owned_type in [
             "pub struct CellInlineConstraint",
             "pub struct Column",
@@ -2350,9 +2434,9 @@ mod package_contract_tests {
             );
         }
         let node_owner = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "table/src/native_table_node.rs")),
+            root.join(concat!("layout_algo_", "table/src/table_node_interface.rs")),
         )
-        .expect("read native table-node owner");
+        .expect("read source table-node owner");
         assert!(
             node_owner.contains("pub struct TableNode")
                 && node_owner.contains("fn ComputeTableInlineSize")
@@ -2367,9 +2451,8 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "table/src/native_table_constraint_space_data.rs"
-            )) && facade
-                .contains("pub use layout_algo_table_native_table_constraint_space_data::*;"),
+                "table/src/table_constraint_space_data.rs"
+            )) && facade.contains("pub use layout_algo_table_table_constraint_space_data::*;"),
             "table constraint-space data must be re-exported from the table algorithm owner"
         );
         for leaked_policy in [
@@ -2389,17 +2472,13 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/table_column_location.rs"))
                 .expect("read table-column location facade");
         assert!(
-            border_facade.contains(concat!(
-                "layout_algo_",
-                "table/src/native_table_borders_types.rs"
-            )) && border_facade
-                .contains("pub use layout_algo_table_native_table_borders_types::*;")
+            border_facade.contains(concat!("layout_algo_", "table/src/table_borders_types.rs"))
+                && border_facade.contains("pub use layout_algo_table_table_borders_types::*;")
                 && column_facade.contains(concat!(
                     "layout_algo_",
-                    "table/src/native_table_column_location.rs"
+                    "table/src/table_column_location.rs"
                 ))
-                && column_facade
-                    .contains("pub use layout_algo_table_native_table_column_location::*;")
+                && column_facade.contains("pub use layout_algo_table_table_column_location::*;")
                 && !border_facade.contains("pub struct TableBorders")
                 && !column_facade.contains("pub struct TableColumnLocation"),
             "table border and column values must be re-exported from the table algorithm owner"
@@ -2413,11 +2492,12 @@ mod package_contract_tests {
         assert!(
             types_facade.contains(concat!(
                 "layout_algo_",
-                "table/src/native_table_layout_algorithm_types.rs"
+                "table/src/table_layout_algorithm_types_interface.rs"
             )) && types_facade
-                .contains("pub use layout_algo_table_native_table_layout_algorithm_types::*;")
-                && node_facade.contains(concat!("layout_algo_", "table/src/native_table_node.rs"))
-                && node_facade.contains("pub use layout_algo_table_native_table_node::*;")
+                .contains("pub use layout_algo_table_table_layout_algorithm_types_interface::*;")
+                && node_facade
+                    .contains(concat!("layout_algo_", "table/src/table_node_interface.rs"))
+                && node_facade.contains("pub use layout_algo_table_table_node_interface::*;")
                 && !types_facade.contains("pub struct CellInlineConstraint")
                 && !node_facade.contains("pub struct TableNode"),
             "table algorithm state and node interface must be re-exported from the table owner"
@@ -2425,17 +2505,17 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_shape_style_projection_resolves_to_the_float_algorithm_owner() {
+    fn shape_style_projection_resolves_to_the_float_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "float/src/native_shape_style_projection.rs"
+            "float/src/shape_style_projection.rs"
         )))
-        .expect("read native shape style-projection owner");
+        .expect("read source shape style-projection owner");
         for owned_policy in [
-            "fn ApplyNativeStyleShape",
+            "fn ApplyStyleShape",
             "for point in &shape.contour",
             "for radius in [&shape.radius_x, &shape.radius_y]",
             "for inset in &shape.insets",
@@ -2444,7 +2524,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "float algorithm native shape projection lost {owned_policy}"
+                "float algorithm source shape projection lost {owned_policy}"
             );
         }
         assert!(
@@ -2452,39 +2532,37 @@ mod package_contract_tests {
             "shape contour projection must retain a float-algorithm sampling frame"
         );
 
-        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/native_input.rs"))
-            .expect("read invalidation-owned native style input");
+        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/input.rs"))
+            .expect("read invalidation-owned source style input");
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "float/src/native_shape_style_projection.rs"
-            )) && facade
-                .contains("layout_algo_float_native_shape_style_projection::ApplyNativeStyleShape"),
-            "native style-input boundary must import shape projection from its float owner"
+                "float/src/shape_style_projection.rs"
+            )) && facade.contains("layout_algo_float_shape_style_projection::ApplyStyleShape"),
+            "source style-input boundary must import shape projection from its float owner"
         );
         for leaked_policy in [
-            "fn ApplyNativeStyleShape(",
+            "fn ApplyStyleShape(",
             "for point in &shape.contour",
             "for inset in &shape.insets",
             "ShapeValue::from_box",
         ] {
             assert!(
                 !facade.contains(leaked_policy),
-                "native style-input facade still owns shape projection policy {leaked_policy}"
+                "source style-input facade still owns shape projection policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_exclusion_space_resolves_to_the_float_algorithm_owner() {
+    fn exclusion_space_resolves_to_the_float_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "float/src/native_exclusion_space.rs"
-        )))
-        .expect("read native exclusion-space owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "float/src/exclusion_space.rs")),
+        )
+        .expect("read source exclusion-space owner");
         for owned_policy in [
             "pub struct DerivedGeometry",
             "pub struct ExclusionSpaceInternal",
@@ -2511,10 +2589,8 @@ mod package_contract_tests {
         )
         .expect("read exclusion-space compatibility facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "float/src/native_exclusion_space.rs"
-            )) && facade.contains("pub use layout_algo_float_native_exclusion_space::*;"),
+            facade.contains(concat!("layout_algo_", "float/src/exclusion_space.rs"))
+                && facade.contains("pub use layout_algo_float_exclusion_space::*;"),
             "exclusion_space must re-export its implementation from the float algorithm"
         );
         for leaked_policy in [
@@ -2529,10 +2605,9 @@ mod package_contract_tests {
             );
         }
 
-        let interval_owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "float/src/native_shape_interval.rs"
-        )))
+        let interval_owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "float/src/shape_interval.rs")),
+        )
         .expect("read float shape-interval owner");
         assert!(
             interval_owner.contains("pub struct ShapeInterval")
@@ -2545,18 +2620,15 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/shapes/shape_interval.rs"))
                 .expect("read shape-interval compatibility facade");
         assert!(
-            interval_facade.contains(concat!(
-                "layout_algo_",
-                "float/src/native_shape_interval.rs"
-            )) && interval_facade.contains("pub use layout_algo_float_native_shape_interval::*")
+            interval_facade.contains(concat!("layout_algo_", "float/src/shape_interval.rs"))
+                && interval_facade.contains("pub use layout_algo_float_shape_interval::*")
                 && !interval_facade.contains("pub struct ShapeInterval"),
             "shape intervals must be re-exported from layout_algo_float"
         );
 
-        let shape_owner = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "float/src/native_shape.rs")),
-        )
-        .expect("read float shape interface owner");
+        let shape_owner =
+            std::fs::read_to_string(root.join(concat!("layout_algo_", "float/src/shape.rs")))
+                .expect("read float shape interface owner");
         assert!(
             shape_owner.contains("pub struct LineSegment")
                 && shape_owner.contains("pub struct ShapeBase")
@@ -2569,16 +2641,15 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/shapes/shape.rs"))
                 .expect("read shape compatibility facade");
         assert!(
-            shape_facade.contains(concat!("layout_algo_", "float/src/native_shape.rs"))
-                && shape_facade.contains("pub use layout_algo_float_native_shape::*")
+            shape_facade.contains(concat!("layout_algo_", "float/src/shape.rs"))
+                && shape_facade.contains("pub use layout_algo_float_shape::*")
                 && !shape_facade.contains("pub trait Shape"),
             "the shape interface must be re-exported from layout_algo_float"
         );
 
-        let shapes_owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "float/src/native_shape_exclusions.rs"
-        )))
+        let shapes_owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "float/src/shape_exclusions.rs")),
+        )
         .expect("read float shape-exclusions owner");
         assert!(
             shapes_owner.contains("pub struct ShapeExclusions")
@@ -2591,29 +2662,24 @@ mod package_contract_tests {
         )
         .expect("read shape-exclusions compatibility facade");
         assert!(
-            shapes_facade.contains(concat!(
-                "layout_algo_",
-                "float/src/native_shape_exclusions.rs"
-            )) && shapes_facade.contains("pub use layout_algo_float_native_shape_exclusions::*")
+            shapes_facade.contains(concat!("layout_algo_", "float/src/shape_exclusions.rs"))
+                && shapes_facade.contains("pub use layout_algo_float_shape_exclusions::*")
                 && !shapes_facade.contains("pub struct ShapeExclusions"),
             "shape exclusions must be re-exported from layout_algo_float"
         );
 
         for (owner_file, facade_file, owned_type, reexport) in [
             (
-                "native_positioned_float.rs",
+                "positioned_float.rs",
                 "positioned_float.rs",
                 "pub struct PositionedFloat",
-                concat!("pub use layout_algo_", "float_native_positioned_float::*;"),
+                concat!("pub use layout_algo_", "float_positioned_float::*;"),
             ),
             (
-                "native_unpositioned_float.rs",
+                "unpositioned_float.rs",
                 "unpositioned_float.rs",
                 "pub struct UnpositionedFloat",
-                concat!(
-                    "pub use layout_algo_",
-                    "float_native_unpositioned_float::*;"
-                ),
+                concat!("pub use layout_algo_", "float_unpositioned_float::*;"),
             ),
         ] {
             let state_owner = std::fs::read_to_string(
@@ -2638,15 +2704,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_exclusion_area_resolves_to_the_float_algorithm_owner() {
+    fn exclusion_area_resolves_to_the_float_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "float/src/native_exclusion_area.rs"
-        )))
-        .expect("read native exclusion-area owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "float/src/exclusion_area.rs")),
+        )
+        .expect("read source exclusion-area owner");
         for owned_policy in [
             "pub struct ExclusionShapeData",
             "pub struct ExclusionArea",
@@ -2672,25 +2737,22 @@ mod package_contract_tests {
         )
         .expect("read exclusion-area compatibility facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "float/src/native_exclusion_area.rs"
-            )) && facade.contains("pub use layout_algo_float_native_exclusion_area::*;")
+            facade.contains(concat!("layout_algo_", "float/src/exclusion_area.rs"))
+                && facade.contains("pub use layout_algo_float_exclusion_area::*;")
                 && !facade.contains("pub struct ExclusionArea"),
             "exclusion_area must be a re-export-only float facade"
         );
     }
 
     #[test]
-    fn native_layout_opportunity_resolves_to_the_float_algorithm_owner() {
+    fn layout_opportunity_resolves_to_the_float_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "float/src/native_layout_opportunity.rs"
-        )))
-        .expect("read native layout-opportunity owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "float/src/layout_opportunity.rs")),
+        )
+        .expect("read source layout-opportunity owner");
         for owned_policy in [
             "pub struct LayoutOpportunity",
             "fn excluded_segment",
@@ -2718,10 +2780,8 @@ mod package_contract_tests {
         )
         .expect("read layout-opportunity compatibility facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "float/src/native_layout_opportunity.rs"
-            )) && facade.contains("pub use layout_algo_float_native_layout_opportunity::*;"),
+            facade.contains(concat!("layout_algo_", "float/src/layout_opportunity.rs"))
+                && facade.contains("pub use layout_algo_float_layout_opportunity::*;"),
             "layout_opportunity must re-export its implementation from the float algorithm"
         );
         for leaked_policy in [
@@ -2738,15 +2798,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_shape_outside_info_resolves_to_the_float_algorithm_owner() {
+    fn shape_outside_info_resolves_to_the_float_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "float/src/native_shape_outside_info.rs"
-        )))
-        .expect("read native shape-outside info owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "float/src/shape_outside_info.rs")),
+        )
+        .expect("read source shape-outside info owner");
         for owned_policy in [
             "pub struct ShapeOutsideInfo",
             "pub type ShapeOutsideInfoMap",
@@ -2773,10 +2832,8 @@ mod package_contract_tests {
         )
         .expect("read shape-outside info compatibility facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "float/src/native_shape_outside_info.rs"
-            )) && facade.contains("pub use layout_algo_float_native_shape_outside_info::*;"),
+            facade.contains(concat!("layout_algo_", "float/src/shape_outside_info.rs"))
+                && facade.contains("pub use layout_algo_float_shape_outside_info::*;"),
             "shape_outside_info must re-export state from the float algorithm"
         );
         for leaked_policy in [
@@ -2792,15 +2849,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_svg_metadata_validation_resolves_to_the_svg_algorithm_owner() {
+    fn svg_metadata_validation_resolves_to_the_svg_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "svg/src/native_svg_metadata_validation.rs"
+            "svg/src/svg_metadata_validation.rs"
         )))
-        .expect("read native SVG metadata-validation owner");
+        .expect("read source SVG metadata-validation owner");
         for owned_policy in [
             "fn ValidateSvgElementInput",
             "for command in &shape.path",
@@ -2825,14 +2882,13 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "svg/src/native_svg_metadata_validation.rs"
+                "svg/src/svg_metadata_validation.rs"
             )),
             "LayoutNode metadata must load SVG validation from its algorithm owner"
         );
-        let input_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_element_metadata_input.rs"),
-        )
-        .expect("read element metadata input owner");
+        let input_owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/element_metadata_input.rs"))
+                .expect("read element metadata input owner");
         assert!(
             input_owner.contains("ValidateSvgElementInput(input.kind, data)?"),
             "element input transaction must delegate SVG validation to its algorithm owner"
@@ -2841,7 +2897,7 @@ mod package_contract_tests {
             "for command in &shape.path",
             "for point in &path.points",
             "SVG path must start with move-to",
-            "SVG textPath points must be finite native coordinates",
+            "SVG textPath points must be finite source coordinates",
         ] {
             assert!(
                 !facade.contains(leaked_policy),
@@ -2851,34 +2907,34 @@ mod package_contract_tests {
 
         for (owner_file, facade_file, owned_type, reexport) in [
             (
-                "native_svg_character_data.rs",
+                "svg_character_data.rs",
                 "svg_character_data.rs",
                 "pub struct SvgCharacterData",
-                "pub use layout_algo_svg_native_svg_character_data::*;",
+                "pub use layout_algo_svg_svg_character_data::*;",
             ),
             (
-                "native_svg_inline_node_data.rs",
+                "svg_inline_node_data.rs",
                 "svg_inline_node_data.rs",
                 "pub struct SvgInlineNodeData",
-                "pub use layout_algo_svg_native_svg_inline_node_data::*;",
+                "pub use layout_algo_svg_svg_inline_node_data::*;",
             ),
             (
-                "native_svg_layout_info.rs",
+                "svg_layout_info.rs",
                 "svg_layout_info.rs",
                 "pub struct SVGLayoutInfo",
-                "pub use layout_algo_svg_native_svg_layout_info::*;",
+                "pub use layout_algo_svg_svg_layout_info::*;",
             ),
             (
-                "native_svg_length_adjust_type.rs",
+                "svg_length_adjust_type.rs",
                 "svg_length_adjust_type.rs",
                 "pub enum SVGLengthAdjustType",
-                "pub use layout_algo_svg_native_svg_length_adjust_type::*;",
+                "pub use layout_algo_svg_svg_length_adjust_type::*;",
             ),
             (
-                "native_svg_text_attributes_request.rs",
+                "svg_text_attributes_request.rs",
                 "svg_text_attributes_request.rs",
                 "pub struct SvgTextAttributesBuildRequest",
-                "pub use layout_algo_svg_native_svg_text_attributes_request::*;",
+                "pub use layout_algo_svg_svg_text_attributes_request::*;",
             ),
         ] {
             let svg_owner = std::fs::read_to_string(
@@ -2904,7 +2960,7 @@ mod package_contract_tests {
 
         let iterator = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "svg/src/native_resolved_text_layout_attributes_iterator.rs"
+            "svg/src/resolved_text_layout_attributes_iterator.rs"
         )))
         .expect("read resolved SVG text-attribute iterator owner");
         assert!(
@@ -2921,24 +2977,24 @@ mod package_contract_tests {
         assert!(
             iterator_facade.contains(concat!(
                 "layout_algo_",
-                "svg/src/native_resolved_text_layout_attributes_iterator.rs"
-            )) && iterator_facade.contains(
-                "pub use layout_algo_svg_native_resolved_text_layout_attributes_iterator::*",
-            ) && !iterator_facade.contains("pub struct ResolvedTextLayoutAttributesIterator"),
+                "svg/src/resolved_text_layout_attributes_iterator.rs"
+            )) && iterator_facade
+                .contains("pub use layout_algo_svg_resolved_text_layout_attributes_iterator::*",)
+                && !iterator_facade.contains("pub struct ResolvedTextLayoutAttributesIterator"),
             "resolved SVG text attributes must be re-exported from layout_algo_svg"
         );
     }
 
     #[test]
-    fn native_svg_text_descendant_index_resolves_to_the_svg_algorithm_owner() {
+    fn svg_text_descendant_index_resolves_to_the_svg_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "svg/src/native_svg_text_descendant_index.rs"
+            "svg/src/svg_text_descendant_index.rs"
         )))
-        .expect("read native SVG text-descendant index owner");
+        .expect("read source SVG text-descendant index owner");
         for owned_policy in [
             "fn AddSvgTextDescendant",
             "fn RemoveSvgTextDescendant",
@@ -2964,7 +3020,7 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "svg/src/native_svg_text_descendant_index.rs"
+                "svg/src/svg_text_descendant_index.rs"
             )) && !loader.contains("fn AddSvgTextDescendant")
                 && !loader.contains("fn RemoveSvgTextDescendant")
                 && !loader.contains("fn SetContainsNonScalingStroke")
@@ -2975,15 +3031,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_list_marker_lookup_resolves_to_the_list_algorithm_owner() {
+    fn list_marker_lookup_resolves_to_the_list_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "list/src/native_list_marker_lookup.rs"
-        )))
-        .expect("read native list-marker lookup owner");
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "list/src/list_marker_lookup.rs")),
+        )
+        .expect("read source list-marker lookup owner");
         for owned_policy in [
             "fn InputListMarker",
             "while !child.is_null()",
@@ -3004,10 +3059,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_node_metadata.rs"))
                 .expect("read LayoutNode metadata facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "list/src/native_list_marker_lookup.rs"
-            )) && facade.contains("layout_algo_list_native_marker_lookup::InputListMarker(self)"),
+            facade.contains(concat!("layout_algo_", "list/src/list_marker_lookup.rs"))
+                && facade.contains("layout_algo_list_marker_lookup::InputListMarker(self)"),
             "LayoutNode metadata must delegate marker lookup to the list algorithm"
         );
         assert!(
@@ -3017,13 +3070,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_list_index_resolves_to_the_list_algorithm_owner() {
+    fn layout_view_list_index_resolves_to_the_list_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "list/src/native_layout_view_list_index.rs"
+            "list/src/layout_view_list_index.rs"
         )))
         .expect("read LayoutView list-index owner");
         for owned_policy in [
@@ -3051,7 +3104,7 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "list/src/native_layout_view_list_index.rs"
+                "list/src/layout_view_list_index.rs"
             )),
             "LayoutView must load counter/list indexes from the list algorithm owner"
         );
@@ -3071,17 +3124,16 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_style_effect_projection_resolves_to_the_fragment_owner() {
+    fn style_effect_projection_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_style_effect_projection.rs"),
-        )
-        .expect("read native style-effect projection owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/style_effect_projection.rs"))
+                .expect("read source style-effect projection owner");
         for owned_policy in [
-            "fn ApplyNativeStylePaintGrouping",
-            "fn ApplyNativeStyleTransforms",
+            "fn ApplyStylePaintGrouping",
+            "fn ApplyStyleTransforms",
             "for filter in projected_filters",
             "for operation in &transform.operations",
             "SetBackdropFilterOwned",
@@ -3090,7 +3142,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native style-effect projection lost {owned_policy}"
+                "layout_fragment source style-effect projection lost {owned_policy}"
             );
         }
         assert!(
@@ -3098,31 +3150,31 @@ mod package_contract_tests {
             "filter and transform projection must retain separate fragment sampling frames"
         );
 
-        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/native_input.rs"))
-            .expect("read invalidation-owned native style input");
+        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/input.rs"))
+            .expect("read invalidation-owned source style input");
         assert!(
-            facade.contains("layout_fragment/src/native_style_effect_projection.rs")
-                && facade.contains("ApplyNativeStylePaintGrouping, ApplyNativeStyleTransforms"),
-            "native style-input boundary must import effect projection from layout_fragment"
+            facade.contains("layout_fragment/src/style_effect_projection.rs")
+                && facade.contains("ApplyStylePaintGrouping, ApplyStyleTransforms"),
+            "source style-input boundary must import effect projection from layout_fragment"
         );
         for leaked_policy in [
-            "fn ApplyNativeStylePaintGrouping(",
-            "fn ApplyNativeStyleTransforms(",
+            "fn ApplyStylePaintGrouping(",
+            "fn ApplyStyleTransforms(",
             "for filter in projected_filters",
             "for operation in &transform.operations",
         ] {
             assert!(
                 !facade.contains(leaked_policy),
-                "native style-input facade still owns effect projection policy {leaked_policy}"
+                "source style-input facade still owns effect projection policy {leaked_policy}"
             );
         }
 
         let clip_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_clip_path_projection.rs"),
+            root.join("layout_fragment/src/clip_path_operation_projection.rs"),
         )
-        .expect("read native clip-path projection owner");
+        .expect("read source clip-path projection owner");
         for owned_policy in [
-            "fn NativeClipPath",
+            "fn ProjectClipPathOperation",
             "fn PathByteStream",
             "for command in &input.commands",
             "BasicShapePolygon",
@@ -3141,13 +3193,13 @@ mod package_contract_tests {
         );
 
         let clip_facade = std::fs::read_to_string(
-            root.join("layoutng/src/internal/boundary/clip_path_native.rs"),
+            root.join("layoutng/src/internal/boundary/clip_path_projection.rs"),
         )
-        .expect("read native clip-path facade");
+        .expect("read source clip-path facade");
         assert!(
-            clip_facade.contains("layout_fragment/src/native_clip_path_projection.rs")
+            clip_facade.contains("layout_fragment/src/clip_path_operation_projection.rs")
                 && clip_facade.contains(
-                    "pub(super) use layout_fragment_native_clip_path_projection::NativeClipPath;"
+                    "pub(super) use layout_fragment_clip_path_operation_projection::ProjectClipPathOperation;"
                 ),
             "clip-path boundary must re-export projection from layout_fragment"
         );
@@ -3163,11 +3215,11 @@ mod package_contract_tests {
         }
 
         let mask_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_mask_image_projection.rs"),
+            root.join("layout_fragment/src/mask_image_style_projection.rs"),
         )
-        .expect("read native mask-image projection owner");
+        .expect("read source mask-image projection owner");
         for owned_policy in [
-            "fn ApplyNativeMaskImages",
+            "fn ApplyMaskImages",
             "fn gradient",
             ".stops.iter()",
             ".collect::<Option<Vec<_>>>()",
@@ -3187,13 +3239,13 @@ mod package_contract_tests {
         );
 
         let mask_facade = std::fs::read_to_string(
-            root.join("layoutng/src/internal/boundary/mask_image_native.rs"),
+            root.join("layoutng/src/internal/boundary/mask_image_projection.rs"),
         )
-        .expect("read native mask-image facade");
+        .expect("read source mask-image facade");
         assert!(
-            mask_facade.contains("layout_fragment/src/native_mask_image_projection.rs")
+            mask_facade.contains("layout_fragment/src/mask_image_style_projection.rs")
                 && mask_facade.contains(
-                    "pub(super) use layout_fragment_native_mask_image_projection::ApplyNativeMaskImages;"
+                    "pub(super) use layout_fragment_mask_image_style_projection::ApplyMaskImages;"
                 ),
             "mask-image boundary must load projection from layout_fragment"
         );
@@ -3211,24 +3263,23 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_style_font_resolution_resolves_to_the_input_owner() {
+    fn style_font_resolution_resolves_to_the_input_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_style_font_resolution.rs"),
-        )
-        .expect("read native style-font resolution owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/style_font_resolution.rs"))
+                .expect("read source style-font resolution owner");
         for owned_policy in [
-            "fn ResolveNativeStyleFont",
+            "fn ResolveStyleFont",
             "for family in &extra.font_families",
-            "NativeFontRequest::new_auto",
+            "FontRequest::new_auto",
             "fonts.Resolve(&request)",
             "builder.SetFont",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native style-font resolution lost {owned_policy}"
+                "layout_invalidation source style-font resolution lost {owned_policy}"
             );
         }
         assert!(
@@ -3236,39 +3287,37 @@ mod package_contract_tests {
             "font input validation and request projection must retain an input sampling frame"
         );
 
-        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/native_input.rs"))
-            .expect("read invalidation-owned native style input");
-        let transaction = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_input_projection.rs"),
-        )
-        .expect("read native style-input transaction owner");
+        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/input.rs"))
+            .expect("read invalidation-owned source style input");
+        let transaction =
+            std::fs::read_to_string(root.join("layout_invalidation/src/input_projection.rs"))
+                .expect("read source style-input transaction owner");
         assert!(
-            facade.contains("native_style_font_resolution.rs")
-                && facade.contains("ResolveNativeStyleFont(builder, extra, fonts)")
-                && transaction.contains("if !node.style.native_style.is_null()"),
-            "native style-input must keep its identity fast path and own font request projection"
+            facade.contains("style_font_resolution.rs")
+                && facade.contains("ResolveStyleFont(builder, extra, fonts)")
+                && transaction.contains("if !node.style.style.is_null()"),
+            "source style-input must keep its identity fast path and own font request projection"
         );
         for leaked_policy in [
             "for family in &extra.font_families",
-            "NativeFontRequest::new_auto(",
+            "FontRequest::new_auto(",
             "fonts.Resolve(&request)",
         ] {
             assert!(
                 !facade.contains(leaked_policy),
-                "native style-input facade still owns font-resolution policy {leaked_policy}"
+                "source style-input facade still owns font-resolution policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_paint_only_font_binding_resolves_to_the_reuse_owner() {
+    fn paint_only_font_binding_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_reuse/src/native_paint_only_font_binding.rs"),
-        )
-        .expect("read paint-only font-binding owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_reuse/src/paint_only_font_binding.rs"))
+                .expect("read paint-only font-binding owner");
         for owned_policy in [
             "#[inline(never)]\npub(super) fn PreservePaintOnlyFontBinding",
             "ComputedStyleBuilder::from_style",
@@ -3286,9 +3335,9 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read layout-object tree builder");
         assert!(
-            builder.contains("layout_reuse/src/native_paint_only_font_binding.rs")
+            builder.contains("layout_reuse/src/paint_only_font_binding.rs")
                 && builder.contains(
-                    "use layout_reuse_native_paint_only_font_binding::PreservePaintOnlyFontBinding;"
+                    "use layout_reuse_paint_only_font_binding::PreservePaintOnlyFontBinding;"
                 )
                 && !builder.contains("fn PreservePaintOnlyFontBinding("),
             "layout-object builder must delegate paint-only font preservation to layout_reuse"
@@ -3296,26 +3345,26 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_font_resolver_boundary_separates_service_from_reuse_policy() {
+    fn font_resolver_boundary_separates_service_from_reuse_policy() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let interface =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_font_resolver.rs"))
-                .expect("read native layout font-resolver interface owner");
+                .expect("read source layout font-resolver interface owner");
         for owned_policy in [
-            "pub struct NativeFontRequest",
+            "pub struct FontRequest",
             "fn new_auto",
             "fn WithBaseDescription",
-            "pub trait NativeFontResolver",
-            "impl NativeFontResolver for font_engine::FontEngine",
+            "pub trait FontResolver",
+            "impl FontResolver for font_engine::FontEngine",
             "FontEngine::ResolveFont",
             "FontEngine::FaceIndex",
             "FontEngine::Variations",
         ] {
             assert!(
                 interface.contains(owned_policy),
-                "shared native font-resolver interface lost {owned_policy}"
+                "shared source font-resolver interface lost {owned_policy}"
             );
         }
         assert!(
@@ -3323,29 +3372,27 @@ mod package_contract_tests {
             "direct FontEngine resolution must retain a service sampling frame"
         );
 
-        let construction =
-            std::fs::read_to_string(root.join("layout_reuse/src/native_font_resolver.rs"))
-                .expect("read native font-resolver construction owner");
+        let construction = std::fs::read_to_string(root.join("layout_reuse/src/font_resolver.rs"))
+            .expect("read source font-resolver construction owner");
         assert!(
-            construction.contains("impl NativeFontResolver for SharedEngineFontResolver")
+            construction.contains("impl FontResolver for SharedEngineFontResolver")
                 && construction.contains("#[inline(never)]\n    fn Resolve"),
             "shared FontEngine resolution must retain a reuse sampling frame"
         );
 
-        let scope = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_font_resolver_scope.rs"),
-        )
-        .expect("read native font-resolver scope owner");
+        let scope =
+            std::fs::read_to_string(root.join("layout_invalidation/src/font_resolver_scope.rs"))
+                .expect("read source font-resolver scope owner");
         for owned_policy in [
             "CURRENT_FONT_RESOLVER",
-            "pub struct NativeFontResolverScope",
+            "pub struct FontResolverScope",
             "pub fn new",
             "pub(crate) unsafe fn new_from_raw",
-            "pub fn CurrentNativeFontResolver",
+            "pub fn CurrentFontResolver",
         ] {
             assert!(
                 scope.contains(owned_policy),
-                "native input font-resolver scope lost {owned_policy}"
+                "source input font-resolver scope lost {owned_policy}"
             );
         }
         assert!(
@@ -3353,40 +3400,38 @@ mod package_contract_tests {
             "constant-time font-resolver TLS binding must remain inlineable"
         );
 
-        let input_facade =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_input.rs"))
-                .expect("read invalidation-owned native input");
+        let input_facade = std::fs::read_to_string(root.join("layout_invalidation/src/input.rs"))
+            .expect("read invalidation-owned source input");
         assert!(
-            input_facade.contains("native_font_resolver_scope.rs")
-                && input_facade.contains("CurrentNativeFontResolver, NativeFontResolverScope",),
-            "native input must own and re-export its font-resolver scope"
+            input_facade.contains("font_resolver_scope.rs")
+                && input_facade.contains("CurrentFontResolver, FontResolverScope",),
+            "source input must own and re-export its font-resolver scope"
         );
         for leaked_policy in [
             "static CURRENT_FONT_RESOLVER",
-            "pub struct NativeFontResolverScope",
-            "impl Drop for NativeFontResolverScope",
+            "pub struct FontResolverScope",
+            "impl Drop for FontResolverScope",
         ] {
             assert!(
                 !input_facade.contains(leaked_policy),
-                "native input still owns font-resolver scope policy {leaked_policy}"
+                "source input still owns font-resolver scope policy {leaked_policy}"
             );
         }
 
         assert!(
-            !interface.contains("layout_reuse/src/native_layout_font_resolver.rs"),
+            !interface.contains("layout_reuse/src/layout_font_resolver.rs"),
             "shared font service must not be sourced from the reuse package"
         );
     }
 
     #[test]
-    fn native_layout_object_font_validity_resolves_to_the_reuse_owner() {
+    fn layout_object_font_validity_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_reuse/src/native_layout_object_font_validity.rs"),
-        )
-        .expect("read LayoutObject font-validity owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_reuse/src/layout_object_font_validity.rs"))
+                .expect("read LayoutObject font-validity owner");
         for owned_policy in [
             "fn IsFontFallbackValid",
             "StyleRef().GetFont()",
@@ -3408,7 +3453,7 @@ mod package_contract_tests {
         )
         .expect("read LayoutObject core-services loader");
         assert!(
-            loader.contains("layout_reuse/src/native_layout_object_font_validity.rs"),
+            loader.contains("layout_reuse/src/layout_object_font_validity.rs"),
             "LayoutObject core services must load font admission from layout_reuse"
         );
         assert!(
@@ -3418,13 +3463,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_css_zoom_slow_path_resolves_to_the_invalidation_owner() {
+    fn css_zoom_slow_path_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_css_zoom.rs"))
-                .expect("read non-unit CSS zoom owner");
+        let owner = std::fs::read_to_string(root.join("layout_invalidation/src/css_zoom.rs"))
+            .expect("read non-unit CSS zoom owner");
         for owned_policy in [
             "fn ZoomedStyleNonUnit",
             "style.clone()",
@@ -3448,7 +3492,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/css_zoom.rs"))
             .expect("read CSS zoom facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_css_zoom.rs")
+            facade.contains("layout_invalidation/src/css_zoom.rs")
                 && facade.contains("if zoom == 1.0")
                 && facade.contains("Cow::Borrowed(style)")
                 && facade.contains("ZoomedStyleNonUnit(style, zoom)"),
@@ -3469,13 +3513,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_svg_dispatch_resolves_to_the_svg_owner() {
+    fn layout_object_svg_dispatch_resolves_to_the_svg_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "svg/src/native_layout_object_svg_dispatch.rs"
+            "svg/src/layout_object_svg_dispatch.rs"
         )))
         .expect("read LayoutObject SVG dispatch owner");
         for owned_policy in [
@@ -3505,7 +3549,7 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "svg/src/native_layout_object_svg_dispatch.rs"
+                "svg/src/layout_object_svg_dispatch.rs"
             )),
             "LayoutObject core services must load SVG dispatch from layout_algo_svg"
         );
@@ -3525,17 +3569,17 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_trigger_scope_projection_resolves_to_the_invalidation_owner() {
+    fn trigger_scope_projection_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_trigger_scope_projection.rs"),
+            root.join("layout_invalidation/src/trigger_scope_projection.rs"),
         )
-        .expect("read native trigger-scope projection owner");
+        .expect("read source trigger-scope projection owner");
         for owned_policy in [
-            "fn ApplyNonDefaultNativeTriggerScope",
-            "fn NativeTriggerScopeNames",
+            "fn ApplyNonDefaultTriggerScope",
+            "fn TriggerScopeNames",
             "for value in &extra.trigger_scope_names",
             "for name in names",
             "SetTriggerScopeOwned",
@@ -3550,36 +3594,36 @@ mod package_contract_tests {
             "non-default trigger-scope construction must retain an invalidation sampling frame"
         );
 
-        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/native_input.rs"))
-            .expect("read invalidation-owned native style input");
+        let facade = std::fs::read_to_string(root.join("layout_invalidation/src/input.rs"))
+            .expect("read invalidation-owned source style input");
         assert!(
-            facade.contains("native_trigger_scope_projection.rs")
+            facade.contains("trigger_scope_projection.rs")
                 && facade.contains(
                     "if !extra.trigger_scope_all && extra.trigger_scope_names.is_empty()"
                 )
-                && facade.contains("ApplyNonDefaultNativeTriggerScope(builder, extra)"),
-            "native style-input must keep the default trigger fast path and delegate non-default construction"
+                && facade.contains("ApplyNonDefaultTriggerScope(builder, extra)"),
+            "source style-input must keep the default trigger fast path and delegate non-default construction"
         );
         for leaked_policy in [
-            "fn NativeTriggerScopeNames(",
+            "fn TriggerScopeNames(",
             "for value in &extra.trigger_scope_names",
             "for name in names",
         ] {
             assert!(
                 !facade.contains(leaked_policy),
-                "native style-input facade still owns trigger-scope policy {leaked_policy}"
+                "source style-input facade still owns trigger-scope policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_trigger_scoped_name_state_resolves_to_the_fragment_owner() {
+    fn trigger_scoped_name_state_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_trigger_scoped_name.rs"))
-                .expect("read native trigger scoped-name owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/trigger_scoped_name.rs"))
+                .expect("read source trigger scoped-name owner");
         for owned_policy in [
             "pub type TriggerScopedName = NamingScope",
             "pub fn ToTriggerScopedName",
@@ -3600,21 +3644,20 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/trigger_scoped_name.rs"))
                 .expect("read trigger scoped-name facade");
         assert!(
-            facade.contains("layout_fragment/src/native_trigger_scoped_name.rs")
-                && facade.contains("pub use layout_fragment_native_trigger_scoped_name::*")
+            facade.contains("layout_fragment/src/trigger_scoped_name.rs")
+                && facade.contains("pub use layout_fragment_trigger_scoped_name::*")
                 && !facade.contains("pub type TriggerScopedName = NamingScope"),
             "trigger scoped-name state must be re-exported from layout_fragment"
         );
     }
 
     #[test]
-    fn native_naming_scope_resolves_to_the_invalidation_owner() {
+    fn naming_scope_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_naming_scope.rs"))
-                .expect("read native naming-scope owner");
+        let owner = std::fs::read_to_string(root.join("layout_invalidation/src/naming_scope.rs"))
+            .expect("read source naming-scope owner");
         for owned_policy in [
             "pub struct NamingScope",
             "fn FindScopeElement",
@@ -3637,8 +3680,8 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/naming_scope.rs"))
             .expect("read naming-scope compatibility facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_naming_scope.rs")
-                && facade.contains("pub use layout_invalidation_native_naming_scope::*;"),
+            facade.contains("layout_invalidation/src/naming_scope.rs")
+                && facade.contains("pub use layout_invalidation_naming_scope::*;"),
             "naming_scope must re-export its implementation from layout_invalidation"
         );
         for leaked_policy in [
@@ -3655,34 +3698,33 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_input_projection_resolves_to_the_invalidation_owner() {
+    fn input_projection_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_input_projection.rs"),
-        )
-        .expect("read native input-projection owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/input_projection.rs"))
+                .expect("read source input-projection owner");
         for owned_policy in [
-            "fn PrepareNativeStyle",
-            "fn PrepareNativeStyleProjection",
-            "fn PrepareNativeStyleDefault",
-            "fn PrepareNativeConstraints",
-            "fn PrepareNativeConstraintsDefault",
-            "if !node.style.native_style.is_null()",
-            "BeginNativeStyle",
-            "ApplyNativeStyleListAndPosition",
-            "ApplyNativeStyleShape",
-            "ApplyNativeStyleGridTableAndBreaks",
-            "ApplyNativeStylePaintGrouping",
-            "ApplyNativeMaskImages",
-            "ApplyNativeTriggerScope",
+            "fn PrepareStyle",
+            "fn PrepareStyleProjection",
+            "fn PrepareStyleDefault",
+            "fn PrepareConstraints",
+            "fn PrepareConstraintsDefault",
+            "if !node.style.style.is_null()",
+            "BeginStyle",
+            "ApplyStyleListAndPosition",
+            "ApplyStyleShape",
+            "ApplyStyleGridTableAndBreaks",
+            "ApplyStylePaintGrouping",
+            "ApplyMaskImages",
+            "ApplyTriggerScope",
             "ConstraintSpaceBuilder::new_without_parent_space",
             "SetContainsAnnotations",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native input projection lost {owned_policy}"
+                "layout_invalidation source input projection lost {owned_policy}"
             );
         }
         assert_eq!(
@@ -3691,38 +3733,35 @@ mod package_contract_tests {
             "slow style reconstruction and root-constraint projection must retain separate invalidation frames"
         );
 
-        let implementation =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_input.rs"))
-                .expect("read invalidation-owned native input implementation");
+        let implementation = std::fs::read_to_string(root.join("layout_invalidation/src/input.rs"))
+            .expect("read invalidation-owned source input implementation");
         assert!(
-            implementation.contains("native_input_projection.rs")
-                && implementation.contains(
-                    "PrepareNativeConstraints, PrepareNativeConstraintsDefault, PrepareNativeStyle,"
-                )
-                && implementation.contains("fn BeginNativeStyle")
-                && implementation.contains("fn FinishNativeStyle"),
-            "native input conversion and projection entries must remain in layout_invalidation"
+            implementation.contains("input_projection.rs")
+                && implementation
+                    .contains("PrepareConstraints, PrepareConstraintsDefault, PrepareStyle,")
+                && implementation.contains("fn BeginStyle")
+                && implementation.contains("fn FinishStyle"),
+            "source input conversion and projection entries must remain in layout_invalidation"
         );
 
-        let facade =
-            std::fs::read_to_string(root.join("layoutng/src/internal/boundary/native_input.rs"))
-                .expect("read native input compatibility facade");
+        let facade = std::fs::read_to_string(root.join("layoutng/src/internal/boundary/input.rs"))
+            .expect("read source input compatibility facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_input.rs")
-                && facade.contains("pub use layout_invalidation_native_input::*;")
-                && !facade.contains("fn BeginNativeStyle")
-                && !facade.contains("pub fn PrepareNativeStyle("),
-            "core native_input must remain a re-export-only invalidation facade"
+            facade.contains("layout_invalidation/src/input.rs")
+                && facade.contains("pub use layout_invalidation_input::*;")
+                && !facade.contains("fn BeginStyle")
+                && !facade.contains("pub fn PrepareStyle("),
+            "core input must remain a re-export-only invalidation facade"
         );
     }
 
     #[test]
-    fn native_input_equivalence_resolves_to_the_invalidation_owner() {
+    fn input_equivalence_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let style_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_computed_style_equivalence.rs"),
+            root.join("layout_invalidation/src/computed_style_equivalence.rs"),
         )
         .expect("read computed-style equivalence owner");
         for owned_policy in [
@@ -3743,7 +3782,7 @@ mod package_contract_tests {
         }
 
         let element_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_element_data_equivalence.rs"),
+            root.join("layout_invalidation/src/element_data_equivalence.rs"),
         )
         .expect("read element-data equivalence owner");
         for owned_policy in [
@@ -3764,8 +3803,8 @@ mod package_contract_tests {
         let core = std::fs::read_to_string(root.join("layoutng/src/internal/layout_input.rs"))
             .expect("read shared layout-input schema");
         assert!(
-            core.contains("layout_invalidation/src/native_computed_style_equivalence.rs")
-                && core.contains("layout_invalidation/src/native_element_data_equivalence.rs"),
+            core.contains("layout_invalidation/src/computed_style_equivalence.rs")
+                && core.contains("layout_invalidation/src/element_data_equivalence.rs"),
             "layout_input must load both invalidation-owned equivalence implementations"
         );
         for leaked_policy in [
@@ -3781,12 +3820,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_managed_input_admission_resolves_to_the_invalidation_owner() {
+    fn managed_input_admission_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_managed_input_admission.rs"),
+            root.join("layout_invalidation/src/managed_input_admission.rs"),
         )
         .expect("read managed-input admission owner");
         for owned_policy in [
@@ -3814,10 +3853,18 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read layout-object tree builder");
         assert!(
-            builder.contains("layout_invalidation/src/native_managed_input_admission.rs")
-                && builder.contains(
-                    "ControlPaintStateChanged, GeometryMetadataEqual, NonStyleInputsEqual, RetainInputStyles"
-                ),
+            builder.contains("layout_invalidation/src/managed_input_admission.rs")
+                && [
+                    "ControlPaintStateChanged",
+                    "GeometryMetadataEqual",
+                    "ImagePaintStateChanged",
+                    "LayoutImageNaturalSizeChangeIsPaintOnly",
+                    "LayoutImageNaturalSizeChanged",
+                    "NonStyleInputsEqual",
+                    "RetainInputStyles",
+                ]
+                .into_iter()
+                .all(|name| builder.contains(name)),
             "layout-object builder must import managed-input admission from invalidation"
         );
         for leaked_policy in [
@@ -3833,22 +3880,21 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_managed_object_update_resolves_to_the_invalidation_owner() {
+    fn managed_object_update_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_managed_object_update.rs"),
-        )
-        .expect("read managed-object update owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/managed_object_update.rs"))
+                .expect("read managed-object update owner");
         for owned_policy in [
             "#[inline(always)]\n    #[allow(clippy::too_many_arguments)]\n    pub(super) fn Create",
             "#[inline(never)]\n#[allow(clippy::too_many_arguments)]\nfn create_managed_object",
             "let same_non_style_inputs",
             "let paint_only",
-            "PrepareNativeStyle(",
+            "PrepareStyle(",
             "PreservePaintOnlyFontBinding",
-            "CreateNativeElementMetadata",
+            "CreateElementMetadata",
             "CreateLayoutObject(",
             "RetainInputStyles",
             "storage.managed.insert",
@@ -3863,7 +3909,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read layout-object tree builder");
         assert!(
-            core.contains("layout_invalidation/src/native_managed_object_update.rs"),
+            core.contains("layout_invalidation/src/managed_object_update.rs"),
             "layout-object builder must load the invalidation-owned managed-object transaction"
         );
         for leaked_policy in [
@@ -3881,14 +3927,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_node_input_state_resolves_to_the_invalidation_owner() {
+    fn node_input_state_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_node_input_state.rs"),
-        )
-        .expect("read retained node-input state owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/node_input_state.rs"))
+                .expect("read retained node-input state owner");
         for owned_policy in [
             "#[inline(never)]\npub(super) fn NewStandaloneNodeData",
             "#[inline(never)]\npub(super) fn UpdateNodeInputData",
@@ -3907,12 +3952,12 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_node_metadata.rs"))
                 .expect("read shared node-metadata schema");
         assert!(
-            core.contains("layout_invalidation/src/native_node_input_state.rs")
+            core.contains("layout_invalidation/src/node_input_state.rs")
                 && core.contains(
-                    "layout_invalidation_native_node_input_state::NewStandaloneNodeData(input)"
+                    "layout_invalidation_node_input_state::NewStandaloneNodeData(input)"
                 )
                 && core.contains(
-                    "layout_invalidation_native_node_input_state::UpdateNodeInputData(self, input)"
+                    "layout_invalidation_node_input_state::UpdateNodeInputData(self, input)"
                 ),
             "node metadata must delegate retained-input construction and replacement to invalidation"
         );
@@ -3929,14 +3974,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_timeline_trigger_metadata_resolves_to_the_invalidation_owner() {
+    fn timeline_trigger_metadata_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_timeline_trigger_metadata.rs"),
+            root.join("layout_invalidation/src/timeline_trigger_metadata.rs"),
         )
-        .expect("read native timeline-trigger metadata owner");
+        .expect("read source timeline-trigger metadata owner");
         for owned_policy in [
             "fn PopulateTimelineTriggerNames",
             "for value in &style.timeline_trigger_names",
@@ -3958,13 +4003,12 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_node_metadata.rs"))
                 .expect("read LayoutNode metadata facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_timeline_trigger_metadata.rs"),
+            facade.contains("layout_invalidation/src/timeline_trigger_metadata.rs"),
             "LayoutNode metadata must load timeline-trigger construction"
         );
-        let input_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_element_metadata_input.rs"),
-        )
-        .expect("read element metadata input owner");
+        let input_owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/element_metadata_input.rs"))
+                .expect("read element metadata input owner");
         assert!(
             input_owner.contains("!style.timeline_trigger_names.is_empty()")
                 && input_owner.contains("PopulateTimelineTriggerNames(&mut element, input)?"),
@@ -3983,14 +4027,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_element_metadata_input_resolves_to_the_invalidation_owner() {
+    fn element_metadata_input_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_element_metadata_input.rs"),
-        )
-        .expect("read element metadata input owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/element_metadata_input.rs"))
+                .expect("read element metadata input owner");
         for owned_policy in [
             "pub fn new(",
             "fn UpdateElementInput",
@@ -4018,7 +4061,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_node_metadata.rs"))
                 .expect("read node metadata compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_element_metadata_input.rs"),
+            loader.contains("layout_invalidation/src/element_metadata_input.rs"),
             "node metadata must load element input policy from layout_invalidation"
         );
         for leaked_policy in [
@@ -4035,13 +4078,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_metadata_append_resolves_to_the_invalidation_owner() {
+    fn metadata_append_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_metadata_append.rs"))
-                .expect("read native metadata append owner");
+            std::fs::read_to_string(root.join("layout_invalidation/src/metadata_append.rs"))
+                .expect("read source metadata append owner");
         for owned_policy in [
             "fn AppendChild",
             "fn DetachForTreeUpdate",
@@ -4065,15 +4108,12 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_node_metadata.rs"))
                 .expect("read LayoutNode metadata facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_metadata_append.rs")
+            facade.contains("layout_invalidation/src/metadata_append.rs")
+                && facade.contains("layout_invalidation_metadata_append::AppendChild(self, child)")
+                && facade
+                    .contains("layout_invalidation_metadata_append::DetachForTreeUpdate(self)")
                 && facade.contains(
-                    "layout_invalidation_native_metadata_append::AppendChild(self, child)"
-                )
-                && facade.contains(
-                    "layout_invalidation_native_metadata_append::DetachForTreeUpdate(self)"
-                )
-                && facade.contains(
-                    "layout_invalidation_native_metadata_append::InsertForTreeUpdate(self, child, before)"
+                    "layout_invalidation_metadata_append::InsertForTreeUpdate(self, child, before)"
                 ),
             "LayoutNode metadata must delegate link mutation to layout_invalidation"
         );
@@ -4090,14 +4130,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_node_metadata_finalize_resolves_to_the_invalidation_owner() {
+    fn node_metadata_finalize_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_node_metadata_finalize.rs"),
-        )
-        .expect("read native metadata-finalization owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/node_metadata_finalize.rs"))
+                .expect("read source metadata-finalization owner");
         for owned_policy in [
             "fn FinalizeTreeRelations",
             "while let Some(node) = pending.pop()",
@@ -4122,9 +4161,9 @@ mod package_contract_tests {
         )
         .expect("read node-metadata input facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_node_metadata_finalize.rs")
+            facade.contains("layout_invalidation/src/node_metadata_finalize.rs")
                 && facade.contains(
-                    "layout_invalidation_native_node_metadata_finalize::FinalizeTreeRelations(root)"
+                    "layout_invalidation_node_metadata_finalize::FinalizeTreeRelations(root)"
                 ),
             "node-metadata input must delegate whole-tree finalization to layout_invalidation"
         );
@@ -4142,14 +4181,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_node_metadata_incremental_relations_resolve_to_the_invalidation_owner() {
+    fn node_metadata_incremental_relations_resolve_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_node_metadata_incremental_relations.rs"),
+            root.join("layout_invalidation/src/node_metadata_incremental_relations.rs"),
         )
-        .expect("read native incremental metadata-relations owner");
+        .expect("read source incremental metadata-relations owner");
         for owned_policy in [
             "fn AttachIncrementalRelations",
             "while distance != 0 && !host.is_null()",
@@ -4174,9 +4213,9 @@ mod package_contract_tests {
         .expect("read node-metadata input facade");
         assert!(
             facade.contains(
-                "layout_invalidation/src/native_node_metadata_incremental_relations.rs"
+                "layout_invalidation/src/node_metadata_incremental_relations.rs"
             ) && facade.contains(
-                "layout_invalidation_native_node_metadata_incremental_relations::AttachIncrementalRelations("
+                "layout_invalidation_node_metadata_incremental_relations::AttachIncrementalRelations("
             ),
             "node-metadata input must delegate incremental relations to layout_invalidation"
         );
@@ -4194,14 +4233,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_node_metadata_tree_query_resolves_to_the_invalidation_owner() {
+    fn node_metadata_tree_query_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_node_metadata_tree.rs"),
-        )
-        .expect("read native node-metadata tree owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/node_metadata_tree.rs"))
+                .expect("read source node-metadata tree owner");
         for owned_policy in [
             "#[inline(never)]",
             "fn parentElement",
@@ -4218,37 +4256,37 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_node_metadata.rs"))
                 .expect("read node-metadata core record");
         assert!(
-            facade.contains("layout_invalidation/src/native_node_metadata_tree.rs")
+            facade.contains("layout_invalidation/src/node_metadata_tree.rs")
                 && !facade.contains("fn parentElement"),
             "node parent-element traversal must load from layout_invalidation"
         );
     }
 
     #[test]
-    fn native_client_traversals_resolve_to_the_commit_owner() {
+    fn client_traversals_resolve_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join("layout_commit/src/native_client_commit.rs"))
-            .expect("read native client commit owner");
+        let owner = std::fs::read_to_string(root.join("layout_commit/src/client_commit.rs"))
+            .expect("read source client commit owner");
         assert!(
             owner.contains("#[inline(never)]")
                 && owner.contains("pub fn commit_paint_client_state")
                 && owner.contains("while !object.is_null()")
-                && owner.contains("unsafe fn refresh_native"),
-            "native client traversals must stay out of line in layout_commit"
+                && owner.contains("unsafe fn refresh_clients"),
+            "source client traversals must stay out of line in layout_commit"
         );
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/paint_client_commit.rs"))
-                .expect("read native client commit adapter");
+                .expect("read source client commit adapter");
         assert!(
             adapter.contains("crate::layout_commit_package::commit_paint_client_state"),
-            "native paint-client entry must delegate to layout_commit"
+            "source paint-client entry must delegate to layout_commit"
         );
         for leaked_policy in [
             "while !object.is_null()",
-            "unsafe fn refresh_native",
+            "unsafe fn refresh_clients",
             "Arc::make_mut",
         ] {
             assert!(
@@ -4259,18 +4297,17 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_engine_paint_commit_resolves_to_the_commit_owner() {
+    fn engine_paint_commit_resolves_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_commit/src/native_engine_paint_commit.rs"))
-                .expect("read native engine paint-commit owner");
+        let owner = std::fs::read_to_string(root.join("layout_commit/src/engine_paint_commit.rs"))
+            .expect("read source engine paint-commit owner");
         for owned_policy in [
-            "struct NativePaintCommit",
+            "struct PaintCommit",
             "impl layout_commit::PaintCommitBackend",
             "fn ValidateAuxiliaryClients",
-            "fn CommitNativeClients",
+            "fn CommitClients",
             "fn CommitPrePaintInputs",
             "fn PublishLayout",
             "CommitPaintClientState",
@@ -4278,24 +4315,23 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_commit native engine backend lost {owned_policy}"
+                "layout_commit source engine backend lost {owned_policy}"
             );
         }
         assert!(
             owner.matches("#[inline(never)]").count() >= 4,
-            "each native Paint commit stage must retain a commit sampling frame"
+            "each source Paint commit stage must retain a commit sampling frame"
         );
 
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_commit/src/native_engine_paint_commit.rs")
-                && adapter
-                    .contains("use layout_commit_native_engine_paint_commit::NativePaintCommit"),
+            adapter.contains("layout_commit/src/engine_paint_commit.rs")
+                && adapter.contains("use layout_commit_engine_paint_commit::PaintCommit"),
             "LayoutEngine must import its concrete Paint backend from layout_commit"
         );
         for leaked_policy in [
-            "impl layout_commit::PaintCommitBackend for NativePaintCommit",
+            "impl layout_commit::PaintCommitBackend for PaintCommit",
             "caret.ValidateForCommittedPaint",
             "tree.CommitPaintClientState",
             ".CommitClients(commit.UsedClients()",
@@ -4308,13 +4344,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_engine_layout_publish_resolves_to_the_commit_owner() {
+    fn engine_layout_publish_resolves_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_commit/src/native_engine_layout_publish.rs"))
-                .expect("read native engine layout-publication owner");
+            std::fs::read_to_string(root.join("layout_commit/src/engine_layout_publish.rs"))
+                .expect("read source engine layout-publication owner");
         for owned_policy in [
             "struct LayoutOutputPreparation",
             "fn begin_layout_output",
@@ -4325,7 +4361,7 @@ mod package_contract_tests {
             "std::mem::take(&mut engine.pre_paint_inputs_)",
             "TracePhase::RunLayoutWithoutPublication",
             "engine.pre_paint_inputs_.invalidate()",
-            "UpdateNativePrePaintInputs",
+            "UpdatePrePaintInputs",
             "TracePhase::CertifyPaintInputs",
             "TracePhase::BuildScrollIndex",
             "ScrollPaintPropertyIndex::new",
@@ -4345,15 +4381,13 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_commit/src/native_engine_layout_publish.rs")
+            adapter.contains("layout_commit/src/engine_layout_publish.rs")
                 && adapter.contains(
-                    "layout_commit_native_engine_layout_publish::begin_layout_output(self, purpose)"
+                    "layout_commit_engine_layout_publish::begin_layout_output(self, purpose)"
                 )
+                && adapter.contains("layout_commit_engine_layout_publish::publish_layout_output")
                 && adapter.contains(
-                    "layout_commit_native_engine_layout_publish::publish_layout_output"
-                )
-                && adapter.contains(
-                    "layout_commit_native_engine_layout_publish::run_layout_without_publication(self)"
+                    "layout_commit_engine_layout_publish::run_layout_without_publication(self)"
                 ),
             "LayoutEngine must delegate successful result publication to layout_commit"
         );
@@ -4362,7 +4396,7 @@ mod package_contract_tests {
             "TracePhase::BuildScrollIndex",
             "self.pending_subtree_layout_id_ = None",
             "std::mem::take(&mut self.pre_paint_inputs_)",
-            "LayoutEngine.RunNativeLayoutWithoutPublication",
+            "LayoutEngine.RunLayoutWithoutPublication",
             "self.fragments = Some(fragments);\n            self.pre_paint_inputs_ = inputs",
         ] {
             assert!(
@@ -4373,34 +4407,34 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_environment_is_shared_pass_orchestration() {
+    fn layout_environment_is_shared_pass_orchestration() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layoutng/src/internal/boundary/native_layout_environment.rs"),
+            root.join("layoutng/src/internal/boundary/layout_environment.rs"),
         )
-        .expect("read native layout environment owner");
+        .expect("read source layout environment owner");
         for owned_policy in [
             "struct InputTextAndImageScopes",
-            "struct NativeLayoutEnvironment",
-            "struct NativeLayoutEnvironmentStorage",
+            "struct LayoutEnvironment",
+            "struct LayoutEnvironmentStorage",
             "FontBinding::new",
             "InputHyphenationResolver::new",
-            "NativeHyphenationResolverScope::new_from_raw",
+            "HyphenationResolverScope::new_from_raw",
             "InputPhraseBreakResolver::new",
-            "NativePhraseBreakResolverScope::new_from_raw",
+            "PhraseBreakResolverScope::new_from_raw",
             "InputTextTransformResolver::new",
-            "NativeTextTransformResolverScope::new_from_raw",
+            "TextTransformResolverScope::new_from_raw",
             "InputShapeImageResolver::new",
-            "NativeShapeImageResolverScope::new_from_raw",
-            "impl LayoutBoundaryEnvironment for NativeLayoutEnvironment",
+            "ShapeImageResolverScope::new_from_raw",
+            "impl LayoutBoundaryEnvironment for LayoutEnvironment",
             "fn ReusesPreparedFonts",
             "fn Commit",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "native layout environment lost {owned_policy}"
+                "source layout environment lost {owned_policy}"
             );
         }
         assert!(
@@ -4410,35 +4444,34 @@ mod package_contract_tests {
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
-                .expect("read native boundary adapter");
+                .expect("read source boundary adapter");
         assert!(
-            adapter.contains("native_layout_environment.rs")
+            adapter.contains("layout_environment.rs")
                 && adapter.contains(
-                    "pub(crate) use layout_boundary_native_layout_environment::NativeLayoutEnvironment"
+                    "pub(crate) use layout_boundary_layout_environment::LayoutEnvironment"
                 ),
-            "native boundary must load and re-export shared pass orchestration"
+            "source boundary must load and re-export shared pass orchestration"
         );
         for leaked_policy in [
             "struct InputTextAndImageScopes",
-            "struct NativeLayoutEnvironmentStorage",
-            "impl LayoutBoundaryEnvironment for NativeLayoutEnvironment",
+            "struct LayoutEnvironmentStorage",
+            "impl LayoutBoundaryEnvironment for LayoutEnvironment",
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
-                "native boundary still owns layout environment policy {leaked_policy}"
+                "source boundary still owns layout environment policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_layout_box_result_commit_resolves_to_the_commit_owner() {
+    fn layout_box_result_commit_resolves_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_commit/src/native_layout_box_result_commit.rs"),
-        )
-        .expect("read native per-box layout-result commit owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_commit/src/layout_box_result_commit.rs"))
+                .expect("read source per-box layout-result commit owner");
         for owned_policy in [
             "fn check_did_add_fragment",
             "fn LayoutBoxSetLayoutResult",
@@ -4464,7 +4497,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox facade");
         assert!(
-            facade.contains("layout_commit/src/native_layout_box_result_commit.rs")
+            facade.contains("layout_commit/src/layout_box_result_commit.rs")
                 && facade.contains("LayoutBoxSetLayoutResult(self, result, index)")
                 && facade.contains("LayoutBoxRebuildFragmentTreeSpine(self)"),
             "LayoutBox must delegate per-box result publication to layout_commit"
@@ -4483,20 +4516,22 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_box_post_layout_resolves_to_the_commit_owner() {
+    fn layout_box_post_layout_resolves_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_commit/src/native_layout_box_post_layout_commit.rs"),
+            root.join("layout_commit/src/layout_box_post_layout_commit.rs"),
         )
         .expect("read LayoutBox post-layout commit owner");
         for owned_policy in [
             "#[inline(never)]",
+            "fn SizeChanged",
             "fn UpdateAfterLayout",
+            "SetScrollableAreaSizeChanged(true)",
             "SetScrollableOverflowFromLayoutResults",
-            "UpdateTransformForLayout",
-            "scrollable_area }.UpdateAfterLayout",
+            "UpdateTransform",
+            "UpdateScrollingAfterLayout",
             "ClearNeedsLayout",
         ] {
             assert!(
@@ -4509,7 +4544,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_layout.rs"))
                 .expect("read LayoutBox layout compatibility module");
         assert!(
-            loader.contains("layout_commit/src/native_layout_box_post_layout_commit.rs")
+            loader.contains("layout_commit/src/layout_box_post_layout_commit.rs")
                 && loader.contains("fn OverrideIntrinsicContentInlineSize")
                 && !loader.contains("fn UpdateAfterLayout"),
             "post-layout publication must load from layout_commit without moving intrinsic-size queries"
@@ -4517,13 +4552,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_post_layout_resolves_to_the_commit_owner() {
+    fn layout_view_post_layout_resolves_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_commit/src/native_layout_view_commit.rs"))
-                .expect("read LayoutView commit owner");
+        let owner = std::fs::read_to_string(root.join("layout_commit/src/layout_view_commit.rs"))
+            .expect("read LayoutView commit owner");
         for owned_policy in [
             "fn UpdateAfterLayout",
             "fn CommitPendingSelection",
@@ -4544,7 +4578,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_view.rs"))
             .expect("read LayoutView compatibility module");
         assert!(
-            loader.contains("layout_commit/src/native_layout_view_commit.rs"),
+            loader.contains("layout_commit/src/layout_view_commit.rs"),
             "LayoutView must load post-layout publication from layout_commit"
         );
         for leaked_policy in [
@@ -4560,13 +4594,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_container_query_sizes_resolve_to_the_commit_owner() {
+    fn container_query_sizes_resolve_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_commit/src/native_container_query_sizes.rs"))
-                .expect("read native container-query size owner");
+            std::fs::read_to_string(root.join("layout_commit/src/container_query_sizes.rs"))
+                .expect("read source container-query size owner");
         for owned_policy in [
             "fn collect_container_query_sizes",
             "LayoutObjectFactoryScope::new",
@@ -4588,9 +4622,9 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_commit/src/native_container_query_sizes.rs")
+            adapter.contains("layout_commit/src/container_query_sizes.rs")
                 && adapter.contains(
-                    "layout_commit_native_container_query_sizes::collect_container_query_sizes(self)"
+                    "layout_commit_container_query_sizes::collect_container_query_sizes(self)"
                 ),
             "LayoutEngine must delegate container-query publication to layout_commit"
         );
@@ -4607,13 +4641,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_output_node_lookup_resolves_to_the_commit_owner() {
+    fn output_node_lookup_resolves_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_commit/src/native_output_node_lookup.rs"))
-                .expect("read native output-node lookup owner");
+        let owner = std::fs::read_to_string(root.join("layout_commit/src/output_node_lookup.rs"))
+            .expect("read source output-node lookup owner");
         for owned_policy in [
             "fn output_node_ptr",
             ".InputKeys(id)",
@@ -4636,10 +4669,9 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read LayoutObjectTree adapter");
         assert!(
-            core.contains("layout_commit/src/native_output_node_lookup.rs")
-                && core.contains("layout_commit_native_output_node_lookup::output_node(self, id)")
-                && core
-                    .contains("layout_commit_native_output_node_lookup::output_node_mut(self, id)"),
+            core.contains("layout_commit/src/output_node_lookup.rs")
+                && core.contains("layout_commit_output_node_lookup::output_node(self, id)")
+                && core.contains("layout_commit_output_node_lookup::output_node_mut(self, id)"),
             "LayoutObjectTree must delegate published object lookup to layout_commit"
         );
         for leaked_policy in [
@@ -4654,14 +4686,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_scroll_offset_snapshot_resolves_to_the_commit_owner() {
+    fn scroll_offset_snapshot_resolves_to_the_commit_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_commit/src/native_scroll_offset_snapshot.rs"),
-        )
-        .expect("read native scroll-offset snapshot owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_commit/src/scroll_offset_snapshot.rs"))
+                .expect("read source scroll-offset snapshot owner");
         for owned_policy in [
             "fn output_scroll_offsets",
             "storage",
@@ -4685,7 +4716,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_builder.rs"))
                 .expect("read LayoutObjectTree adapter");
         assert!(
-            adapter.contains("layout_commit/src/native_scroll_offset_snapshot.rs")
+            adapter.contains("layout_commit/src/scroll_offset_snapshot.rs")
                 && adapter
                     .contains("layout_commit_scroll_offset_snapshot::output_scroll_offsets(self)"),
             "LayoutObjectTree must delegate scroll-offset publication to layout_commit"
@@ -4702,45 +4733,37 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_object_index_traversals_resolve_to_the_fragment_owner() {
+    fn object_index_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_object_index.rs"))
-                .expect("read native fragment object index owner");
+        let owner = std::fs::read_to_string(
+            root.join("layout_fragment/src/layout_boundary_object_index.rs"),
+        )
+        .expect("read source fragment object index owner");
         for owned_policy in [
             "pub(crate) fn ensure_layout_boundary_object_index",
-            "pub(crate) fn mark_uncullable_paint_ancestors",
             "cache.objects.push(object)",
-            "while !ancestor.is_null()",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native object index lost {owned_policy}"
+                "layout_fragment source object index lost {owned_policy}"
             );
         }
         assert!(
-            owner.matches("#[inline(never)]").count() >= 2,
-            "both fragment index traversals must remain visible to sampling profilers"
+            owner.contains("#[inline(never)]"),
+            "fragment indexing must remain visible to sampling profilers"
         );
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
-        let export_state = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_export_state.rs"),
-        )
-        .expect("read fragment export-state adapter");
         assert!(
-            adapter.contains("layout_fragment_native::ensure_layout_boundary_object_index")
-                && export_state
-                    .contains("crate::layout_fragment_native::mark_uncullable_paint_ancestors"),
-            "native object indexing must delegate through fragment-owned adapters"
+            adapter.contains("layout_fragment_object_index::ensure_layout_boundary_object_index"),
+            "source object indexing must delegate through the fragment-owned adapter"
         );
         for leaked_policy in [
             "cache.objects.push(object)",
-            "let escapes_normal_flow =",
             "cache.source_objects = Arc::new(source_objects)",
         ] {
             assert!(
@@ -4751,13 +4774,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_sticky_offset_loop_resolves_to_the_fragment_owner() {
+    fn sticky_offset_loop_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_sticky_offsets.rs"))
-                .expect("read native fragment sticky-offset owner");
+        let owner = std::fs::read_to_string(
+            root.join("layout_fragment/src/paint_layer_scrollable_area_sticky_offsets.rs"),
+        )
+        .expect("read source fragment sticky-offset owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(crate) fn update_sticky_offsets",
@@ -4768,7 +4792,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native sticky-offset loop lost {owned_policy}"
+                "layout_fragment source sticky-offset loop lost {owned_policy}"
             );
         }
 
@@ -4776,8 +4800,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment_native_sticky::update_sticky_offsets"),
-            "fragment boundary must delegate native sticky refresh to layout_fragment"
+            adapter.contains("layout_fragment_sticky_offsets::update_sticky_offsets"),
+            "fragment boundary must delegate source sticky refresh to layout_fragment"
         );
         for leaked_policy in [
             "let constrained_axes = LayoutBoxModelObject::StickyConstrainedAxes",
@@ -4791,13 +4815,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_scroll_refresh_resolves_to_the_fragment_owner() {
+    fn scroll_refresh_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_scroll_refresh.rs"))
-                .expect("read native fragment scroll-refresh owner");
+        let owner = std::fs::read_to_string(
+            root.join("layout_fragment/src/scroll_paint_property_refresh.rs"),
+        )
+        .expect("read source fragment scroll-refresh owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn refresh_scroll_paint_properties",
@@ -4809,7 +4834,16 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native scroll refresh lost {owned_policy}"
+                "layout_fragment source scroll refresh lost {owned_policy}"
+            );
+        }
+        for reconstructed_state in [
+            "scroll.scroll_origin = Offset::default()",
+            "scroll.scroll_position = scroll_offset",
+        ] {
+            assert!(
+                !owner.contains(reconstructed_state),
+                "scroll refresh must consume the retained ScrollableArea, not reconstruct {reconstructed_state}"
             );
         }
 
@@ -4817,9 +4851,10 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter
-                .contains("layout_fragment_native_scroll_refresh::refresh_scroll_paint_properties"),
-            "fragment boundary must delegate native scroll refresh to layout_fragment"
+            adapter.contains(
+                "layout_fragment_scroll_paint_property_refresh::refresh_scroll_paint_properties"
+            ),
+            "fragment boundary must delegate source scroll refresh to layout_fragment"
         );
         for leaked_policy in [
             "old_scroll = fragment.paint.scroll_offset",
@@ -4834,14 +4869,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_scroll_index_resolves_to_the_fragment_owner() {
+    fn scroll_index_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_scroll_paint_property_index.rs"),
+            root.join("layout_fragment/src/scroll_paint_property_index.rs"),
         )
-        .expect("read native fragment scroll-index owner");
+        .expect("read source fragment scroll-index owner");
         for owned_policy in [
             "pub(crate) struct ScrollPaintPropertyIndex",
             "pub(crate) fn new",
@@ -4852,7 +4887,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native scroll index lost {owned_policy}"
+                "layout_fragment source scroll index lost {owned_policy}"
             );
         }
         assert!(
@@ -4864,11 +4899,11 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_scroll_paint_property_index.rs")
+            adapter.contains("layout_fragment/src/scroll_paint_property_index.rs")
                 && adapter.contains(
-                    "layout_fragment_native_scroll_paint_property_index::ScrollPaintPropertyIndex"
+                    "layout_fragment_scroll_paint_property_index::ScrollPaintPropertyIndex"
                 ),
-            "fragment boundary must import its native scroll index from layout_fragment"
+            "fragment boundary must import its source scroll index from layout_fragment"
         );
         assert!(
             !root
@@ -4879,18 +4914,18 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_paint_style_projection_resolves_to_the_fragment_owner() {
+    fn paint_style_projection_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join("layout_fragment/src/native_paint_style.rs"))
-            .expect("read fragment native paint-style owner");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/paint_style_export.rs"))
+            .expect("read fragment source paint-style owner");
         for owned_entry in [
             "pub(crate) fn ExportGeometryStyle",
             "pub(crate) fn ExportStyle",
             "pub(crate) fn ExportStyleWithProjectedSvg",
-            "pub(crate) fn SetResolvedLayoutTransform",
-            "native_clip_path_export.rs",
+            "pub(crate) fn SetResolvedOffsetTransform",
+            "clip_path_paint_export.rs",
         ] {
             assert!(
                 owner.contains(owned_entry),
@@ -4902,18 +4937,18 @@ mod package_contract_tests {
             "fragment paint-style projection entries must remain visible to sampling profilers"
         );
         assert!(
-            root.join("layout_fragment/src/native_clip_path_export.rs")
+            root.join("layout_fragment/src/clip_path_paint_export.rs")
                 .is_file(),
             "clip-path projection must be physically owned by layout_fragment"
         );
 
         let facade = std::fs::read_to_string(
-            root.join("layoutng/src/internal/boundary/native_paint_style.rs"),
+            root.join("layoutng/src/internal/boundary/paint_style_export.rs"),
         )
-        .expect("read native paint-style facade");
+        .expect("read source paint-style facade");
         assert!(
-            facade.contains("layout_fragment/src/native_paint_style.rs")
-                && facade.contains("pub use layout_fragment_native_paint_style::*"),
+            facade.contains("layout_fragment/src/paint_style_export.rs")
+                && facade.contains("pub use layout_fragment_paint_style_export::*"),
             "core paint-style module must be a fragment-owner facade"
         );
         for leaked_policy in ["fn Backgrounds(", "fn Masks(", "fn Transform("] {
@@ -4925,13 +4960,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_paint_input_update_resolves_to_the_fragment_owner() {
+    fn paint_input_update_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let schema =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_paint_input.rs"))
-                .expect("read fragment-owned paint-input schema");
+        let schema = std::fs::read_to_string(root.join("layout_fragment/src/paint_input.rs"))
+            .expect("read fragment-owned paint-input schema");
         for owned_type in [
             "pub struct ClipPathPaint",
             "pub struct PaintShader",
@@ -4947,15 +4981,14 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/paint_input.rs"))
                 .expect("read paint-input compatibility facade");
         assert!(
-            schema_facade.contains("layout_fragment/src/native_paint_input.rs")
-                && schema_facade.contains("pub use layout_fragment_native_paint_input::*;")
+            schema_facade.contains("layout_fragment/src/paint_input.rs")
+                && schema_facade.contains("pub use layout_fragment_paint_input::*;")
                 && !schema_facade.contains("pub struct PaintStyleData"),
             "paint-input schema must be re-exported from layout_fragment"
         );
 
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_paint_input_update.rs"))
-                .expect("read native fragment paint-input owner");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/paint_input_update.rs"))
+            .expect("read source fragment paint-input owner");
         for owned_policy in [
             "pub(super) fn update_paint_style",
             "pub(super) fn paint_input_plan",
@@ -4967,7 +5000,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native paint-input update lost {owned_policy}"
+                "layout_fragment source paint-input update lost {owned_policy}"
             );
         }
         assert!(
@@ -4990,7 +5023,7 @@ mod package_contract_tests {
         }
         for leaked_policy in [
             "svg_clip_resources.snapshot.version != clip_resource_version",
-            "Arc::make_mut(&mut record.effective_style).native_style",
+            "Arc::make_mut(&mut record.effective_style).style",
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
@@ -4998,7 +5031,7 @@ mod package_contract_tests {
             );
         }
         for leaked_policy in [
-            "let native_fields =",
+            "let fields =",
             "metadata_requires_export",
             "node.UpdateInputData(&record.input)",
         ] {
@@ -5010,13 +5043,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_gap_geometry_resolves_to_the_fragment_owner() {
+    fn gap_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_gap_geometry.rs"))
-                .expect("read fragment-owned gap geometry");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/gap_geometry.rs"))
+            .expect("read fragment-owned gap geometry");
         for owned_policy in [
             "pub struct GapGeometry",
             "pub struct GridLanesMainGapSegmentWalker",
@@ -5040,27 +5072,23 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/gap/gap_geometry.rs"))
                 .expect("read gap-geometry compatibility facade");
         assert!(
-            facade.contains("layout_fragment/src/native_gap_geometry.rs")
-                && facade.contains("pub use layout_fragment_native_gap_geometry::*;")
+            facade.contains("layout_fragment/src/gap_geometry.rs")
+                && facade.contains("pub use layout_fragment_gap_geometry::*;")
                 && !facade.contains("fn GenerateIntersectionListForGap"),
             "retained gap geometry must be re-exported from layout_fragment"
         );
 
         for (owner_file, facade_file, owned_type) in [
-            ("native_cross_gap.rs", "cross_gap.rs", "pub struct CrossGap"),
-            ("native_main_gap.rs", "main_gap.rs", "pub struct MainGap"),
+            ("cross_gap.rs", "cross_gap.rs", "pub struct CrossGap"),
+            ("main_gap.rs", "main_gap.rs", "pub struct MainGap"),
             (
-                "native_gap_intersection.rs",
+                "gap_intersection.rs",
                 "gap_intersection.rs",
                 "pub struct GapIntersection",
             ),
+            ("gap_utils.rs", "gap_utils.rs", "pub struct GapSegmentState"),
             (
-                "native_gap_utils.rs",
-                "gap_utils.rs",
-                "pub struct GapSegmentState",
-            ),
-            (
-                "native_gap_decoration_utils.rs",
+                "gap_decoration_utils.rs",
                 "gap_decoration_utils.rs",
                 "pub struct CSSGapDecorationUtils",
             ),
@@ -5076,15 +5104,14 @@ mod package_contract_tests {
                 std::fs::read_to_string(root.join("layoutng/src/internal/gap").join(facade_file))
                     .unwrap_or_else(|_| panic!("read gap companion facade {facade_file}"));
             assert!(
-                compatibility.contains("layout_fragment/src/native_")
-                    && compatibility.contains("pub use layout_fragment_native_")
+                compatibility.contains("layout_fragment/src/")
+                    && compatibility.contains("pub use layout_fragment_")
                     && !compatibility.contains(owned_type),
                 "gap companion {facade_file} must remain a fragment-owner facade"
             );
         }
-        let cross_gap =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_cross_gap.rs"))
-                .expect("read fragment cross-gap owner");
+        let cross_gap = std::fs::read_to_string(root.join("layout_fragment/src/cross_gap.rs"))
+            .expect("read fragment cross-gap owner");
         assert!(
             cross_gap.contains("#[inline(never)]")
                 && cross_gap.contains("fn AdjustGapSegmentStateRangesForFragmentation"),
@@ -5097,10 +5124,9 @@ mod package_contract_tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_retained_paint_refresh.rs"),
-        )
-        .expect("read retained paint-refresh owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/retained_paint_refresh.rs"))
+                .expect("read retained paint-refresh owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn refresh_retained_paint_inputs",
@@ -5108,8 +5134,8 @@ mod package_contract_tests {
             "InvalidateInkOverflow",
             "unsafe fn refresh",
             "ExportPaintProperties",
-            "ExportCanvasBackgroundNative",
-            "ExportGlobalMainThreadScrollFactsNative",
+            "ExportCanvasBackground",
+            "ExportGlobalMainThreadScrollFacts",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -5121,9 +5147,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains(
-                "layout_fragment_native_retained_paint_refresh::refresh_retained_paint_inputs"
-            ),
+            adapter
+                .contains("layout_fragment_retained_paint_refresh::refresh_retained_paint_inputs"),
             "fragment boundary must delegate retained paint refresh to layout_fragment"
         );
         for leaked_policy in [
@@ -5139,25 +5164,24 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_prepaint_input_update_resolves_to_the_fragment_owner() {
+    fn prepaint_input_update_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_prepaint_input_update.rs"),
-        )
-        .expect("read native PrePaint input owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/prepaint_input_update.rs"))
+                .expect("read source PrePaint input owner");
         for owned_policy in [
             "pub(super) fn UpdateFragmentPaintStyle",
-            "pub(super) fn VisitNativePaintInputsMut",
-            "pub(super) fn UpdateNativePrePaintInputs",
+            "pub(super) fn VisitMutablePaintInputs",
+            "pub(super) fn UpdatePrePaintInputs",
             "reference_viewport",
             "FlatPrePaintInput",
             "tracker.update_flat",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native PrePaint input update lost {owned_policy}"
+                "layout_fragment source PrePaint input update lost {owned_policy}"
             );
         }
         assert!(
@@ -5168,14 +5192,14 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_prepaint_input_update.rs")
-                && adapter.contains("layout_fragment_native_prepaint_input_update::{"),
+            adapter.contains("layout_fragment/src/prepaint_input_update.rs")
+                && adapter.contains("layout_fragment_prepaint_input_update::{"),
             "LayoutEngine must import PrePaint updates from layout_fragment"
         );
         for leaked_policy in [
             "fn UpdateFragmentPaintStyle(",
-            "fn VisitNativePaintInputsMut(",
-            "fn UpdateNativePrePaintInputs(",
+            "fn VisitMutablePaintInputs(",
+            "fn UpdatePrePaintInputs(",
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
@@ -5185,42 +5209,47 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_engine_paint_update_resolves_to_the_fragment_owner() {
+    fn engine_paint_update_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_engine_paint_update.rs"))
-                .expect("read native engine paint-update owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/engine_paint_update.rs"))
+                .expect("read source engine paint-update owner");
         for owned_policy in [
-            "trait NativeEnginePaintUpdate",
+            "trait EnginePaintUpdate",
             "fn populate_paint_data",
             "fn refresh_targeted_paint_data",
             "fn refresh_targeted_paint_inputs",
             "fn refresh_scroll_cull_data",
-            "PublishLayoutResult",
+            "fn commit_scroll_origins",
             "RefreshRetainedPaintInputs",
             "ScrollPaintPropertyIndex::new",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native engine paint update lost {owned_policy}"
+                "layout_fragment source engine paint update lost {owned_policy}"
             );
         }
         assert!(
             owner.matches("#[inline(never)]").count() >= 4,
             "paint publication, retained refreshes and CullRect refresh must retain fragment sampling frames"
         );
+        assert!(
+            !owner
+                .rsplit_once("fn refresh_scroll_cull_data")
+                .is_some_and(|(_, body)| body.contains("PublishLayoutResult")),
+            "CullRect refresh must retain the source fragment graph"
+        );
 
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_engine_paint_update.rs")
-                && adapter.contains("NativeEnginePaintUpdate::populate_paint_data(self)")
-                && adapter.contains("NativeEnginePaintUpdate::refresh_targeted_paint_data(self)")
-                && adapter.contains("NativeEnginePaintUpdate::refresh_targeted_paint_inputs(self)")
-                && adapter
-                    .contains("NativeEnginePaintUpdate::refresh_scroll_cull_data(self, fragments)"),
+            adapter.contains("layout_fragment/src/engine_paint_update.rs")
+                && adapter.contains("EnginePaintUpdate::populate_paint_data(self)")
+                && adapter.contains("EnginePaintUpdate::refresh_targeted_paint_data(self)")
+                && adapter.contains("EnginePaintUpdate::refresh_targeted_paint_inputs(self)")
+                && adapter.contains("EnginePaintUpdate::refresh_scroll_cull_data(self, fragments)"),
             "LayoutEngine must delegate paint publication and refresh to layout_fragment"
         );
         for leaked_policy in [
@@ -5232,22 +5261,22 @@ mod package_contract_tests {
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
-                "LayoutEngine still owns native paint-update policy {leaked_policy}"
+                "LayoutEngine still owns source paint-update policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_layout_paint_output_traversals_resolve_to_the_fragment_owner() {
+    fn layout_paint_output_traversals_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_layout_paint_output.rs"))
-                .expect("read native LayoutPaintOutput traversal owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_paint_output.rs"))
+                .expect("read source LayoutPaintOutput traversal owner");
         for owned_policy in [
             "fn paint_cull_rect_has_scrolled_enough",
-            "fn changed(cursor: NativePaintFragmentCursor",
+            "fn changed(cursor: PaintFragmentCursor",
             "fn visit_paint_inputs_mut",
             "unsafe fn visit(",
             "paint_cull_scroll_offset",
@@ -5266,18 +5295,16 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutPaintOutput adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_layout_paint_output.rs")
+            adapter.contains("layout_fragment/src/layout_paint_output.rs")
                 && adapter.contains(
-                    "layout_fragment_native_layout_paint_output::paint_cull_rect_has_scrolled_enough"
+                    "layout_fragment_layout_paint_output::paint_cull_rect_has_scrolled_enough"
                 )
-                && adapter.contains(
-                    "layout_fragment_native_layout_paint_output::visit_paint_inputs_mut"
-                ),
+                && adapter.contains("layout_fragment_layout_paint_output::visit_paint_inputs_mut"),
             "LayoutPaintOutput must delegate fragment traversals to layout_fragment"
         );
         for leaked_policy in [
             "const CHANGED_ENOUGH_DISTANCE",
-            "unsafe fn visit(\n            cursor: NativePaintFragmentCursor",
+            "unsafe fn visit(\n            cursor: PaintFragmentCursor",
             "cursor.PaintDataMut()",
         ] {
             assert!(
@@ -5288,17 +5315,16 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_cursor_children_resolve_to_the_fragment_owner() {
+    fn fragment_cursor_children_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_cursor_children.rs"),
-        )
-        .expect("read native fragment cursor child owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_cursor_children.rs"))
+                .expect("read source fragment cursor child owner");
         for owned_policy in [
-            "fn native_paint_fragment_children",
-            "fn native_fragment_children",
+            "fn paint_fragment_children",
+            "fn fragment_children",
             "fn append_svg_children",
             "fn append_box_children",
             "SlowFirstChild",
@@ -5313,20 +5339,19 @@ mod package_contract_tests {
         }
         assert!(
             owner.matches("#[inline(never)]").count() >= 4,
-            "paint/native cursor entries and child expansion stages must retain fragment sampling frames"
+            "paint/source cursor entries and child expansion stages must retain fragment sampling frames"
         );
 
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_output.rs"))
-            .expect("read native fragment cursor adapter");
+            .expect("read source fragment cursor adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_fragment_cursor_children.rs")
+            adapter.contains("layout_fragment/src/fragment_cursor_children.rs")
+                && adapter
+                    .contains("layout_fragment_fragment_cursor_children::fragment_children(self)")
                 && adapter.contains(
-                    "layout_fragment_native_fragment_cursor_children::native_fragment_children(self)"
-                )
-                && adapter.contains(
-                    "layout_fragment_native_fragment_cursor_children::native_paint_fragment_children(self)"
+                    "layout_fragment_fragment_cursor_children::paint_fragment_children(self)"
                 ),
-            "NativeFragmentCursor must delegate child expansion to layout_fragment"
+            "FragmentCursor must delegate child expansion to layout_fragment"
         );
         for leaked_policy in [
             "fn append_svg_children",
@@ -5342,14 +5367,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_tree_traversal_utils_resolve_to_the_fragment_owner() {
+    fn tree_traversal_utils_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_tree_traversal_utils.rs"),
-        )
-        .expect("read native fragment traversal owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/tree_traversal_utils.rs"))
+                .expect("read source fragment traversal owner");
         for owned_policy in [
             "trait PhysicalFragmentTraversalListener",
             "fn HandleBoxFragment",
@@ -5361,7 +5385,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native traversal lost {owned_policy}"
+                "layout_fragment source traversal lost {owned_policy}"
             );
         }
         assert!(
@@ -5371,10 +5395,10 @@ mod package_contract_tests {
 
         let facade =
             std::fs::read_to_string(root.join("layoutng/src/internal/tree_traversal_utils.rs"))
-                .expect("read native fragment traversal facade");
+                .expect("read source fragment traversal facade");
         assert!(
-            facade.contains("layout_fragment/src/native_tree_traversal_utils.rs")
-                && facade.contains("pub use layout_fragment_native_tree_traversal_utils::*"),
+            facade.contains("layout_fragment/src/tree_traversal_utils.rs")
+                && facade.contains("pub use layout_fragment_tree_traversal_utils::*"),
             "core traversal module must re-export the layout_fragment owner"
         );
         for leaked_policy in [
@@ -5391,14 +5415,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_pagination_fragment_utils_resolve_to_the_fragment_owner() {
+    fn pagination_fragment_utils_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_pagination_fragment_utils.rs"),
-        )
-        .expect("read native pagination fragment owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/pagination_fragment_utils.rs"))
+                .expect("read source pagination fragment owner");
         for owned_policy in [
             "fn GetPageBorderBoxLink",
             "fn GetPageBorderBox",
@@ -5423,8 +5446,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/pagination_utils.rs"))
                 .expect("read pagination fragment facade");
         assert!(
-            facade.contains("layout_fragment/src/native_pagination_fragment_utils.rs")
-                && facade.contains("pub use layout_fragment_native_pagination_fragment_utils::*"),
+            facade.contains("layout_fragment/src/pagination_fragment_utils.rs")
+                && facade.contains("pub use layout_fragment_pagination_fragment_utils::*"),
             "core pagination module must re-export the layout_fragment owner"
         );
         for leaked_policy in [
@@ -5441,14 +5464,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_box_location_update_resolves_to_the_fragment_owner() {
+    fn layout_box_location_update_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_box_location_update.rs"),
-        )
-        .expect("read native box-location owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_box_location_update.rs"))
+                .expect("read source box-location owner");
         for owned_policy in [
             "struct OutOfFlowDescendant",
             "fn SetChildLocation",
@@ -5471,10 +5493,10 @@ mod package_contract_tests {
 
         let facade =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_utils.rs"))
-                .expect("read native box-location facade");
+                .expect("read source box-location facade");
         assert!(
-            facade.contains("layout_fragment/src/native_layout_box_location_update.rs")
-                && facade.contains("pub use layout_fragment_native_layout_box_location_update::*"),
+            facade.contains("layout_fragment/src/layout_box_location_update.rs")
+                && facade.contains("pub use layout_fragment_layout_box_location_update::*"),
             "core box-location module must re-export the layout_fragment owner"
         );
         for leaked_policy in [
@@ -5491,14 +5513,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_scrollable_overflow_recalc_resolves_to_the_fragment_owner() {
+    fn scrollable_overflow_recalc_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_scrollable_overflow_recalc.rs"),
-        )
-        .expect("read native scrollable-overflow owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/scrollable_overflow_recalc.rs"))
+                .expect("read source scrollable-overflow owner");
         for owned_policy in [
             "fn RecalcFragmentChildren",
             "fn LayoutBoxRecalcScrollableOverflowNG",
@@ -5522,7 +5543,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_core_services.rs"))
                 .expect("read LayoutBox core-services facade");
         assert!(
-            facade.contains("layout_fragment/src/native_scrollable_overflow_recalc.rs")
+            facade.contains("layout_fragment/src/scrollable_overflow_recalc.rs")
                 && facade.contains("LayoutBoxRecalcChildScrollableOverflowNG")
                 && facade.contains("LayoutBoxRecalcScrollableOverflowNG"),
             "LayoutBox core services must re-export overflow recalc from layout_fragment"
@@ -5541,14 +5562,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_scrollable_overflow_calculation_resolves_to_the_fragment_owner() {
+    fn scrollable_overflow_calculation_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_scrollable_overflow_calculation.rs"),
+            root.join("layout_fragment/src/scrollable_overflow_calculation.rs"),
         )
-        .expect("read native scrollable-overflow calculation owner");
+        .expect("read source scrollable-overflow calculation owner");
         for owned_policy in [
             "fn RecalculateScrollableOverflowForFragment",
             "fn AddItemsInternal",
@@ -5569,7 +5590,7 @@ mod package_contract_tests {
         );
 
         let calculator = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_scrollable_overflow_calculator.rs"),
+            root.join("layout_fragment/src/scrollable_overflow_calculator.rs"),
         )
         .expect("read fragment-owned scrollable-overflow calculator");
         for owned_policy in [
@@ -5579,7 +5600,7 @@ mod package_contract_tests {
             "fn AddBuilderItems",
             "fn AddFragmentItems",
             "fn AdjustOverflowForScrollOrigin",
-            "#[path = \"native_scrollable_overflow_calculation.rs\"]",
+            "#[path = \"scrollable_overflow_calculation.rs\"]",
         ] {
             assert!(
                 calculator.contains(owned_policy),
@@ -5592,9 +5613,8 @@ mod package_contract_tests {
         )
         .expect("read scrollable-overflow calculator facade");
         assert!(
-            facade.contains("layout_fragment/src/native_scrollable_overflow_calculator.rs")
-                && facade
-                    .contains("pub use layout_fragment_native_scrollable_overflow_calculator::*;")
+            facade.contains("layout_fragment/src/scrollable_overflow_calculator.rs")
+                && facade.contains("pub use layout_fragment_scrollable_overflow_calculator::*;")
                 && !facade.contains("pub struct ScrollableOverflowCalculator"),
             "scrollable-overflow calculator must be re-exported from layout_fragment"
         );
@@ -5612,14 +5632,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_sticky_constraints_resolve_to_the_fragment_owner() {
+    fn sticky_constraints_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let geometry_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_sticky_constraints.rs"),
-        )
-        .expect("read native sticky-constraint geometry owner");
+        let geometry_owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_sticky_constraints.rs"))
+                .expect("read source sticky-constraint geometry owner");
         for owned_policy in [
             "fn MapRectToAncestorIgnoringPaintGeometry",
             "fn ComputeStickyPositionConstraintsForLayout",
@@ -5639,9 +5658,9 @@ mod package_contract_tests {
         );
 
         let data_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_sticky_position_scrolling_constraints.rs"),
+            root.join("layout_fragment/src/sticky_position_scrolling_constraints.rs"),
         )
-        .expect("read native sticky scrolling-constraint data owner");
+        .expect("read source sticky scrolling-constraint data owner");
         for owned_policy in [
             "pub struct PerAxisData",
             "fn ComputeOffset",
@@ -5663,15 +5682,13 @@ mod package_contract_tests {
         )
         .expect("read sticky constraint-data facade");
         assert!(
-            geometry_facade.contains("layout_fragment/src/native_layout_sticky_constraints.rs")
+            geometry_facade.contains("layout_fragment/src/layout_sticky_constraints.rs")
                 && geometry_facade
-                    .contains("pub use layout_fragment_native_layout_sticky_constraints::*;")
-                && data_facade.contains(
-                    "layout_fragment/src/native_sticky_position_scrolling_constraints.rs"
-                )
-                && data_facade.contains(
-                    "pub use layout_fragment_native_sticky_position_scrolling_constraints::*;"
-                ),
+                    .contains("pub use layout_fragment_layout_sticky_constraints::*;")
+                && data_facade
+                    .contains("layout_fragment/src/sticky_position_scrolling_constraints.rs")
+                && data_facade
+                    .contains("pub use layout_fragment_sticky_position_scrolling_constraints::*;"),
             "sticky geometry and data must be re-exported from layout_fragment"
         );
         for leaked_policy in [
@@ -5687,14 +5704,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_box_scrollbars_resolve_to_the_sizing_owner() {
+    fn layout_box_scrollbars_resolve_to_the_sizing_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_algo_sizing/src/native_layout_box_scrollbars.rs"),
-        )
-        .expect("read native LayoutBox scrollbar owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_algo_sizing/src/layout_box_scrollbars.rs"))
+                .expect("read source LayoutBox scrollbar owner");
         for owned_policy in [
             "fn HypotheticalScrollbarThickness",
             "fn CanSkipComputeScrollbars",
@@ -5717,8 +5733,8 @@ mod package_contract_tests {
         );
 
         let custom_owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_custom_scrollbar.rs"))
-                .expect("read native custom scrollbar owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/custom_scrollbar.rs"))
+                .expect("read source custom scrollbar owner");
         for owned_policy in [
             "pub struct CustomScrollbar",
             "fn SetPartStyle",
@@ -5738,8 +5754,8 @@ mod package_contract_tests {
             "custom scrollbar part allocation/style mutation must retain a fragment sampling frame"
         );
         let part_identity =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_scrollbar_part.rs"))
-                .expect("read native scrollbar-part identity owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/scrollbar_part.rs"))
+                .expect("read source scrollbar-part identity owner");
         assert!(
             part_identity.contains("pub enum ScrollbarPart")
                 && part_identity.contains("kAllParts = 0xffff_ffff")
@@ -5748,9 +5764,9 @@ mod package_contract_tests {
             "scrollbar-part identity must stay inlineable in layout_fragment"
         );
         let custom_part_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_custom_scrollbar_part.rs"),
+            root.join("layout_fragment/src/layout_custom_scrollbar_part.rs"),
         )
-        .expect("read native custom scrollbar part owner");
+        .expect("read source custom scrollbar part owner");
         for owned_policy in [
             "pub struct LayoutCustomScrollbarPart",
             "fn compute_size",
@@ -5771,7 +5787,7 @@ mod package_contract_tests {
         )
         .expect("read LayoutBox scrollbar compatibility loader");
         assert!(
-            loader.contains("layout_algo_sizing/src/native_layout_box_scrollbars.rs"),
+            loader.contains("layout_algo_sizing/src/layout_box_scrollbars.rs"),
             "LayoutBox scrollbar compatibility module must load its sizing owner"
         );
         let custom_facade =
@@ -5785,18 +5801,17 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/scrollbar_part.rs"))
                 .expect("read scrollbar-part identity facade");
         assert!(
-            custom_facade.contains("layout_fragment/src/native_custom_scrollbar.rs")
-                && custom_facade.contains("pub use layout_fragment_native_custom_scrollbar::*;")
+            custom_facade.contains("layout_fragment/src/custom_scrollbar.rs")
+                && custom_facade.contains("pub use layout_fragment_custom_scrollbar::*;")
                 && custom_part_facade
-                    .contains("layout_fragment/src/native_layout_custom_scrollbar_part.rs")
+                    .contains("layout_fragment/src/layout_custom_scrollbar_part.rs")
                 && custom_part_facade
-                    .contains("pub use layout_fragment_native_layout_custom_scrollbar_part::*;"),
+                    .contains("pub use layout_fragment_layout_custom_scrollbar_part::*;"),
             "custom scrollbar facades must re-export their fragment owners"
         );
         assert!(
-            part_identity_facade.contains("layout_fragment/src/native_scrollbar_part.rs")
-                && part_identity_facade
-                    .contains("pub use layout_fragment_native_scrollbar_part::*")
+            part_identity_facade.contains("layout_fragment/src/scrollbar_part.rs")
+                && part_identity_facade.contains("pub use layout_fragment_scrollbar_part::*")
                 && !part_identity_facade.contains("pub enum ScrollbarPart"),
             "scrollbar-part identity must be re-exported from layout_fragment"
         );
@@ -5823,14 +5838,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_scrollable_area_resolves_to_the_fragment_owner() {
+    fn scrollable_area_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let area_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_scrollable_area.rs"),
+            root.join("layout_fragment/src/paint_layer_scrollable_area.rs"),
         )
-        .expect("read native scrollable-area owner");
+        .expect("read source scrollable-area owner");
         for owned_policy in [
             "pub struct PaintLayerScrollableArea",
             "fn ComputeScrollbarExistence",
@@ -5839,33 +5854,58 @@ mod package_contract_tests {
             "fn UpdateScrollDimensions",
             "fn SetHasHorizontalScrollbar",
             "fn SetHasVerticalScrollbar",
+            "fn SetHasHorizontalScrollbarInManager",
+            "fn SetHasVerticalScrollbarInManager",
+            "fn DestroyDetachedScrollbars",
+            "fn DestroyScrollbar",
+            "fn ShouldAvoidHidingOverlayScrollbars",
+            "fn ShouldSupplyScrollbarsForVisualViewport",
+            "fn DidUpdateVisualViewport",
+            "fn IsScrollCornerVisible",
+            "fn ScrollbarFrameRectChanged",
+            "fn ScrollbarOffset",
+            "fn PositionOverflowControlsForPrePaint",
+            "fn UsedColorSchemeScrollbarsChanged",
+            "fn ScrollbarsHiddenIfOverlay",
+            "fn SetScrollbarsHiddenIfOverlayFromOwner",
         ] {
             assert!(
                 area_owner.contains(owned_policy),
                 "layout_fragment scrollable area lost {owned_policy}"
             );
         }
+        assert!(
+            area_owner.contains("if self.has_horizontal_scrollbar_")
+                && area_owner.contains("if self.has_vertical_scrollbar_")
+                && area_owner.contains("DelayScrollOffsetClampScope::ClampingIsDelayed()")
+                && area_owner.contains("self.DestroyDetachedScrollbars();")
+                && area_owner.contains("SetOnlyThisNeedsPaintPropertyUpdate"),
+            "scrollbar manager must hide detached bars, retain them during delayed clamp, and destroy them at the clamp boundary"
+        );
 
         let identity_owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_scrollbar_identity.rs"))
-                .expect("read native scrollbar client identity owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/scrollbar_identity.rs"))
+                .expect("read source scrollbar client identity owner");
         for owned_policy in [
             "pub struct Scrollbar",
             "pub struct ScrollCornerDisplayItemClient",
             "DisplayItemClient",
             "fn DisconnectFromScrollableArea",
+            "fn StyleChanged",
+            "fn ShouldParticipateInHitTesting",
             "impl Traceable for Scrollbar",
             "impl Traceable for ScrollCornerDisplayItemClient",
         ] {
             assert!(
                 identity_owner.contains(owned_policy),
-                "layout_fragment native scrollbar identity lost {owned_policy}"
+                "layout_fragment source scrollbar identity lost {owned_policy}"
             );
         }
 
-        let scope_owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_scroll_layout_scope.rs"))
-                .expect("read native scroll-layout scope owner");
+        let scope_owner = std::fs::read_to_string(
+            root.join("layout_fragment/src/paint_layer_scrollable_area_scope.rs"),
+        )
+        .expect("read source scroll-layout scope owner");
         for owned_policy in [
             "pub struct FreezeScrollbarsScope",
             "pub struct FreezeScrollbarsRootScope",
@@ -5884,15 +5924,14 @@ mod package_contract_tests {
         );
 
         let model_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_box_model_scrollable_area.rs"),
+            root.join("layout_fragment/src/layout_box_model_scrollable_area.rs"),
         )
         .expect("read LayoutBoxModelObject scrollable-area owner");
         for owned_policy in [
-            "fn UpdateScrollableAreaForLayout",
-            "fn DisposeScrollableAreaForLayout",
+            "fn CreateScrollableAreaForPaintLayer",
+            "fn DisposeScrollableAreaForPaintLayer",
             "PaintLayerScrollableArea::new",
-            "IsScrollContainer",
-            "IsOverscrollContainer",
+            "InitializeScrollingBackgroundDisplayItemClient",
         ] {
             assert!(
                 model_owner.contains(owned_policy),
@@ -5904,6 +5943,25 @@ mod package_contract_tests {
             "scrollable-area admission and disposal must retain fragment sampling frames"
         );
 
+        let paint_layer_owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/paint_layer.rs"))
+                .expect("read PaintLayer owner");
+        for owned_policy in [
+            "fn RequiresScrollableArea",
+            "fn UpdateScrollableArea",
+            "fn UpdateScrollingAfterLayout",
+            "IsScrollContainer",
+            "IsOverscrollContainer",
+            "CanResize",
+            "CreateScrollableAreaForPaintLayer",
+            "DisposeScrollableAreaForPaintLayer",
+        ] {
+            assert!(
+                paint_layer_owner.contains(owned_policy),
+                "PaintLayer scrollable-area lifecycle lost {owned_policy}"
+            );
+        }
+
         let area_facade =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_scrollable_area.rs"))
                 .expect("read scrollable-area facade");
@@ -5911,26 +5969,26 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/scroll_layout_scope.rs"))
                 .expect("read scroll-layout scope facade");
         let identity_facade =
-            std::fs::read_to_string(root.join("layoutng/src/internal/native_scrollbar.rs"))
-                .expect("read native scrollbar identity facade");
+            std::fs::read_to_string(root.join("layoutng/src/internal/scrollbar.rs"))
+                .expect("read source scrollbar identity facade");
         assert!(
-            area_facade.contains("layout_fragment/src/native_layout_scrollable_area.rs")
-                && area_facade
-                    .contains("pub use layout_fragment_native_layout_scrollable_area::*;")
-                && scope_facade.contains("layout_fragment/src/native_scroll_layout_scope.rs")
-                && scope_facade.contains("pub use layout_fragment_native_scroll_layout_scope::*;")
-                && identity_facade.contains("layout_fragment/src/native_scrollbar_identity.rs")
-                && identity_facade
-                    .contains("pub use layout_fragment_native_scrollbar_identity::*;"),
+            area_facade.contains("layout_fragment/src/paint_layer_scrollable_area.rs")
+                && area_facade.contains("pub use layout_fragment_paint_layer_scrollable_area::*;")
+                && scope_facade
+                    .contains("layout_fragment/src/paint_layer_scrollable_area_scope.rs")
+                && scope_facade
+                    .contains("pub use layout_fragment_paint_layer_scrollable_area_scope::*;")
+                && identity_facade.contains("layout_fragment/src/scrollbar_identity.rs")
+                && identity_facade.contains("pub use layout_fragment_scrollbar_identity::*;"),
             "scrollable area, scopes, and client identity must be re-exported from layout_fragment"
         );
         let model_loader =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_model_object.rs"))
                 .expect("read LayoutBoxModelObject loader");
         assert!(
-            model_loader.contains("layout_fragment/src/native_layout_box_model_scrollable_area.rs")
-                && !model_loader.contains("fn UpdateScrollableAreaForLayout")
-                && !model_loader.contains("fn DisposeScrollableAreaForLayout"),
+            model_loader.contains("layout_fragment/src/layout_box_model_scrollable_area.rs")
+                && !model_loader.contains("fn CreateScrollableAreaForPaintLayer")
+                && !model_loader.contains("fn DisposeScrollableAreaForPaintLayer"),
             "LayoutBoxModelObject must load scrollable-area lifecycle from layout_fragment"
         );
         for leaked_policy in [
@@ -5949,14 +6007,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_motion_path_geometry_resolves_to_the_fragment_owner() {
+    fn motion_path_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let geometry = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_motion_path_geometry.rs"),
+            root.join("layout_fragment/src/motion_path_geometry_helpers.rs"),
         )
-        .expect("read native motion-path geometry owner");
+        .expect("read source motion-path geometry owner");
         for owned_policy in [
             "fn MotionPathLength",
             "fn MotionPathPointAndTangentAtLength",
@@ -5977,9 +6035,9 @@ mod package_contract_tests {
         );
 
         let projection = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_motion_path_projection.rs"),
+            root.join("layout_fragment/src/motion_path_shape_projection.rs"),
         )
-        .expect("read native motion-path projection owner");
+        .expect("read source motion-path projection owner");
         for owned_policy in [
             "fn circle_radius",
             "fn ellipse_path",
@@ -5987,7 +6045,7 @@ mod package_contract_tests {
             "fn basic_shape_path",
             "fn resolved_sample",
             "fn PointAndTangentForShape",
-            "#[path = \"native_motion_path_geometry.rs\"]",
+            "#[path = \"motion_path_geometry_helpers.rs\"]",
         ] {
             assert!(
                 projection.contains(owned_policy),
@@ -6003,9 +6061,9 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/motion_path_geometry.rs"))
                 .expect("read motion-path geometry facade");
         assert!(
-            facade.contains("layout_fragment/src/native_motion_path_projection.rs")
+            facade.contains("layout_fragment/src/motion_path_shape_projection.rs")
                 && facade
-                    .contains("pub(crate) use layout_fragment_native_motion_path_projection::*;")
+                    .contains("pub(crate) use layout_fragment_motion_path_shape_projection::*;")
                 && !facade.contains("fn PointAndTangentForShape"),
             "motion-path projection must be re-exported from layout_fragment"
         );
@@ -6023,13 +6081,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_transform_geometry_resolves_to_the_fragment_owner() {
+    fn transform_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_transform_utils.rs"))
-                .expect("read native transform-geometry owner");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/transform_utils.rs"))
+            .expect("read source transform-geometry owner");
         for owned_policy in [
             "impl MotionPathBox for LayoutBox",
             "fn ComputeReferenceBoxInternal",
@@ -6051,17 +6108,17 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/transform_utils.rs"))
             .expect("read transform-geometry facade");
         assert!(
-            facade.contains("layout_fragment/src/native_transform_utils.rs")
-                && facade.contains("pub use layout_fragment_native_transform_utils::*;")
+            facade.contains("layout_fragment/src/transform_utils.rs")
+                && facade.contains("pub use layout_fragment_transform_utils::*;")
                 && !facade.contains("fn UpdateTransformState"),
             "transform geometry must be re-exported from layout_fragment"
         );
 
         let retained =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_layout_transform.rs"))
+            std::fs::read_to_string(root.join("layout_fragment/src/paint_layer_transform.rs"))
                 .expect("read retained layout-transform owner");
         for owned_policy in [
-            "fn UpdateTransformForLayout",
+            "fn UpdateTransform",
             "fn GetTransformFromContainer",
             "fn NearestAncestorForElement",
             "fn PerspectiveOrigin",
@@ -6080,21 +6137,22 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_transform.rs"))
                 .expect("read retained layout-transform facade");
         assert!(
-            retained_facade.contains("layout_fragment/src/native_layout_transform.rs")
-                && retained_facade.contains("pub use layout_fragment_native_layout_transform::*;")
+            retained_facade.contains("layout_fragment/src/paint_layer_transform.rs")
+                && retained_facade.contains("pub use layout_fragment_paint_layer_transform::*;")
                 && !retained_facade.contains("fn GetTransformFromContainer"),
             "retained layout transforms must be re-exported from layout_fragment"
         );
     }
 
     #[test]
-    fn native_client_rects_resolve_to_the_fragment_owner() {
+    fn client_rects_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_client_rects.rs"))
-                .expect("read native client-rect owner");
+        let owner = std::fs::read_to_string(
+            root.join("layout_fragment/src/fragment_client_rect_queries.rs"),
+        )
+        .expect("read source client-rect owner");
         for owned_policy in [
             "fn find_path",
             "fn visit<'a>",
@@ -6117,10 +6175,11 @@ mod package_contract_tests {
         );
 
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_output.rs"))
-            .expect("read native client-rect adapter");
+            .expect("read source client-rect adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_client_rects.rs")
-                && adapter.contains("layout_fragment_native_client_rects::client_rects(self)"),
+            adapter.contains("layout_fragment/src/fragment_client_rect_queries.rs")
+                && adapter
+                    .contains("layout_fragment_fragment_client_rect_queries::client_rects(self)"),
             "LayoutNode must delegate client-rect queries to layout_fragment"
         );
         for leaked_policy in [
@@ -6138,14 +6197,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_inline_client_geometry_resolves_to_the_fragment_owner() {
+    fn inline_client_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_inline_client_geometry.rs"),
-        )
-        .expect("read native inline client-geometry owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/inline_client_geometry.rs"))
+                .expect("read source inline client-geometry owner");
         for owned_policy in [
             "pub(crate) struct InlineClientGeometry",
             "pub(crate) fn LayoutInlineClientRectsInContainers",
@@ -6165,18 +6223,17 @@ mod package_contract_tests {
             "inline client-geometry enumeration must retain a fragment sampling frame"
         );
 
-        let adapter = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "inline/src/native_layout_inline.rs"
-        )))
+        let adapter = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "inline/src/layout_inline.rs")),
+        )
         .expect("read LayoutInline owner");
         assert!(
-            adapter.contains("layout_fragment/src/native_inline_client_geometry.rs")
+            adapter.contains("layout_fragment/src/inline_client_geometry.rs")
                 && adapter.contains("LayoutInlineClientRectsInContainers(self)"),
             "LayoutInline must delegate client geometry to layout_fragment"
         );
         for leaked_policy in [
-            "MoveToIncludingCulledInline(native)",
+            "MoveToIncludingCulledInline(source)",
             "IsInlineRubyText()",
             "CurrentRectInFirstContainerFragment()",
             "MoveToNextForSameLayoutObject()",
@@ -6189,26 +6246,22 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_inline.rs"))
             .expect("read LayoutInline compatibility facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "inline/src/native_layout_inline.rs"
-            )) && facade.contains(concat!(
-                "pub use layout_algo_",
-                "inline_native_layout_inline::*;"
-            )) && !facade.contains("pub struct LayoutInline"),
+            facade.contains(concat!("layout_algo_", "inline/src/layout_inline.rs"))
+                && facade.contains(concat!("pub use layout_algo_", "inline_layout_inline::*;"))
+                && !facade.contains("pub struct LayoutInline"),
             "LayoutInline must be re-exported from the inline algorithm owner"
         );
     }
 
     #[test]
-    fn native_layout_box_geometry_resolves_to_the_fragment_owner() {
+    fn layout_box_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_box_fragment_geometry.rs"),
+            root.join("layout_fragment/src/layout_box_fragment_geometry.rs"),
         )
-        .expect("read native LayoutBox fragment-geometry owner");
+        .expect("read source LayoutBox fragment-geometry owner");
         for owned_policy in [
             "fn LayoutBoxLocationContainer",
             "fn LayoutBoxFindPreviousBreakToken",
@@ -6244,7 +6297,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox facade");
         assert!(
-            facade.contains("layout_fragment/src/native_layout_box_fragment_geometry.rs")
+            facade.contains("layout_fragment/src/layout_box_fragment_geometry.rs")
                 && facade.contains("LayoutBoxLocationContainer(self)")
                 && facade.contains("LayoutBoxFindPreviousBreakToken(fragment)")
                 && facade.contains("LayoutBoxStitchedBlockSize(self)")
@@ -6274,15 +6327,49 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_column_spanner_admission_resolves_to_the_block_algorithm_owner() {
+    fn layout_box_background_resolves_to_the_fragment_owner() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("layoutng package root");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_box_background.rs"))
+                .expect("read source LayoutBox background owner");
+        for owned_policy in [
+            "fn LayoutBoxPhysicalBackgroundRectProvider",
+            "fn LayoutBoxBackgroundPaintedExtentProvider",
+            "fn LayoutBoxBackgroundIsKnownToBeOpaqueInRectProvider",
+            "fn LayoutBoxForegroundIsKnownToBeOpaqueInRectProvider",
+            "fn LayoutBoxComputeBackgroundIsKnownToBeObscuredProvider",
+            "fn LayoutBoxIntersectsVisibleViewportProvider",
+            "fn LayoutBoxEnsureIsReadyForPaintInvalidationProvider",
+            "fn LayoutBoxBackgroundClipBorderBoxIsEquivalentToPaddingBoxProvider",
+            "KnownToBeOpaque(style)",
+            "EnsureIsReadyForPaintInvalidationBase",
+        ] {
+            assert!(
+                owner.contains(owned_policy),
+                "layout_fragment LayoutBox background lost {owned_policy}"
+            );
+        }
+
+        let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
+            .expect("read LayoutBox facade");
+        assert!(
+            facade.contains("layout_fragment/src/layout_box_background.rs"),
+            "LayoutBox must load background/obscuration policy from layout_fragment"
+        );
+    }
+
+    #[test]
+    fn column_spanner_admission_resolves_to_the_block_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "block/src/native_column_spanner_admission.rs"
+            "block/src/column_spanner_admission.rs"
         )))
-        .expect("read native block column-spanner owner");
+        .expect("read source block column-spanner owner");
         for owned_policy in [
             "fn LayoutBoxIsValidColumnSpannerInTree",
             "fn LayoutBoxIsSelfValidColumnSpanner",
@@ -6309,7 +6396,7 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "block/src/native_column_spanner_admission.rs"
+                "block/src/column_spanner_admission.rs"
             )) && facade.contains("LayoutBoxIsValidColumnSpannerInTree(self, style)")
                 && facade.contains("LayoutBoxIsSelfValidColumnSpanner(self, style)")
                 && facade.contains("LayoutBoxDoesAncestryAllowColumnSpanner(self)")
@@ -6328,10 +6415,9 @@ mod package_contract_tests {
             );
         }
 
-        let path_owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "block/src/native_column_spanner_path.rs"
-        )))
+        let path_owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "block/src/column_spanner_path.rs")),
+        )
         .expect("read block column-spanner path owner");
         assert!(
             path_owner.contains("pub struct ColumnSpannerPath")
@@ -6342,19 +6428,18 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/column_spanner_path.rs"))
                 .expect("read column-spanner path facade");
         assert!(
-            path_facade.contains(concat!(
-                "layout_algo_",
-                "block/src/native_column_spanner_path.rs"
-            )) && path_facade.contains(concat!(
-                "pub use layout_algo_",
-                "block_native_column_spanner_path::*;"
-            )) && !path_facade.contains("pub struct ColumnSpannerPath"),
+            path_facade.contains(concat!("layout_algo_", "block/src/column_spanner_path.rs"))
+                && path_facade.contains(concat!(
+                    "pub use layout_algo_",
+                    "block_column_spanner_path::*;"
+                ))
+                && !path_facade.contains("pub struct ColumnSpannerPath"),
             "column-spanner path must be re-exported from the block owner"
         );
 
         let marker_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "block/src/native_unpositioned_list_marker.rs"
+            "block/src/unpositioned_list_marker_interface.rs"
         )))
         .expect("read block-level list-marker state owner");
         assert!(
@@ -6377,24 +6462,23 @@ mod package_contract_tests {
         assert!(
             marker_facade.contains(concat!(
                 "layout_algo_",
-                "block/src/native_unpositioned_list_marker.rs"
+                "block/src/unpositioned_list_marker_interface.rs"
             )) && marker_facade.contains(concat!(
                 "pub use layout_algo_",
-                "block_native_unpositioned_list_marker::*;"
+                "block_unpositioned_list_marker_interface::*;"
             )) && !marker_facade.contains("pub struct UnpositionedListMarker"),
             "block-level list-marker state must be re-exported from the block owner"
         );
     }
 
     #[test]
-    fn native_devtools_flex_info_resolves_to_the_flex_algorithm_owner() {
+    fn devtools_flex_info_resolves_to_the_flex_algorithm_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "flex/src/native_devtools_flex_info.rs"
-        )))
+        let owner = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "flex/src/devtools_flex_info.rs")),
+        )
         .expect("read flex DevTools geometry owner");
         assert!(
             owner.contains("pub struct DevtoolsFlexInfo")
@@ -6406,26 +6490,24 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/devtools_flex_info.rs"))
                 .expect("read flex DevTools geometry facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "flex/src/native_devtools_flex_info.rs"
-            )) && facade.contains(concat!(
-                "pub use layout_algo_",
-                "flex_native_devtools_flex_info::*;"
-            )) && !facade.contains("pub struct DevtoolsFlexInfo"),
+            facade.contains(concat!("layout_algo_", "flex/src/devtools_flex_info.rs"))
+                && facade.contains(concat!(
+                    "pub use layout_algo_",
+                    "flex_devtools_flex_info::*;"
+                ))
+                && !facade.contains("pub struct DevtoolsFlexInfo"),
             "flex diagnostic geometry must be re-exported from its algorithm owner"
         );
     }
 
     #[test]
-    fn native_layout_result_overflow_resolves_to_the_fragment_owner() {
+    fn layout_result_overflow_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_result_overflow.rs"),
-        )
-        .expect("read native layout-result overflow owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_result_overflow.rs"))
+                .expect("read source layout-result overflow owner");
         for owned_policy in [
             "fn LayoutBoxSetScrollableOverflowFromLayoutResults",
             "layout_results_.iter()",
@@ -6448,7 +6530,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox facade");
         assert!(
-            facade.contains("layout_fragment/src/native_layout_result_overflow.rs")
+            facade.contains("layout_fragment/src/layout_result_overflow.rs")
                 && facade.contains("LayoutBoxSetScrollableOverflowFromLayoutResults(self)"),
             "LayoutBox must delegate result-overflow aggregation to layout_fragment"
         );
@@ -6465,12 +6547,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_snap_area_resolves_to_the_fragment_owner() {
+    fn snap_area_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join("layout_fragment/src/native_snap_area.rs"))
-            .expect("read native snap-area owner");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/snap_area.rs"))
+            .expect("read source snap-area owner");
         for owned_policy in [
             "pub struct SnapArea",
             "fn from_element",
@@ -6492,10 +6574,10 @@ mod package_contract_tests {
         );
 
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/snap_area.rs"))
-            .expect("read native snap-area facade");
+            .expect("read source snap-area facade");
         assert!(
-            facade.contains("layout_fragment/src/native_snap_area.rs")
-                && facade.contains("pub use layout_fragment_native_snap_area::*;"),
+            facade.contains("layout_fragment/src/snap_area.rs")
+                && facade.contains("pub use layout_fragment_snap_area::*;"),
             "snap-area state must be re-exported from layout_fragment"
         );
         assert!(
@@ -6505,14 +6587,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_physical_fragment_list_resolves_to_the_fragment_owner() {
+    fn physical_fragment_list_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_physical_fragment_list.rs"),
-        )
-        .expect("read native physical-fragment list owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/physical_fragment_list.rs"))
+                .expect("read source physical-fragment list owner");
         for owned_policy in [
             "pub struct PhysicalFragmentList",
             "pub struct PhysicalFragmentIterator",
@@ -6534,7 +6615,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox facade");
         assert!(
-            facade.contains("layout_fragment/src/native_physical_fragment_list.rs")
+            facade.contains("layout_fragment/src/physical_fragment_list.rs")
                 && facade.contains("PhysicalFragmentIterator, PhysicalFragmentList"),
             "LayoutBox must re-export physical-fragment list types from layout_fragment"
         );
@@ -6551,14 +6632,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_visual_overflow_resolves_to_the_fragment_owner() {
+    fn fragment_visual_overflow_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_visual_overflow.rs"),
-        )
-        .expect("read native fragment visual-overflow owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_visual_overflow.rs"))
+                .expect("read source fragment visual-overflow owner");
         for owned_policy in [
             "fn LayoutBoxCopyVisualOverflowFromFragmentsWithoutInvalidations",
             "PhysicalFragmentCount",
@@ -6578,10 +6658,9 @@ mod package_contract_tests {
             "multi-fragment visual-overflow stitching must retain a fragment sampling frame"
         );
 
-        let box_owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_box_visual_overflow.rs"),
-        )
-        .expect("read LayoutBox visual-overflow owner");
+        let box_owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_box_visual_overflow.rs"))
+                .expect("read LayoutBox visual-overflow owner");
         for owned_policy in [
             "fn AddSelfVisualOverflow",
             "fn AddContentsVisualOverflow",
@@ -6589,16 +6668,15 @@ mod package_contract_tests {
             "fn CopyVisualOverflowFromFragmentsWithoutInvalidations",
             "fn BorderOutsetsForClipping",
             "fn VisualOverflowRect",
-            "#[path = \"native_fragment_visual_overflow.rs\"]",
+            "#[path = \"fragment_visual_overflow.rs\"]",
         ] {
             assert!(
                 box_owner.contains(owned_policy),
                 "LayoutBox visual-overflow owner lost {owned_policy}"
             );
         }
-        let model =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_overflow_model.rs"))
-                .expect("read retained overflow-model owner");
+        let model = std::fs::read_to_string(root.join("layout_fragment/src/overflow_model.rs"))
+            .expect("read retained overflow-model owner");
         for owned_type in [
             "pub struct BoxScrollableOverflowModel",
             "pub struct BoxVisualOverflowModel",
@@ -6614,8 +6692,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/overflow_model.rs"))
                 .expect("read overflow-model facade");
         assert!(
-            model_facade.contains("layout_fragment/src/native_overflow_model.rs")
-                && model_facade.contains("pub use layout_fragment_native_overflow_model::*;")
+            model_facade.contains("layout_fragment/src/overflow_model.rs")
+                && model_facade.contains("pub use layout_fragment_overflow_model::*;")
                 && !model_facade.contains("pub struct BoxOverflowModel"),
             "overflow storage must be re-exported from layout_fragment"
         );
@@ -6625,8 +6703,8 @@ mod package_contract_tests {
         )
         .expect("read LayoutBox visual-overflow facade");
         assert!(
-            facade.contains("layout_fragment/src/native_layout_box_visual_overflow.rs")
-                && facade.contains("pub use layout_fragment_native_layout_box_visual_overflow::*;")
+            facade.contains("layout_fragment/src/layout_box_visual_overflow.rs")
+                && facade.contains("pub use layout_fragment_layout_box_visual_overflow::*;")
                 && !facade.contains("fn VisualOverflowRect"),
             "LayoutBox visual overflow must be re-exported from layout_fragment"
         );
@@ -6643,33 +6721,29 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_retained_paint_support_resolves_to_the_fragment_owner() {
+    fn retained_paint_support_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         for (owner_file, facade_file, owned_policy) in [
+            ("paint_layer.rs", "paint_layer.rs", "pub struct PaintLayer"),
             (
-                "native_paint_layer.rs",
-                "paint_layer.rs",
-                "pub struct PaintLayer",
-            ),
-            (
-                "native_outline_info.rs",
+                "outline_info.rs",
                 "outline_info.rs",
                 "pub struct LayoutOutlineInfo",
             ),
             (
-                "native_outline_geometry.rs",
+                "outline_geometry.rs",
                 "outline_geometry.rs",
                 "fn OutlineOutsetExtent",
             ),
             (
-                "native_outline_rect_collector.rs",
+                "outline_rect_collector.rs",
                 "outline_rect_collector.rs",
                 "pub trait OutlineRectCollector",
             ),
             (
-                "native_text_overflow_post_layout_snapshot.rs",
+                "text_overflow_post_layout_snapshot.rs",
                 "text_overflow_post_layout_snapshot.rs",
                 "pub struct TextOverflowPostLayoutSnapshot",
             ),
@@ -6684,14 +6758,41 @@ mod package_contract_tests {
                 std::fs::read_to_string(root.join("layoutng/src/internal").join(facade_file))
                     .unwrap_or_else(|_| panic!("read retained paint facade {facade_file}"));
             assert!(
-                facade.contains("layout_fragment/src/native_")
-                    && facade.contains("pub use layout_fragment_native_")
+                facade.contains("layout_fragment/src/")
+                    && facade.contains("pub use layout_fragment_")
                     && !facade.contains(owned_policy),
                 "retained paint support {facade_file} must remain a fragment-owner facade"
             );
         }
+        let layer_owner = std::fs::read_to_string(root.join("layout_fragment/src/paint_layer.rs"))
+            .expect("read retained PaintLayer owner");
+        for source_method in [
+            "fn DebugName",
+            "fn OwnerNodeId",
+            "fn PaintsWithFilters",
+            "fn FirstChild",
+            "fn NextSibling",
+            "fn UpdateDescendantDependentFlags",
+            "has_visible_content_",
+            "has_visible_self_painting_descendant_",
+            "fn HasVisibleSelfPaintingDescendant",
+        ] {
+            assert!(
+                layer_owner.contains(source_method),
+                "retained PaintLayer lost Chromium method {source_method}"
+            );
+        }
+        for undefined_provider in [
+            "DispatchLayoutObjectRecalcVisualOverflow",
+            "HasNonIsolatedBlendingDescendants()",
+        ] {
+            assert!(
+                !layer_owner.contains(undefined_provider),
+                "PaintLayer must not revive undefined provider {undefined_provider}"
+            );
+        }
         let snapshot = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_text_overflow_post_layout_snapshot.rs"),
+            root.join("layout_fragment/src/text_overflow_post_layout_snapshot.rs"),
         )
         .expect("read text-overflow snapshot owner");
         assert!(
@@ -6703,25 +6804,28 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_overflow_recalc_resolves_to_the_fragment_owner() {
+    fn layout_object_overflow_recalc_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_overflow_recalc.rs"),
+            root.join("layout_fragment/src/layout_object_overflow_recalc.rs"),
         )
-        .expect("read native LayoutObject overflow-recalc owner");
+        .expect("read source LayoutObject overflow-recalc owner");
         for owned_policy in [
             "fn RecalcNormalFlowChildVisualOverflowIfNeeded",
             "fn RecalcScrollableOverflow",
             "fn RecalcVisualOverflow",
+            "fn RecalcVisualOverflowBase",
             "fn LayoutObjectRecalcScrollableOverflow",
             "fn LayoutObjectRecalcVisualOverflow",
-            "LayoutObjectRecalcNormalFlowChildVisualOverflowIfNeededProvider",
+            "self.RecalcVisualOverflow()",
             "ChildNeedsScrollableOverflowRecalc",
             "DispatchLayoutObjectRecalcScrollableOverflow",
             "DispatchLayoutObjectRecalcVisualOverflow",
             "while !child.is_null()",
+            "current.HasLayer()",
+            "HasSelfPaintingLayer()",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -6732,13 +6836,25 @@ mod package_contract_tests {
             owner.matches("#[inline(never)]").count() >= 3,
             "normal-flow, base scrollable, and visual overflow traversals must retain fragment sampling frames"
         );
+        assert!(
+            !owner.contains("LayoutObjectRecalcNormalFlowChildVisualOverflowIfNeededProvider"),
+            "normal-flow visual overflow must not retain its dead provider"
+        );
+        let layout_object =
+            std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
+                .expect("read LayoutObject declarations");
+        assert!(
+            !layout_object
+                .contains("LayoutObjectRecalcNormalFlowChildVisualOverflowIfNeededProvider"),
+            "LayoutObject declarations must not retain the dead normal-flow provider"
+        );
 
         let facade = std::fs::read_to_string(
             root.join("layoutng/src/internal/layout_object_core_services.rs"),
         )
         .expect("read LayoutObject core-services facade");
         assert!(
-            facade.contains("layout_fragment/src/native_layout_object_overflow_recalc.rs"),
+            facade.contains("layout_fragment/src/layout_object_overflow_recalc.rs"),
             "LayoutObject core services must load overflow traversal from layout_fragment"
         );
         for leaked_policy in [
@@ -6753,17 +6869,142 @@ mod package_contract_tests {
                 "LayoutObject core services still own overflow traversal {leaked_policy}"
             );
         }
+
+        let dispatcher =
+            std::fs::read_to_string(root.join("layoutng_assembly/src/block_virtual_dispatch.rs"))
+                .expect("read LayoutObject virtual dispatcher");
+        for dispatch_policy in [
+            "fn DispatchLayoutObjectRecalcVisualOverflow",
+            "LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot",
+            "IsLayoutBlockClass(runtime_class)",
+            "object.cast::<LayoutBlock>() }.RecalcVisualOverflow()",
+            "object.cast::<LayoutText>() }.RecalcVisualOverflow()",
+            "object.cast::<LayoutBoxModelObject>() }.RecalcVisualOverflow()",
+        ] {
+            assert!(
+                dispatcher.contains(dispatch_policy),
+                "LayoutObject visual-overflow dispatch lost {dispatch_policy}"
+            );
+        }
+
+        let block = std::fs::read_to_string(root.join("layout_algo_block/src/layout_block.rs"))
+            .expect("read LayoutBlock visual-overflow owner");
+        assert!(
+            block.contains("Source: core/layout/layout_block.cc:629-641")
+                && block.contains("self.ClearVisualOverflow()")
+                && block.contains("fragment.GetMutableForPainting().RecalcInkOverflow()")
+                && !block.contains("object.RecalcVisualOverflowBase()"),
+            "LayoutBlock must recalculate resident fragment ink overflow instead of substituting base traversal"
+        );
+
+        let fragment =
+            std::fs::read_to_string(root.join("layout_fragment/src/physical_box_fragment.rs"))
+                .expect("read PhysicalBoxFragment ink-overflow owner");
+        for owned_policy in [
+            "pub fn RecalcInkOverflow(&self)",
+            "fn RecalcContentsInkOverflow(&self)",
+            "CopyVisualOverflowFromFragments()",
+            "table_virtuals.computed_row_span",
+            "recalc_text_combine_contents_ink_overflow",
+            "Source: core/layout/physical_box_fragment.cc:1001-1036",
+            "Source: core/layout/physical_box_fragment.cc:1040-1095",
+        ] {
+            assert!(
+                fragment.contains(owned_policy),
+                "PhysicalBoxFragment ink-overflow owner lost {owned_policy}"
+            );
+        }
+        assert!(
+            !fragment.contains("PhysicalBoxFragmentComputeSelfInkOverflow")
+                && !fragment.contains(
+                    "table-row self ink overflow requires LayoutTableCell row-span dispatch"
+                )
+                && !fragment.contains("combined-text ink overflow requires LayoutTextCombine"),
+            "PhysicalBoxFragment must not retain dead or substitute ink-overflow providers"
+        );
+
+        let fragment_item =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_item.rs"))
+                .expect("read FragmentItem ink-overflow owner");
+        assert!(
+            fragment_item.contains("adjust_text_combine_bounding_box")
+                && fragment_item.contains(".SetTextInkOverflow(")
+                && fragment_item.contains(".SetSvgTextInkOverflow(")
+                && !fragment_item
+                    .contains("text ink-overflow recomputation requires InlinePaintContext")
+                && !fragment_item.contains("AdjustRectForBoundingBox"),
+            "FragmentItem must retain source-owned text overflow and cross the installed inline-owner callback"
+        );
+
+        let ink_overflow =
+            std::fs::read_to_string(root.join("layout_fragment/src/ink_overflow.rs"))
+                .expect("read InkOverflow owner");
+        for owned_policy in [
+            "Source: core/layout/ink_overflow.cc:351-370",
+            "Source: core/layout/ink_overflow.cc:372-436",
+            "Source: core/layout/ink_overflow.cc:439-489",
+            "used_font.TextInkBounds(text_info)",
+            "ExpandForShadowOverflow(",
+            "self.SetSelf(type_, &ink_overflow",
+        ] {
+            assert!(
+                ink_overflow.contains(owned_policy),
+                "InkOverflow text recomputation lost {owned_policy}"
+            );
+        }
+
+        let inline_installer =
+            std::fs::read_to_string(root.join("layout_algo_inline/src/assembly.rs"))
+                .expect("read inline algorithm installer");
+        assert!(
+            inline_installer.contains("adjust_text_combine_bounding_box =")
+                && inline_installer.contains("recalc_text_combine_contents_ink_overflow =")
+                && inline_installer.contains("adjust_combined_text_style =")
+                && inline_installer.contains("is_text_fragment_selected ="),
+            "the inline package must install text-combine overflow, style, and selection callbacks"
+        );
+
+        let layout_text_interface =
+            std::fs::read_to_string(root.join("layout_algo_inline/src/layout_text_interface.rs"))
+                .expect("read LayoutText SVG font dispatch");
+        let svg_installer = std::fs::read_to_string(root.join("layout_algo_svg/src/assembly.rs"))
+            .expect("read SVG algorithm installer");
+        assert!(
+            layout_text_interface.contains("RegisterSvgInlineTextFontVirtuals")
+                && layout_text_interface.contains("SVG_INLINE_TEXT_SCALED_FONT")
+                && layout_text_interface.contains("SVG_INLINE_TEXT_SCALING_FACTOR")
+                && svg_installer.contains(
+                    "RegisterSvgInlineTextFontVirtuals(SvgInlineTextScaledFont, SvgInlineTextScalingFactor)"
+                ),
+            "SVG scaled-font access must remain installed beyond LayoutPassScope for retained overflow recomputation"
+        );
+        assert!(
+            !layout_text_interface.contains("LayoutTextScaledFont(")
+                && !inline_installer.contains("LayoutTextScaledFont"),
+            "the removed free-function scaled-font substitute must not return"
+        );
+
+        let outline =
+            std::fs::read_to_string(root.join("layout_fragment/src/outline_rect_collector.rs"))
+                .expect("read outline collector owner");
+        assert!(
+            outline.contains("current.UniteEvenIfEmpty(rect)")
+                && outline.contains("self.rects_.extend(rects)")
+                && !outline.contains("UnionOutlineRectCollectorAddRect")
+                && !outline.contains("VectorOutlineRectCollectorCombineWithOffset"),
+            "outline collectors must keep their source-owned local operations without dead providers"
+        );
     }
 
     #[test]
-    fn native_layout_object_geometry_queries_resolve_to_the_fragment_owner() {
+    fn layout_object_geometry_queries_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_geometry_queries.rs"),
+            root.join("layout_fragment/src/layout_object_geometry_queries.rs"),
         )
-        .expect("read native LayoutObject geometry-query owner");
+        .expect("read source LayoutObject geometry-query owner");
         for owned_policy in [
             "fn ContainingScrollContainer(",
             "fn LocalToAncestorPoint(",
@@ -6790,7 +7031,7 @@ mod package_contract_tests {
         )
         .expect("read LayoutObject core-services facade");
         assert!(
-            facade.contains("layout_fragment/src/native_layout_object_geometry_queries.rs"),
+            facade.contains("layout_fragment/src/layout_object_geometry_queries.rs"),
             "LayoutObject core services must load geometry walks from layout_fragment"
         );
         for leaked_policy in [
@@ -6807,14 +7048,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_scroll_container_queries_resolve_to_the_fragment_owner() {
+    fn layout_object_scroll_container_queries_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_scroll_container_queries.rs"),
+            root.join("layout_fragment/src/layout_object_scroll_container_queries.rs"),
         )
-        .expect("read native LayoutObject scroll-container-query owner");
+        .expect("read source LayoutObject scroll-container-query owner");
         for owned_policy in [
             "fn IsContentMovingOverscrollContainer",
             "fn IsScrollContainerWithScrollMarkerGroup",
@@ -6829,8 +7070,9 @@ mod package_contract_tests {
             "fn ContainingScrollContainerLayerAnyAxisDefault",
             "fn ContainingScrollContainerLayerForAxis(",
             "fn ContainingScrollContainerLayerForAxisDefault",
-            "LayoutObjectContainingScrollContainerAnyAxisProvider",
-            "LayoutObjectContainingScrollContainerLayerForAxisProvider",
+            "self.EnclosingLayer()",
+            ".ContainingScrollContainerLayer(&mut is_fixed_to_view",
+            "style.IsOverflowValueScrollableY()",
             "LayoutObjectIsBackdropForOverscrollAreaParentProvider",
             "LayoutObjectIsScrollMarkerGroupBeforeProvider",
         ] {
@@ -6842,13 +7084,13 @@ mod package_contract_tests {
         assert_eq!(
             owner.matches("#[inline(never)]").count(),
             3,
-            "scroll box and layer ancestry providers must retain separate fragment frames"
+            "scroll box and layer ancestry queries must retain separate fragment frames"
         );
 
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_scroll_container_queries.rs"),
+            loader.contains("layout_fragment/src/layout_object_scroll_container_queries.rs"),
             "LayoutObject must load scroll-container queries from layout_fragment"
         );
         for leaked_policy in [
@@ -6874,14 +7116,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_fragment_queries_resolve_to_the_fragment_owner() {
+    fn layout_object_fragment_queries_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_fragment_queries.rs"),
+            root.join("layout_fragment/src/layout_object_fragment_queries.rs"),
         )
-        .expect("read native LayoutObject fragment-query owner");
+        .expect("read source LayoutObject fragment-query owner");
         for owned_policy in [
             "fn HitTestForOcclusion",
             "fn HitTestAllPhases",
@@ -6914,7 +7156,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_fragment_queries.rs"),
+            loader.contains("layout_fragment/src/layout_object_fragment_queries.rs"),
             "LayoutObject must load hit-test and mapping queries from layout_fragment"
         );
         for leaked_policy in [
@@ -6941,14 +7183,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_selection_queries_resolve_to_the_fragment_owner() {
+    fn layout_object_selection_queries_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_selection_queries.rs"),
+            root.join("layout_fragment/src/layout_object_selection_queries.rs"),
         )
-        .expect("read native LayoutObject selection-query owner");
+        .expect("read source LayoutObject selection-query owner");
         for owned_policy in [
             "fn CanUpdateSelectionOnRootLineBoxes",
             "fn AbsoluteSelectionRect",
@@ -6957,9 +7199,13 @@ mod package_contract_tests {
             "fn IsSelectable",
             "LayoutObjectCanUpdateSelectionOnRootLineBoxesProvider",
             "LayoutObjectAbsoluteSelectionRectProvider",
-            "LayoutObjectCanBeSelectionLeafProvider",
-            "LayoutObjectIsSelectedProvider",
-            "LayoutObjectIsSelectableProvider",
+            "self.SlowFirstChild().is_null()",
+            "self.StyleRef().Visibility() != EVisibility::kVisible",
+            "self.HasLockedAncestorPreventingPaint()",
+            "self.CanBeSelectionLeafInternal()",
+            "self.GetSelectionState() != SelectionState::kNone",
+            "factories.is_text_fragment_selected",
+            "self.StyleRef().IsSelectable()",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -6971,12 +7217,22 @@ mod package_contract_tests {
             1,
             "only retained selection-rectangle aggregation should force a fragment sampling frame"
         );
+        assert!(
+            !owner.contains("LayoutObjectIsSelectedProvider")
+                && !owner.contains("LayoutObjectIsSelectableProvider"),
+            "fixed-cost selection queries must not retain dead providers"
+        );
 
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_selection_queries.rs"),
+            loader.contains("layout_fragment/src/layout_object_selection_queries.rs"),
             "LayoutObject must load selection queries from layout_fragment"
+        );
+        assert!(
+            !loader.contains("LayoutObjectIsSelectedProvider")
+                && !loader.contains("LayoutObjectIsSelectableProvider"),
+            "LayoutObject declarations must not retain dead selection providers"
         );
         for leaked_policy in [
             "fn CanUpdateSelectionOnRootLineBoxes",
@@ -6993,14 +7249,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_coordinate_conversion_resolves_to_the_fragment_owner() {
+    fn layout_object_coordinate_conversion_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_coordinate_conversion.rs"),
+            root.join("layout_fragment/src/layout_object_coordinate_conversion.rs"),
         )
-        .expect("read native LayoutObject coordinate-conversion owner");
+        .expect("read source LayoutObject coordinate-conversion owner");
         for owned_policy in [
             "fn OffsetFromContainerInternalBase",
             "fn OffsetFromScrollableContainer",
@@ -7012,6 +7268,7 @@ mod package_contract_tests {
             "fn AncestorToLocalQuad",
             "fn AncestorToLocalPointF",
             "fn LocalToAncestorRect",
+            "fn MapLocalToAncestorForGeometry",
             "fn LocalRectToAncestorQuad",
             "fn LocalToAncestorQuad",
             "fn LocalToAncestorPointPhysical",
@@ -7022,7 +7279,6 @@ mod package_contract_tests {
             "fn AbsoluteToLocalRect",
             "fn AbsoluteToLocalQuad",
             "fn AbsoluteToLocalPointF",
-            "LayoutObjectOffsetFromAncestorProvider",
             "DispatchLayoutObjectOffsetFromContainerInternal",
             "LayoutObjectAncestorToLocalPointFProvider",
             "LayoutObjectLocalToAncestorTransformProvider",
@@ -7041,7 +7297,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_coordinate_conversion.rs"),
+            loader.contains("layout_fragment/src/layout_object_coordinate_conversion.rs"),
             "LayoutObject must load coordinate conversion from layout_fragment"
         );
         for leaked_policy in [
@@ -7088,14 +7344,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_bounding_geometry_resolves_to_the_fragment_owner() {
+    fn layout_object_bounding_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_bounding_geometry.rs"),
+            root.join("layout_fragment/src/layout_object_bounding_geometry.rs"),
         )
-        .expect("read native LayoutObject bounding-geometry owner");
+        .expect("read source LayoutObject bounding-geometry owner");
         for owned_policy in [
             "fn AddAbsoluteRectForLayer",
             "fn QuadsInAncestorInternal",
@@ -7125,7 +7381,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_bounding_geometry.rs"),
+            loader.contains("layout_fragment/src/layout_object_bounding_geometry.rs"),
             "LayoutObject must load bounding geometry from layout_fragment"
         );
         for leaked_policy in [
@@ -7148,14 +7404,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_paint_dispatch_resolves_to_the_fragment_owner() {
+    fn layout_object_paint_dispatch_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_paint_dispatch.rs"),
+            root.join("layout_fragment/src/layout_object_paint_dispatch.rs"),
         )
-        .expect("read native LayoutObject paint-dispatch owner");
+        .expect("read source LayoutObject paint-dispatch owner");
         for owned_policy in [
             "fn IsCanvasOrInCanvasSubtree",
             "fn IsInCanvasSubtree",
@@ -7170,7 +7426,8 @@ mod package_contract_tests {
             "fn OutlineRects(",
             "fn DebugRect",
             "LayoutObjectPaintProvider",
-            "LayoutObjectCanvasForDrawingLayoutObjectProvider",
+            "InputCanvasLayoutSubtree",
+            "InputHasDrawableAttribute",
             "DispatchLayoutObjectAddOutlineRects",
         ] {
             assert!(
@@ -7187,8 +7444,22 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_paint_dispatch.rs"),
+            loader.contains("layout_fragment/src/layout_object_paint_dispatch.rs"),
             "LayoutObject must load paint dispatch from layout_fragment"
+        );
+        assert!(
+            !loader.contains("LayoutObjectCanvasForDrawingLayoutObjectProvider"),
+            "LayoutObject declarations must not retain the translated canvas ancestry provider"
+        );
+        let dispatcher =
+            std::fs::read_to_string(root.join("layoutng_assembly/src/block_virtual_dispatch.rs"))
+                .expect("read LayoutObject virtual dispatcher");
+        assert!(
+            dispatcher.contains("fn DispatchLayoutObjectIsCanvas")
+                && dispatcher.contains("InputIsHTMLCanvasElement")
+                && !dispatcher
+                    .contains("block_false_predicates!(\n    DispatchLayoutObjectIsCanvas"),
+            "LayoutHTMLCanvas identity must not remain a false base predicate"
         );
         for leaked_policy in [
             "fn IsCanvasOrInCanvasSubtree",
@@ -7212,14 +7483,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_paint_state_resolves_to_the_fragment_owner() {
+    fn layout_object_paint_state_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_paint_state.rs"),
-        )
-        .expect("read native LayoutObject paint-state owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_object_paint_state.rs"))
+                .expect("read source LayoutObject paint-state owner");
         for owned_policy in [
             "fn SetIsBackgroundAttachmentFixedObject",
             "fn SetCanCompositeBackgroundAttachmentFixed",
@@ -7245,7 +7515,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_paint_state.rs"),
+            loader.contains("layout_fragment/src/layout_object_paint_state.rs"),
             "LayoutObject must load paint state from layout_fragment"
         );
         for leaked_policy in [
@@ -7263,14 +7533,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_effective_style_resolves_to_the_fragment_owner() {
+    fn layout_object_effective_style_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_effective_style.rs"),
+            root.join("layout_fragment/src/layout_object_effective_style.rs"),
         )
-        .expect("read native LayoutObject effective-style owner");
+        .expect("read source LayoutObject effective-style owner");
         for owned_policy in [
             "fn EffectiveStyle",
             "fn SlowEffectiveStyle",
@@ -7296,7 +7566,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_effective_style.rs"),
+            loader.contains("layout_fragment/src/layout_object_effective_style.rs"),
             "LayoutObject must load effective style from layout_fragment"
         );
         for leaked_policy in [
@@ -7323,14 +7593,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_gap_queries_preserve_algorithm_attribution() {
+    fn layout_object_gap_queries_preserve_algorithm_attribution() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_gap_queries.rs"),
-        )
-        .expect("read native LayoutObject gap-query owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_object_gap_queries.rs"))
+                .expect("read source LayoutObject gap-query owner");
         for owned_policy in [
             "fn StitchedRowGapIndexBase",
             "fn StitchedRowGapIndex(",
@@ -7350,7 +7619,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_gap_queries.rs"),
+            loader.contains("layout_fragment/src/layout_object_gap_queries.rs"),
             "LayoutObject must load gap queries from layout_fragment"
         );
         for leaked_policy in ["fn StitchedRowGapIndexBase", "fn StitchedRowGapIndex("] {
@@ -7377,14 +7646,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_box_fragment_access_resolves_to_the_fragment_owner() {
+    fn layout_box_fragment_access_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_box_fragment_access.rs"),
-        )
-        .expect("read native LayoutBox fragment-access owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_box_fragment_access.rs"))
+                .expect("read source LayoutBox fragment-access owner");
         for owned_policy in [
             "pub fn GetLayoutResult",
             "pub fn InvalidateCachedGeometry",
@@ -7411,7 +7679,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_box_fragment_access.rs"),
+            loader.contains("layout_fragment/src/layout_box_fragment_access.rs"),
             "LayoutBox must load fragment result access from layout_fragment"
         );
         for leaked_policy in [
@@ -7430,14 +7698,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_inline_fragment_state_resolves_to_the_fragment_owner() {
+    fn layout_object_inline_fragment_state_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_inline_fragment_state.rs"),
+            root.join("layout_fragment/src/layout_object_inline_fragment_state.rs"),
         )
-        .expect("read native LayoutObject inline-fragment-state owner");
+        .expect("read source LayoutObject inline-fragment-state owner");
         for owned_policy in [
             "fn IsFragmentLessBoxBase",
             "fn IsFragmentLessBox(",
@@ -7466,7 +7734,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_inline_fragment_state.rs"),
+            loader.contains("layout_fragment/src/layout_object_inline_fragment_state.rs"),
             "LayoutObject must load inline-fragment state from layout_fragment"
         );
         for leaked_policy in [
@@ -7489,22 +7757,25 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_layer_queries_resolve_to_the_fragment_owner() {
+    fn layout_object_layer_queries_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_object_layer_queries.rs"),
+            root.join("layout_fragment/src/layout_object_layer_queries.rs"),
         )
-        .expect("read native LayoutObject layer-query owner");
+        .expect("read source LayoutObject layer-query owner");
         for owned_policy in [
             "fn HasDistortingVisualEffects",
             "fn HasNonZeroEffectiveOpacity",
+            "requires source LocalBorderBoxProperties",
             "fn EnclosingLayer",
             "fn PaintingLayer(",
             "fn PaintingLayerDefault",
-            "LayoutObjectEnclosingLayerProvider",
-            "LayoutObjectPaintingLayerProvider",
+            "current_ref.HasLayer()",
+            "current_ref.ContainerForColumnSpanner()",
+            "current_ref.ContainingBlock() as *mut LayoutObject",
+            "IsSelfPaintingLayer()",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -7520,7 +7791,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_object_layer_queries.rs"),
+            loader.contains("layout_fragment/src/layout_object_layer_queries.rs"),
             "LayoutObject must load layer queries from layout_fragment"
         );
         for leaked_policy in [
@@ -7538,14 +7809,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_transform_change_admission_resolves_to_the_invalidation_owner() {
+    fn transform_change_admission_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_transform_invalidation.rs"),
-        )
-        .expect("read native transform invalidation owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/transform_invalidation.rs"))
+                .expect("read source transform invalidation owner");
         assert!(
             owner.contains("#[inline(never)]")
                 && owner.contains("fn LayoutBoxTransformsChangeMayRequireLayout")
@@ -7557,7 +7827,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_transform_invalidation.rs")
+            facade.contains("layout_invalidation/src/transform_invalidation.rs")
                 && facade.contains("LayoutBoxTransformsChangeMayRequireLayout(self)"),
             "LayoutBox must delegate transform admission to layout_invalidation"
         );
@@ -7568,14 +7838,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_box_fragment_retirement_resolves_to_the_invalidation_owner() {
+    fn layout_box_fragment_retirement_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_box_fragment_retirement.rs"),
+            root.join("layout_invalidation/src/layout_box_fragment_retirement.rs"),
         )
-        .expect("read native LayoutBox fragment retirement owner");
+        .expect("read source LayoutBox fragment retirement owner");
         for owned_policy in [
             "fn LayoutBoxDisassociatePhysicalFragments",
             "FragmentItems::LayoutObjectWillBeDestroyed",
@@ -7596,7 +7866,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_box.rs"))
             .expect("read LayoutBox facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_box_fragment_retirement.rs")
+            facade.contains("layout_invalidation/src/layout_box_fragment_retirement.rs")
                 && facade.contains("LayoutBoxDisassociatePhysicalFragments(self)"),
             "LayoutBox must delegate fragment retirement to layout_invalidation"
         );
@@ -7612,23 +7882,23 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_box_model_lifecycle_resolves_to_the_invalidation_owner() {
+    fn layout_box_model_lifecycle_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_box_model_lifecycle.rs"),
+            root.join("layout_invalidation/src/layout_box_model_lifecycle.rs"),
         )
-        .expect("read native LayoutBoxModelObject lifecycle owner");
+        .expect("read source LayoutBoxModelObject lifecycle owner");
         for owned_policy in [
             "fn NeedsAnchorPositionScrollData",
             "fn WillBeDestroyed",
             "fn StyleWillChange",
             "fn StyleDidChange",
-            "DisposeScrollableAreaForLayout",
+            "DisposeScrollableAreaForPaintLayer",
             "DestroyLayer",
             "DispatchLayoutBoxModelUpdateFromStyle",
-            "UpdateTransformAfterStyleChangeForLayout",
+            "UpdateTransformAfterStyleChange",
             "UpdateLayerAfterStyleChange",
             "EnsureAnchorPositionScrollData",
             "RemoveAnchorPositionScrollData",
@@ -7648,7 +7918,7 @@ mod package_contract_tests {
         )
         .expect("read LayoutBoxModelObject lifecycle loader");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_box_model_lifecycle.rs"),
+            loader.contains("layout_invalidation/src/layout_box_model_lifecycle.rs"),
             "LayoutBoxModelObject lifecycle must load from layout_invalidation"
         );
         for leaked_policy in [
@@ -7665,14 +7935,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_node_style_resolves_to_the_invalidation_owner() {
+    fn layout_node_style_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_node_style.rs"),
-        )
-        .expect("read native layout-node style owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/layout_node_style.rs"))
+                .expect("read source layout-node style owner");
         for owned_policy in [
             "fn ComputeIsFixedContainer",
             "fn ComputeIsAbsoluteContainer",
@@ -7684,13 +7953,16 @@ mod package_contract_tests {
             "SetCanContainAbsolutePositionObjects",
             "SetHasTransformRelatedProperty",
             "SetHasNonVisibleOverflow",
-            "UpdateScrollableAreaForLayout",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native layout-node style lost {owned_policy}"
+                "layout_invalidation source layout-node style lost {owned_policy}"
             );
         }
+        assert!(
+            !owner.contains("UpdateScrollableAreaForLayout"),
+            "LayoutBox::UpdateFromStyle must not preempt PaintLayer::UpdateScrollableArea"
+        );
         assert_eq!(
             owner.matches("#[inline(never)]").count(),
             2,
@@ -7699,10 +7971,10 @@ mod package_contract_tests {
 
         let loader =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_node_style.rs"))
-                .expect("read native layout-node style loader");
+                .expect("read source layout-node style loader");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_node_style.rs"),
-            "native layout-node style must load from layout_invalidation"
+            loader.contains("layout_invalidation/src/layout_node_style.rs"),
+            "source layout-node style must load from layout_invalidation"
         );
         for leaked_policy in [
             "fn ComputeIsFixedContainer",
@@ -7712,20 +7984,20 @@ mod package_contract_tests {
         ] {
             assert!(
                 !loader.contains(leaked_policy),
-                "core native layout-node style still owns {leaked_policy}"
+                "core source layout-node style still owns {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_layout_box_style_change_resolves_to_the_invalidation_owner() {
+    fn layout_box_style_change_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_box_style_change.rs"),
+            root.join("layout_invalidation/src/layout_box_style_change.rs"),
         )
-        .expect("read native LayoutBox style-change owner");
+        .expect("read source LayoutBox style-change owner");
         for owned_policy in [
             "fn LayoutBoxStyleWillChange",
             "fn LayoutBoxStyleDidChange",
@@ -7733,6 +8005,7 @@ mod package_contract_tests {
             "GridColumnStart",
             "SetGridPlacementDirty",
             "ComputeOverflowClipAxes",
+            "ScrollContainerStatusChanged",
             "SetNeedsCollectInlines",
             "invalidate_column_spanners",
             "TransformsChangeMayRequireLayout",
@@ -7751,7 +8024,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_lifecycle.rs"))
                 .expect("read LayoutBox lifecycle facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_box_style_change.rs")
+            facade.contains("layout_invalidation/src/layout_box_style_change.rs")
                 && facade.contains("LayoutBoxStyleWillChange(self,")
                 && facade.contains("LayoutBoxStyleDidChange(self,"),
             "LayoutBox lifecycle must delegate style invalidation to layout_invalidation"
@@ -7770,14 +8043,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_derived_block_style_changes_resolve_to_the_invalidation_owner() {
+    fn derived_block_style_changes_resolve_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let block_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_block_style_change.rs"),
+            root.join("layout_invalidation/src/layout_block_style_change.rs"),
         )
-        .expect("read native LayoutBlock style-change owner");
+        .expect("read source LayoutBlock style-change owner");
         for owned_policy in [
             "fn LayoutBlockStyleDidChange",
             "HasSVGTextDescendants",
@@ -7797,9 +8070,9 @@ mod package_contract_tests {
         );
 
         let flow_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_block_flow_style_change.rs"),
+            root.join("layout_invalidation/src/layout_block_flow_style_change.rs"),
         )
-        .expect("read native LayoutBlockFlow style-change owner");
+        .expect("read source LayoutBlockFlow style-change owner");
         for owned_policy in [
             "fn LayoutBlockFlowStyleDidChange",
             "UpdateForMulticol",
@@ -7818,22 +8091,20 @@ mod package_contract_tests {
         );
 
         let block_facade = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "block/src/native_layout_block.rs")),
+            root.join(concat!("layout_algo_", "block/src/layout_block.rs")),
         )
-        .expect("read native LayoutBlock owner");
-        let flow_facade = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "block/src/native_layout_block_flow.rs"
-        )))
-        .expect("read native LayoutBlockFlow owner");
+        .expect("read source LayoutBlock owner");
+        let flow_facade = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "block/src/layout_block_flow.rs")),
+        )
+        .expect("read source LayoutBlockFlow owner");
         assert!(
-            block_facade.contains("layout_invalidation/src/native_layout_block_style_change.rs")
+            block_facade.contains("layout_invalidation/src/layout_block_style_change.rs")
                 && block_facade.contains("LayoutBlockStyleDidChange(self,"),
             "LayoutBlock must delegate style invalidation to layout_invalidation"
         );
         assert!(
-            flow_facade
-                .contains("layout_invalidation/src/native_layout_block_flow_style_change.rs")
+            flow_facade.contains("layout_invalidation/src/layout_block_flow_style_change.rs")
                 && flow_facade.contains("LayoutBlockFlowStyleDidChange(self,"),
             "LayoutBlockFlow must delegate style invalidation to layout_invalidation"
         );
@@ -7855,20 +8126,22 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_style_update_resolves_to_the_invalidation_owner() {
+    fn layout_object_style_update_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_style_update.rs"),
+            root.join("layout_invalidation/src/layout_object_style_update.rs"),
         )
-        .expect("read native LayoutObject style-update owner");
+        .expect("read source LayoutObject style-update owner");
         for owned_policy in [
             "fn SetStyle(",
             "fn SetStyleWithChanges",
             "fn SetPseudoElementStyle(",
             "fn SetPseudoElementStyleWithMatchParentSize",
             "fn StyleWillChange",
+            "Visibility()",
+            "DirtyVisibleContentStatus",
             "fn StyleDidChange",
             "fn transform_style_difference",
             "fn AnonymousHasStylePropagationOverrideBase",
@@ -7907,7 +8180,7 @@ mod package_contract_tests {
         )
         .expect("read LayoutObject core-services facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_object_style_update.rs"),
+            facade.contains("layout_invalidation/src/layout_object_style_update.rs"),
             "LayoutObject core services must load style transactions from layout_invalidation"
         );
         for leaked_policy in [
@@ -7947,14 +8220,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_style_services_resolve_to_the_invalidation_owner() {
+    fn layout_object_style_services_resolve_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_style_services.rs"),
+            root.join("layout_invalidation/src/layout_object_style_services.rs"),
         )
-        .expect("read native LayoutObject style-service owner");
+        .expect("read source LayoutObject style-service owner");
         for owned_policy in [
             "fn UpdateFromElementBase",
             "fn UpdateFromElement(",
@@ -7980,7 +8253,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_object_style_services.rs"),
+            loader.contains("layout_invalidation/src/layout_object_style_services.rs"),
             "LayoutObject must load style services from layout_invalidation"
         );
         for leaked_policy in [
@@ -7999,14 +8272,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_prepaint_invalidation_resolves_to_the_invalidation_owner() {
+    fn layout_object_prepaint_invalidation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_prepaint_invalidation.rs"),
+            root.join("layout_invalidation/src/layout_object_prepaint_invalidation.rs"),
         )
-        .expect("read native LayoutObject prepaint-invalidation owner");
+        .expect("read source LayoutObject prepaint-invalidation owner");
         for owned_policy in [
             "fn EffectiveAllowedTouchAction",
             "fn HasEffectiveAllowedTouchAction",
@@ -8047,28 +8320,32 @@ mod package_contract_tests {
             14,
             "position, selection, prepaint, interaction, anchor, SVG, reinsert, and layer propagation must retain invalidation frames"
         );
+        assert!(
+            !owner.contains("LayoutObjectMarkSelfPaintingLayerForVisualOverflowRecalcProvider",),
+            "visual-overflow layer marking must be implemented directly by layout_invalidation",
+        );
 
         let reasons = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_pre_paint_subtree_walk_reasons.rs"),
+            root.join("layout_invalidation/src/pre_paint_subtree_walk_reasons.rs"),
         )
         .expect("read prepaint subtree-walk reason owner");
         assert!(
             reasons.contains("pub enum PrePaintSubtreeWalkReason")
                 && reasons.contains("pub struct PrePaintSubtreeWalkReasons")
                 && reasons.contains("pub const fn CrossFramePrePaintSubtreeWalkReasons")
+                && reasons.contains("core/paint/pre_paint_subtree_walk_reasons.h")
+                && !reasons.contains("layoutng/internal/pre_paint_subtree_walk_reasons.h")
                 && !reasons.contains("#[inline(never)]"),
-            "prepaint reason bit operations must stay inlineable in layout_invalidation"
+            "prepaint reason bit operations must stay inlineable in layout_invalidation and cite their real core/paint source"
         );
         let reasons_facade = std::fs::read_to_string(
             root.join("layoutng/src/internal/pre_paint_subtree_walk_reasons.rs"),
         )
         .expect("read prepaint subtree-walk reason facade");
         assert!(
-            reasons_facade
-                .contains("layout_invalidation/src/native_pre_paint_subtree_walk_reasons.rs",)
-                && reasons_facade.contains(
-                    "pub use layout_invalidation_native_pre_paint_subtree_walk_reasons::*",
-                )
+            reasons_facade.contains("layout_invalidation/src/pre_paint_subtree_walk_reasons.rs",)
+                && reasons_facade
+                    .contains("pub use layout_invalidation_pre_paint_subtree_walk_reasons::*",)
                 && !reasons_facade.contains("pub enum PrePaintSubtreeWalkReason"),
             "prepaint walk reasons must be re-exported from layout_invalidation"
         );
@@ -8076,8 +8353,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader
-                .contains("layout_invalidation/src/native_layout_object_prepaint_invalidation.rs"),
+            loader.contains("layout_invalidation/src/layout_object_prepaint_invalidation.rs"),
             "LayoutObject must load prepaint invalidation from layout_invalidation"
         );
         for leaked_policy in [
@@ -8105,6 +8381,7 @@ mod package_contract_tests {
             "fn SetSVGDescendantMayHaveTransformRelatedOperations",
             "fn UpdateAfterReinsert",
             "fn MarkSelfPaintingLayerForVisualOverflowRecalc",
+            "LayoutObjectMarkSelfPaintingLayerForVisualOverflowRecalcProvider",
         ] {
             assert!(
                 !loader.contains(leaked_policy),
@@ -8114,22 +8391,23 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_display_lock_resolves_to_the_invalidation_owner() {
+    fn layout_object_display_lock_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_display_lock.rs"),
+            root.join("layout_invalidation/src/layout_object_display_lock.rs"),
         )
-        .expect("read native LayoutObject display-lock owner");
+        .expect("read source LayoutObject display-lock owner");
         for owned_policy in [
             "fn ChildLayoutBlockedByDisplayLock",
             "fn ChildPrePaintBlockedByDisplayLock",
             "fn ChildPaintBlockedByDisplayLock",
+            "fn HasLockedAncestorPreventingPaint",
             "fn GetDisplayLockContext",
             "ContentLockBlocksChildLayout",
-            "LayoutObjectChildPrePaintBlockedByDisplayLockProvider",
-            "LayoutObjectChildPaintBlockedByDisplayLockProvider",
+            "ContentLockBlocksChildPrePaint",
+            "ContentLockBlocksChildPaint",
             "LayoutObjectGetDisplayLockContextProvider",
         ] {
             assert!(
@@ -8145,7 +8423,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_object_display_lock.rs"),
+            loader.contains("layout_invalidation/src/layout_object_display_lock.rs"),
             "LayoutObject must load display-lock queries from layout_invalidation"
         );
         for leaked_policy in [
@@ -8162,14 +8440,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_tree_lifecycles_resolve_to_the_invalidation_owner() {
+    fn layout_object_tree_lifecycles_resolve_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let object_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_tree_lifecycle.rs"),
+            root.join("layout_invalidation/src/layout_object_tree_lifecycle.rs"),
         )
-        .expect("read native LayoutObject lifecycle owner");
+        .expect("read source LayoutObject lifecycle owner");
         for owned_policy in [
             "fn InsertedIntoTree",
             "fn InsertedIntoTreeBase",
@@ -8195,9 +8473,9 @@ mod package_contract_tests {
         );
 
         let box_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_box_tree_lifecycle.rs"),
+            root.join("layout_invalidation/src/layout_box_tree_lifecycle.rs"),
         )
-        .expect("read native LayoutBox lifecycle owner");
+        .expect("read source LayoutBox lifecycle owner");
         for owned_policy in [
             "fn LayoutBoxWillBeDestroyed",
             "fn LayoutBoxInsertedIntoTree",
@@ -8225,12 +8503,11 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_lifecycle.rs"))
                 .expect("read LayoutBox lifecycle facade");
         assert!(
-            object_facade
-                .contains("layout_invalidation/src/native_layout_object_tree_lifecycle.rs"),
+            object_facade.contains("layout_invalidation/src/layout_object_tree_lifecycle.rs"),
             "LayoutObject core services must load lifecycle policy from layout_invalidation"
         );
         assert!(
-            box_facade.contains("layout_invalidation/src/native_layout_box_tree_lifecycle.rs")
+            box_facade.contains("layout_invalidation/src/layout_box_tree_lifecycle.rs")
                 && box_facade.contains("LayoutBoxWillBeDestroyed(self)")
                 && box_facade.contains("LayoutBoxInsertedIntoTree(self)"),
             "LayoutBox lifecycle must delegate tree policy to layout_invalidation"
@@ -8261,14 +8538,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_tree_topology_resolves_to_the_invalidation_owner() {
+    fn layout_object_tree_topology_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_tree.rs"),
-        )
-        .expect("read LayoutObject tree-topology owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/layout_object_tree.rs"))
+                .expect("read LayoutObject tree-topology owner");
         for owned_policy in [
             "pub type IndexCache",
             "fn GeneratingNode",
@@ -8297,8 +8573,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_tree.rs"))
                 .expect("read LayoutObject tree-topology facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_object_tree.rs")
-                && facade.contains("pub use layout_invalidation_native_layout_object_tree::*;")
+            facade.contains("layout_invalidation/src/layout_object_tree.rs")
+                && facade.contains("pub use layout_invalidation_layout_object_tree::*;")
                 && !facade.contains("fn IsBeforeInPreOrder"),
             "LayoutObject topology must be re-exported from layout_invalidation"
         );
@@ -8329,12 +8605,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_child_mutation_resolves_to_the_invalidation_owner() {
+    fn layout_object_child_mutation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_child_list.rs"),
+            root.join("layout_invalidation/src/layout_object_child_list.rs"),
         )
         .expect("read LayoutObject child-mutation owner");
         for owned_policy in [
@@ -8360,23 +8636,22 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_child_list.rs"))
                 .expect("read LayoutObject child-list facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_object_child_list.rs")
-                && facade
-                    .contains("pub use layout_invalidation_native_layout_object_child_list::*;")
+            facade.contains("layout_invalidation/src/layout_object_child_list.rs")
+                && facade.contains("pub use layout_invalidation_layout_object_child_list::*;")
                 && !facade.contains("fn InsertChildNode"),
             "LayoutObject child mutation must be re-exported from layout_invalidation"
         );
     }
 
     #[test]
-    fn native_layout_object_child_dispatch_resolves_to_the_invalidation_owner() {
+    fn layout_object_child_dispatch_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_child_mutation.rs"),
+            root.join("layout_invalidation/src/layout_object_child_mutation.rs"),
         )
-        .expect("read native LayoutObject child-dispatch owner");
+        .expect("read source LayoutObject child-dispatch owner");
         for owned_policy in [
             "fn AddChildDefault",
             "fn AddChild(",
@@ -8406,7 +8681,7 @@ mod package_contract_tests {
         )
         .expect("read LayoutObject core-services facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_object_child_mutation.rs"),
+            facade.contains("layout_invalidation/src/layout_object_child_mutation.rs"),
             "LayoutObject core services must load child mutation from layout_invalidation"
         );
         for leaked_policy in [
@@ -8428,12 +8703,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_box_model_tree_mutation_resolves_to_the_invalidation_owner() {
+    fn box_model_tree_mutation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_box_model_tree_mutation.rs"),
+            root.join("layout_invalidation/src/layout_box_model_tree_mutation.rs"),
         )
         .expect("read box-model tree-mutation owner");
         for owned_policy in [
@@ -8459,7 +8734,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_model_tree.rs"))
                 .expect("read box-model tree compatibility module");
         assert!(
-            core.contains("layout_invalidation/src/native_layout_box_model_tree_mutation.rs")
+            core.contains("layout_invalidation/src/layout_box_model_tree_mutation.rs")
                 && core.contains("fn ComputedPaddingOutsets")
                 && !core.contains("fn SplitAnonymousBoxesAroundChild")
                 && !core.contains("fn MoveChildrenToBase"),
@@ -8468,17 +8743,19 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_hot_object_invalidation_resolves_to_the_invalidation_owner() {
+    fn hot_object_invalidation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_hot_invalidation.rs"),
+            root.join("layout_invalidation/src/layout_object_hot_invalidation.rs"),
         )
         .expect("read hot LayoutObject invalidation owner");
         for owned_policy in [
             "fn MarkContainerChainForOverflowRecalcIfNeeded",
             "fn SetNeedsOverflowRecalcWithType",
+            "self.SetShouldCheckForPaintInvalidation();",
+            "self.MarkSelfPaintingLayerForVisualOverflowRecalc();",
             "fn PropagateStyleToAnonymousChildren",
             "SetChildNeedsScrollableOverflowRecalc",
             "CreateAnonymousStyleBuilderWithDisplay",
@@ -8497,7 +8774,7 @@ mod package_contract_tests {
         let core = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_hot.rs"))
             .expect("read hot LayoutObject core module");
         assert!(
-            core.contains("layout_invalidation/src/native_layout_object_hot_invalidation.rs")
+            core.contains("layout_invalidation/src/layout_object_hot_invalidation.rs")
                 && core.contains("fn FirstLineStyleRef")
                 && !core.contains("fn View")
                 && !core.contains("fn PropagateStyleToAnonymousChildren")
@@ -8507,12 +8784,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_box_model_layer_lifecycle_resolves_to_the_invalidation_owner() {
+    fn box_model_layer_lifecycle_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_box_model_layer_invalidation.rs"),
+            root.join("layout_invalidation/src/layout_box_model_layer_invalidation.rs"),
         )
         .expect("read box-model layer invalidation owner");
         for owned_policy in [
@@ -8537,7 +8814,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_model_object.rs"))
                 .expect("read LayoutBoxModelObject core record");
         assert!(
-            core.contains("layout_invalidation/src/native_layout_box_model_layer_invalidation.rs")
+            core.contains("layout_invalidation/src/layout_box_model_layer_invalidation.rs")
                 && core.contains("fn LayerTypeRequired")
                 && !core.contains("fn UpdateLayerAfterStyleChange")
                 && !core.contains("fn CreateLayerAfterStyleChange")
@@ -8547,13 +8824,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_container_queries_resolve_to_the_block_owner() {
+    fn layout_object_container_queries_resolve_to_the_block_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "block/src/native_layout_object_containers.rs"
+            "block/src/layout_object_containers.rs"
         )))
         .expect("read LayoutObject container-query owner");
         for owned_policy in [
@@ -8589,7 +8866,7 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "block/src/native_layout_object_containers.rs"
+                "block/src/layout_object_containers.rs"
             )) && !facade.contains("fn ContainerForAbsolutePositionWithSkipInfo"),
             "LayoutObject container-query loader must not regain block policy"
         );
@@ -8620,13 +8897,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_root_layout_resolves_to_the_block_owner() {
+    fn layout_view_root_layout_resolves_to_the_block_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "block/src/native_layout_view_root_layout.rs"
+            "block/src/layout_view_root_layout.rs"
         )))
         .expect("read LayoutView root-layout owner");
         for owned_policy in [
@@ -8654,7 +8931,7 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "block/src/native_layout_view_root_layout.rs"
+                "block/src/layout_view_root_layout.rs"
             )) && !loader.contains("fn LayoutRoot")
                 && !loader.contains("fn ComputeMinimumWidth"),
             "LayoutView root layout must load from the block algorithm owner"
@@ -8662,13 +8939,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_block_queries_resolve_to_the_block_owner() {
+    fn layout_view_block_queries_resolve_to_the_block_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "block/src/native_layout_view_block_queries.rs"
+            "block/src/layout_view_block_queries.rs"
         )))
         .expect("read LayoutView block-query owner");
         for owned_policy in [
@@ -8695,7 +8972,7 @@ mod package_contract_tests {
         assert!(
             loader.contains(concat!(
                 "layout_algo_",
-                "block/src/native_layout_view_block_queries.rs"
+                "block/src/layout_view_block_queries.rs"
             )),
             "LayoutView must load pagination queries from the block owner"
         );
@@ -8714,14 +8991,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_geometry_resolves_to_the_fragment_owner() {
+    fn layout_view_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_view_geometry.rs"),
-        )
-        .expect("read LayoutView viewport-geometry owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_view_geometry.rs"))
+                .expect("read LayoutView viewport-geometry owner");
         for owned_policy in [
             "fn IsBeingAutoSized",
             "fn InitialContainingBlockSize",
@@ -8751,7 +9027,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_view.rs"))
             .expect("read LayoutView compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_view_geometry.rs"),
+            loader.contains("layout_fragment/src/layout_view_geometry.rs"),
             "LayoutView must load viewport geometry from the fragment owner"
         );
         for leaked_policy in [
@@ -8773,12 +9049,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_queries_resolve_to_the_fragment_owner() {
+    fn layout_view_queries_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_view_fragment_queries.rs"),
+            root.join("layout_fragment/src/layout_view_fragment_queries.rs"),
         )
         .expect("read LayoutView fragment-query owner");
         for owned_policy in [
@@ -8810,7 +9086,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_view.rs"))
             .expect("read LayoutView compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_view_fragment_queries.rs"),
+            loader.contains("layout_fragment/src/layout_view_fragment_queries.rs"),
             "LayoutView must load fragment queries from layout_fragment"
         );
         for leaked_policy in [
@@ -8834,14 +9110,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_paint_policy_resolves_to_the_fragment_owner() {
+    fn layout_view_paint_policy_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_view_paint_policy.rs"),
-        )
-        .expect("read LayoutView paint-policy owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_view_paint_policy.rs"))
+                .expect("read LayoutView paint-policy owner");
         for owned_policy in [
             "fn BackgroundIsKnownToBeOpaqueInRect",
             "fn AdditionalCompositingReasons",
@@ -8864,7 +9139,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_view.rs"))
             .expect("read LayoutView compatibility module");
         assert!(
-            loader.contains("layout_fragment/src/native_layout_view_paint_policy.rs"),
+            loader.contains("layout_fragment/src/layout_view_paint_policy.rs"),
             "LayoutView must load paint policy from layout_fragment"
         );
         for leaked_policy in [
@@ -8884,14 +9159,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_state_propagation_resolves_to_the_invalidation_owner() {
+    fn layout_object_state_propagation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_state_propagation.rs"),
+            root.join("layout_invalidation/src/layout_object_state_propagation.rs"),
         )
-        .expect("read native LayoutObject state-propagation owner");
+        .expect("read source LayoutObject state-propagation owner");
         for owned_policy in [
             "fn LayoutObjectDepthSlow",
             "fn NotifyPriorityScrollAnchorStatusChanged",
@@ -8918,7 +9193,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_object_state_propagation.rs")
+            facade.contains("layout_invalidation/src/layout_object_state_propagation.rs")
                 && facade.contains("LayoutObjectDepthSlow(self)")
                 && facade.contains("LayoutObjectSetDepthIncludingDescendants(self, depth)")
                 && facade
@@ -8941,14 +9216,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_paint_invalidation_resolves_to_the_invalidation_owner() {
+    fn layout_object_paint_invalidation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_paint_invalidation.rs"),
+            root.join("layout_invalidation/src/layout_object_paint_invalidation.rs"),
         )
-        .expect("read native LayoutObject paint-invalidation owner");
+        .expect("read source LayoutObject paint-invalidation owner");
         for owned_policy in [
             "fn DestroyAndCleanupAnonymousWrappers",
             "fn InvalidateVisualOverflow",
@@ -8974,7 +9249,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_object_paint_invalidation.rs"),
+            loader.contains("layout_invalidation/src/layout_object_paint_invalidation.rs"),
             "LayoutObject must load paint invalidation from layout_invalidation"
         );
         for leaked_policy in [
@@ -8992,14 +9267,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_layer_mutation_resolves_to_the_invalidation_owner() {
+    fn layout_object_layer_mutation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_layer_mutation.rs"),
+            root.join("layout_invalidation/src/layout_object_layer_mutation.rs"),
         )
-        .expect("read native LayoutObject layer-mutation owner");
+        .expect("read source LayoutObject layer-mutation owner");
         for owned_policy in [
             "fn AddLayers",
             "fn RemoveLayers",
@@ -9025,7 +9300,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_object_layer_mutation.rs"),
+            loader.contains("layout_invalidation/src/layout_object_layer_mutation.rs"),
             "LayoutObject must load layer mutation from layout_invalidation"
         );
         for leaked_policy in [
@@ -9043,14 +9318,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_image_observers_resolve_to_the_invalidation_owner() {
+    fn layout_object_image_observers_resolve_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_image_observers.rs"),
+            root.join("layout_invalidation/src/layout_object_image_observers.rs"),
         )
-        .expect("read native LayoutObject image-observer owner");
+        .expect("read source LayoutObject image-observer owner");
         for owned_policy in [
             "fn AddAsImageObserver",
             "fn RemoveAsImageObserver",
@@ -9088,7 +9363,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
             .expect("read LayoutObject compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_object_image_observers.rs"),
+            loader.contains("layout_invalidation/src/layout_object_image_observers.rs"),
             "LayoutObject must load image observers from layout_invalidation"
         );
         for leaked_policy in [
@@ -9114,14 +9389,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_block_flow_child_normalization_resolves_to_the_invalidation_owner() {
+    fn layout_block_flow_child_normalization_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_block_flow_child_normalization.rs"),
+            root.join("layout_invalidation/src/layout_block_flow_child_normalization.rs"),
         )
-        .expect("read native LayoutBlockFlow child-normalization owner");
+        .expect("read source LayoutBlockFlow child-normalization owner");
         for owned_policy in [
             "fn get_inline_run",
             "fn LayoutBlockFlowCollapseAnonymousBlockChild",
@@ -9142,15 +9417,13 @@ mod package_contract_tests {
             "inline-run discovery and child normalization must retain invalidation sampling frames"
         );
 
-        let facade = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "block/src/native_layout_block_flow.rs"
-        )))
-        .expect("read native LayoutBlockFlow owner");
+        let facade = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "block/src/layout_block_flow.rs")),
+        )
+        .expect("read source LayoutBlockFlow owner");
         assert!(
-            facade.contains(
-                "layout_invalidation/src/native_layout_block_flow_child_normalization.rs"
-            ) && facade.contains("LayoutBlockFlowCollapseAnonymousBlockChild(self, child)")
+            facade.contains("layout_invalidation/src/layout_block_flow_child_normalization.rs")
+                && facade.contains("LayoutBlockFlowCollapseAnonymousBlockChild(self, child)")
                 && facade.contains("LayoutBlockFlowMakeChildrenInlineIfPossible(self)")
                 && facade.contains("LayoutBlockFlowMakeChildrenNonInline(self, insertion_point)")
                 && facade.contains("LayoutBlockFlowDirtyLinesFromChangedChild(self, child)"),
@@ -9170,14 +9443,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_block_flow_child_mutation_resolves_to_the_invalidation_owner() {
+    fn layout_block_flow_child_mutation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_block_flow_child_mutation.rs"),
+            root.join("layout_invalidation/src/layout_block_flow_child_mutation.rs"),
         )
-        .expect("read native LayoutBlockFlow child-mutation owner");
+        .expect("read source LayoutBlockFlow child-mutation owner");
         for owned_policy in [
             "fn is_mergeable_anonymous_block",
             "fn reparent_subsequent_floating_or_out_of_flow",
@@ -9199,13 +9472,12 @@ mod package_contract_tests {
             "insertion, removal and reparenting walks must retain invalidation sampling frames"
         );
 
-        let facade = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "block/src/native_layout_block_flow.rs"
-        )))
-        .expect("read native LayoutBlockFlow owner");
+        let facade = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "block/src/layout_block_flow.rs")),
+        )
+        .expect("read source LayoutBlockFlow owner");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_block_flow_child_mutation.rs")
+            facade.contains("layout_invalidation/src/layout_block_flow_child_mutation.rs")
                 && facade.contains("LayoutBlockFlowAddChildBase(self, new_child, before_child)")
                 && facade.contains("LayoutBlockFlowRemoveChildBase(self, old_child)")
                 && facade.contains("LayoutBlockFlowCanMergeWithBase(self, other)"),
@@ -9227,14 +9499,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_block_flow_multicol_update_resolves_to_the_invalidation_owner() {
+    fn layout_block_flow_multicol_update_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_block_flow_multicol_update.rs"),
+            root.join("layout_invalidation/src/layout_block_flow_multicol_update.rs"),
         )
-        .expect("read native LayoutBlockFlow multicol-update owner");
+        .expect("read source LayoutBlockFlow multicol-update owner");
         for owned_policy in [
             "fn LayoutBlockFlowUpdateForMulticol",
             "SpecifiesColumns",
@@ -9256,13 +9528,12 @@ mod package_contract_tests {
             "multicol admission and descendant propagation must retain an invalidation sampling frame"
         );
 
-        let facade = std::fs::read_to_string(root.join(concat!(
-            "layout_algo_",
-            "block/src/native_layout_block_flow.rs"
-        )))
-        .expect("read native LayoutBlockFlow owner");
+        let facade = std::fs::read_to_string(
+            root.join(concat!("layout_algo_", "block/src/layout_block_flow.rs")),
+        )
+        .expect("read source LayoutBlockFlow owner");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_block_flow_multicol_update.rs")
+            facade.contains("layout_invalidation/src/layout_block_flow_multicol_update.rs")
                 && facade.contains("LayoutBlockFlowUpdateForMulticol(self)"),
             "LayoutBlockFlow must delegate multicol refresh to layout_invalidation"
         );
@@ -9279,13 +9550,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_metrics_resolve_to_the_fragment_owner() {
+    fn layout_metrics_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_layout_metrics.rs"))
-                .expect("read native layout-metric owner");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/layout_metrics.rs"))
+            .expect("read source layout-metric owner");
         for owned_policy in [
             "fn scroll_range",
             "fn metric",
@@ -9307,11 +9577,11 @@ mod package_contract_tests {
         );
 
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_output.rs"))
-            .expect("read native layout-metric adapter");
+            .expect("read source layout-metric adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_layout_metrics.rs")
-                && adapter.contains("layout_fragment_native_layout_metrics::scroll_range(self)")
-                && adapter.contains("layout_fragment_native_layout_metrics::metric(self, metric)"),
+            adapter.contains("layout_fragment/src/layout_metrics.rs")
+                && adapter.contains("layout_fragment_layout_metrics::scroll_range(self)")
+                && adapter.contains("layout_fragment_layout_metrics::metric(self, metric)"),
             "LayoutNode must delegate CSSOM geometry metrics to layout_fragment"
         );
         for leaked_policy in [
@@ -9328,18 +9598,18 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_text_fragment_queries_resolve_to_the_fragment_owner() {
+    fn text_fragment_queries_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_text_fragment_queries.rs"),
-        )
-        .expect("read native text-fragment query owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/text_fragment_queries.rs"))
+                .expect("read source text-fragment query owner");
         for owned_policy in [
             "fn paint_glyph_runs",
             "fn text_paint_baseline",
             "fn text_inline_position",
+            "fn text_next_character_width",
             "fn text_range_rect",
             "fn text_offset_for_point",
             "BuildPaintGlyphRuns",
@@ -9353,22 +9623,23 @@ mod package_contract_tests {
             );
         }
         assert!(
-            owner.matches("#[inline(never)]").count() >= 5,
+            owner.matches("#[inline(never)]").count() >= 6,
             "each on-demand text query class must retain a fragment sampling frame"
         );
 
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_output.rs"))
             .expect("read text-fragment query adapter");
         for delegated in [
-            "layout_fragment_native_text_fragment_queries::paint_glyph_runs(self)",
-            "layout_fragment_native_text_fragment_queries::text_paint_baseline(self)",
-            "layout_fragment_native_text_fragment_queries::text_inline_position(self, offset)",
-            "layout_fragment_native_text_fragment_queries::text_range_rect(self, start, end)",
-            "layout_fragment_native_text_fragment_queries::text_offset_for_point(self, point)",
+            "layout_fragment_text_fragment_queries::paint_glyph_runs(self)",
+            "layout_fragment_text_fragment_queries::text_paint_baseline(self)",
+            "layout_fragment_text_fragment_queries::text_inline_position(self, offset)",
+            "layout_fragment_text_fragment_queries::text_next_character_width(self, offset)",
+            "layout_fragment_text_fragment_queries::text_range_rect(self, start, end)",
+            "layout_fragment_text_fragment_queries::text_offset_for_point(self, point)",
         ] {
             assert!(
                 adapter.contains(delegated),
-                "native text cursor must delegate through {delegated}"
+                "source text cursor must delegate through {delegated}"
             );
         }
         for leaked_policy in [
@@ -9385,19 +9656,19 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_caret_geometry_resolves_to_the_fragment_owner() {
+    fn caret_geometry_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_caret_geometry.rs"))
-                .expect("read native caret-geometry owner");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/caret_geometry.rs"))
+            .expect("read source caret-geometry owner");
         for owned_policy in [
             "fn visit_text",
             "fn text_control_caret_rect",
             "fn editor(",
             "fn text_control_offset_for_point",
             "TextInlinePosition",
+            "TextNextCharacterWidth",
             "TextPaintBaseline",
             "TextOffsetForPoint",
             "text_control_empty_caret",
@@ -9412,9 +9683,8 @@ mod package_contract_tests {
             "caret rect, hit test and recursive walks must retain fragment sampling frames"
         );
 
-        let contract =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_caret_rect.rs"))
-                .expect("read caret rectangle contract owner");
+        let contract = std::fs::read_to_string(root.join("layout_fragment/src/caret_rect.rs"))
+            .expect("read caret rectangle contract owner");
         assert!(
             contract.contains("pub enum CaretShape")
                 && contract.contains("pub trait CaretRectServices")
@@ -9425,8 +9695,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/caret_rect.rs"))
                 .expect("read caret rectangle contract facade");
         assert!(
-            contract_facade.contains("layout_fragment/src/native_caret_rect.rs")
-                && contract_facade.contains("pub use layout_fragment_native_caret_rect::*;")
+            contract_facade.contains("layout_fragment/src/caret_rect.rs")
+                && contract_facade.contains("pub use layout_fragment_caret_rect::*;")
                 && !contract_facade.contains("pub trait CaretRectServices"),
             "caret rectangle contract must be re-exported from layout_fragment"
         );
@@ -9434,13 +9704,11 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/caret/geometry.rs"))
             .expect("read caret geometry adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_caret_geometry.rs")
+            adapter.contains("layout_fragment/src/caret_geometry.rs")
+                && adapter.contains("layout_fragment_caret_geometry::text_control_caret_rect")
                 && adapter
-                    .contains("layout_fragment_native_caret_geometry::text_control_caret_rect")
-                && adapter.contains(
-                    "layout_fragment_native_caret_geometry::text_control_offset_for_point"
-                ),
-            "caret geometry API must delegate native walks to layout_fragment"
+                    .contains("layout_fragment_caret_geometry::text_control_offset_for_point"),
+            "caret geometry API must delegate source walks to layout_fragment"
         );
         for leaked_policy in [
             "fn visit_text",
@@ -9456,14 +9724,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_sticky_layout_commit_resolves_to_the_fragment_owner() {
+    fn sticky_layout_commit_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_sticky_layout_commit.rs"),
-        )
-        .expect("read native sticky layout-commit owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/sticky_layout_commit.rs"))
+                .expect("read source sticky layout-commit owner");
         for owned_policy in [
             "fn update_sticky_offsets_after_layout",
             "TracePhase::UpdateStickyOffsets",
@@ -9484,9 +9751,9 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_sticky_layout_commit.rs")
+            adapter.contains("layout_fragment/src/sticky_layout_commit.rs")
                 && adapter.contains(
-                    "layout_fragment_native_sticky_layout_commit::update_sticky_offsets_after_layout"
+                    "layout_fragment_sticky_layout_commit::update_sticky_offsets_after_layout"
                 ),
             "LayoutEngine must delegate post-layout sticky traversal to layout_fragment"
         );
@@ -9503,14 +9770,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_engine_scroll_refresh_resolves_to_the_fragment_owner() {
+    fn engine_scroll_refresh_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_engine_scroll_refresh.rs"),
-        )
-        .expect("read native retained-scroll owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/retained_scroll_refresh.rs"))
+                .expect("read source retained-scroll owner");
         for owned_policy in [
             "fn refresh_retained_scroll_geometry",
             "RefreshScrollCullData",
@@ -9533,9 +9799,9 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_engine_scroll_refresh.rs")
+            adapter.contains("layout_fragment/src/retained_scroll_refresh.rs")
                 && adapter.contains(
-                    "layout_fragment_native_engine_scroll_refresh::refresh_retained_scroll_geometry"
+                    "layout_fragment_retained_scroll_refresh::refresh_retained_scroll_geometry"
                 ),
             "LayoutEngine must delegate retained-scroll fragment refresh to layout_fragment"
         );
@@ -9556,20 +9822,18 @@ mod package_contract_tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_layout_result_publish.rs"),
-        )
-        .expect("read native layout-result publication owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/layout_result_publish.rs"))
+                .expect("read source layout-result publication owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn populate_layout_result_paint_data",
             "TracePhase::PopulateLayoutResultPaintData",
-            "TracePhase::BuildPaintCullRect",
             "TracePhase::PopulateFragmentPaintData",
             "TracePhase::ResolveLogicalParents",
             "TracePhase::PopulateGlobalPaintData",
             "FragmentOwners",
-            "LayoutResultHandle::FromNative",
+            "LayoutResultHandle::FromLayoutResult",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -9582,7 +9846,7 @@ mod package_contract_tests {
                 .expect("read fragment boundary adapter");
         assert!(
             adapter.contains(
-                "layout_fragment_native_layout_result_publish::populate_layout_result_paint_data"
+                "layout_fragment_layout_result_publish::populate_layout_result_paint_data"
             ),
             "fragment boundary must delegate LayoutResult publication to layout_fragment"
         );
@@ -9599,27 +9863,25 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_paint_population_resolves_to_the_fragment_owner() {
+    fn fragment_paint_population_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_paint_population.rs"),
-        )
-        .expect("read native fragment paint-population owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_paint_population.rs"))
+                .expect("read source fragment paint-population owner");
         for owned_policy in [
             "fn PopulateInlineItemLocalPaintData",
             "fn PopulateInlineItemPaintData",
             "pub(super) fn PopulatePhysicalFragmentPaintData",
             "FragmentPaintData::new",
-            "ShouldCullPhysicalFragment",
-            "ClearPaintInputs",
-            "SetPaintInput",
+            "paint_state.SetPhysical",
+            "paint_state.SetInline",
             "PopulateSVGChildPaintData",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native paint population lost {owned_policy}"
+                "layout_fragment source paint population lost {owned_policy}"
             );
         }
         assert!(
@@ -9631,9 +9893,9 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_fragment_paint_population.rs")
+            adapter.contains("layout_fragment/src/fragment_paint_population.rs")
                 && adapter.contains(
-                    "layout_fragment_native_fragment_paint_population::PopulatePhysicalFragmentPaintData"
+                    "layout_fragment_fragment_paint_population::PopulatePhysicalFragmentPaintData"
                 ),
             "fragment boundary must import physical paint population from layout_fragment"
         );
@@ -9650,14 +9912,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_property_export_resolves_to_the_fragment_owner() {
+    fn fragment_property_export_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_property_export.rs"),
-        )
-        .expect("read native fragment property-export owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_property_export.rs"))
+                .expect("read source fragment property-export owner");
         for owned_policy in [
             "pub(super) fn ExportPaintProperties",
             "fn ExportPrePaintInvalidation",
@@ -9670,7 +9931,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native property export lost {owned_policy}"
+                "layout_fragment source property export lost {owned_policy}"
             );
         }
         assert!(
@@ -9682,9 +9943,9 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_fragment_property_export.rs")
+            adapter.contains("layout_fragment/src/fragment_property_export.rs")
                 && adapter.contains(
-                    "layout_fragment_native_fragment_property_export::{ExportPaintProperties, ExportProperties}"
+                    "layout_fragment_fragment_property_export::{ExportPaintProperties, ExportProperties}"
                 ),
             "fragment boundary must import property projection from layout_fragment"
         );
@@ -9701,14 +9962,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_export_support_resolves_to_the_fragment_owner() {
+    fn fragment_export_support_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_export_support.rs"),
-        )
-        .expect("read native fragment export support owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_export_support.rs"))
+                .expect("read source fragment export support owner");
         for owned_policy in [
             "pub(super) fn Number",
             "pub(super) fn ExportAppliedTextDecorations",
@@ -9717,11 +9977,10 @@ mod package_contract_tests {
             "pub(super) type SourceMap",
             "pub(super) type StyleSourceMap",
             "pub(super) type ExportedStyleCache",
-            "pub(super) fn TraceInlineExport",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native export support lost {owned_policy}"
+                "layout_fragment source export support lost {owned_policy}"
             );
         }
         assert!(
@@ -9733,8 +9992,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_fragment_export_support.rs")
-                && adapter.contains("layout_fragment_native_fragment_export_support::{"),
+            adapter.contains("layout_fragment/src/fragment_export_support.rs")
+                && adapter.contains("layout_fragment_fragment_export_support::{"),
             "fragment boundary must import export support from layout_fragment"
         );
         for leaked_policy in [
@@ -9751,26 +10010,25 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_text_paint_export_resolves_to_the_fragment_owner() {
+    fn text_paint_export_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_text_paint_export.rs"))
-                .expect("read native text paint-export owner");
+        let owner = std::fs::read_to_string(root.join("layout_fragment/src/text_paint_export.rs"))
+            .expect("read source text paint-export owner");
         for owned_policy in [
             "struct GlyphExportContext",
             "fn ExportGlyph",
             "pub(super) fn ExportShapeResult",
             "pub(super) fn ExportTextCombineEmphasis",
             "pub(crate) fn BuildPaintGlyphRuns",
-            "pub(crate) fn NativeTextPaintBaseline",
+            "pub(crate) fn ExportTextPaintBaseline",
             "pub(super) fn ExportTextCombineInlineOffset",
             "pub(super) fn ExportListMarkerSymbol",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native text paint export lost {owned_policy}"
+                "layout_fragment source text paint export lost {owned_policy}"
             );
         }
         assert!(
@@ -9782,15 +10040,15 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_text_paint_export.rs")
-                && adapter.contains("layout_fragment_native_text_paint_export::{"),
+            adapter.contains("layout_fragment/src/text_paint_export.rs")
+                && adapter.contains("layout_fragment_text_paint_export::{"),
             "fragment boundary must import text paint export from layout_fragment"
         );
         for leaked_policy in [
             "struct GlyphExportContext",
             "fn ExportGlyph(",
             "fn ExportShapeResult(",
-            "fn TextPaintBaseline(",
+            "fn ResolveTextPaintBaseline(",
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
@@ -9800,14 +10058,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_geometry_export_resolves_to_the_fragment_owner() {
+    fn fragment_geometry_export_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_geometry_export.rs"),
-        )
-        .expect("read native fragment geometry-export owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_geometry_export.rs"))
+                .expect("read source fragment geometry-export owner");
         for owned_policy in [
             "fn FragmentLocalAffineTransform",
             "pub(super) fn ExportSvgTextPaintData",
@@ -9819,20 +10076,30 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native geometry export lost {owned_policy}"
+                "layout_fragment source geometry export lost {owned_policy}"
             );
         }
         assert!(
             owner.matches("#[inline(never)]").count() >= 2,
             "SVG-text and box geometry projection must retain sampling frames"
         );
+        for reconstructed_state in [
+            "let visible_width = Number(clip.size.width)",
+            "(Offset::default(), paint.scroll_offset)",
+            "compositor_element_id: if area.is_null()",
+        ] {
+            assert!(
+                !owner.contains(reconstructed_state),
+                "scroll geometry export must consume the retained ScrollableArea, not reconstruct {reconstructed_state}"
+            );
+        }
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_fragment_geometry_export.rs")
-                && adapter.contains("layout_fragment_native_fragment_geometry_export::{"),
+            adapter.contains("layout_fragment/src/fragment_geometry_export.rs")
+                && adapter.contains("layout_fragment_fragment_geometry_export::{"),
             "fragment boundary must import geometry projection from layout_fragment"
         );
         for leaked_policy in [
@@ -9853,10 +10120,9 @@ mod package_contract_tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let scrollbar = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_scrollbar_paint_export.rs"),
-        )
-        .expect("read native scrollbar paint owner");
+        let scrollbar =
+            std::fs::read_to_string(root.join("layout_fragment/src/scrollbar_paint_export.rs"))
+                .expect("read source scrollbar paint owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn ExportScrollbarPaintData",
@@ -9870,10 +10136,9 @@ mod package_contract_tests {
             );
         }
 
-        let specialized = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_specialized_paint_export.rs"),
-        )
-        .expect("read specialized fragment paint owner");
+        let specialized =
+            std::fs::read_to_string(root.join("layout_fragment/src/specialized_paint_export.rs"))
+                .expect("read specialized fragment paint owner");
         for owned_policy in [
             "pub(super) fn ExportTablePaintData",
             "pub(super) fn ExportMathMLPaintData",
@@ -9889,7 +10154,7 @@ mod package_contract_tests {
         }
 
         let collapsed = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_collapsed_table_paint_export.rs"),
+            root.join("layout_fragment/src/collapsed_table_paint_export.rs"),
         )
         .expect("read collapsed-table paint owner");
         for owned_policy in [
@@ -9907,7 +10172,7 @@ mod package_contract_tests {
         }
 
         let table_geometry =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_table_fragment_data.rs"))
+            std::fs::read_to_string(root.join("layout_fragment/src/table_fragment_data.rs"))
                 .expect("read fragment-owned table geometry data");
         assert!(
             table_geometry.contains("pub struct TableColumnGeometry")
@@ -9918,16 +10183,15 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/table_fragment_data.rs"))
                 .expect("read table fragment-data facade");
         assert!(
-            table_geometry_facade.contains("layout_fragment/src/native_table_fragment_data.rs")
+            table_geometry_facade.contains("layout_fragment/src/table_fragment_data.rs")
                 && table_geometry_facade
-                    .contains("pub use layout_fragment_native_table_fragment_data::*;")
+                    .contains("pub use layout_fragment_table_fragment_data::*;")
                 && !table_geometry_facade.contains("pub struct TableColumnGeometry"),
             "table geometry payloads must be re-exported from layout_fragment"
         );
 
-        let mathml =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_mathml_paint_info.rs"))
-                .expect("read fragment-owned MathML paint data");
+        let mathml = std::fs::read_to_string(root.join("layout_fragment/src/mathml_paint_info.rs"))
+            .expect("read fragment-owned MathML paint data");
         assert!(
             mathml.contains("pub struct MathMLPaintInfo")
                 && mathml.contains("operator_shape_result_view")
@@ -9938,8 +10202,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/mathml_paint_info.rs"))
                 .expect("read MathML paint-data facade");
         assert!(
-            mathml_facade.contains("layout_fragment/src/native_mathml_paint_info.rs")
-                && mathml_facade.contains("pub use layout_fragment_native_mathml_paint_info::*;")
+            mathml_facade.contains("layout_fragment/src/mathml_paint_info.rs")
+                && mathml_facade.contains("pub use layout_fragment_mathml_paint_info::*;")
                 && !mathml_facade.contains("pub struct MathMLPaintInfo"),
             "MathML paint data must be re-exported from layout_fragment"
         );
@@ -9948,9 +10212,9 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         for owner in [
-            "layout_fragment/src/native_scrollbar_paint_export.rs",
-            "layout_fragment/src/native_specialized_paint_export.rs",
-            "layout_fragment/src/native_collapsed_table_paint_export.rs",
+            "layout_fragment/src/scrollbar_paint_export.rs",
+            "layout_fragment/src/specialized_paint_export.rs",
+            "layout_fragment/src/collapsed_table_paint_export.rs",
         ] {
             assert!(
                 adapter.contains(owner),
@@ -9971,46 +10235,37 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_export_state_resolves_to_the_fragment_owner() {
+    fn fragment_export_state_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_export_state.rs"),
-        )
-        .expect("read native fragment export-state owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_fragment/src/fragment_export_state.rs"))
+                .expect("read source fragment export-state owner");
         for owned_policy in [
-            "pub(super) struct PaintCullRect",
-            "pub(super) fn BuildPaintCullRect",
             "pub(super) struct FragmentOwners",
             "pub(super) fn fragment_instance",
             "pub(super) fn PopulateSVGChildPaintData",
-            "mark_uncullable_paint_ancestors",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native export state lost {owned_policy}"
+                "layout_fragment source export state lost {owned_policy}"
             );
         }
         assert!(
-            owner.matches("#[inline(never)]").count() >= 2,
-            "cull construction and SVG child expansion must retain sampling frames"
+            owner.contains("#[inline(never)]"),
+            "SVG child expansion must retain a sampling frame"
         );
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_fragment_export_state.rs")
-                && adapter.contains("layout_fragment_native_fragment_export_state::{"),
+            adapter.contains("layout_fragment/src/fragment_export_state.rs")
+                && adapter.contains("layout_fragment_fragment_export_state::{"),
             "fragment boundary must import publication state from layout_fragment"
         );
-        for leaked_policy in [
-            "struct PaintCullRect",
-            "fn BuildPaintCullRect(",
-            "struct FragmentOwners",
-            "fn PopulateSVGChildPaintData(",
-        ] {
+        for leaked_policy in ["struct FragmentOwners", "fn PopulateSVGChildPaintData("] {
             assert!(
                 !adapter.contains(leaked_policy),
                 "fragment boundary still owns export-state policy {leaked_policy}"
@@ -10019,40 +10274,43 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_fragment_ink_and_images_resolve_to_the_fragment_owner() {
+    fn fragment_ink_and_images_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let storage =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_ink_overflow.rs"))
-                .expect("read fragment-owned ink-overflow storage");
+        let storage = std::fs::read_to_string(root.join("layout_fragment/src/ink_overflow.rs"))
+            .expect("read fragment-owned ink-overflow storage");
         for owned_policy in [
             "pub struct InkOverflow",
             "pub enum InkOverflowType",
-            "pub trait InkOverflowTextMethods",
-            "pub(crate) trait InkOverflowTextInternals",
             "pub fn Set(",
+            "fn InkOverflowComputeEmphasisMarkOverflowForTextCombine",
+            "fn InkOverflowExpandForShadowOverflowForTextCombine",
         ] {
             assert!(
                 storage.contains(owned_policy),
                 "fragment ink-overflow storage lost {owned_policy}"
             );
         }
+        assert!(
+            !storage.contains("trait InkOverflowTextMethods")
+                && !storage.contains("trait InkOverflowTextInternals"),
+            "ink-overflow must not retain declaration-only substitute traits"
+        );
         let storage_facade =
             std::fs::read_to_string(root.join("layoutng/src/internal/ink_overflow.rs"))
                 .expect("read ink-overflow compatibility facade");
         assert!(
-            storage_facade.contains("layout_fragment/src/native_ink_overflow.rs")
-                && storage_facade.contains("pub use layout_fragment_native_ink_overflow::*;")
+            storage_facade.contains("layout_fragment/src/ink_overflow.rs")
+                && storage_facade.contains("pub use layout_fragment_ink_overflow::*;")
                 && !storage_facade.contains("pub struct InkOverflow"),
             "ink-overflow storage must be re-exported from layout_fragment"
         );
 
-        let ink =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_ink_overflow_export.rs"))
-                .expect("read native ink-overflow owner");
+        let ink = std::fs::read_to_string(root.join("layout_fragment/src/ink_overflow_export.rs"))
+            .expect("read source ink-overflow owner");
         for owned_policy in [
-            "pub(super) fn ExportNativeInkRect",
+            "pub(super) fn ExportInkRect",
             "pub(super) fn ExportBoxInkOverflow",
             "pub(super) fn ExportInlineInkOverflow",
             "ComputeInkBounds",
@@ -10060,21 +10318,26 @@ mod package_contract_tests {
         ] {
             assert!(
                 ink.contains(owned_policy),
-                "layout_fragment native ink export lost {owned_policy}"
+                "layout_fragment source ink export lost {owned_policy}"
             );
         }
         assert!(
             ink.matches("#[inline(never)]").count() >= 2,
             "box and inline ink export must retain separate sampling frames"
         );
+        assert!(
+            ink.contains("layout_box.SelfVisualOverflowRect()")
+                && !ink.contains("paint.style.box_shadows")
+                && !ink.contains("paint.style.outline_width"),
+            "LayoutBox visual overflow must come from the source overflow owner, not style reconstruction"
+        );
 
-        let images = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_nine_piece_image_export.rs"),
-        )
-        .expect("read native nine-piece image owner");
+        let images =
+            std::fs::read_to_string(root.join("layout_fragment/src/nine_piece_image_export.rs"))
+                .expect("read source nine-piece image owner");
         for owned_policy in [
             "#[inline(never)]",
-            "pub(super) fn ExportNativeNinePieceImages",
+            "pub(super) fn ExportNinePieceImages",
             "FetchedNinePieceImageResourceId",
             "border_image",
             "mask_box_image",
@@ -10090,8 +10353,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         for owner in [
-            "layout_fragment/src/native_ink_overflow_export.rs",
-            "layout_fragment/src/native_nine_piece_image_export.rs",
+            "layout_fragment/src/ink_overflow_export.rs",
+            "layout_fragment/src/nine_piece_image_export.rs",
         ] {
             assert!(
                 adapter.contains(owner),
@@ -10101,7 +10364,7 @@ mod package_contract_tests {
         for leaked_policy in [
             "fn ExportBoxInkOverflow(",
             "fn ExportInlineInkOverflow(",
-            "fn ExportNativeNinePieceImages(",
+            "fn ExportNinePieceImages(",
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
@@ -10111,13 +10374,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_global_fragment_passes_resolve_to_the_fragment_owner() {
+    fn global_fragment_passes_resolve_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let background_transfer =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_background_transfer.rs"))
-                .expect("read native canvas-background transfer owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/background_transfer.rs"))
+                .expect("read source canvas-background transfer owner");
         for owned_policy in [
             "#[inline(never)]",
             "fn LayoutBoxModelObjectBackgroundTransfersToView",
@@ -10134,7 +10397,7 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_model_object.rs"))
                 .expect("read LayoutBoxModelObject background adapter");
         assert!(
-            background_adapter.contains("layout_fragment/src/native_background_transfer.rs")
+            background_adapter.contains("layout_fragment/src/background_transfer.rs")
                 && background_adapter.contains(
                     "LayoutBoxModelObjectBackgroundTransfersToView(self, document_style)"
                 ),
@@ -10152,11 +10415,11 @@ mod package_contract_tests {
         }
 
         let global =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_global_paint_export.rs"))
-                .expect("read native global paint owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/global_paint_export.rs"))
+                .expect("read source global paint owner");
         for owned_policy in [
-            "pub(super) fn ExportCanvasBackgroundNative",
-            "pub(super) fn ExportGlobalMainThreadScrollFactsNative",
+            "pub(super) fn ExportCanvasBackground",
+            "pub(super) fn ExportGlobalMainThreadScrollFacts",
             "background_transfers_to_view",
             "requires_main_thread_scrolling_for_background_attachment_fixed",
         ] {
@@ -10167,12 +10430,12 @@ mod package_contract_tests {
         }
 
         let relationships = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_fragment_relationship_export.rs"),
+            root.join("layout_fragment/src/fragment_relationship_export.rs"),
         )
-        .expect("read native fragment relationship owner");
+        .expect("read source fragment relationship owner");
         for owned_policy in [
-            "pub(super) fn ResolveNativeLogicalParentOccurrences",
-            "pub(super) fn PopulateNativeInlineStitchedDecorations",
+            "pub(super) fn ResolveLogicalParentOccurrences",
+            "pub(super) fn PopulateInlineStitchedDecorations",
             "logical_parent_fragment_instance_id",
             "StitchedDecorationData",
         ] {
@@ -10183,8 +10446,8 @@ mod package_contract_tests {
         }
 
         let sticky =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_sticky_paint_export.rs"))
-                .expect("read native sticky paint owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/sticky_paint_export.rs"))
+                .expect("read source sticky paint owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn ExportStickyPaintProperties",
@@ -10197,10 +10460,9 @@ mod package_contract_tests {
             );
         }
 
-        let thumb = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_scrollbar_thumb_geometry.rs"),
-        )
-        .expect("read native scrollbar thumb owner");
+        let thumb =
+            std::fs::read_to_string(root.join("layout_fragment/src/scrollbar_thumb_geometry.rs"))
+                .expect("read source scrollbar thumb owner");
         assert!(
             thumb.contains("#[inline(never)]") && thumb.contains("pub(super) fn SetScrollbarThumb"),
             "scrollbar thumb geometry must keep a fragment sampling entry"
@@ -10210,10 +10472,10 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         for owner in [
-            "layout_fragment/src/native_global_paint_export.rs",
-            "layout_fragment/src/native_fragment_relationship_export.rs",
-            "layout_fragment/src/native_sticky_paint_export.rs",
-            "layout_fragment/src/native_scrollbar_thumb_geometry.rs",
+            "layout_fragment/src/global_paint_export.rs",
+            "layout_fragment/src/fragment_relationship_export.rs",
+            "layout_fragment/src/sticky_paint_export.rs",
+            "layout_fragment/src/scrollbar_thumb_geometry.rs",
         ] {
             assert!(
                 adapter.contains(owner),
@@ -10221,9 +10483,9 @@ mod package_contract_tests {
             );
         }
         for leaked_policy in [
-            "fn ExportCanvasBackgroundNative(",
-            "fn ResolveNativeLogicalParentOccurrences(",
-            "fn PopulateNativeInlineStitchedDecorations(",
+            "fn ExportCanvasBackground(",
+            "fn ResolveLogicalParentOccurrences(",
+            "fn PopulateInlineStitchedDecorations(",
             "fn ExportStickyPaintProperties(",
             "fn SetScrollbarThumb(",
         ] {
@@ -10235,17 +10497,17 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_inline_fragment_policy_resolves_to_the_fragment_owner() {
+    fn inline_fragment_policy_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_fragment/src/native_inline_fragment_policy.rs"),
+            root.join("layout_fragment/src/inline_fragment_paint_policy.rs"),
         )
-        .expect("read native inline-fragment policy owner");
+        .expect("read source inline-fragment policy owner");
         for owned_policy in [
-            "fn StyleRequiresPaintBackedInlineFragment",
-            "pub(crate) fn NativeStyleRequiresPaintBackedInlineFragment",
+            "fn ProjectedStyleRequiresPaintBackedInlineFragment",
+            "pub(crate) fn ComputedStyleRequiresPaintBackedInlineFragment",
             "pub(crate) fn RequiresPaintBackedInlineFragment",
             "paint.backdrop_filter_has_reference",
             "style.HasBoxDecorationBackground()",
@@ -10257,20 +10519,20 @@ mod package_contract_tests {
         }
         assert!(
             owner.matches("#[inline(never)]").count() >= 2,
-            "typed and native inline admission must retain sampling frames"
+            "typed and source inline admission must retain sampling frames"
         );
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         assert!(
-            adapter.contains("layout_fragment/src/native_inline_fragment_policy.rs")
-                && adapter.contains("layout_fragment_native_inline_fragment_policy::{"),
+            adapter.contains("layout_fragment/src/inline_fragment_paint_policy.rs")
+                && adapter.contains("layout_fragment_inline_fragment_paint_policy::{"),
             "fragment boundary must re-export inline admission from layout_fragment"
         );
         for leaked_policy in [
-            "fn StyleRequiresPaintBackedInlineFragment(",
-            "fn NativeStyleRequiresPaintBackedInlineFragment(",
+            "fn ProjectedStyleRequiresPaintBackedInlineFragment(",
+            "fn ComputedStyleRequiresPaintBackedInlineFragment(",
             "fn RequiresPaintBackedInlineFragment(",
         ] {
             assert!(
@@ -10286,19 +10548,18 @@ mod package_contract_tests {
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_fragment/src/native_paint_cache_refresh.rs"))
-                .expect("read native paint-cache refresh owner");
+            std::fs::read_to_string(root.join("layout_fragment/src/paint_cache_refresh.rs"))
+                .expect("read source paint-cache refresh owner");
         for owned_policy in [
             "pub(super) fn refresh_compatible_node_input_cache",
             "pub(super) fn refresh_compatible_paint_cache",
             "TracePhase::RefreshBoundaryCache",
             "cache.style_sources.clear()",
             "HasStickyConstrainedPosition",
-            "MarkUncullablePaintAncestors",
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_fragment native paint-cache refresh lost {owned_policy}"
+                "layout_fragment source paint-cache refresh lost {owned_policy}"
             );
         }
         assert!(
@@ -10310,8 +10571,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
                 .expect("read fragment boundary adapter");
         for delegation in [
-            "layout_fragment_native_paint_cache_refresh::refresh_compatible_node_input_cache",
-            "layout_fragment_native_paint_cache_refresh::refresh_compatible_paint_cache",
+            "layout_fragment_paint_cache_refresh::refresh_compatible_node_input_cache",
+            "layout_fragment_paint_cache_refresh::refresh_compatible_paint_cache",
         ] {
             assert!(
                 adapter.contains(delegation),
@@ -10330,13 +10591,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_tree_update_transaction_resolves_to_the_invalidation_owner() {
+    fn tree_update_transaction_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_tree_update.rs"))
-                .expect("read native invalidation tree-update owner");
+        let owner = std::fs::read_to_string(root.join("layout_invalidation/src/tree_update.rs"))
+            .expect("read source invalidation tree-update owner");
         for owned_policy in [
             "pub(super) fn reattach",
             "pub(super) fn place",
@@ -10352,7 +10612,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native transaction lost {owned_policy}"
+                "layout_invalidation source transaction lost {owned_policy}"
             );
         }
         assert!(
@@ -10392,14 +10652,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_font_environment_cache_resolves_to_the_reuse_owner() {
+    fn font_environment_cache_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_reuse/src/native_layout_environment_cache.rs"),
-        )
-        .expect("read native reusable font-environment owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_reuse/src/layout_environment_cache.rs"))
+                .expect("read source reusable font-environment owner");
         for owned_policy in [
             "pub(crate) struct ReusableLayoutEnvironment",
             "fn Matches(&self",
@@ -10412,7 +10671,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_reuse native font environment lost {owned_policy}"
+                "layout_reuse source font environment lost {owned_policy}"
             );
         }
         assert!(
@@ -10422,12 +10681,11 @@ mod package_contract_tests {
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
-                .expect("read native layout boundary adapter");
+                .expect("read source layout boundary adapter");
         assert!(
-            adapter.contains("layout_reuse/src/native_layout_environment_cache.rs")
-                && adapter.contains(
-                    "layout_reuse_native_layout_environment_cache::ReusableLayoutEnvironment"
-                ),
+            adapter.contains("layout_reuse/src/layout_environment_cache.rs")
+                && adapter
+                    .contains("layout_reuse_layout_environment_cache::ReusableLayoutEnvironment"),
             "layout boundary must import reusable font state from layout_reuse"
         );
         for leaked_policy in [
@@ -10443,13 +10701,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_engine_output_reuse_resolves_to_the_reuse_owner() {
+    fn engine_output_reuse_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_reuse/src/native_engine_output_reuse.rs"))
-                .expect("read native engine output-reuse owner");
+        let owner = std::fs::read_to_string(root.join("layout_reuse/src/engine_output_reuse.rs"))
+            .expect("read source engine output-reuse owner");
         for owned_policy in [
             "fn has_current_output",
             "engine.fragments.is_some()",
@@ -10473,9 +10730,9 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_reuse/src/native_engine_output_reuse.rs")
+            adapter.contains("layout_reuse/src/engine_output_reuse.rs")
                 && adapter.contains(
-                    "layout_reuse_native_engine_output_reuse::has_current_output(self, purpose)"
+                    "layout_reuse_engine_output_reuse::has_current_output(self, purpose)"
                 ),
             "LayoutEngine must delegate resident output admission to layout_reuse"
         );
@@ -10491,12 +10748,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_font_resolver_resolves_to_the_reuse_owner() {
+    fn font_resolver_resolves_to_the_reuse_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join("layout_reuse/src/native_font_resolver.rs"))
-            .expect("read native font resolver owner");
+        let owner = std::fs::read_to_string(root.join("layout_reuse/src/font_resolver.rs"))
+            .expect("read source font resolver owner");
         for owned_policy in [
             "struct DeferredFontResolver",
             "pub(super) fn EngineFontResolver",
@@ -10507,7 +10764,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_reuse native font resolver lost {owned_policy}"
+                "layout_reuse source font resolver lost {owned_policy}"
             );
         }
         assert!(
@@ -10517,12 +10774,12 @@ mod package_contract_tests {
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
-                .expect("read native layout boundary adapter");
+                .expect("read source layout boundary adapter");
         assert!(
-            adapter.contains("layout_reuse/src/native_font_resolver.rs")
-                && adapter.contains("layout_reuse_native_font_resolver::EngineFontResolver")
-                && adapter.contains("layout_reuse_native_font_resolver::ConstructionFontResolver"),
-            "layout boundary must import native font resolvers from layout_reuse"
+            adapter.contains("layout_reuse/src/font_resolver.rs")
+                && adapter.contains("layout_reuse_font_resolver::EngineFontResolver")
+                && adapter.contains("layout_reuse_font_resolver::ConstructionFontResolver"),
+            "layout boundary must import source font resolvers from layout_reuse"
         );
         for leaked_policy in [
             "struct DeferredFontResolver",
@@ -10537,7 +10794,7 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_font_from_selector_resolves_to_the_font_boundary() {
+    fn font_from_selector_resolves_to_the_font_boundary() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
@@ -10549,8 +10806,8 @@ mod package_contract_tests {
             "fn FontFromSelector",
             "while !family.is_null()",
             "families.push",
-            "NativeFontRequest::new_auto",
-            "CurrentNativeFontResolver",
+            "FontRequest::new_auto",
+            "CurrentFontResolver",
             "CloneWithDescription",
             "fn FontNewWithSelector",
         ] {
@@ -10566,20 +10823,20 @@ mod package_contract_tests {
         );
 
         assert!(
-            !owner.contains("layout_reuse/src/native_font_from_selector.rs"),
+            !owner.contains("layout_reuse/src/font_from_selector.rs"),
             "selector-backed construction must not be assigned to cache reuse"
         );
     }
 
     #[test]
-    fn native_layout_object_invalidation_resolves_to_the_invalidation_owner() {
+    fn layout_object_invalidation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let tree_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_tree_invalidation.rs"),
+            root.join("layout_invalidation/src/layout_tree_invalidation.rs"),
         )
-        .expect("read native invalidation tree adapter");
+        .expect("read source invalidation tree adapter");
         for owned_policy in [
             "pub(crate) struct LayoutObjectInvalidationTree",
             "impl layout_invalidation::ContainerChainInvalidationTree",
@@ -10595,12 +10852,12 @@ mod package_contract_tests {
         ] {
             assert!(
                 tree_owner.contains(owned_policy),
-                "layout_invalidation native tree adapter lost {owned_policy}"
+                "layout_invalidation source tree adapter lost {owned_policy}"
             );
         }
         assert!(
             tree_owner.contains("#[inline(never)]\nfn ShouldInvalidateBeyond"),
-            "the native intrinsic-width boundary decision must retain an invalidation sampling frame"
+            "the source intrinsic-width boundary decision must retain an invalidation sampling frame"
         );
         assert!(
             tree_owner.contains(
@@ -10615,9 +10872,9 @@ mod package_contract_tests {
         );
 
         let dirty_state_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_dirty_state.rs"),
+            root.join("layout_invalidation/src/layout_object_dirty_state.rs"),
         )
-        .expect("read native LayoutObject dirty-state owner");
+        .expect("read source LayoutObject dirty-state owner");
         for owned_policy in [
             "fn SetNeedsLayout(",
             "fn SetNeedsLayoutWithMarking",
@@ -10646,10 +10903,9 @@ mod package_contract_tests {
             "small per-object dirty-state composition must remain inlineable"
         );
 
-        let geometry_owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_geometry_invalidation.rs"),
-        )
-        .expect("read native geometry invalidation owner");
+        let geometry_owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/geometry_invalidation.rs"))
+                .expect("read source geometry invalidation owner");
         for owned_policy in [
             "SetShouldDoFullPaintInvalidationWithReason",
             "SetShouldCheckForPaintInvalidation",
@@ -10657,26 +10913,25 @@ mod package_contract_tests {
         ] {
             assert!(
                 geometry_owner.contains(owned_policy),
-                "layout_invalidation native geometry policy lost {owned_policy}"
+                "layout_invalidation source geometry policy lost {owned_policy}"
             );
         }
 
         let tree_facade =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_tree_invalidation.rs"))
-                .expect("read native invalidation tree facade");
+                .expect("read source invalidation tree facade");
         let geometry_facade = std::fs::read_to_string(
             root.join("layoutng/src/internal/layout_geometry_invalidation.rs"),
         )
-        .expect("read native geometry invalidation facade");
+        .expect("read source geometry invalidation facade");
         let dirty_state_loader =
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_object_inlines.rs"))
-                .expect("read native dirty-state compatibility loader");
+                .expect("read source dirty-state compatibility loader");
         assert!(
-            tree_facade.contains("layout_invalidation/src/native_layout_tree_invalidation.rs")
-                && geometry_facade
-                    .contains("layout_invalidation/src/native_geometry_invalidation.rs")
+            tree_facade.contains("layout_invalidation/src/layout_tree_invalidation.rs")
+                && geometry_facade.contains("layout_invalidation/src/geometry_invalidation.rs")
                 && dirty_state_loader
-                    .contains("layout_invalidation/src/native_layout_object_dirty_state.rs"),
+                    .contains("layout_invalidation/src/layout_object_dirty_state.rs"),
             "core invalidation modules must be owner facades"
         );
         for leaked_policy in [
@@ -10741,14 +10996,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_input_invalidation_resolves_to_the_invalidation_owner() {
+    fn input_invalidation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_input_invalidation.rs"),
-        )
-        .expect("read native input invalidation owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/input_invalidation.rs"))
+                .expect("read source input invalidation owner");
         for owned_policy in [
             "pub(super) fn invalidate_editing",
             "pub(super) fn invalidate_selection_paint",
@@ -10759,7 +11013,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native input invalidation lost {owned_policy}"
+                "layout_invalidation source input invalidation lost {owned_policy}"
             );
         }
         assert!(
@@ -10791,14 +11045,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_node_input_transaction_resolves_to_the_invalidation_owner() {
+    fn node_input_transaction_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_node_input_update.rs"),
-        )
-        .expect("read native node-input transaction owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/node_input_update.rs"))
+                .expect("read source node-input transaction owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn update_node_input",
@@ -10809,7 +11062,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native node-input transaction lost {owned_policy}"
+                "layout_invalidation source node-input transaction lost {owned_policy}"
             );
         }
 
@@ -10832,13 +11085,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_tree_facts_scan_resolves_to_the_invalidation_owner() {
+    fn tree_facts_scan_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_tree_facts.rs"))
-                .expect("read native invalidation tree-facts owner");
+        let owner = std::fs::read_to_string(root.join("layout_invalidation/src/tree_facts.rs"))
+            .expect("read source invalidation tree-facts owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn collect_layout_tree_facts",
@@ -10849,7 +11101,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native tree-facts scan lost {owned_policy}"
+                "layout_invalidation source tree-facts scan lost {owned_policy}"
             );
         }
 
@@ -10871,14 +11123,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_constraint_equivalence_resolves_to_the_invalidation_owner() {
+    fn constraint_equivalence_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_constraint_equivalence.rs"),
-        )
-        .expect("read native constraint-equivalence owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/constraint_equivalence.rs"))
+                .expect("read source constraint-equivalence owner");
         for owned_policy in [
             "pub(super) fn SameOptionalArc",
             "pub(super) fn SameImageCatalogGeometry",
@@ -10901,8 +11152,8 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_invalidation/src/native_constraint_equivalence.rs")
-                && adapter.contains("layout_invalidation_native_constraint_equivalence::{"),
+            adapter.contains("layout_invalidation/src/constraint_equivalence.rs")
+                && adapter.contains("layout_invalidation_constraint_equivalence::{"),
             "LayoutEngine must import constraint admission from layout_invalidation"
         );
         for leaked_policy in [
@@ -10919,15 +11170,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_engine_mutation_resolves_to_the_invalidation_owner() {
+    fn engine_mutation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_engine_mutation.rs"))
-                .expect("read native engine-mutation owner");
+            std::fs::read_to_string(root.join("layout_invalidation/src/engine_mutation.rs"))
+                .expect("read source engine-mutation owner");
         for owned_policy in [
-            "trait NativeEngineMutation",
+            "trait EngineMutation",
             "fn geometry_input_matches",
             "fn apply_mutation",
             "fn retain_invalidated_layout_result",
@@ -10939,7 +11190,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native engine mutation lost {owned_policy}"
+                "layout_invalidation source engine mutation lost {owned_policy}"
             );
         }
         assert!(
@@ -10950,11 +11201,10 @@ mod package_contract_tests {
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
             .expect("read LayoutEngine adapter");
         assert!(
-            adapter.contains("layout_invalidation/src/native_engine_mutation.rs")
-                && adapter.contains(
-                    "NativeEngineMutation::geometry_input_matches(self, id, style, element)"
-                )
-                && adapter.contains("NativeEngineMutation::apply_mutation(self, mutation)"),
+            adapter.contains("layout_invalidation/src/engine_mutation.rs")
+                && adapter
+                    .contains("EngineMutation::geometry_input_matches(self, id, style, element)")
+                && adapter.contains("EngineMutation::apply_mutation(self, mutation)"),
             "LayoutEngine must delegate mutation admission to layout_invalidation"
         );
         for leaked_policy in [
@@ -10965,18 +11215,18 @@ mod package_contract_tests {
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
-                "LayoutEngine still owns native mutation policy {leaked_policy}"
+                "LayoutEngine still owns source mutation policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_positioned_object_invalidation_resolves_to_the_invalidation_owner() {
+    fn positioned_object_invalidation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_positioned_object_invalidation.rs"),
+            root.join("layout_invalidation/src/positioned_object_invalidation.rs"),
         )
         .expect("read positioned-object invalidation owner");
         for owned_policy in [
@@ -10998,13 +11248,13 @@ mod package_contract_tests {
         );
 
         let adapter = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "block/src/native_layout_block.rs")),
+            root.join(concat!("layout_algo_", "block/src/layout_block.rs")),
         )
-        .expect("read native LayoutBlock owner");
+        .expect("read source LayoutBlock owner");
         assert!(
-            adapter.contains("layout_invalidation/src/native_positioned_object_invalidation.rs")
+            adapter.contains("layout_invalidation/src/positioned_object_invalidation.rs")
                 && adapter.contains(
-                    "layout_invalidation_native_positioned_object_invalidation::remove_positioned_objects"
+                    "layout_invalidation_positioned_object_invalidation::remove_positioned_objects"
                 ),
             "LayoutBlock must delegate positioned-object removal to layout_invalidation"
         );
@@ -11021,14 +11271,14 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_block_child_mutation_resolves_to_the_invalidation_owner() {
+    fn layout_block_child_mutation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_block_child_mutation.rs"),
+            root.join("layout_invalidation/src/layout_block_child_mutation.rs"),
         )
-        .expect("read native LayoutBlock child-mutation owner");
+        .expect("read source LayoutBlock child-mutation owner");
         for owned_policy in [
             "fn LayoutBlockAddChildBeforeDescendant",
             "SplitAnonymousBoxesAroundChild",
@@ -11047,11 +11297,11 @@ mod package_contract_tests {
         );
 
         let facade = std::fs::read_to_string(
-            root.join(concat!("layout_algo_", "block/src/native_layout_block.rs")),
+            root.join(concat!("layout_algo_", "block/src/layout_block.rs")),
         )
-        .expect("read native LayoutBlock owner");
+        .expect("read source LayoutBlock owner");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_block_child_mutation.rs")
+            facade.contains("layout_invalidation/src/layout_block_child_mutation.rs")
                 && facade.contains(
                     "LayoutBlockAddChildBeforeDescendant(self, new_child, before_descendant)",
                 ),
@@ -11069,13 +11319,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_out_of_flow_data_resolves_to_the_out_of_flow_owner() {
+    fn out_of_flow_data_resolves_to_the_out_of_flow_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "out_of_flow/src/native_out_of_flow_data.rs"
+            "out_of_flow/src/out_of_flow_data.rs"
         )))
         .expect("read out-of-flow retained-data owner");
         for owned_policy in [
@@ -11106,8 +11356,8 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_out_of_flow_data.rs"
-            )) && facade.contains("pub use layout_algo_out_of_flow_native_out_of_flow_data::*;"),
+                "out_of_flow/src/out_of_flow_data.rs"
+            )) && facade.contains("pub use layout_algo_out_of_flow_out_of_flow_data::*;"),
             "out_of_flow_data must re-export state from its algorithm owner"
         );
         for leaked_policy in [
@@ -11124,7 +11374,7 @@ mod package_contract_tests {
 
         let fallback_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "out_of_flow/src/native_successful_position_fallback.rs"
+            "out_of_flow/src/successful_position_fallback.rs"
         )))
         .expect("read successful position-fallback owner");
         assert!(
@@ -11142,26 +11392,24 @@ mod package_contract_tests {
         assert!(
             fallback_facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_successful_position_fallback.rs"
-            ))
-                && fallback_facade.contains(
-                    "pub use layout_algo_out_of_flow_native_successful_position_fallback::*",
-                )
+                "out_of_flow/src/successful_position_fallback.rs"
+            )) && fallback_facade
+                .contains("pub use layout_algo_out_of_flow_successful_position_fallback::*",)
                 && !fallback_facade.contains("pub struct SuccessfulPositionFallback"),
             "successful position fallback must be re-exported from its out-of-flow owner"
         );
     }
 
     #[test]
-    fn native_anchor_lookup_resolves_to_the_out_of_flow_owner() {
+    fn anchor_lookup_resolves_to_the_out_of_flow_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
             root.join(concat!("layout_algo_", "out_of_flow"))
-                .join("src/native_anchor_lookup.rs"),
+                .join("src/anchor_lookup.rs"),
         )
-        .expect("read native out-of-flow anchor lookup owner");
+        .expect("read source out-of-flow anchor lookup owner");
         for owned_policy in [
             "fn for_each_anchor_map_on_container",
             "pub fn LayoutBoxFindTargetAnchor",
@@ -11185,10 +11433,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layoutng/src/internal/layout_box_core_services.rs"))
                 .expect("read LayoutBox core-services facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "out_of_flow/src/native_anchor_lookup.rs"
-            )) && facade.contains("LayoutBoxAcceptableImplicitAnchor")
+            facade.contains(concat!("layout_algo_", "out_of_flow/src/anchor_lookup.rs"))
+                && facade.contains("LayoutBoxAcceptableImplicitAnchor")
                 && facade.contains("LayoutBoxFindTargetAnchor"),
             "LayoutBox core services must re-export anchor lookup from the out-of-flow owner"
         );
@@ -11206,15 +11452,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_anchor_map_operations_resolve_to_the_out_of_flow_owner() {
+    fn anchor_map_operations_resolve_to_the_out_of_flow_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
             root.join(concat!("layout_algo_", "out_of_flow"))
-                .join("src/native_anchor_map_operations.rs"),
+                .join("src/anchor_map_operations.rs"),
         )
-        .expect("read native AnchorMap operation owner");
+        .expect("read source AnchorMap operation owner");
         for owned_policy in [
             "fn PhysicalAnchorReferenceInsertInReverseTreeOrderInto",
             "fn AnchorMapEntries",
@@ -11238,9 +11484,9 @@ mod package_contract_tests {
 
         let schema = std::fs::read_to_string(
             root.join(concat!("layout_algo_", "out_of_flow"))
-                .join("src/native_anchor_map.rs"),
+                .join("src/anchor_map.rs"),
         )
-        .expect("read native AnchorMap schema owner");
+        .expect("read source AnchorMap schema owner");
         for owned_type in [
             "pub struct PhysicalAnchorReference",
             "pub enum AnchorKey",
@@ -11255,14 +11501,14 @@ mod package_contract_tests {
             );
         }
         assert!(
-            schema.contains("#[path = \"native_anchor_map_operations.rs\"]"),
+            schema.contains("#[path = \"anchor_map_operations.rs\"]"),
             "AnchorMap schema must compile its out-of-flow operations beside the owned data"
         );
         let services = std::fs::read_to_string(
             root.join(concat!("layout_algo_", "out_of_flow"))
-                .join("src/native_anchor_map_services.rs"),
+                .join("src/anchor_map_services.rs"),
         )
-        .expect("read native AnchorMap services owner");
+        .expect("read source AnchorMap services owner");
         assert!(
             services.contains("fn HasRunningTransformAnimation")
                 && services.contains("TransformAnimation::kTransform")
@@ -11275,7 +11521,7 @@ mod package_contract_tests {
         assert!(
             services_facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_anchor_map_services.rs"
+                "out_of_flow/src/anchor_map_services.rs"
             )) && !services_facade.contains("fn HasRunningTransformAnimation"),
             "AnchorMap services must be re-exported from the out-of-flow algorithm"
         );
@@ -11283,10 +11529,8 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/anchor_map.rs"))
             .expect("read AnchorMap facade");
         assert!(
-            facade.contains(concat!(
-                "layout_algo_",
-                "out_of_flow/src/native_anchor_map.rs"
-            )) && facade.contains("pub use layout_algo_out_of_flow_native_anchor_map::*;")
+            facade.contains(concat!("layout_algo_", "out_of_flow/src/anchor_map.rs"))
+                && facade.contains("pub use layout_algo_out_of_flow_anchor_map::*;")
                 && !facade.contains("pub struct AnchorMap"),
             "AnchorMap schema and operations must be re-exported from the out-of-flow algorithm"
         );
@@ -11304,15 +11548,15 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_anchor_position_scroll_data_resolves_to_the_out_of_flow_owner() {
+    fn anchor_position_scroll_data_resolves_to_the_out_of_flow_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "out_of_flow/src/native_anchor_position_scroll_data.rs"
+            "out_of_flow/src/anchor_position_scroll_data.rs"
         )))
-        .expect("read native anchor-position scroll-data owner");
+        .expect("read source anchor-position scroll-data owner");
         for owned_policy in [
             "pub struct AnchorPositionScrollData",
             "fn ComputeAdjustmentContainersData",
@@ -11336,9 +11580,9 @@ mod package_contract_tests {
 
         let services = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "out_of_flow/src/native_anchor_scroll_services.rs"
+            "out_of_flow/src/anchor_scroll_services_interface.rs"
         )))
-        .expect("read native anchor scroll-container services owner");
+        .expect("read source anchor scroll-container services owner");
         for owned_policy in [
             "pub struct AnchorScrollContainerState",
             "fn ReadAnchorScrollContainerState",
@@ -11350,7 +11594,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 services.contains(owned_policy),
-                "out-of-flow native anchor scroll services lost {owned_policy}"
+                "out-of-flow source anchor scroll services lost {owned_policy}"
             );
         }
         assert!(
@@ -11365,9 +11609,9 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_anchor_position_scroll_data.rs"
+                "out_of_flow/src/anchor_position_scroll_data.rs"
             )) && facade
-                .contains("pub use layout_algo_out_of_flow_native_anchor_position_scroll_data::*;"),
+                .contains("pub use layout_algo_out_of_flow_anchor_position_scroll_data::*;"),
             "anchor-position scroll data must be re-exported from the out-of-flow owner"
         );
         for leaked_policy in [
@@ -11388,9 +11632,9 @@ mod package_contract_tests {
         assert!(
             services_facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_anchor_scroll_services.rs"
+                "out_of_flow/src/anchor_scroll_services_interface.rs"
             )) && services_facade
-                .contains("pub use layout_algo_out_of_flow_native_anchor_scroll_services::*;"),
+                .contains("pub use layout_algo_out_of_flow_anchor_scroll_services_interface::*;"),
             "anchor scroll-container facts must be re-exported from the out-of-flow owner"
         );
         assert!(
@@ -11401,9 +11645,9 @@ mod package_contract_tests {
 
         let range_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "out_of_flow/src/native_non_overflowing_scroll_range.rs"
+            "out_of_flow/src/non_overflowing_scroll_range.rs"
         )))
-        .expect("read native non-overflowing scroll-range owner");
+        .expect("read source non-overflowing scroll-range owner");
         assert!(
             range_owner.contains("pub struct NonOverflowingScrollRange")
                 && range_owner.contains("fn Contains"),
@@ -11416,24 +11660,24 @@ mod package_contract_tests {
         assert!(
             range_facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_non_overflowing_scroll_range.rs"
-            )) && range_facade.contains(
-                "pub use layout_algo_out_of_flow_native_non_overflowing_scroll_range::*;"
-            ) && !range_facade.contains("pub struct NonOverflowingScrollRange"),
+                "out_of_flow/src/non_overflowing_scroll_range.rs"
+            )) && range_facade
+                .contains("pub use layout_algo_out_of_flow_non_overflowing_scroll_range::*;")
+                && !range_facade.contains("pub struct NonOverflowingScrollRange"),
             "non-overflowing scroll ranges must be re-exported from the out-of-flow owner"
         );
     }
 
     #[test]
-    fn native_oof_positioned_node_resolves_to_the_out_of_flow_owner() {
+    fn oof_positioned_node_resolves_to_the_out_of_flow_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "out_of_flow/src/native_oof_positioned_node.rs"
+            "out_of_flow/src/oof_positioned_node.rs"
         )))
-        .expect("read native OOF positioned-node owner");
+        .expect("read source OOF positioned-node owner");
         for owned_policy in [
             "pub struct OofContainingBlock",
             "pub struct OofInlineContainer",
@@ -11455,8 +11699,8 @@ mod package_contract_tests {
         assert!(
             facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_oof_positioned_node.rs"
-            )) && facade.contains("pub use layout_algo_out_of_flow_native_oof_positioned_node::*;"),
+                "out_of_flow/src/oof_positioned_node.rs"
+            )) && facade.contains("pub use layout_algo_out_of_flow_oof_positioned_node::*;"),
             "OOF positioned-node state must be re-exported from the out-of-flow owner"
         );
         for leaked_policy in [
@@ -11473,7 +11717,7 @@ mod package_contract_tests {
 
         let inline_owner = std::fs::read_to_string(root.join(concat!(
             "layout_algo_",
-            "out_of_flow/src/native_inline_containing_block_utils.rs"
+            "out_of_flow/src/inline_containing_block_utils_interface.rs"
         )))
         .expect("read inline containing-block owner");
         for owned_policy in [
@@ -11495,22 +11739,21 @@ mod package_contract_tests {
         assert!(
             inline_facade.contains(concat!(
                 "layout_algo_",
-                "out_of_flow/src/native_inline_containing_block_utils.rs"
+                "out_of_flow/src/inline_containing_block_utils_interface.rs"
             )) && inline_facade.contains(
-                "pub use layout_algo_out_of_flow_native_inline_containing_block_utils::*;"
+                "pub use layout_algo_out_of_flow_inline_containing_block_utils_interface::*;"
             ) && !inline_facade.contains("pub struct InlineContainingBlockGeometry"),
             "inline containing-block state must be re-exported from the out-of-flow owner"
         );
     }
 
     #[test]
-    fn native_tree_preparation_resolves_to_the_invalidation_owner() {
+    fn tree_preparation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner =
-            std::fs::read_to_string(root.join("layout_invalidation/src/native_prepare_tree.rs"))
-                .expect("read native invalidation tree-preparation owner");
+        let owner = std::fs::read_to_string(root.join("layout_invalidation/src/prepare_tree.rs"))
+            .expect("read source invalidation tree-preparation owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn prepare_layout_object_tree",
@@ -11527,7 +11770,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native tree preparation lost {owned_policy}"
+                "layout_invalidation source tree preparation lost {owned_policy}"
             );
         }
         assert!(
@@ -11537,13 +11780,13 @@ mod package_contract_tests {
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
-                .expect("read native layout boundary adapter");
+                .expect("read source layout boundary adapter");
         assert!(
-            adapter.contains("layout_invalidation_native_prepare_tree::prepare_layout_object_tree"),
-            "layout boundary must delegate native tree preparation to layout_invalidation"
+            adapter.contains("layout_invalidation_prepare_tree::prepare_layout_object_tree"),
+            "layout boundary must delegate source tree preparation to layout_invalidation"
         );
         for leaked_policy in [
-            "NativeNodeMetadataRelations::FinalizeTreeRelations",
+            "NodeMetadataRelations::FinalizeTreeRelations",
             "fn RebindFont(",
             "fn RebindTargetedFont(",
             "fn RebindFontsFromConstraintSpace(",
@@ -11552,18 +11795,18 @@ mod package_contract_tests {
         ] {
             assert!(
                 !adapter.contains(leaked_policy),
-                "layout boundary still owns native tree-preparation policy {leaked_policy}"
+                "layout boundary still owns source tree-preparation policy {leaked_policy}"
             );
         }
     }
 
     #[test]
-    fn native_layout_view_destruction_resolves_to_the_invalidation_owner() {
+    fn layout_view_destruction_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_view_destruction.rs"),
+            root.join("layout_invalidation/src/layout_view_destruction.rs"),
         )
         .expect("read LayoutView destruction owner");
         for owned_policy in [
@@ -11582,7 +11825,7 @@ mod package_contract_tests {
         let facade = std::fs::read_to_string(root.join("layoutng/src/internal/layout_view.rs"))
             .expect("read LayoutView facade");
         assert!(
-            facade.contains("layout_invalidation/src/native_layout_view_destruction.rs")
+            facade.contains("layout_invalidation/src/layout_view_destruction.rs")
                 && facade.contains("LayoutViewWillBeDestroyed(self)"),
             "LayoutView must delegate anonymous-page teardown to layout_invalidation"
         );
@@ -11598,12 +11841,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_invalidation_resolves_to_the_invalidation_owner() {
+    fn layout_view_invalidation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_view_invalidation.rs"),
+            root.join("layout_invalidation/src/layout_view_invalidation.rs"),
         )
         .expect("read LayoutView invalidation owner");
         for owned_policy in [
@@ -11630,7 +11873,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_view.rs"))
             .expect("read LayoutView compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_view_invalidation.rs"),
+            loader.contains("layout_invalidation/src/layout_view_invalidation.rs"),
             "LayoutView must load style invalidation from layout_invalidation"
         );
         for leaked_policy in [
@@ -11649,12 +11892,12 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_view_child_mutation_resolves_to_the_invalidation_owner() {
+    fn layout_view_child_mutation_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
         let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_view_child_mutation.rs"),
+            root.join("layout_invalidation/src/layout_view_child_mutation.rs"),
         )
         .expect("read LayoutView child-mutation owner");
         for owned_policy in [
@@ -11674,7 +11917,7 @@ mod package_contract_tests {
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_view.rs"))
             .expect("read LayoutView compatibility module");
         assert!(
-            loader.contains("layout_invalidation/src/native_layout_view_child_mutation.rs"),
+            loader.contains("layout_invalidation/src/layout_view_child_mutation.rs"),
             "LayoutView must load structural mutation from layout_invalidation"
         );
         for leaked_policy in ["fn AddChild", "fn IsChildAllowed", "fn CanHaveChildren"] {
@@ -11686,14 +11929,13 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_layout_object_factory_resolves_to_the_invalidation_owner() {
+    fn layout_object_factory_resolves_to_the_invalidation_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_invalidation/src/native_layout_object_factory.rs"),
-        )
-        .expect("read native LayoutObject factory owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_invalidation/src/layout_object_factory.rs"))
+                .expect("read source LayoutObject factory owner");
         for owned_policy in [
             "fn CreateObject(",
             "fn CreateBlockFlowOrListItem",
@@ -11709,7 +11951,7 @@ mod package_contract_tests {
         ] {
             assert!(
                 owner.contains(owned_policy),
-                "layout_invalidation native object factory lost {owned_policy}"
+                "layout_invalidation source object factory lost {owned_policy}"
             );
         }
         assert!(
@@ -11719,12 +11961,11 @@ mod package_contract_tests {
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
-                .expect("read native layout boundary adapter");
+                .expect("read source layout boundary adapter");
         assert!(
-            adapter.contains("layout_invalidation/src/native_layout_object_factory.rs")
-                && adapter.contains(
-                    "layout_invalidation_native_layout_object_factory::CreateLayoutObject"
-                ),
+            adapter.contains("layout_invalidation/src/layout_object_factory.rs")
+                && adapter
+                    .contains("layout_invalidation_layout_object_factory::CreateLayoutObject"),
             "layout boundary must re-export object creation from layout_invalidation"
         );
         for leaked_policy in [
@@ -11749,19 +11990,18 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn native_initial_letter_fitting_resolves_to_the_inline_owner() {
+    fn initial_letter_fitting_resolves_to_the_inline_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let owner = std::fs::read_to_string(
-            root.join("layout_algo_inline/src/native_initial_letter_style.rs"),
-        )
-        .expect("read native initial-letter style owner");
+        let owner =
+            std::fs::read_to_string(root.join("layout_algo_inline/src/initial_letter_style.rs"))
+                .expect("read source initial-letter style owner");
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn InitialLetterTextStyle",
             "desired_cap_height",
-            "CurrentNativeFontResolver",
+            "CurrentFontResolver",
             "while adjusted_size > 1.0",
             "SetVerticalAlign",
         ] {
@@ -11773,12 +12013,11 @@ mod package_contract_tests {
 
         let adapter =
             std::fs::read_to_string(root.join("layoutng/src/internal/boundary/layout_boundary.rs"))
-                .expect("read native layout boundary adapter");
+                .expect("read source layout boundary adapter");
         assert!(
-            adapter.contains("layout_algo_inline/src/native_initial_letter_style.rs")
-                && adapter.contains(
-                    "layout_algo_inline_native_initial_letter_style::InitialLetterTextStyle"
-                ),
+            adapter.contains("layout_algo_inline/src/initial_letter_style.rs")
+                && adapter
+                    .contains("layout_algo_inline_initial_letter_style::InitialLetterTextStyle"),
             "layout boundary must import initial-letter fitting from layout_algo_inline"
         );
         assert!(
@@ -11796,7 +12035,6 @@ mod package_contract_tests {
         rust_sources(root, &mut sources);
         let fragment_phases = [
             "UpdateStickyOffsets",
-            "BuildPaintCullRect",
             "PopulateFragmentPaintData",
             "ResolveLogicalParents",
             "PopulateGlobalPaintData",
@@ -11818,6 +12056,30 @@ mod package_contract_tests {
             violations.is_empty(),
             "fragment work attributed to commit:\n{}",
             violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn layout_fragment_filenames_do_not_invent_boundary_prefixes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("layoutng package root");
+        let directory = root.join("layout_fragment/src");
+        let mut files = std::fs::read_dir(directory)
+            .expect("read layout_fragment sources")
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| {
+                ["source_", "adapter_", "bridge_"]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                    && name.ends_with(".rs")
+            })
+            .collect::<Vec<_>>();
+        files.sort();
+        assert!(
+            files.is_empty(),
+            "layout_fragment filenames must follow Chromium entities without invented boundary prefixes: {files:?}"
         );
     }
 }

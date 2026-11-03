@@ -1,0 +1,23 @@
+[
+  {"id":"example","url":"https://example.com/","scrolls":[0,700,2000,5000]},
+  {"id":"mdn-grid","url":"https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Grid_layout","scrolls":[0,700,2000,5000]},
+  {"id":"wikipedia-browser","url":"https://en.wikipedia.org/wiki/Web_browser","scrolls":[0,700,2000,5000]},
+  {"id":"w3c-css2","url":"https://www.w3.org/TR/CSS2/","scrolls":[0,700,2000,5000]},
+  {"id":"ietf-http","url":"https://www.ietf.org/archive/id/draft-ietf-httpbis-messaging-19.html","scrolls":[0,700,2000,5000]},
+  {"id":"rust-book","url":"https://doc.rust-lang.org/book/","scrolls":[0,700,2000,5000]},
+  {"id":"python-docs","url":"https://docs.python.org/3/","scrolls":[0,700,2000,5000]},
+  {"id":"sqlite","url":"https://www.sqlite.org/index.html","scrolls":[0,700,2000,5000]},
+  {"id":"curl-docs","url":"https://curl.se/docs/","scrolls":[0,700,2000,5000]},
+  {"id":"git-docs","url":"https://git-scm.com/docs","scrolls":[0,700,2000,5000]},
+  {"id":"llvm-docs","url":"https://llvm.org/docs/","scrolls":[0,700,2000,5000]},
+  {"id":"cmake-docs","url":"https://cmake.org/cmake/help/latest/","scrolls":[0,700,2000,5000]},
+  {"id":"nginx-docs","url":"https://nginx.org/en/docs/","scrolls":[0,700,2000,5000]},
+  {"id":"openssl-docs","url":"https://docs.openssl.org/master/","scrolls":[0,700,2000,5000]},
+  {"id":"zlib","url":"https://zlib.net/","scrolls":[0,700,2000,5000]},
+  {"id":"libpng","url":"http://www.libpng.org/pub/png/","scrolls":[0,700,2000,5000]},
+  {"id":"rfc9110","url":"https://www.rfc-editor.org/rfc/rfc9110.html","scrolls":[0,700,2000,5000]},
+  {"id":"meson-docs","url":"https://mesonbuild.com/","scrolls":[0,700,2000,5000]},
+  {"id":"ninja-manual","url":"https://ninja-build.org/manual.html","scrolls":[0,700,2000,5000]},
+  {"id":"man7","url":"https://man7.org/linux/man-pages/man2/read.2.html","scrolls":[0,700,2000,5000]},
+  {"id":"gnu-make","url":"https://www.gnu.org/software/make/manual/make.html","scrolls":[0,700,2000,5000]}
+]

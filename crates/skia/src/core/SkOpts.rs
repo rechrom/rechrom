@@ -105,7 +105,7 @@ pub fn Init() {
 pub(crate) const fn scalar_dispatch() -> PipelineDispatch {
     use scalar::scalar_wide_abi as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -121,7 +121,7 @@ pub(crate) const fn scalar_dispatch() -> PipelineDispatch {
 pub(crate) const fn neon_highp_dispatch() -> PipelineDispatch {
     use scalar::neon_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -156,7 +156,7 @@ pub(crate) const fn neon_lowp_dispatch() -> PipelineDispatch {
     {
         use scalar::neon_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -176,7 +176,7 @@ pub(crate) const fn neon_lowp_dispatch() -> PipelineDispatch {
 pub(crate) const fn sse2_highp_dispatch() -> PipelineDispatch {
     use scalar::x86_sse_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -214,7 +214,7 @@ pub(crate) const fn x86_sse_lowp_stages_dispatch() -> PipelineDispatch {
     {
         use scalar::x86_sse_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -231,7 +231,7 @@ pub(crate) const fn x86_sse_lowp_stages_dispatch() -> PipelineDispatch {
 pub(crate) const fn x86_sse41_highp_stages_dispatch() -> PipelineDispatch {
     use scalar::x86_sse41_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -266,7 +266,7 @@ pub(crate) const fn x86_sse41_lowp_stages_dispatch() -> PipelineDispatch {
     {
         use scalar::x86_sse41_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -283,7 +283,7 @@ pub(crate) const fn x86_sse41_lowp_stages_dispatch() -> PipelineDispatch {
 pub(crate) const fn x86_avx_highp_stages_dispatch() -> PipelineDispatch {
     use scalar::x86_avx_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -318,7 +318,7 @@ pub(crate) const fn x86_avx_lowp_stages_dispatch() -> PipelineDispatch {
     {
         use scalar::x86_avx_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -335,7 +335,7 @@ pub(crate) const fn x86_avx_lowp_stages_dispatch() -> PipelineDispatch {
 pub(crate) const fn avx2_highp_dispatch() -> PipelineDispatch {
     use scalar::x86_avx2_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -370,7 +370,7 @@ pub(crate) const fn x86_avx2_lowp_stages_dispatch() -> PipelineDispatch {
     {
         use scalar::x86_avx2_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -387,7 +387,7 @@ pub(crate) const fn x86_avx2_lowp_stages_dispatch() -> PipelineDispatch {
 pub(crate) const fn ml4_highp_dispatch() -> PipelineDispatch {
     use scalar::x86_ml4_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -422,7 +422,7 @@ pub(crate) const fn x86_ml4_lowp_stages_dispatch() -> PipelineDispatch {
     {
         use scalar::x86_ml4_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -439,7 +439,7 @@ pub(crate) const fn x86_ml4_lowp_stages_dispatch() -> PipelineDispatch {
 pub(crate) const fn lsx_highp_dispatch() -> PipelineDispatch {
     use scalar::lsx_pipe_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -474,7 +474,7 @@ pub(crate) const fn lsx_lowp_dispatch() -> PipelineDispatch {
     {
         use scalar::lsx_pipe_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -491,7 +491,7 @@ pub(crate) const fn lsx_lowp_dispatch() -> PipelineDispatch {
 pub(crate) const fn lasx_highp_dispatch() -> PipelineDispatch {
     use scalar::lasx_pipe_highp_stages as n;
     static OPS: [Option<StageFn>; kNumRasterPipelineHighpOps] =
-        super::SkRasterPipelineOpList::native_highp_function_table!(n, StageFn);
+        super::SkRasterPipelineOpList::highp_function_table!(n, StageFn);
     PipelineDispatch {
         ops: &OPS,
         terminal: Some(unsafe {
@@ -526,7 +526,7 @@ pub(crate) const fn lasx_lowp_dispatch() -> PipelineDispatch {
     {
         use scalar::lasx_pipe_lowp_stages as n;
         static OPS: [Option<StageFn>; kNumRasterPipelineLowpOps] =
-            super::SkRasterPipelineOpList::native_lowp_function_table!(n, StageFn);
+            super::SkRasterPipelineOpList::lowp_function_table!(n, StageFn);
         PipelineDispatch {
             ops: &OPS,
             terminal: Some(unsafe {
@@ -549,7 +549,7 @@ pub(crate) fn active_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            let pair = native_x86_dispatches();
+            let pair = x86_dispatches();
             return if scalar::disabled_lowp::COMPILE_DISABLED {
                 (None, pair.1)
             } else {
@@ -558,7 +558,7 @@ pub(crate) fn active_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch
         }
         #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
         {
-            let pair = native_neon_dispatches();
+            let pair = neon_dispatches();
             return if scalar::disabled_lowp::COMPILE_DISABLED {
                 (None, pair.1)
             } else {
@@ -567,7 +567,7 @@ pub(crate) fn active_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch
         }
         #[cfg(target_arch = "loongarch64")]
         {
-            let pair = native_lasx_dispatches();
+            let pair = lasx_dispatches();
             return if scalar::disabled_lowp::COMPILE_DISABLED {
                 (None, pair.1)
             } else {
@@ -586,7 +586,7 @@ pub(crate) fn active_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch
     })
 }
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-fn native_x86_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch) {
+fn x86_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch) {
     use crate::src::core::SkCpu::{self, SkX64};
     // Source: src/opts/SkRasterPipeline_opts.h:88-95
     // Honor the native global compiler level before considering runtime upgrades.
@@ -669,12 +669,12 @@ fn native_x86_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch) {
 
 // Source: src/core/SkOpts.cpp:20-43,51-72
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-fn native_neon_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch) {
+fn neon_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch) {
     (Some(neon_lowp_dispatch()), neon_highp_dispatch())
 }
 // Source: src/core/SkOpts.cpp:51-72
 #[cfg(target_arch = "loongarch64")]
-fn native_lasx_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch) {
+fn lasx_dispatches() -> (Option<PipelineDispatch>, PipelineDispatch) {
     let mut selected = if cfg!(target_feature = "lsx") {
         (Some(lsx_lowp_dispatch()), lsx_highp_dispatch())
     } else {

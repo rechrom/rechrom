@@ -1,6 +1,6 @@
 //! Manage VizOutput through Chromium's translated DirectRenderer core.
 //! The embedding injects drawing and output capabilities through RendererBackend.
-pub mod native;
+pub mod host_output;
 pub use components::viz::{
     common::display::renderer_settings::RendererSettings,
     service::display::{
@@ -11,7 +11,7 @@ pub use components::viz::{
         render_pass_alpha_type::RenderPassAlphaType,
     },
 };
-pub use native::{RenderUpdate, Renderer};
+pub use host_output::{RenderUpdate, Renderer};
 mod components {
     pub(crate) mod viz {
         pub(crate) mod common {

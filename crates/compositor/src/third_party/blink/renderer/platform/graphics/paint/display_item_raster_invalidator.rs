@@ -1,7 +1,5 @@
-// Translation status: complete
 // Copyright 2015 The Chromium Authors. BSD-style license in LICENSE.
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.h:1-68;
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:1-10.
+// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.{h,cc}.
 use crate::adapter::{
     geometry::Rect,
     raster_invalidator::{
@@ -23,6 +21,8 @@ pub struct DisplayItemRasterInvalidator<
     invalidator_: &'a mut S,
     old_display_items_: &'a [I],
     new_display_items_: &'a [I],
+    old_image_content_revisions_: &'a [Vec<(u64, u64)>],
+    new_image_content_revisions_: &'a [Vec<(u64, u64)>],
     mapper_: &'a M,
     old_display_items_index_: HashMap<DisplayItemClientId, Vec<usize>>,
 }
@@ -33,14 +33,29 @@ impl<
         M: RasterVisualRectMapper + ?Sized,
     > DisplayItemRasterInvalidator<'a, I, S, M>
 {
+    // Source: display_item_raster_invalidator.h:32-33.
+    const kClientIsOld: ClientIsOldOrNew = ClientIsOldOrNew::kClientIsOld;
+    const kClientIsNew: ClientIsOldOrNew = ClientIsOldOrNew::kClientIsNew;
+
     pub fn new(invalidator: &'a mut S, old: &'a [I], new: &'a [I], mapper: &'a M) -> Self {
         Self {
             invalidator_: invalidator,
             old_display_items_: old,
             new_display_items_: new,
+            old_image_content_revisions_: &[],
+            new_image_content_revisions_: &[],
             mapper_: mapper,
             old_display_items_index_: HashMap::new(),
         }
+    }
+    pub fn WithImageContentRevisions(
+        mut self,
+        old: &'a [Vec<(u64, u64)>],
+        new: &'a [Vec<(u64, u64)>],
+    ) -> Self {
+        self.old_image_content_revisions_ = old;
+        self.new_image_content_revisions_ = new;
+        self
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:11-99.
     pub fn Generate(&mut self) {
@@ -88,14 +103,30 @@ impl<
             // that record-presence transition exactly like an unmatched
             // display item; otherwise ContentLayerClientImpl may retain the
             // preceding recording and newly exposed tiles raster as clear.
-            if reason == Reason::kNone && old.DrawsContent() != new.DrawsContent() {
+            // A source tombstone means this item was moved from the cache. Its
+            // subtype bytes now belong to `new`, so the deliberately-cleared
+            // base draws-content bit is not a content transition.
+            if reason == Reason::kNone
+                && !old.IsTombstone()
+                && old.DrawsContent() != new.DrawsContent()
+            {
                 reason = if new.DrawsContent() {
                     Reason::kAppeared
                 } else {
                     Reason::kDisappeared
                 };
             }
-            if reason == Reason::kNone && old.ImageContentRevisions() != new.ImageContentRevisions()
+            if reason == Reason::kNone
+                && self
+                    .old_image_content_revisions_
+                    .get(old_index)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    != self
+                        .new_image_content_revisions_
+                        .get(new_index)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default()
             {
                 reason = Reason::kImage;
             }
@@ -140,6 +171,7 @@ impl<
         }
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:101-133.
+    #[inline(always)]
     fn MatchNewDisplayItemInOldChunk(&mut self, new: &I, next: &mut usize) -> Option<usize> {
         if !new.IsCacheable() {
             return None;
@@ -170,6 +202,7 @@ impl<
         None
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:135-142.
+    #[inline(always)]
     fn AddRasterInvalidation(
         &mut self,
         id: DisplayItemClientId,
@@ -184,6 +217,7 @@ impl<
             .AddRasterInvalidation(rect, id, reason, old);
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:144-187.
+    #[inline(always)]
     fn GenerateRasterInvalidation(
         &mut self,
         id: DisplayItemClientId,
@@ -197,13 +231,13 @@ impl<
                     id,
                     old,
                     Reason::kDisappeared,
-                    ClientIsOldOrNew::kClientIsOld,
+                    Self::kClientIsOld,
                 );
             }
             return;
         }
         if old.IsEmpty() {
-            self.AddRasterInvalidation(id, new, Reason::kAppeared, ClientIsOldOrNew::kClientIsNew);
+            self.AddRasterInvalidation(id, new, Reason::kAppeared, Self::kClientIsNew);
             return;
         }
         if reason == Reason::kJustCreated {
@@ -211,9 +245,9 @@ impl<
                 id,
                 old,
                 Reason::kDisappeared,
-                ClientIsOldOrNew::kClientIsOld,
+                Self::kClientIsOld,
             );
-            self.AddRasterInvalidation(id, new, Reason::kAppeared, ClientIsOldOrNew::kClientIsNew);
+            self.AddRasterInvalidation(id, new, Reason::kAppeared, Self::kClientIsNew);
             return;
         }
         if !IsFullPaintInvalidationReason(reason) && (old.x != new.x || old.y != new.y) {
@@ -227,6 +261,7 @@ impl<
         self.GenerateIncrementalRasterInvalidation(id, old, new);
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:219-238.
+    #[inline(always)]
     fn GenerateIncrementalRasterInvalidation(
         &mut self,
         id: DisplayItemClientId,
@@ -240,7 +275,7 @@ impl<
                 id,
                 right,
                 Reason::kIncremental,
-                ClientIsOldOrNew::kClientIsNew,
+                Self::kClientIsNew,
             );
         }
         let bottom = ComputeBottomDelta(new, old, new);
@@ -249,11 +284,12 @@ impl<
                 id,
                 bottom,
                 Reason::kIncremental,
-                ClientIsOldOrNew::kClientIsNew,
+                Self::kClientIsNew,
             );
         }
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:240-254.
+    #[inline(always)]
     fn GenerateFullRasterInvalidation(
         &mut self,
         id: DisplayItemClientId,
@@ -262,12 +298,12 @@ impl<
         reason: Reason,
     ) {
         if !new.Contains(old) {
-            self.AddRasterInvalidation(id, old, reason, ClientIsOldOrNew::kClientIsNew);
+            self.AddRasterInvalidation(id, old, reason, Self::kClientIsNew);
             if old.Contains(new) {
                 return;
             }
         }
-        self.AddRasterInvalidation(id, new, reason, ClientIsOldOrNew::kClientIsNew);
+        self.AddRasterInvalidation(id, new, reason, Self::kClientIsNew);
     }
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:189-217.
@@ -292,20 +328,269 @@ fn ComputeBottomDelta(location: Rect, old: Rect, new: Rect) -> Rect {
     Rect::default()
 }
 
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:100,134,143,188,218,239.
-// Source function separators have no runtime instructions.
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:134.
-// Definition separator has no runtime instructions.
+    #[derive(Clone, Debug)]
+    struct Item {
+        id: u8,
+        client: usize,
+        rect: Rect,
+        reason: Reason,
+        draws: bool,
+        cacheable: bool,
+        tombstone: bool,
+    }
 
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:143.
-// Definition separator has no runtime instructions.
+    impl Item {
+        fn drawing(id: u8, client: usize, rect: Rect) -> Self {
+            Self {
+                id,
+                client,
+                rect,
+                reason: Reason::kNone,
+                draws: true,
+                cacheable: true,
+                tombstone: false,
+            }
+        }
 
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:188.
-// Definition separator has no runtime instructions.
+        fn tombstone(mut self) -> Self {
+            self.draws = false;
+            self.tombstone = true;
+            self
+        }
+    }
 
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:218.
-// Definition separator has no runtime instructions.
+    impl RasterInvalidationItem for Item {
+        type Id = u8;
+        fn GetId(&self) -> Self::Id {
+            self.id
+        }
+        fn ClientId(&self) -> DisplayItemClientId {
+            self.client
+        }
+        fn DrawsContent(&self) -> bool {
+            self.draws
+        }
+        fn IsCacheable(&self) -> bool {
+            self.cacheable
+        }
+        fn IsTombstone(&self) -> bool {
+            self.tombstone
+        }
+        fn ScrollbarNeedsUpdateDisplay(&self) -> Option<bool> {
+            None
+        }
+        fn VisualRect(&self) -> Rect {
+            self.rect
+        }
+        fn GetPaintInvalidationReason(&self) -> Reason {
+            self.reason
+        }
+    }
 
-// Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:239.
-// Definition separator has no runtime instructions.
+    #[derive(Default)]
+    struct Sink {
+        invalidations: Vec<(Rect, usize, Reason, ClientIsOldOrNew)>,
+    }
+
+    impl RasterInvalidationSink for Sink {
+        fn ClipByLayerBounds(&self, rect: Rect) -> Rect {
+            rect
+        }
+        fn AddRasterInvalidation(
+            &mut self,
+            rect: Rect,
+            id: DisplayItemClientId,
+            reason: Reason,
+            old_or_new: ClientIsOldOrNew,
+        ) {
+            self.invalidations.push((rect, id, reason, old_or_new));
+        }
+    }
+
+    struct IdentityMapper;
+    impl RasterVisualRectMapper for IdentityMapper {
+        fn MapVisualRect(&self, rect: Rect) -> Rect {
+            rect
+        }
+    }
+
+    fn generate(old: &[Item], new: &[Item]) -> Sink {
+        let mut sink = Sink::default();
+        DisplayItemRasterInvalidator::new(&mut sink, old, new, &IdentityMapper).Generate();
+        sink
+    }
+
+    #[test]
+    fn cached_tombstones_preserve_source_reorder_detection() {
+        let first_rect = Rect::new(100, 100, 100, 100);
+        let second_rect = Rect::new(100, 100, 50, 200);
+        let old = [
+            Item::drawing(1, 1, first_rect).tombstone(),
+            Item::drawing(2, 2, second_rect).tombstone(),
+        ];
+        let new = [
+            Item::drawing(2, 2, second_rect),
+            Item::drawing(1, 1, first_rect),
+        ];
+        let result = generate(&old, &new);
+        assert_eq!(
+            result.invalidations,
+            vec![(
+                first_rect,
+                1,
+                Reason::kReordered,
+                ClientIsOldOrNew::kClientIsNew
+            )]
+        );
+    }
+
+    #[test]
+    fn appearance_and_disappearance_use_old_and_new_client_sides() {
+        let old_rect = Rect::new(1, 2, 30, 40);
+        let appeared = generate(&[], &[Item::drawing(1, 7, old_rect)]);
+        assert_eq!(
+            appeared.invalidations,
+            vec![(
+                old_rect,
+                7,
+                Reason::kAppeared,
+                ClientIsOldOrNew::kClientIsNew
+            )]
+        );
+        let disappeared = generate(&[Item::drawing(1, 7, old_rect)], &[]);
+        assert_eq!(
+            disappeared.invalidations,
+            vec![(
+                old_rect,
+                7,
+                Reason::kDisappeared,
+                ClientIsOldOrNew::kClientIsOld
+            )]
+        );
+    }
+
+    #[test]
+    fn same_origin_size_change_generates_source_right_and_bottom_deltas() {
+        let old = [Item::drawing(1, 3, Rect::new(10, 20, 30, 40))];
+        let mut resized = Item::drawing(1, 3, Rect::new(10, 20, 35, 46));
+        resized.reason = Reason::kIncremental;
+        let new = [resized];
+        let result = generate(&old, &new);
+        assert_eq!(
+            result.invalidations,
+            vec![
+                (
+                    Rect::new(40, 20, 5, 46),
+                    3,
+                    Reason::kIncremental,
+                    ClientIsOldOrNew::kClientIsNew
+                ),
+                (
+                    Rect::new(10, 60, 35, 6),
+                    3,
+                    Reason::kIncremental,
+                    ClientIsOldOrNew::kClientIsNew
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn full_invalidation_unions_all_items_for_one_client() {
+        let first = Rect::new(100, 100, 300, 300);
+        let second = Rect::new(100, 150, 300, 300);
+        let old = [Item::drawing(1, 8, first), Item::drawing(2, 8, second)];
+        let mut new = old.clone();
+        for item in &mut new {
+            item.reason = Reason::kLayout;
+        }
+        let result = generate(&old, &new);
+        assert_eq!(
+            result.invalidations,
+            vec![(
+                Rect::new(100, 100, 300, 350),
+                8,
+                Reason::kLayout,
+                ClientIsOldOrNew::kClientIsNew
+            )]
+        );
+    }
+
+    #[test]
+    fn just_created_never_treats_reused_client_address_as_the_old_client() {
+        let old_rect = Rect::new(10, 20, 30, 40);
+        let new_rect = Rect::new(50, 60, 70, 80);
+        let old = [Item::drawing(1, 11, old_rect)];
+        let mut replacement = Item::drawing(1, 11, new_rect);
+        replacement.reason = Reason::kJustCreated;
+        let result = generate(&old, &[replacement]);
+        assert_eq!(
+            result.invalidations,
+            vec![
+                (
+                    old_rect,
+                    11,
+                    Reason::kDisappeared,
+                    ClientIsOldOrNew::kClientIsOld
+                ),
+                (
+                    new_rect,
+                    11,
+                    Reason::kAppeared,
+                    ClientIsOldOrNew::kClientIsNew
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn retained_image_revision_change_stays_symmetric_without_touching_tombstones() {
+        let rect = Rect::new(5, 6, 20, 30);
+        let old = Item::drawing(1, 4, rect);
+        let new = Item::drawing(1, 4, rect);
+        let old_revisions = vec![vec![(9, 1)]];
+        let new_revisions = vec![vec![(9, 2)]];
+        let run = |old_items: &[Item],
+                   new_items: &[Item],
+                   old_revisions: &[Vec<(u64, u64)>],
+                   new_revisions: &[Vec<(u64, u64)>]| {
+            let mut sink = Sink::default();
+            DisplayItemRasterInvalidator::new(
+                &mut sink,
+                old_items,
+                new_items,
+                &IdentityMapper,
+            )
+            .WithImageContentRevisions(old_revisions, new_revisions)
+            .Generate();
+            sink
+        };
+        let forward = run(
+            std::slice::from_ref(&old),
+            std::slice::from_ref(&new),
+            &old_revisions,
+            &new_revisions,
+        );
+        let backward = run(
+            std::slice::from_ref(&new),
+            std::slice::from_ref(&old),
+            &new_revisions,
+            &old_revisions,
+        );
+        for result in [forward, backward] {
+            assert_eq!(
+                result.invalidations,
+                vec![(
+                    rect,
+                    4,
+                    Reason::kImage,
+                    ClientIsOldOrNew::kClientIsNew
+                )]
+            );
+        }
+    }
+}

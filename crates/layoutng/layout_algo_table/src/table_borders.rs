@@ -742,7 +742,7 @@ mod tests {
     }
     #[test]
     fn collapsed_border_specificity_grid_growth_and_spans_match_cpp() {
-        crate::native_test_thread::run(border_grid_body);
+        crate::test_thread::run(border_grid_body);
     }
     fn border_grid_body() {
         let _heap = LayoutHeapScope::new();

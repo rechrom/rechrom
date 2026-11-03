@@ -29,7 +29,6 @@ pub trait RenderPassPipelineContext {
     fn report_expected_checkerboard_animation(&mut self);
     fn frame_checkerboarded_needs_raster(&self) -> bool;
     fn requires_high_resolution_to_draw(&self) -> bool;
-    fn prevent_visible_scroll_checkerboarding(&mut self) -> bool;
     fn report_expected_missing_high_resolution_content(&mut self);
     fn resourceless_software_draw(&self) -> bool;
     fn frame_has_view_transition_save_directive(&self) -> bool;
@@ -112,9 +111,7 @@ pub fn CalculateRenderPasses<C: RenderPassPipelineContext>(
             stats.aborted_checkerboard_animation = true;
         }
     }
-    if (context.frame_checkerboarded_needs_raster() && context.requires_high_resolution_to_draw())
-        || (content.num_missing_tiles > 0 && context.prevent_visible_scroll_checkerboarding())
-    {
+    if context.frame_checkerboarded_needs_raster() && context.requires_high_resolution_to_draw() {
         if expects_to_draw {
             context.report_expected_missing_high_resolution_content();
         } else {
@@ -159,7 +156,6 @@ mod tests {
         commit_active: bool,
         missing_high_res: bool,
         require_high_res: bool,
-        prevent_scroll_checkerboard: bool,
         resourceless: bool,
         transition: bool,
         output: bool,
@@ -213,9 +209,6 @@ mod tests {
         }
         fn requires_high_resolution_to_draw(&self) -> bool {
             self.require_high_res
-        }
-        fn prevent_visible_scroll_checkerboarding(&mut self) -> bool {
-            self.prevent_scroll_checkerboard
         }
         event!(
             report_expected_missing_high_resolution_content,
@@ -299,18 +292,17 @@ mod tests {
     }
 
     #[test]
-    fn visible_missing_tile_aborts_checkerboarded_scroll_only() {
+    fn missing_tile_without_high_res_requirement_draws() {
         let mut context = Context {
             damage: true,
             content: RenderPassContentResult {
                 num_missing_tiles: 1,
                 have_missing_animated_tiles: false,
             },
-            prevent_scroll_checkerboard: true,
             ..Default::default()
         };
         let (result, stats) = CalculateRenderPasses(&mut context, false);
-        assert_eq!(result, DrawResult::kAbortedMissingHighResContent);
-        assert!(stats.aborted_missing_high_resolution_content);
+        assert_eq!(result, DrawResult::kSuccess);
+        assert!(!stats.aborted_missing_high_resolution_content);
     }
 }

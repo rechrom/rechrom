@@ -1,7 +1,7 @@
 //! Exercise nested SVG through the production Page, retained native tree,
 //! fragment publication and immutable PaintArtifact boundaries.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -234,7 +234,7 @@ fn set_attribute(page: &mut Page, name: &str, attribute: &str, value: &str) {
 
 #[test]
 fn nested_svg_loads_through_production_page() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             r#"<svg id="outer" width="200" height="100">
@@ -256,7 +256,7 @@ fn nested_svg_loads_through_production_page() {
 
 #[test]
 fn rectangle_geometry_helper_preserves_an_ordinary_svg_root() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             r#"<svg id="outer" width="200" height="100" viewBox="0 0 100 50"><rect id="shape" x="10" y="5" width="20" height="10"/></svg>"#,
@@ -268,7 +268,7 @@ fn rectangle_geometry_helper_preserves_an_ordinary_svg_root() {
 
 #[test]
 fn nested_viewbox_applies_none_meet_slice_and_alignment() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (preserve, expected) in [
             ("none", rect(20., 10., 40., 20.)),
@@ -287,7 +287,7 @@ fn nested_viewbox_applies_none_meet_slice_and_alignment() {
 
 #[test]
 fn nested_percentages_use_the_nearest_viewport_user_space() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             r#"<svg id="outer" width="200" height="100" viewBox="0 0 100 50"><svg id="middle" x="10%" y="20%" width="50%" height="50%"><svg id="inner" x="50%" y="50%" width="50%" height="50%"><rect id="shape" width="25" height="12.5"/></svg></svg></svg>"#,
@@ -305,7 +305,7 @@ fn nested_percentages_use_the_nearest_viewport_user_space() {
 
 #[test]
 fn nested_transform_precedes_viewport_translation_and_viewbox_mapping() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             r#"<svg width="200" height="120"><g transform="translate(3 4)"><svg x="20" y="10" width="80" height="40" viewBox="0 0 40 20" transform="translate(5 7) scale(2)"><rect id="shape" width="10" height="5"/></svg></g></svg>"#,
@@ -316,7 +316,7 @@ fn nested_transform_precedes_viewport_translation_and_viewbox_mapping() {
 
 #[test]
 fn nested_overflow_clip_is_local_and_does_not_leak_to_siblings() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (overflow, expected) in [
             ("hidden", rect(20., 10., 80., 40.)),
@@ -340,7 +340,7 @@ fn nested_overflow_clip_is_local_and_does_not_leak_to_siblings() {
 
 #[test]
 fn zero_sized_nested_viewports_do_not_paint_descendants() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (width, height) in [("0", "40"), ("80", "0"), ("0", "0")] {
             let page = fixture(&format!(
@@ -359,7 +359,7 @@ fn zero_sized_nested_viewports_do_not_paint_descendants() {
 
 #[test]
 fn svg_inside_foreign_object_is_an_outermost_root_again() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (open, close) in [
             ("", ""),
@@ -379,7 +379,7 @@ fn svg_inside_foreign_object_is_an_outermost_root_again() {
 
 #[test]
 fn changing_nested_geometry_updates_paint_and_keeps_old_artifacts_immutable() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(
             r#"<svg width="240" height="160"><svg id="inner" x="20" y="10" width="80" height="40" viewBox="0 0 40 20"><rect id="shape" width="10" height="5"/></svg></svg>"#,
@@ -411,7 +411,7 @@ fn changing_nested_geometry_updates_paint_and_keeps_old_artifacts_immutable() {
 
 #[test]
 fn fetched_svg_image_publishes_a_nested_viewport_record() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = page_fixture(
             r#"<img id="image" width="200" height="100" src="fixture.svg">"#,
@@ -468,7 +468,7 @@ fn fetched_svg_image_publishes_a_nested_viewport_record() {
 
 #[test]
 fn nested_viewbox_clip_stays_in_the_viewport_coordinate_system() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture(
             r#"<svg width="200" height="120"><svg x="20" y="10" width="80" height="40" viewBox="10 20 20 20" preserveAspectRatio="none"><rect id="shape" width="50" height="50"/></svg></svg>"#,
@@ -480,7 +480,7 @@ fn nested_viewbox_clip_stays_in_the_viewport_coordinate_system() {
 
 #[test]
 fn reparenting_svg_reclassifies_root_and_viewport_without_changing_dom_identity() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(
             r#"<svg id="outer" width="200" height="120"></svg><div id="host"><svg id="moving" x="20" y="10" width="80" height="40"><rect id="shape" width="10" height="5"/></svg></div>"#,
@@ -513,7 +513,7 @@ fn reparenting_svg_reclassifies_root_and_viewport_without_changing_dom_identity(
 
 #[test]
 fn empty_nested_viewbox_suppresses_paint_until_valid_geometry_returns() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for view_box in ["0 0 0 20", "0 0 40 0", "0 0 0 0"] {
             let mut page = fixture(&format!(
@@ -533,7 +533,7 @@ fn empty_nested_viewbox_suppresses_paint_until_valid_geometry_returns() {
 
 #[test]
 fn retained_overflow_mutation_refreshes_only_the_nested_clip_scope() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(
             r#"<svg width="200" height="120"><svg id="inner" x="20" y="10" width="80" height="40" style="overflow:hidden"><rect id="shape" x="-10" y="-5" width="100" height="60"/></svg><rect id="sibling" x="130" y="80" width="20" height="10"/></svg>"#,
@@ -556,7 +556,7 @@ fn retained_overflow_mutation_refreshes_only_the_nested_clip_scope() {
 
 #[test]
 fn retained_css_transforms_update_svg_group_and_nested_viewport_geometry() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(
             r#"<svg width="200" height="120"><g id="group"><svg id="inner" x="20" y="10" width="80" height="40" viewBox="0 0 40 20"><rect id="shape" width="10" height="5"/></svg></g></svg>"#,
@@ -585,7 +585,7 @@ fn retained_css_transforms_update_svg_group_and_nested_viewport_geometry() {
 
 #[test]
 fn unsupported_nested_geometry_reports_explicit_layout_errors() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         for (attributes, expected) in [
             ("width='2em' height='40'", "SVG viewport contextual/calculated or invalid length"),
@@ -603,7 +603,7 @@ fn unsupported_nested_geometry_reports_explicit_layout_errors() {
 
 #[test]
 fn inline_svg_root_resize_does_not_reuse_an_image_container_override() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(
             r#"<svg id="outer" width="40" height="80"><svg x="50%" y="50%" width="50%" height="50%"><rect id="shape" width="10" height="10"/></svg></svg>"#,

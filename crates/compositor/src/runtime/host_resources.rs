@@ -17,12 +17,12 @@ use std::{any::Any, sync::Arc};
 
 /// A default native WritableSharedMemoryMapping is invalid. A valid mapping is
 /// the actual external allocation and stays exclusively owned until dropped.
-pub trait NativeSharedMemoryMapping {
+pub trait SharedMemoryMappingBackend {
     fn memory(&self) -> &[u8];
     fn memory_mut(&mut self) -> &mut [u8];
 }
 #[derive(Default)]
-pub struct SharedMemoryMapping(pub Option<Box<dyn NativeSharedMemoryMapping>>);
+pub struct SharedMemoryMapping(pub Option<Box<dyn SharedMemoryMappingBackend>>);
 #[derive(Clone)]
 pub struct UIBitmap(pub Arc<dyn HostUIResourceBitmap + Send + Sync>);
 impl HostUIResourceBitmap for UIBitmap {
@@ -58,10 +58,10 @@ impl HostUIResourceImageInfo for UIImageInfo {
 /// Opaque image owner produced and consumed by the injected raster service.
 /// Compositor retains identity and lifetime only; concrete Skia image types stay
 /// inside the raster package.
-pub trait NativeUiImage: Any {
+pub trait UiImage: Any {
     fn as_any(&self) -> &dyn Any;
 }
-pub type UIImage = Arc<dyn NativeUiImage>;
+pub type UIImage = Arc<dyn UiImage>;
 pub struct SourceBitmap<'a>(pub Box<dyn HostUISourceBitmap<'a, UIImageInfo, UIImage> + 'a>);
 impl<'a> HostUISourceBitmap<'a, UIImageInfo, UIImage> for SourceBitmap<'a> {
     fn setInfo(&mut self, info: UIImageInfo, row_bytes: usize) {

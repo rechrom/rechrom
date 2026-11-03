@@ -1,6 +1,6 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
 //! Document-owned, concrete assembly of the translated selector, declaration,
-//! cascade priority and native style builder. Document roots every final style.
+//! cascade priority and computed style style builder. Document roots every final style.
 #![allow(non_snake_case)]
 use crate::{
     css_property_name::CSSPropertyName,
@@ -8,6 +8,7 @@ use crate::{
     css_property_value_set::CSSPropertyValueSetRuleHandle,
     css_selector::{CSSSelector, GetPseudoId, MatchType, PseudoType, RelationType},
     css_selector_list::CSSSelectorList,
+    css_value::CSSValuePayload,
     media_queries::{
         media_query_backend::ParseMediaQuerySet,
         production_container_query::{
@@ -19,7 +20,7 @@ use crate::{
     parser::{
         css_parser_mode::CSSParserMode,
         css_selector_parser::{CSSSelectorParser, SelectorParserContext},
-        production_property_parser::{ParseDeclarationList, PropertyParseErrorKind},
+        production_property_parser::{ParseDeclarationList, ParseProperty, PropertyParseErrorKind},
     },
     persistent_selector::{
         PersistentSelectorError, PersistentSelectorMatchSession, PersistentSelectorService,
@@ -56,10 +57,10 @@ use cssom::css_style_sheet::{CSSStyleSheet, CSSUserAgentStyleSheetRole};
 use dom::{
     persistent_document::{
         CompatibilityMode, DOMNamespace, DOMNodeType, DOMOwnerHandle, PseudoContent, PseudoElement,
-        ResolvedNodeStyle,
+        ResolvedNodeStyle, ResolvedStyleResources,
     },
     style_state::{StyleChange, StyleUpdateImpact, StyleUpdateStats},
-    Document, UserInteractionState, DOM,
+    Document, StyleDocument, UserInteractionState, DOM,
 };
 use foundation::{
     AtomicString, CSSPropertyID, DisplayAdjustmentContext, EDisplay, EOverflow, EOverflowWrap,
@@ -75,6 +76,7 @@ use layoutng_style::style::{
     style_fetched_image::{FetchedImage, StyleFetchedImage},
     style_image::StyleImage,
 };
+
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeSet, HashMap, HashSet},
@@ -220,9 +222,6 @@ impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_>
         let resource_resolution = resource.map_or(1.0, |resource| resource.resolution_scale as f32);
         let is_document_image =
             resource.is_some_and(|resource| self.document.ImageResourceIsDocument(resource.id));
-        if std::env::var_os("BROWSER_TRACE_STYLE_IMAGES").is_some() {
-            eprintln!("style-image-resolved source={source} resource_id={id}");
-        }
         let fetched = foundation::MakeGarbageCollected(StyleFetchedImage::new(
             value.url_data.clone(),
             id,
@@ -231,7 +230,9 @@ impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_>
             override_resolution,
             is_document_image,
             resource.map_or_else(Default::default, |resource| resource.orientation),
+            resource.is_some_and(|resource| resource.is_cors_same_origin),
             self.document.ImageResourceFailedFor(&source),
+            resource.is_some_and(|resource| resource.known_to_be_opaque),
         ));
         let image = std::ptr::NonNull::new(fetched.cast::<StyleImage>()).unwrap();
         if let Some(id) = std::num::NonZeroU64::new(id) {
@@ -524,7 +525,7 @@ impl RuleCandidateBuckets {
 /// require ordinary resolution instead of manufacturing a matching signature.
 #[derive(Clone)]
 struct RetainedRuleSignature {
-    native_style_complete: bool,
+    style_complete: bool,
     variable_dependencies: Option<Rc<RetainedVariableDependencies>>,
     base_len: usize,
     values: Vec<(
@@ -561,7 +562,7 @@ impl RetainedRuleSignature {
         values[..base_len].sort_unstable();
         values[base_len..].sort_unstable();
         Self {
-            native_style_complete: false,
+            style_complete: false,
             variable_dependencies: None,
             base_len,
             values,
@@ -618,7 +619,7 @@ pub struct TranslatedRuleShadowStats {
     /// Real Update/Cascade candidates containing at least one retained typed
     /// property set. Empty results are not counted.
     pub translated_style_cascade_attempts: usize,
-    /// Attempts whose translated StyleCascade produced the final native style.
+    /// Attempts whose translated StyleCascade produced the final computed style style.
     pub translated_style_cascade_applied: usize,
     /// Typed cascade attempts that failed atomically. Failed builders are never
     /// published and no second cascade implementation is invoked.
@@ -630,10 +631,10 @@ pub struct TranslatedRuleShadowStats {
     pub translated_style_cascade_root_applied: usize,
     /// Root attempts that failed atomically.
     pub translated_style_cascade_root_failures: usize,
-    /// Translated StyleCascade attempts for pseudo-element native styles.
+    /// Translated StyleCascade attempts for pseudo-element computed style styles.
     pub translated_style_cascade_pseudo_attempts: usize,
     /// Pseudo-element attempts whose translated cascade produced the published
-    /// native ComputedStyle.
+    /// computed style ComputedStyle.
     pub translated_style_cascade_pseudo_applied: usize,
     /// Pseudo-element attempts that failed atomically.
     pub translated_style_cascade_pseudo_failures: usize,
@@ -691,6 +692,9 @@ struct ResolverDependencyState {
     forward_positional_parents: HashSet<usize>,
     backward_positional_parents: HashSet<usize>,
     text_link_text_color: Option<foundation::Color>,
+    link_color: Option<foundation::Color>,
+    visited_link_color: Option<foundation::Color>,
+    active_link_color: Option<foundation::Color>,
 }
 
 impl ResolverDependencyState {
@@ -711,6 +715,48 @@ impl ResolverDependencyState {
             self.text_link_text_color = Some(color.clone());
         }
     }
+}
+
+fn ParseLegacyHTMLColor(value: &str) -> Option<foundation::Color> {
+    let properties = ParseProperty(
+        CSSPropertyID::kColor,
+        &foundation::String::from(value),
+        false,
+        CSSParserMode::kHTMLQuirksMode,
+    )
+    .ok()?;
+    let value = properties
+        .iter()
+        .find(|property| property.PropertyID() == CSSPropertyID::kColor)?
+        .Value();
+    match value.Payload() {
+        CSSValuePayload::kColorClass(color) => Some(color.0.clone()),
+        CSSValuePayload::kIdentifierClass(identifier) => {
+            crate::production_css_value::NamedColor(identifier.0)
+        }
+        _ => None,
+    }
+}
+
+fn DocumentBodyLinkColors(
+    document: &Document,
+) -> (
+    Option<foundation::Color>,
+    Option<foundation::Color>,
+    Option<foundation::Color>,
+) {
+    let Some(body) =
+        (0..document.NodeCount()).find(|&index| document.Node(index).IsHTMLElement("body"))
+    else {
+        return (None, None, None);
+    };
+    let color = |name| {
+        document
+            .Node(body)
+            .FindAttribute(name)
+            .and_then(|attribute| ParseLegacyHTMLColor(&attribute.value))
+    };
+    (color("link"), color("vlink"), color("alink"))
 }
 
 /// UA input preserves immutable stylesheet ownership across the host boundary.
@@ -816,7 +862,7 @@ pub struct DocumentStyleEngine {
     // Blink discovers viewport-unit users by walking the live element tree
     // when the viewport dirty flags are consumed. Keep the equivalent exact
     // result set alongside the resolved styles so the Rust boundary does not
-    // rescan every connected element on each native resize sample.
+    // rescan every connected element on each computed style resize sample.
     viewport_dependent_elements: HashSet<usize>,
     container_dependent_elements: HashSet<usize>,
     // SVGResources retains the live clients of paint servers. Keep the same
@@ -898,7 +944,7 @@ impl DocumentStyleEngine {
                 continue;
             }
             stats.custom_records += 1;
-            if maps.insert(Rc::as_ptr(&custom.values)) {
+            if maps.insert(custom.values.root_id()) {
                 stats.value_maps += 1;
                 stats.value_entries += custom.values.len();
                 stats.value_key_capacity += custom
@@ -906,7 +952,7 @@ impl DocumentStyleEngine {
                     .keys()
                     .map(std::string::String::capacity)
                     .sum::<usize>();
-                stats.value_bucket_payload_capacity_estimate += custom.values.capacity()
+                stats.value_bucket_payload_capacity_estimate += custom.values.storage_nodes()
                     * std::mem::size_of::<(std::string::String, ComputedVariableValue)>();
                 for value in custom.values.values() {
                     if let ComputedVariableValue::Data(value) = value {
@@ -918,7 +964,7 @@ impl DocumentStyleEngine {
                     }
                 }
             }
-            if registered.insert(Rc::as_ptr(&custom.registered_values)) {
+            if registered.insert(custom.registered_values.root_id()) {
                 stats.registered_maps += 1;
                 stats.registered_entries += custom.registered_values.len();
                 stats.registered_key_capacity += custom
@@ -1017,10 +1063,10 @@ impl DocumentStyleEngine {
         let mut seen = HashSet::new();
         let mut changed = false;
         for (node, width, height) in sizes {
-            let Some(native) = owner
+            let Some(computed_style) = owner
                 .GetDocument()
                 .ResolvedStyleFor(node)
-                .and_then(|s| unsafe { s.native_style.Get().as_ref() })
+                .and_then(|s| unsafe { s.computed_style_owner.Get().as_ref() })
             else {
                 continue;
             };
@@ -1030,7 +1076,7 @@ impl DocumentStyleEngine {
                 .get(&node)
                 .cloned()
                 .unwrap_or_else(|| {
-                    ContainerState::SizeOnly(width, height, native.GetWritingDirection())
+                    ContainerState::SizeOnly(width, height, computed_style.GetWritingDirection())
                 });
             state.width = Some(width);
             state.height = Some(height);
@@ -1067,7 +1113,7 @@ impl DocumentStyleEngine {
             return Err(DocumentStyleError::WrongDocument);
         }
         self.registered_container_properties = resolver;
-        owner.GetDocumentMut().StyleStateMut().all_dirty = true;
+        owner.GetDocumentMut().InvalidateAllStyles();
         Ok(())
     }
     /// The real page/style-engine owner supplies page color-scheme and
@@ -1082,7 +1128,7 @@ impl DocumentStyleEngine {
         }
         if self.color_scheme_settings != settings {
             self.color_scheme_settings = settings;
-            owner.GetDocumentMut().StyleStateMut().all_dirty = true;
+            owner.GetDocumentMut().InvalidateAllStyles();
         }
         Ok(())
     }
@@ -1103,7 +1149,7 @@ impl DocumentStyleEngine {
         self.property_registry
             .RegisterProperty(name, registration)
             .map_err(DocumentStyleError::PropertyRegistration)?;
-        owner.GetDocumentMut().StyleStateMut().all_dirty = true;
+        owner.GetDocumentMut().InvalidateAllStyles();
         Ok(())
     }
     pub fn Diagnostics(&self) -> &[DocumentStyleError] {
@@ -1121,7 +1167,7 @@ impl DocumentStyleEngine {
         };
         let style = document
             .ResolvedStyleFor(index)
-            .and_then(|style| unsafe { style.native_style.Get().as_ref() });
+            .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() });
         let selectors = self.selectors.borrow();
         let subject = selectors.SubjectMatchFlags(index);
         let (local, children, ancestors) = match pseudo {
@@ -1325,38 +1371,44 @@ impl DocumentStyleEngine {
     pub fn TranslatedRuleShadowStats(&self) -> TranslatedRuleShadowStats {
         self.translated_rule_shadow_stats
     }
-    pub fn Update<'a>(
+    pub fn Update<'a, D: StyleDocument + ?Sized>(
         &mut self,
-        owner: &mut DOM,
+        owner: &mut D,
         media: &MediaValuesCachedData,
         ua: impl Into<UserAgentStyleSheetInput<'a>>,
     ) -> Result<StyleUpdateImpact, DocumentStyleError> {
         self.UpdateWithEnvironment(owner, media, ua, None)
     }
-    pub fn UpdateWithEnvironment<'a>(
+    pub fn UpdateWithEnvironment<'a, D: StyleDocument + ?Sized>(
         &mut self,
-        owner: &mut DOM,
+        owner: &mut D,
         media: &MediaValuesCachedData,
         ua: impl Into<UserAgentStyleSheetInput<'a>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
     ) -> Result<StyleUpdateImpact, DocumentStyleError> {
-        self.UpdateForStyleRequest(owner, media, ua.into(), environment_variables, None)
+        self.UpdateForStyleRequest(
+            owner.DocumentForStyleMut(),
+            media,
+            ua.into(),
+            environment_variables,
+            None,
+        )
     }
 
     /// Element::EnsureComputedStyle: after normal style update, resolve only the
     /// missing flat-tree ancestor chain of a script-query target. Ensured styles
     /// are query caches, not layout styles, and are invalidated by normal recalc.
-    pub fn EnsureComputedStyle<'a>(
+    pub fn EnsureComputedStyle<'a, D: StyleDocument + ?Sized>(
         &mut self,
-        owner: &mut DOM,
+        owner: &mut D,
         media: &MediaValuesCachedData,
         ua: impl Into<UserAgentStyleSheetInput<'a>>,
         node: usize,
     ) -> Result<(), DocumentStyleError> {
-        if owner.GetDocument().RootHandle() != self.document {
+        let document = owner.DocumentForStyleMut();
+        if document.RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
-        let document = owner.GetDocument();
         if !ConnectedElement(document, node) || document.ResolvedStyleFor(node).is_some() {
             return Ok(());
         }
@@ -1376,13 +1428,13 @@ impl DocumentStyleEngine {
         // Detached mutations may leave DOM facts pending without dirtying the
         // active style tree; the embedding need not schedule a lifecycle for them.
         debug_assert!(!document.StyleState().all_dirty);
-        self.UpdateForStyleRequest(owner, media, ua.into(), None, Some(node))?;
+        self.UpdateForStyleRequest(document, media, ua.into(), None, Some(node))?;
         Ok(())
     }
 
     fn UpdateForStyleRequest(
         &mut self,
-        owner: &mut DOM,
+        document_owner: &mut Document,
         media: &MediaValuesCachedData,
         ua: UserAgentStyleSheetInput<'_>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
@@ -1393,10 +1445,10 @@ impl DocumentStyleEngine {
             browser_tracing::span("style_rules", "StyleEngine.UpdateActiveStyleSheets");
         self.diagnostics.clear();
         self.translated_rule_shadow_stats = Default::default();
-        if owner.GetDocument().RootHandle() != self.document {
+        if document_owner.RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
-        let state = owner.GetDocument().StyleState();
+        let state = document_owner.StyleState();
         // Chromium's StyleFetchedImage retains identity while its
         // ImageResourceContent changes underneath it, so a matched-properties
         // cache hit observes the completed or failed resource. Rechrom publishes an
@@ -1411,12 +1463,16 @@ impl DocumentStyleEngine {
             || !state.dirty_style_elements.is_empty()
             || !state.inserted_style_subtrees.is_empty()
         {
-            self.SynchronizeStyleSheets(owner);
+            self.SynchronizeStyleSheets(document_owner);
         }
-        let document = owner.GetDocument();
+        let document = &*document_owner;
         if document.RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
+        let (link_color, visited_link_color, active_link_color) = DocumentBodyLinkColors(document);
+        self.resolver_dependencies.link_color = link_color;
+        self.resolver_dependencies.visited_link_color = visited_link_color;
+        self.resolver_dependencies.active_link_color = active_link_color;
         // Blink's ApplyRuleSetChanges invalidates against old and new rule sets.
         // Retain exact source snapshots: removals and source-order/layer changes
         // are observable even when the DOM and declaration text are unchanged.
@@ -1696,7 +1752,7 @@ impl DocumentStyleEngine {
                     })
             });
         let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
-        // This compatibility counter counts dependency scans, not native
+        // This compatibility counter counts dependency scans, not computed style
         // RuleSet compilation. The latter is owned by shared_rule_sets above.
         let mut rule_sets_built = 0;
         let mut dependency_trace =
@@ -1933,6 +1989,44 @@ impl DocumentStyleEngine {
                     }
                     StyleChange::AttributeValue(index) => {
                         dirty.insert(index);
+                        if document.Node(index).IsHTMLElement("body")
+                            && document
+                                .StyleState()
+                                .attribute_changes
+                                .get(&index)
+                                .is_some_and(|change| {
+                                    change.names.iter().any(|name| {
+                                        matches!(name.as_str(), "link" | "vlink" | "alink")
+                                    })
+                                })
+                        {
+                            // HTMLBodyElement::ParseAttribute updates the
+                            // document TextLinkColors owner and schedules a
+                            // subtree recalc because every anchor may change.
+                            AddSubtree(document, index, &mut dirty);
+                        }
+                        if document.Node(index).IsHTMLElement("table")
+                            && document
+                                .StyleState()
+                                .attribute_changes
+                                .get(&index)
+                                .is_some_and(|change| {
+                                    change.names.iter().any(|name| {
+                                        matches!(
+                                            name.as_str(),
+                                            "cellpadding"
+                                                | "border"
+                                                | "bordercolor"
+                                                | "rules"
+                                                | "frame"
+                                        )
+                                    })
+                                })
+                        {
+                            // HTMLTableElement::SetNeedsTableStyleRecalc:
+                            // shared cell presentation style changed.
+                            AddSubtree(document, index, &mut dirty);
+                        }
                         InvalidateSlotAssignmentForNode(document, index, &mut dirty);
                         // HTML href changes also change link pseudo states,
                         // independently of CSS [href] attribute dependencies.
@@ -2217,7 +2311,7 @@ impl DocumentStyleEngine {
                 changed_sheets_trace.set("ua_unchanged", ua_unchanged as u8 as f64);
                 let mut old_sheets_changed = false;
                 let mut old_highlight_pseudos = HashSet::new();
-                let native_changed_rules = precise_changes.as_ref().and_then(|changed| {
+                let changed_rules = precise_changes.as_ref().and_then(|changed| {
                     if !rule_set_invalidation_context_unchanged || !ua_unchanged {
                         return None;
                     }
@@ -2302,23 +2396,20 @@ impl DocumentStyleEngine {
                     }
                     Some(rules)
                 });
+                changed_sheets_trace.set("changed_rules", changed_rules.is_some() as u8 as f64);
                 changed_sheets_trace.set(
-                    "native_changed_rules",
-                    native_changed_rules.is_some() as u8 as f64,
-                );
-                changed_sheets_trace.set(
-                    "native_rule_sets",
-                    native_changed_rules.as_ref().map_or(0, Vec::len) as f64,
+                    "rule_sets",
+                    changed_rules.as_ref().map_or(0, Vec::len) as f64,
                 );
                 let dirty_before_changed_sheets = dirty.len();
-                let mut native_invalidated_count = 0usize;
+                let mut invalidated_count = 0usize;
                 let mut missing_old_match_count = 0usize;
                 // Blink runs ApplyRuleSetInvalidationForTreeScope in element
                 // traversal order and keeps SelectorFilter's ancestor stack in
                 // step with that walk. Preserve the same order here; iterating
                 // a HashSet rebuilds the ancestor filter for almost every node.
                 let elements = ConnectedElements(document).collect::<Vec<_>>();
-                let native_invalidated = native_changed_rules.as_ref().and_then(|rules| {
+                let invalidated = changed_rules.as_ref().and_then(|rules| {
                     // ApplyRuleSetChanges is scoped. A shadow sheet containing
                     // :host, ::slotted or another tree-scope selector cannot be
                     // checked by the document-scope invalidator, but it also
@@ -2353,8 +2444,8 @@ impl DocumentStyleEngine {
                     InvalidateChangedTreeScopes(document, &shadow_scopes, &mut invalidated);
                     Some(invalidated)
                 });
-                if let Some(invalidated) = native_invalidated {
-                    native_invalidated_count = invalidated.len();
+                if let Some(invalidated) = invalidated {
+                    invalidated_count = invalidated.len();
                     dirty.extend(invalidated);
                     if old_sheets_changed {
                         for &index in &elements {
@@ -2387,7 +2478,9 @@ impl DocumentStyleEngine {
                                 && old_style.is_some()
                                 && !self.matches.contains_key(&index);
                             let old_highlight = old_style
-                                .and_then(|style| unsafe { style.native_style.Get().as_ref() })
+                                .and_then(|style| unsafe {
+                                    style.computed_style_owner.Get().as_ref()
+                                })
                                 .is_some_and(|style| {
                                     old_highlight_pseudos
                                         .iter()
@@ -2418,7 +2511,7 @@ impl DocumentStyleEngine {
                     "dirty_before_changed_sheets",
                     dirty_before_changed_sheets as f64,
                 );
-                changed_sheets_trace.set("native_invalidated", native_invalidated_count as f64);
+                changed_sheets_trace.set("invalidated", invalidated_count as f64);
                 changed_sheets_trace.set(
                     "missing_old_match_invalidated",
                     missing_old_match_count as f64,
@@ -2429,7 +2522,7 @@ impl DocumentStyleEngine {
                     "StyleChangedSheetInvalidationOutcome",
                     &[
                         ("dirty_before", dirty_before_changed_sheets as f64),
-                        ("native_invalidated", native_invalidated_count as f64),
+                        ("invalidated", invalidated_count as f64),
                         (
                             "missing_old_match_invalidated",
                             missing_old_match_count as f64,
@@ -2563,7 +2656,7 @@ impl DocumentStyleEngine {
                     {
                         candidates.insert(index);
                     }
-                    // Element's own native/control state must be refreshed
+                    // Element's own computed style/control state must be refreshed
                     // even when its ordinary matched-rule signature is equal.
                     if self
                         .interaction_changed_nodes
@@ -2787,7 +2880,7 @@ impl DocumentStyleEngine {
             self.environment = Some(environment);
             self.sheet_dependencies = sheet_dependencies;
             FinishUpdate(
-                owner.GetDocumentMut(),
+                document_owner,
                 StyleUpdateStats {
                     rule_sets_built,
                     ..Default::default()
@@ -2812,20 +2905,21 @@ impl DocumentStyleEngine {
             Rc::new(crate::resolver::production_style_resolver::ProductionResolverBatch::default());
         // MatchResult carries the exact highlight names which matched each
         // originating element. No document-wide selector inventory is needed.
-        // Build all immutable styles before publishing. The translated
-        // StyleResolver owns Blink's initial-style lifecycle; this engine only
-        // supplies its immutable host environment through a private adapter.
+        // Build and install each immutable style in traversal order. The
+        // translated StyleResolver owns Blink's initial-style lifecycle; this
+        // engine only supplies its immutable host environment.
         let initial_root = crate::resolver::production_style_resolver::InitialStyleForDocument(
             media,
             self.color_scheme_settings,
         );
         let initial_root_ref = unsafe { &*initial_root.Get() };
-        // Styles are large boundary projections. Avoid repeatedly relocating
-        // all earlier results while accumulating the known dirty subjects.
-        let mut pending = Vec::<(usize, ResolvedNodeStyle)>::with_capacity(dirty.len());
+        // Record only identities needed by the exceptional SVG resource pass.
+        // Ordinary styles are installed on their element as soon as recalc for
+        // that element finishes.
+        let mut changed_style_nodes = HashSet::with_capacity(dirty.len());
         let mut pending_reattach = HashSet::new();
         let mut cleared = Vec::new();
-        let mut native = HashMap::<usize, Persistent<ComputedStyle>>::new();
+        let mut computed_style = HashMap::<usize, Persistent<ComputedStyle>>::new();
         let mut stack = vec![(
             document.Root(),
             None,
@@ -2885,6 +2979,9 @@ impl DocumentStyleEngine {
             _at_shadow_boundary,
         )) = stack.pop()
         {
+            let mut resolved_to_commit = None;
+            let mut clear_current_style = false;
+            let document = &*document_owner;
             let node = document.Node(index);
             let element = node.Type() == DOMNodeType::kElement;
             let element_scope =
@@ -2904,10 +3001,10 @@ impl DocumentStyleEngine {
                 // style. A display:none parent normally stores no style; its
                 // descendants lose old/ensured styles without selector matching.
                 if ensure_target.is_none()
-                    && parent_index.is_some_and(|parent| !native.contains_key(&parent))
+                    && parent_index.is_some_and(|parent| !computed_style.contains_key(&parent))
                 {
                     if let Some(old) = old {
-                        if !unsafe { old.native_style.Get().as_ref() }
+                        if !unsafe { old.computed_style_owner.Get().as_ref() }
                             .is_some_and(|style| style.IsEnsuredInDisplayNone())
                         {
                             impact.Merge(StyleUpdateImpact::TREE);
@@ -2916,10 +3013,11 @@ impl DocumentStyleEngine {
                         child_subtree = true;
                     }
                     cleared.push(index);
+                    clear_current_style = true;
                     if self
                         .matches
                         .get(&index)
-                        .is_some_and(|signature| signature.native_style_complete)
+                        .is_some_and(|signature| signature.style_complete)
                         && self.custom_properties.contains_key(&index)
                     {
                         retained_suppressed.insert(index);
@@ -2932,8 +3030,8 @@ impl DocumentStyleEngine {
                     let inherited_custom_properties = parent_index
                         .and_then(|parent| custom_properties.get(&parent))
                         .cloned();
-                    let old_native =
-                        old.and_then(|style| unsafe { style.native_style.Get().as_ref() });
+                    let old_computed_style =
+                        old.and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() });
                     let old_custom = self.custom_properties.get(&index).cloned();
                     let old_parent_custom =
                         parent_index.and_then(|parent| self.custom_properties.get(&parent));
@@ -2965,7 +3063,7 @@ impl DocumentStyleEngine {
                         } else if !self
                             .matches
                             .get(&index)
-                            .is_some_and(|signature| signature.native_style_complete)
+                            .is_some_and(|signature| signature.style_complete)
                         {
                             custom_pass_rejected_signature += 1;
                             false
@@ -2982,8 +3080,8 @@ impl DocumentStyleEngine {
                     let pass_through_custom_properties = custom_pass_through_base
                         .then(|| {
                             let parent = inherited_custom_properties.as_ref()?;
-                            if old_native
-                                .is_some_and(|style| !NativeStyleHasVariableDependencies(style))
+                            if old_computed_style
+                                .is_some_and(|style| !StyleHasVariableDependencies(style))
                             {
                                 custom_pass_variable_free += 1;
                                 return Some((parent.clone(), true));
@@ -3004,10 +3102,7 @@ impl DocumentStyleEngine {
                                 custom_pass_rejected_dependencies += 1;
                                 return None;
                             };
-                            let key = (
-                                Rc::as_ptr(&old_parent.values) as usize,
-                                Rc::as_ptr(&parent.values) as usize,
-                            );
+                            let key = (old_parent.values.root_id(), parent.values.root_id());
                             let changed = custom_property_change_cache
                                 .entry(key)
                                 .or_insert_with(|| {
@@ -3022,7 +3117,7 @@ impl DocumentStyleEngine {
                                 return None;
                             }
                             custom_pass_exact_dependencies += 1;
-                            if old_native.is_none() {
+                            if old_computed_style.is_none() {
                                 custom_pass_suppressed += 1;
                             }
                             let inherited_value_changed = changed
@@ -3044,8 +3139,8 @@ impl DocumentStyleEngine {
                     let reason_inherited_custom = inherited_custom && !pass_through_custom;
                     let reason_missing = old.is_none() && !pass_through_custom;
                     let reason_ensured = old.is_some_and(|s| {
-                        s.native_style.Get().is_null()
-                            || unsafe { &*s.native_style.Get() }.IsEnsuredInDisplayNone()
+                        s.computed_style_owner.Get().is_null()
+                            || unsafe { &*s.computed_style_owner.Get() }.IsEnsuredInDisplayNone()
                     });
                     let reason_explicit =
                         explicit && old.is_none_or(|s| s.has_explicit_inheritance != Some(false));
@@ -3074,12 +3169,12 @@ impl DocumentStyleEngine {
                         }
                         custom_properties.insert(index, next_custom);
                         if let Some(old) = old {
-                            native.insert(index, old.native_style.clone());
-                            let old_native = unsafe { &*old.native_style.Get() };
-                            none |= old_native.Display() == EDisplay::kNone
-                                && !UsesSVGHiddenContainer(document, index, old_native);
+                            computed_style.insert(index, old.computed_style_owner.clone());
+                            let old_computed_style = unsafe { &*old.computed_style_owner.Get() };
+                            none |= old_computed_style.Display() == EDisplay::kNone
+                                && !UsesSVGHiddenContainer(document, index, old_computed_style);
                             if parent_index.is_none() {
-                                root_font = old_native.GetFontDescription().SpecifiedSize();
+                                root_font = old_computed_style.GetFontDescription().SpecifiedSize();
                             }
                             child_custom = next_custom_changed;
                         } else {
@@ -3112,14 +3207,16 @@ impl DocumentStyleEngine {
                             && self
                                 .matches
                                 .get(&index)
-                                .is_some_and(|signature| signature.native_style_complete)
+                                .is_some_and(|signature| signature.style_complete)
                             && old.is_some_and(|old| {
-                                !unsafe { &*old.native_style.Get() }.IsEnsuredInDisplayNone()
+                                !unsafe { &*old.computed_style_owner.Get() }
+                                    .IsEnsuredInDisplayNone()
                             });
                         if !incremental_style {
                             self.selectors.borrow().ResetSubjectMatchFlags(index);
                         }
-                        let parent_handle = parent_index.and_then(|p| native.get(&p)).cloned();
+                        let parent_handle =
+                            parent_index.and_then(|p| computed_style.get(&p)).cloned();
                         let parent = parent_handle.as_ref().map(|style| unsafe { &*style.Get() });
                         let root_handle = document
                             .Node(document.Root())
@@ -3129,7 +3226,7 @@ impl DocumentStyleEngine {
                             .find(|&candidate| {
                                 document.Node(candidate).Type() == DOMNodeType::kElement
                             })
-                            .and_then(|root_index| native.get(&root_index))
+                            .and_then(|root_index| computed_style.get(&root_index))
                             .cloned();
                         let root_style = root_handle.as_ref().map(|style| unsafe { &*style.Get() });
                         let inherited_custom = parent_index
@@ -3139,7 +3236,7 @@ impl DocumentStyleEngine {
                         // (style_resolver.cc:1736-1944). HTML, SVG and MathML
                         // each retain the namespace-specific default RuleSet that
                         // MatchUARules selects. This is the sole base-style path:
-                        // its typed result owns native style and custom properties.
+                        // its typed result owns computed style style and custom properties.
                         let rule_sets = &production_resolver_rule_sets;
                         self.translated_rule_shadow_stats.elements_probed += 1;
                         self.translated_rule_shadow_stats
@@ -3170,7 +3267,7 @@ impl DocumentStyleEngine {
                                 media,
                                 states: &self.container_states,
                                 stored_custom: &self.custom_properties,
-                                current_styles: Some(&native),
+                                current_styles: Some(&computed_style),
                                 current_custom: Some(&custom_properties),
                                 environment: environment_variables,
                                 registered: Some(registered_container_properties),
@@ -3191,6 +3288,11 @@ impl DocumentStyleEngine {
                         collaborators.color_scheme_settings = self.color_scheme_settings;
                         collaborators.text_link_text_color =
                             self.resolver_dependencies.text_link_text_color;
+                        collaborators.link_color = self.resolver_dependencies.link_color;
+                        collaborators.visited_link_color =
+                            self.resolver_dependencies.visited_link_color;
+                        collaborators.active_link_color =
+                            self.resolver_dependencies.active_link_color;
                         collaborators.is_document_element = parent.is_none();
                         collaborators.subject_node = Some(index);
                         collaborators.is_ensuring_style = ensure_target.is_some();
@@ -3414,7 +3516,7 @@ impl DocumentStyleEngine {
                                 element_sheets,
                                 &scoped_sheets,
                                 Some(kind),
-                                Some(&native),
+                                Some(&computed_style),
                                 Some(&custom_properties),
                                 environment_variables,
                             )?;
@@ -3472,7 +3574,7 @@ impl DocumentStyleEngine {
                         // cpp: Element::RecalcHighlightStyles (element.cc:6747-6828)
                         // and StyleResolver::StyleForHighlightPseudoElement
                         // (style_resolver.cc:10642-10652). Highlight pseudos are
-                        // native cached styles on the originating ComputedStyle;
+                        // computed style cached styles on the originating ComputedStyle;
                         // they are not generated PseudoElement boxes. Each request
                         // inherits highlight properties from the parent's matching
                         // highlight style and initializes the remaining properties
@@ -3616,7 +3718,7 @@ impl DocumentStyleEngine {
                                         media,
                                         states: &self.container_states,
                                         stored_custom: &self.custom_properties,
-                                        current_styles: Some(&native),
+                                        current_styles: Some(&computed_style),
                                         current_custom: Some(&custom_properties),
                                         environment: environment_variables,
                                         registered: Some(registered_container_properties),
@@ -3640,6 +3742,12 @@ impl DocumentStyleEngine {
                                             self.color_scheme_settings;
                                         collaborators.text_link_text_color =
                                             self.resolver_dependencies.text_link_text_color;
+                                        collaborators.link_color =
+                                            self.resolver_dependencies.link_color;
+                                        collaborators.visited_link_color =
+                                            self.resolver_dependencies.visited_link_color;
+                                        collaborators.active_link_color =
+                                            self.resolver_dependencies.active_link_color;
                                         collaborators.pseudo_id = pseudo_id;
                                         collaborators.pseudo_argument = argument.clone();
                                         collaborators.search_text = search_text;
@@ -3711,9 +3819,9 @@ impl DocumentStyleEngine {
                                                     as *mut ComputedStyle,
                                             ));
                                             let pointer = resolved_highlight.Get();
-                                            let native = unsafe { &*pointer };
-                                            if native.HasVariableDeclaration()
-                                                || native.HasVariableReference()
+                                            let computed_style = unsafe { &*pointer };
+                                            if computed_style.HasVariableDeclaration()
+                                                || computed_style.HasVariableReference()
                                             {
                                                 MergePseudoVariableDependencies(
                                                     &mut variable_dependencies,
@@ -3786,14 +3894,14 @@ impl DocumentStyleEngine {
                                 ordinary_signature_complete
                                     && OrdinarySignatureElement(document, index),
                             );
-                            signature.native_style_complete = true;
+                            signature.style_complete = true;
                             signature.variable_dependencies = variable_dependencies.map(Rc::new);
                             pending_matches.insert(index, signature);
                             pending_custom_properties.insert(index, computed_custom.clone());
                             custom_properties.insert(index, computed_custom);
                             retained_suppressed.insert(index);
                             if let Some(old) = old {
-                                if !unsafe { old.native_style.Get().as_ref() }
+                                if !unsafe { old.computed_style_owner.Get().as_ref() }
                                     .is_some_and(|style| style.IsEnsuredInDisplayNone())
                                 {
                                     impact.Merge(StyleUpdateImpact::TREE);
@@ -3802,6 +3910,7 @@ impl DocumentStyleEngine {
                                 child_subtree = true;
                             }
                             cleared.push(index);
+                            clear_current_style = true;
                             none = true;
                             next_parent = Some(index);
                             child_inherited = false;
@@ -3822,38 +3931,37 @@ impl DocumentStyleEngine {
                             resolved.own_generates_box = svg_hidden_container
                                 || (!own_none && !resolved.own_display_contents);
                             resolved.generates_box = !none && resolved.own_generates_box;
-                            ProjectForLayoutBoundary(final_style, &mut resolved)?;
                             resolved.has_explicit_inheritance =
                                 Some(final_style.HasExplicitInheritance());
-                            resolved.SetNativeStyle(style.clone());
+                            resolved.SetComputedStyleOwner(style.clone());
                             let compare_trace = browser_tracing::span(
                                 "style_diff",
                                 "StyleEngine.CompareResolvedStyle",
                             );
-                            let old_native =
-                                old.and_then(|s| unsafe { s.native_style.Get().as_ref() });
-                            // cpp: computed_style.cc:407-500; element.cc:5562-5583.
-                            // Propagation is decided by the translated native style
+                            let old_computed_style =
+                                old.and_then(|s| unsafe { s.computed_style_owner.Get().as_ref() });
+                            // cpp: computed style.cc:407-500; element.cc:5562-5583.
+                            // Propagation is decided by the translated computed style style
                             // difference, not by a hand-maintained projection subset.
-                            let native_difference = old_native
+                            let difference = old_computed_style
                                 .map_or(ComputedStyleDifference::kDescendantAffecting, |old| {
                                     style_diff::ComputeDifference(old, final_style)
                                 });
-                            let old_custom = self.custom_properties.get(&index);
-                            let custom_changed = old_custom.is_none_or(|old| {
+                            let old_custom = self.custom_properties.get(&index).cloned();
+                            let custom_changed = old_custom.as_deref().is_none_or(|old| {
                                 !CustomPropertiesEquivalent(old, &computed_custom)
                             });
                             // A child's highlight style inherits from the matching
                             // highlight style on its flat-tree parent. That dependency
                             // is separate from ordinary CSS inheritance and therefore
-                            // must explicitly schedule descendants when the native
+                            // must explicitly schedule descendants when the computed style
                             // highlight cache changes.
-                            let highlight_changed = old_native.is_none_or(|old| {
+                            let highlight_changed = old_computed_style.is_none_or(|old| {
                                 old.HighlightData() != final_style.HighlightData()
                             });
                             let suppression_changed = old
                                 .is_none_or(|s| s.generates_box != resolved.generates_box)
-                                || old_native.is_some_and(|old| {
+                                || old_computed_style.is_some_and(|old| {
                                     (old.Display() == EDisplay::kNone) != own_none
                                 });
                             drop(compare_trace);
@@ -3864,18 +3972,22 @@ impl DocumentStyleEngine {
                                     &[
                                         ("node_id", node.Id() as f64),
                                         ("ancestor_display_none", ancestor_none as u8 as f64),
-                                        ("had_style", old_native.is_some() as u8 as f64),
-                                        ("native_difference", native_difference as u8 as f64),
+                                        ("had_style", old_computed_style.is_some() as u8 as f64),
+                                        ("difference", difference as u8 as f64),
                                         ("custom_changed", custom_changed as u8 as f64),
                                         ("had_custom", old_custom.is_some() as u8 as f64),
                                         (
                                             "old_custom_values",
-                                            old_custom.map_or(0, |value| value.values.len()) as f64,
+                                            old_custom
+                                                .as_deref()
+                                                .map_or(0, |value| value.values.len())
+                                                as f64,
                                         ),
                                         ("new_custom_values", computed_custom.values.len() as f64),
                                         (
                                             "old_registered_values",
                                             old_custom
+                                                .as_deref()
                                                 .map_or(0, |value| value.registered_values.len())
                                                 as f64,
                                         ),
@@ -3887,7 +3999,7 @@ impl DocumentStyleEngine {
                                         ("suppression_changed", suppression_changed as u8 as f64),
                                         (
                                             "initial_data_changed",
-                                            old_native.is_none_or(|old| {
+                                            old_computed_style.is_none_or(|old| {
                                                 old.InitialData() != final_style.InitialData()
                                             }) as u8
                                                 as f64,
@@ -3895,13 +4007,27 @@ impl DocumentStyleEngine {
                                     ],
                                 );
                             }
-                            child_inherited = native_difference
+                            child_inherited = difference
                                 >= ComputedStyleDifference::kIndependentInherited
                                 || highlight_changed;
                             child_custom = custom_changed;
                             child_subtree |= suppression_changed
-                                || native_difference
-                                    == ComputedStyleDifference::kDescendantAffecting;
+                                || difference == ComputedStyleDifference::kDescendantAffecting;
+                            // Source: core/dom/element.cc:5880-5891. A change
+                            // in the root's unconditional scrollbar size
+                            // changes every viewport-unit conversion. Clear
+                            // only viewport-dependent cache entries and force
+                            // descendant recalc after the new root style has
+                            // entered the current computed style-style map.
+                            if parent.is_none()
+                                && old_computed_style.is_none_or(|old| {
+                                    old.UnconditionalScrollbarSize()
+                                        != final_style.UnconditionalScrollbarSize()
+                                })
+                            {
+                                self.matched_properties_cache.ClearViewportDependent();
+                                child_subtree = true;
+                            }
                             // cpp: StyleResolver::ResolveStyle(StyleRequest),
                             // Element::GetCachedPseudoElementStyle. Pseudos inherit from
                             // their originating element and have a separate match result.
@@ -3939,7 +4065,7 @@ impl DocumentStyleEngine {
                                     Some(&production_resolver_rule_sets),
                                     &rule_collections,
                                     &resolver_batch,
-                                    &native,
+                                    &computed_style,
                                     &custom_properties,
                                     root_style,
                                 )?;
@@ -4019,7 +4145,7 @@ impl DocumentStyleEngine {
                                     &production_resolver_rule_sets,
                                     &rule_collections,
                                     &resolver_batch,
-                                    &native,
+                                    &computed_style,
                                     &custom_properties,
                                     root_style,
                                 )?;
@@ -4043,7 +4169,7 @@ impl DocumentStyleEngine {
                                 ordinary_signature_complete
                                     && OrdinarySignatureElement(document, index),
                             );
-                            signature.native_style_complete = true;
+                            signature.style_complete = true;
                             signature.variable_dependencies = variable_dependencies.map(Rc::new);
                             pending_matches.insert(index, signature);
                             let mut finalize_trace = browser_tracing::span(
@@ -4052,7 +4178,7 @@ impl DocumentStyleEngine {
                             );
                             // The preliminary difference controls inheritance. Compare
                             // again after cache population so pseudo content changes
-                            // participate in the native public-pseudo difference.
+                            // participate in the computed style public-pseudo difference.
                             let final_difference = {
                                 let _diff_trace = browser_tracing::span(
                                     "style_diff",
@@ -4061,10 +4187,10 @@ impl DocumentStyleEngine {
                                 if pseudo_rules.is_empty() {
                                     // No generated-pseudo cache was touched since the
                                     // preliminary comparison; the same immutable inputs
-                                    // cannot produce a different native style difference.
-                                    native_difference
+                                    // cannot produce a different computed style style difference.
+                                    difference
                                 } else {
-                                    old_native.map_or(
+                                    old_computed_style.map_or(
                                         ComputedStyleDifference::kDescendantAffecting,
                                         |old| style_diff::ComputeDifference(old, final_style),
                                     )
@@ -4073,8 +4199,8 @@ impl DocumentStyleEngine {
                             let equal = final_difference == ComputedStyleDifference::kEqual
                         // Generated style equality deliberately excludes these
                         // derived flags. A real page/preference update still
-                        // publishes their newly computed native values.
-                        && old_native.is_some_and(|old| {
+                        // publishes their newly computed computed style values.
+                        && old_computed_style.is_some_and(|old| {
                             // A query cache must become an ordinary style even
                             // when its physical box stays suppressed (SVG g).
                             old.IsEnsuredInDisplayNone() == final_style.IsEnsuredInDisplayNone()
@@ -4092,7 +4218,7 @@ impl DocumentStyleEngine {
                         // ::placeholder uses an internal PseudoId and is not
                         // covered by ComputedStyle's public-pseudo flag loop.
                         // Its form-control lifecycle still owns a distinct cache.
-                        && old_native.is_some_and(|old| PseudoStyleKind::DIRECT.into_iter().all(|kind| {
+                        && old_computed_style.is_some_and(|old| PseudoStyleKind::DIRECT.into_iter().all(|kind| {
                             old.GetCachedPseudoElementStyleWithoutArgument(kind.Id())
                                 == final_style.GetCachedPseudoElementStyleWithoutArgument(kind.Id())
                         }))
@@ -4102,26 +4228,35 @@ impl DocumentStyleEngine {
                         // force publishing an unchanged style on every child.
                         && old.is_some_and(|old| {
                             // Normalize only this unpublished result, and only
-                            // after native equality has been established. A
+                            // after computed style equality has been established. A
                             // changed style needs no cloned comparison payload.
-                            // Equal styles retain the committed native owner;
+                            // Equal styles retain the committed computed style owner;
                             // a projection mismatch restores the new owner.
-                            resolved.SetNativeStyle(old.native_style.clone());
+                            resolved.SetComputedStyleOwner(old.computed_style_owner.clone());
                             if old == &resolved { true } else {
-                                resolved.SetNativeStyle(style.clone());
+                                resolved.SetComputedStyleOwner(style.clone());
                                 false
                             }
                         });
                             finalize_trace.set("equal", equal as u8 as f64);
                             child_explicit = !equal;
                             pending_values.insert(index, values);
+                            // cpp: style_variables.cc:16-35. Chromium makes
+                            // independently built equal roots canonical after
+                            // equality. Reuse the complete old immutable owner
+                            // here so every following descendant sees pointer
+                            // identity instead of rescanning the same large
+                            // inherited variable map.
+                            let computed_custom = old_custom
+                                .filter(|_| !custom_changed)
+                                .unwrap_or(computed_custom);
                             pending_custom_properties.insert(index, computed_custom.clone());
                             custom_properties.insert(index, computed_custom);
                             // A root font change also invalidates rem users outside ordinary
                             // inheritance. Until unit dependency flags are retained, visit
                             // the connected document for that source-defined dependency.
                             if parent.is_none()
-                                && old_native.is_some_and(|old| {
+                                && old_computed_style.is_some_and(|old| {
                                     old.GetFontDescription().SpecifiedSize()
                                         != final_style.GetFontDescription().SpecifiedSize()
                                 })
@@ -4129,13 +4264,15 @@ impl DocumentStyleEngine {
                                 child_subtree = true;
                             }
                             // Equality above already retained the committed owner.
-                            // Retain the native dependency facts for the next targeted
+                            // Retain the computed style dependency facts for the next targeted
                             // container recalc; no arena-wide style/flag scan is needed.
                             pending_container_dependencies.push((
                                 index,
-                                ContainerQueryDependent(unsafe { &*resolved.native_style.Get() }),
+                                ContainerQueryDependent(unsafe {
+                                    &*resolved.computed_style_owner.Get()
+                                }),
                             ));
-                            native.insert(index, resolved.native_style.clone());
+                            computed_style.insert(index, resolved.computed_style_owner.clone());
                             // `equal` already proved full projection equality. Avoid
                             // traversing the same large boundary payload a second time.
                             if !equal && old != Some(&resolved) {
@@ -4148,7 +4285,7 @@ impl DocumentStyleEngine {
                                         pending_reattach.insert(node.Id());
                                     }
                                 }
-                                pending.push((index, resolved));
+                                resolved_to_commit = Some(resolved);
                             }
                             next_parent = Some(index);
                             drop(finalize_trace);
@@ -4271,34 +4408,44 @@ impl DocumentStyleEngine {
                     );
                 }
             }
+            if clear_current_style {
+                document_owner.ClearResolvedStyle(index);
+            } else if let Some(resolved) = resolved_to_commit {
+                CommitResolvedStyle(
+                    document_owner,
+                    &mut self.viewport_dependent_elements,
+                    index,
+                    resolved,
+                );
+                changed_style_nodes.insert(index);
+            }
         }
         drop(sheets);
-        // Remove obsolete resource styles before resolving paint-server clients;
-        // the pending batch must never fall back to a discarded document style.
-        for &index in &cleared {
-            owner.GetDocumentMut().ClearResolvedStyle(index);
-        }
         if ensure_target.is_none() {
-            let document = owner.GetDocument();
+            let document = &*document_owner;
             self.svg_style_elements.retain(|index| {
                 document.ResolvedStyleFor(*index).is_some()
                     && document.Node(*index).Namespace() == DOMNamespace::kSVG
             });
-            for &(index, _) in &pending {
+            for &index in &changed_style_nodes {
                 if document.Node(index).Namespace() == DOMNamespace::kSVG {
                     self.svg_style_elements.insert(index);
                 } else {
                     self.svg_style_elements.remove(&index);
                 }
             }
-            ResolveSVGPaintServers(
+            let svg_updates = ResolveSVGPaintServers(
                 document,
                 &self.svg_style_elements,
-                &mut pending,
+                &changed_style_nodes,
                 &mut stats,
                 &mut impact,
-                &mut pending_reattach,
             );
+            let _publish_trace =
+                browser_tracing::span("style_commit", "StyleEngine.PublishSVGResourceStyles");
+            for (index, resources) in svg_updates {
+                document_owner.SetResolvedStyleResources(index, resources);
+            }
         }
         self.sheet_revision = Some(revision);
         self.active_sheets = active_sheets;
@@ -4319,8 +4466,6 @@ impl DocumentStyleEngine {
                 self.container_dependent_elements.remove(&index);
             }
         }
-        let document = owner.GetDocumentMut();
-        let _publish_trace = browser_tracing::span("style_commit", "StyleEngine.PublishStyles");
         for index in cleared {
             if !retained_suppressed.contains(&index) {
                 self.matches.remove(&index);
@@ -4330,18 +4475,11 @@ impl DocumentStyleEngine {
             self.viewport_dependent_elements.remove(&index);
             self.container_dependent_elements.remove(&index);
         }
-        {
-            let mut commit = DocumentResolvedStyleCommit {
-                document,
-                viewport_dependent_elements: &mut self.viewport_dependent_elements,
-            };
-            style_commit::CommitResolvedStyles(&mut commit, pending);
-        }
-        document
+        document_owner
             .StyleStateMut()
             .layout_reattach_nodes
             .extend(pending_reattach);
-        FinishUpdate(document, stats, impact);
+        FinishUpdate(document_owner, stats, impact);
         update_trace.set(
             "translated_resolver_attempts",
             self.translated_rule_shadow_stats
@@ -4799,7 +4937,7 @@ impl DocumentStyleEngine {
             }
             let key = (sheet.Identity(), sheet.Revision());
             let typed = self.typed_sheets.get(&key)?;
-            let rule_set = self.translated_rule_sets.get(&key)?.clone();
+            let rule_set = self.translated_rule_sets.get(&key).cloned()?;
             let expected_mode = ExpectedSheetParserMode(document, origin)?;
             if typed.contents.ParserContext().Mode() != expected_mode {
                 return None;
@@ -4895,6 +5033,10 @@ impl DocumentStyleEngine {
                 "disabled"|"checked"|"selected"|"readonly"|"required"|"multiple"|"size"|"type"
                 |"value"|"min"|"max"|"step"|"pattern"|"minlength"|"maxlength"|"placeholder"
                 |"dir"|"lang"|"contenteditable"|"inert"|"popover"|"open"
+                |"align"|"bgcolor"|"background"|"text"|"link"|"vlink"|"alink"
+                |"marginwidth"|"leftmargin"|"marginheight"|"topmargin"
+                |"width"|"height"|"border"|"bordercolor"|"cellpadding"|"cellspacing"
+                |"valign"|"nowrap"|"face"|"clear"
                 |"form"|"name"|"slot"|"part"|"exportparts"|"tabindex"|"autofocus"|"is"))
         {
             return false;
@@ -4921,7 +5063,7 @@ impl DocumentStyleEngine {
             return false;
         };
         // `hidden` is a local presentation hint (HTMLElement::CollectStyleFor-
-        // PresentationAttribute). The caller dirties this element; native style
+        // PresentationAttribute). The caller dirties this element; computed style style
         // difference propagates display/inherited changes. Only compiled
         // selectors such as [hidden] .child invalidate additional subjects.
         for rules in rule_sets {
@@ -5275,7 +5417,7 @@ impl DocumentStyleEngine {
         ordinary_complete: bool,
     ) -> bool {
         if document.ResolvedStyleFor(index).is_none_or(|resolved| {
-            unsafe { resolved.native_style.Get().as_ref() }
+            unsafe { resolved.computed_style_owner.Get().as_ref() }
                 .is_some_and(|style| style.IsEnsuredInDisplayNone())
         }) {
             return true;
@@ -5301,7 +5443,7 @@ impl DocumentStyleEngine {
                 .is_some_and(|index| !index.matching_may_report_diagnostics)
         {
             // Full resolution is already required without a complete retained
-            // signature. Do not build and discard a prepass result; the native
+            // signature. Do not build and discard a prepass result; the computed style
             // resolver still runs.
             return true;
         }
@@ -5336,7 +5478,7 @@ impl DocumentStyleEngine {
         index: usize,
         media: &MediaValuesCachedData,
         sheets: &[(&CSSStyleSheet, CascadeOrigin)],
-        native: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
+        computed_style: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
         custom: Option<&HashMap<usize, Rc<CustomProperties>>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
     ) -> Vec<(
@@ -5420,7 +5562,7 @@ impl DocumentStyleEngine {
                         .unwrap_or(&self.property_registry),
                 ),
                 &self.custom_properties,
-                native,
+                computed_style,
                 custom,
                 environment_variables,
                 &mut self.diagnostics,
@@ -5471,11 +5613,11 @@ impl DocumentStyleEngine {
     }
     // cpp: HTMLStyleElement::ProcessStyleSheet; StyleEngine::UpdateActiveStyleSheets.
     // CSSOM owns the parsed sheets; owner-node replacement preserves source order.
-    fn SynchronizeStyleSheets(&mut self, owner: &mut DOM) {
+    fn SynchronizeStyleSheets(&mut self, document_owner: &mut Document) {
         let mut trace = browser_tracing::span("style_rules", "StyleEngine.SynchronizeStyleSheets");
         self.inline_sheet_contents
             .retain(|_, contents| contents.strong_count() != 0);
-        let document = owner.GetDocument();
+        let document = &*document_owner;
         let parser_context = crate::production_style_sheet::InlineStyleSheetParserContext();
         // StyleElement::Process and StyleSheetCandidateNode changes are already
         // recorded by DOM. Discover new candidates only in inserted subtrees;
@@ -5504,7 +5646,7 @@ impl DocumentStyleEngine {
                 continue;
             }
             let node = document.Node(index);
-            if node.IsHTMLElement("style") && owner.NeedsStyleSheetParsing(node.Id()) {
+            if node.IsHTMLElement("style") && document.NeedsStyleSheetParsing(node.Id()) {
                 fn text(document: &Document, index: usize, result: &mut String) {
                     let node = document.Node(index);
                     if node.Type() == DOMNodeType::kText {
@@ -5568,7 +5710,7 @@ impl DocumentStyleEngine {
         trace.set("visited_nodes", visited.len() as f64);
         trace.set("parsed_sheets", sheets.len() as f64);
         for sheet in sheets {
-            owner.GetDocumentMut().AppendStyleSheet(sheet)
+            document_owner.AppendStyleSheet(sheet)
         }
     }
     fn CollectRules(
@@ -5579,7 +5721,7 @@ impl DocumentStyleEngine {
         sheets: &[(&CSSStyleSheet, CascadeOrigin)],
         scoped_sheets: &HashMap<usize, Vec<(&CSSStyleSheet, CascadeOrigin)>>,
         pseudo: Option<PseudoStyleKind>,
-        native: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
+        computed_style: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
         custom: Option<&HashMap<usize, Rc<CustomProperties>>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
     ) -> Result<CollectedRules, DocumentStyleError> {
@@ -5618,7 +5760,7 @@ impl DocumentStyleEngine {
                     media,
                     states: &self.container_states,
                     stored_custom: &self.custom_properties,
-                    current_styles: native,
+                    current_styles: computed_style,
                     current_custom: custom,
                     environment: environment_variables,
                     registered: Some(registered_container_properties),
@@ -6175,7 +6317,7 @@ impl DocumentStyleEngine {
         trace.set("pseudo", kind.Id().value() as f64);
         trace.set("rules", rules.rules.len() as f64);
         let node = document.Node(index);
-        let parent = unsafe { &*originating.native_style.Get() };
+        let parent = unsafe { &*originating.computed_style_owner.Get() };
         if !has_layout_context
             || (kind != PseudoStyleKind::Placeholder && !parent.CanGeneratePseudoElement(kind.Id()))
         {
@@ -6237,7 +6379,7 @@ impl DocumentStyleEngine {
             document,
             originating_index: index,
         };
-        let parent_handle = originating.native_style.clone();
+        let parent_handle = originating.computed_style_owner.clone();
         let root_handle = root_style
             .map(|style| Persistent::from_ptr(style as *const ComputedStyle as *mut ComputedStyle));
         let registered_container_properties = self
@@ -6269,6 +6411,9 @@ impl DocumentStyleEngine {
         collaborators.root_style = root_handle;
         collaborators.color_scheme_settings = self.color_scheme_settings;
         collaborators.text_link_text_color = self.resolver_dependencies.text_link_text_color;
+        collaborators.link_color = self.resolver_dependencies.link_color;
+        collaborators.visited_link_color = self.resolver_dependencies.visited_link_color;
+        collaborators.active_link_color = self.resolver_dependencies.active_link_color;
         collaborators.pseudo_id = kind.Id();
         collaborators.originating_pseudo_id = match kind {
             PseudoStyleKind::BeforeMarker => PseudoId::kPseudoIdBefore,
@@ -6343,8 +6488,9 @@ impl DocumentStyleEngine {
                 }
                 self.ResolveFontFeatureValues(&mut builder);
                 let mut style = Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
-                let native = unsafe { &*style.Get() };
-                if native.HasVariableDeclaration() || native.HasVariableReference() {
+                let computed_style = unsafe { &*style.Get() };
+                if computed_style.HasVariableDeclaration() || computed_style.HasVariableReference()
+                {
                     MergePseudoVariableDependencies(
                         variable_dependencies,
                         output.variable_dependencies_complete,
@@ -6353,30 +6499,31 @@ impl DocumentStyleEngine {
                 }
                 if !has_nested_marker && !kind.IsNestedMarker() {
                     if let Some(old) = document.ResolvedStyleFor(index) {
-                        let cached = unsafe { &*old.native_style.Get() }
+                        let cached = unsafe { &*old.computed_style_owner.Get() }
                             .GetCachedPseudoElementStyleWithoutArgument(kind.Id());
                         if unsafe { cached.as_ref() }.is_some_and(|old| {
-                            old == native && old.HasAttrFunction() == native.HasAttrFunction()
+                            old == computed_style
+                                && old.HasAttrFunction() == computed_style.HasAttrFunction()
                         }) {
                             style = Persistent::from_ptr(cached as *mut ComputedStyle);
                         }
                     }
                 }
-                let native = unsafe { &*style.Get() };
+                let computed_style = unsafe { &*style.Get() };
                 parent.AddCachedPseudoElementStyle(
                     style.Get(),
                     kind.Id(),
                     &foundation::g_null_atom,
                 );
-                if native.Display() == EDisplay::kNone
+                if computed_style.Display() == EDisplay::kNone
                     || (matches!(kind, PseudoStyleKind::Before | PseudoStyleKind::After)
-                        && native.ContentPreventsBoxGeneration())
+                        && computed_style.ContentPreventsBoxGeneration())
                     || (matches!(
                         kind,
                         PseudoStyleKind::Marker
                             | PseudoStyleKind::BeforeMarker
                             | PseudoStyleKind::AfterMarker
-                    ) && native.ContentPreventsBoxGeneration())
+                    ) && computed_style.ContentPreventsBoxGeneration())
                 {
                     return Ok(None);
                 }
@@ -6432,7 +6579,7 @@ impl DocumentStyleEngine {
             browser_tracing::span("style_resolve", "StyleEngine.ResolveNestedMarkerStyle");
         trace.set("node_id", document.Node(index).Id() as f64);
         trace.set("rules", rules.rules.len() as f64);
-        let parent = unsafe { &*originating.native_style.Get() };
+        let parent = unsafe { &*originating.computed_style_owner.Get() };
         if !has_layout_context
             || rules.rules.is_empty()
             || !parent.CanGeneratePseudoElement(PseudoId::kPseudoIdMarker)
@@ -6440,7 +6587,7 @@ impl DocumentStyleEngine {
             return Ok(None);
         }
         let mut originating_style = ResolvedNodeStyle::default();
-        originating_style.SetNativeStyle(originating.native_style.clone());
+        originating_style.SetComputedStyleOwner(originating.computed_style_owner.clone());
         Ok(self
             .ResolvePseudoStyle(
                 document,
@@ -6470,14 +6617,12 @@ impl DocumentStyleEngine {
     fn ProjectPseudoElement(
         style: Persistent<ComputedStyle>,
     ) -> Result<PseudoElement, DocumentStyleError> {
-        let native = unsafe { &*style.Get() };
-        let mut projection = ResolvedNodeStyle::default();
-        ProjectForLayoutBoundary(native, &mut projection)?;
-        // DOM/Layout consumes a projection of native ContentData; the native
+        let computed_style = unsafe { &*style.Get() };
+        // DOM/Layout consumes a projection of computed style ContentData; the computed style
         // content chain remains the computed value and cache-owned source.
         let mut text = String::new();
         let mut projected_content = Vec::new();
-        let mut content = native.GetContentData();
+        let mut content = computed_style.GetContentData();
         while let Some(data) = content {
             let data_ref = unsafe { &*data };
             if data_ref.IsText() {
@@ -6489,7 +6634,7 @@ impl DocumentStyleEngine {
             } else if data_ref.IsImage() {
                 let image = unsafe { &*(data as *const ImageContentData) }.GetImage();
                 if let Some(image) = unsafe { image.as_ref() }.and_then(FetchedImage) {
-                    let respect_orientation = native.ImageOrientation();
+                    let respect_orientation = computed_style.ImageOrientation();
                     let (natural_width, natural_height) = image
                         .NaturalSize(respect_orientation)
                         .map_or((None, None), |(width, height)| (Some(width), Some(height)));
@@ -6499,10 +6644,12 @@ impl DocumentStyleEngine {
                         natural_width,
                         natural_height,
                         resolution_scale: image.ResolutionScale(),
+                        known_to_be_opaque: image.StyleImage().KnownToBeOpaque(computed_style),
                     });
                 } else if let Some(shader) = unsafe { image.as_ref() }.and_then(|image| {
-                    layoutng::internal::boundary::native_paint_style::ExportGeneratedImageShader(
-                        native, image,
+                    layoutng::internal::boundary::paint_style_export::ExportGeneratedImageShader(
+                        computed_style,
+                        image,
                     )
                 }) {
                     projected_content.push(PseudoContent::Image {
@@ -6511,19 +6658,19 @@ impl DocumentStyleEngine {
                         natural_width: None,
                         natural_height: None,
                         resolution_scale: 1.0,
+                        known_to_be_opaque: false,
                     });
                 }
             }
             content = data_ref.Next();
         }
         let mut pseudo = PseudoElement {
-            style: projection.style,
             text,
             content: projected_content,
-            display_contents: native.Display() == EDisplay::kContents,
+            display_contents: computed_style.Display() == EDisplay::kContents,
             ..Default::default()
         };
-        pseudo.SetNativeStyle(style);
+        pseudo.SetComputedStyleOwner(style);
         Ok(pseudo)
     }
 }
@@ -6536,28 +6683,23 @@ impl DocumentStyleEngine {
 fn ResolveSVGPaintServers(
     document: &Document,
     resident_svg_styles: &HashSet<usize>,
-    pending: &mut Vec<(usize, ResolvedNodeStyle)>,
+    changed_style_nodes: &HashSet<usize>,
     stats: &mut StyleUpdateStats,
     impact: &mut StyleUpdateImpact,
-    pending_reattach: &mut HashSet<u64>,
-) {
+) -> Vec<(usize, ResolvedStyleResources)> {
     let mut trace = browser_tracing::span("style_resolve", "StyleEngine.ResolveSVGPaintServers");
-    let snapshot = pending
+    let snapshot = resident_svg_styles
         .iter()
-        .map(|(node, style)| (*node, style))
+        .filter_map(|node| document.ResolvedStyleFor(*node).map(|style| (*node, style)))
         .collect::<crate::svg_paint_server::PendingStyles<'_>>();
     let mut updates = Vec::new();
     let mut svg_nodes = 0;
     let mut clients = 0;
-    // SVGResources clients own live ComputedStyles. Pending results can
-    // introduce new clients; resident results supply unchanged dependents.
-    // Removed nodes have already released their style through DOM::Remove.
-    for node in snapshot.keys().copied().chain(
-        resident_svg_styles
-            .iter()
-            .copied()
-            .filter(|node| !snapshot.contains_key(node)),
-    ) {
+    // SVGResources clients own live ComputedStyles. Ordinary style recalc has
+    // already installed each new owner on its element; this exceptional pass
+    // only refreshes resource-derived paint data for those residents and for
+    // unchanged clients of a changed resource.
+    for node in resident_svg_styles.iter().copied() {
         // cpp: LayoutSVGShape/Inline/Text/TransformableContainer::StyleDidChange
         // -> SVGResources::UpdatePaints. HTML's inherited fill/stroke remains
         // canonical CSS, but it has no SVG paint-server client of its own.
@@ -6565,25 +6707,25 @@ fn ResolveSVGPaintServers(
             continue;
         }
         svg_nodes += 1;
-        let Some(current) = snapshot
-            .get(&node)
-            .copied()
-            .or_else(|| document.ResolvedStyleFor(node))
-        else {
+        let Some(current) = snapshot.get(&node).copied() else {
             continue;
         };
-        let fill_reference = current.style.paint.svg_fill_reference.as_deref();
-        let stroke_reference = current.style.paint.svg_stroke_reference.as_deref();
-        let native = unsafe { current.native_style.Get().as_ref() };
+        let computed_style = unsafe { current.computed_style_owner.Get().as_ref() };
+        let fill_reference = computed_style
+            .filter(|style| style.FillPaint().HasUrl())
+            .map(|style| style.FillPaint().GetUrl().Utf8());
+        let stroke_reference = computed_style
+            .filter(|style| style.StrokePaint().HasUrl())
+            .map(|style| style.StrokePaint().GetUrl().Utf8());
         let marker_url =
             |resource: *mut layoutng_style::style::style_svg_resource::StyleSVGResource| {
                 unsafe { resource.as_ref() }
                     .map(|resource| resource.Url().Utf8())
                     .filter(|url| !url.is_empty())
             };
-        let marker_start = native.and_then(|style| marker_url(style.MarkerStartResource()));
-        let marker_mid = native.and_then(|style| marker_url(style.MarkerMidResource()));
-        let marker_end = native.and_then(|style| marker_url(style.MarkerEndResource()));
+        let marker_start = computed_style.and_then(|style| marker_url(style.MarkerStartResource()));
+        let marker_mid = computed_style.and_then(|style| marker_url(style.MarkerMidResource()));
+        let marker_end = computed_style.and_then(|style| marker_url(style.MarkerEndResource()));
         let mask_definition = document.Node(node).IsElement("mask", DOMNamespace::kSVG);
         if !mask_definition
             && fill_reference.is_none()
@@ -6595,47 +6737,48 @@ fn ResolveSVGPaintServers(
             continue;
         }
         clients += 1;
-        let fill_opacity = native.map_or(1.0, |style| style.FillOpacity());
-        let stroke_opacity = native.map_or(1.0, |style| style.StrokeOpacity());
-        let fill = fill_reference.and_then(|reference| {
+        let fill_opacity = computed_style.map_or(1.0, |style| style.FillOpacity());
+        let stroke_opacity = computed_style.map_or(1.0, |style| style.StrokeOpacity());
+        let fill = fill_reference.as_deref().and_then(|reference| {
             crate::svg_paint_server::Resolve(document, node, &snapshot, reference, fill_opacity)
         });
-        let stroke = stroke_reference.and_then(|reference| {
+        let stroke = stroke_reference.as_deref().and_then(|reference| {
             crate::svg_paint_server::Resolve(document, node, &snapshot, reference, stroke_opacity)
         });
-        let mut context_paint = current.style.paint.clone();
-        context_paint.svg_fill_server = fill.clone();
-        context_paint.svg_stroke_server = stroke.clone();
+        let paint = layoutng::internal::boundary::paint_style_export::Export(
+            computed_style.expect("resolved SVG client style must be owned"),
+            None,
+        );
+        let context_paint = crate::svg_paint_server::SVGContextPaint::new(&paint, &fill, &stroke);
         let markers = crate::svg_paint_server::ResolveMarkers(
             document,
             &snapshot,
             node,
-            &context_paint,
+            context_paint,
             marker_start.as_deref(),
             marker_mid.as_deref(),
             marker_end.as_deref(),
-            current.style.paint.svg_stroke_width,
+            paint.svg_stroke_width,
         );
         let mask_graph = mask_definition
             .then(|| crate::svg_paint_server::ResolveMaskDefinition(document, &snapshot, node));
-        if current.style.paint.svg_mask_resource == mask_graph
-            && current.style.paint.svg_fill_server == fill
-            && current.style.paint.svg_stroke_server == stroke
-            && current.style.paint.svg_markers == markers
+        let current_resources = document.ResolvedStyleResourcesFor(node);
+        if current_resources.svg_mask_resource == mask_graph
+            && current_resources.svg_fill_server == fill
+            && current_resources.svg_stroke_server == stroke
+            && current_resources.svg_markers == markers
         {
             continue;
         }
-        let mut updated = current.clone();
-        updated.style.paint.svg_mask_resource = mask_graph;
-        updated.style.paint.svg_fill_server = fill;
-        updated.style.paint.svg_stroke_server = stroke;
-        updated.style.paint.svg_markers = markers;
-        let (change, reattach) =
-            StyleImpact(document, node, document.ResolvedStyleFor(node), &updated);
-        impact.Merge(change);
-        if reattach {
-            pending_reattach.insert(document.Node(node).Id());
-        }
+        let mut updated = current_resources.clone();
+        updated.svg_mask_resource = mask_graph;
+        updated.svg_fill_server = fill;
+        updated.svg_stroke_server = stroke;
+        updated.svg_markers = markers;
+        // Paint-server resolution is document resource state, not a second
+        // ComputedStyle difference. Its client keeps the same style owner and
+        // only its retained paint binding changes.
+        impact.paint = true;
         updates.push((node, updated));
     }
     trace.set("arena_nodes", document.NodeCount() as f64);
@@ -6644,22 +6787,25 @@ fn ResolveSVGPaintServers(
     trace.set("updated", updates.len() as f64);
     drop(snapshot);
     if updates.is_empty() {
-        return;
+        return updates;
     }
-    let mut positions = pending
-        .iter()
-        .enumerate()
-        .map(|(position, (node, _))| (*node, position))
-        .collect::<HashMap<_, _>>();
-    for (node, updated) in updates {
-        if let Some(&position) = positions.get(&node) {
-            pending[position].1 = updated;
-        } else {
-            positions.insert(node, pending.len());
-            pending.push((node, updated));
+    for (node, _) in &updates {
+        if !changed_style_nodes.contains(node) {
             stats.changed_nodes += 1;
         }
     }
+    // The retained client set is unordered. Normalize this small exceptional
+    // pass so Layout still receives parent-first changes.
+    updates.sort_by_cached_key(|(node, _)| {
+        let mut depth = 0;
+        let mut current = Some(*node);
+        while let Some(index) = current {
+            depth += 1;
+            current = document.FlatTreeParentElement(index);
+        }
+        (depth, document.Node(*node).Id())
+    });
+    updates
 }
 
 fn ApplyTextControlInnerEditorCustomStyle(
@@ -6697,320 +6843,9 @@ fn ApplyTextControlInnerEditorCustomStyle(
     });
 }
 
-// cpp: layout_list_marker.cc:74-100 (LayoutListMarker::ImageBulletSize).
-// Style owns image-set selection and generated-image sizing. Export the
-// selected immutable image identity plus author-space intrinsic dimensions;
-// LayoutReplaced reapplies effective zoom at its native boundary.
-fn ProjectListMarkerImage(
-    native: &ComputedStyle,
-) -> Option<layoutng::internal::layout_input::ListMarkerImage> {
-    let image = unsafe { native.ListStyleImage().Get().as_ref() }?;
-    if image.ErrorOccurred() {
-        return None;
-    }
-    let (resource_id, shader, resolution_scale) = if let Some(fetched) = FetchedImage(image) {
-        if fetched.ResourceId() == 0 {
-            // Until the resource supplies an intrinsic size and paint id, use
-            // list-style-type. Resource invalidation rebuilds this projection.
-            return None;
-        }
-        (fetched.ResourceId(), None, fetched.ResolutionScale())
-    } else {
-        let shader = layoutng::internal::boundary::native_paint_style::ExportGeneratedImageShader(
-            native, image,
-        )?;
-        (0, Some(shader), 1.0)
-    };
-
-    let zoom = native.EffectiveZoom();
-    if !zoom.is_finite() || zoom <= 0.0 {
-        return None;
-    }
-    let side = unsafe { native.GetFont().as_ref() }
-        .and_then(|font| unsafe { font.PrimaryFont().as_ref() })
-        .map_or_else(
-            || native.GetFontDescription().ComputedSize() / 2.0,
-            |primary| primary.GetFontMetrics().Ascent() as f32 / 2.0,
-        );
-    let default_size = foundation::gfx::SizeF::new(side, side);
-    let respect_orientation = native.ImageOrientation();
-    let size = image.ImageSize(zoom, &default_size, respect_orientation);
-    let natural_width = f64::from(size.width()) / f64::from(zoom);
-    let natural_height = f64::from(size.height()) / f64::from(zoom);
-    if !natural_width.is_finite()
-        || !natural_height.is_finite()
-        || natural_width <= 0.0
-        || natural_height <= 0.0
-    {
-        return None;
-    }
-    Some(layoutng::internal::layout_input::ListMarkerImage {
-        resource_id,
-        shader,
-        natural_width,
-        natural_height,
-        resolution_scale,
-    })
-}
-
-fn ProjectForLayoutBoundary(
-    native: &ComputedStyle,
-    resolved: &mut ResolvedNodeStyle,
-) -> Result<(), DocumentStyleError> {
-    let _trace = browser_tracing::span("style_commit", "StyleEngine.ProjectForLayoutBoundary");
-    let font = native.GetFontDescription();
-    let mut ext = layoutng::internal::layout_input::ExtendedStyle::default();
-    use layoutng::internal::layout_input::{
-        Display, FloatSide, ListStylePosition as LayoutListStylePosition,
-        ListStyleType as LayoutListStyleType, Overflow, Position, WhiteSpace,
-    };
-    resolved.style.display = match native.Display() {
-        EDisplay::kInline => Display::kInline,
-        EDisplay::kBlock => Display::kBlock,
-        EDisplay::kInlineBlock => Display::kInlineBlock,
-        EDisplay::kListItem
-        | EDisplay::kInlineListItem
-        | EDisplay::kFlowRootListItem
-        | EDisplay::kInlineFlowRootListItem => Display::kListItem,
-        EDisplay::kFlex | EDisplay::kWebkitBox => Display::kFlex,
-        EDisplay::kInlineFlex | EDisplay::kWebkitInlineBox => Display::kInlineFlex,
-        EDisplay::kGrid => Display::kGrid,
-        EDisplay::kInlineGrid => Display::kInlineGrid,
-        EDisplay::kTable => Display::kTable,
-        EDisplay::kInlineTable => Display::kInlineTable,
-        EDisplay::kTableRowGroup => Display::kTableSection,
-        EDisplay::kTableHeaderGroup => Display::kTableHeaderGroup,
-        EDisplay::kTableFooterGroup => Display::kTableFooterGroup,
-        EDisplay::kTableRow => Display::kTableRow,
-        EDisplay::kTableColumn => Display::kTableColumn,
-        EDisplay::kTableColumnGroup => Display::kTableColumnGroup,
-        EDisplay::kTableCell => Display::kTableCell,
-        EDisplay::kTableCaption => Display::kTableCaption,
-        EDisplay::kFlowRoot => Display::kFlowRoot,
-        EDisplay::kMath => Display::kMath,
-        EDisplay::kBlockMath => Display::kBlockMath,
-        EDisplay::kRuby => Display::kRuby,
-        EDisplay::kBlockRuby => Display::kBlockRuby,
-        EDisplay::kRubyText => Display::kRubyText,
-        EDisplay::kGridLanes | EDisplay::kInlineGridLanes => Display::kGridLanes,
-        EDisplay::kLayoutCustom | EDisplay::kInlineLayoutCustom => Display::kCustom,
-        // Box generation/contents flags carry the structural distinction;
-        // SVG's display:none g uses its dedicated hidden-container object.
-        EDisplay::kNone | EDisplay::kContents => Display::kInline,
-    };
-    resolved.style.position = match native.GetPosition() {
-        foundation::EPosition::kStatic => Position::kStatic,
-        foundation::EPosition::kRelative => Position::kRelative,
-        foundation::EPosition::kAbsolute => Position::kAbsolute,
-        foundation::EPosition::kFixed => Position::kFixed,
-        foundation::EPosition::kSticky => Position::kSticky,
-    };
-    resolved.style.floating = match native.Floating() {
-        foundation::EFloat::kNone => FloatSide::kNone,
-        foundation::EFloat::kLeft => FloatSide::kLeft,
-        foundation::EFloat::kRight => FloatSide::kRight,
-        foundation::EFloat::kInlineStart => FloatSide::kInlineStart,
-        foundation::EFloat::kInlineEnd => FloatSide::kInlineEnd,
-    };
-    use layoutng_style::css::white_space::EWhiteSpace;
-    ext.white_space = match native.WhiteSpace() {
-        EWhiteSpace::kNormal => WhiteSpace::kNormal,
-        EWhiteSpace::kNowrap => WhiteSpace::kNowrap,
-        EWhiteSpace::kPre => WhiteSpace::kPre,
-        EWhiteSpace::kPreLine => WhiteSpace::kPreLine,
-        EWhiteSpace::kPreWrap => WhiteSpace::kPreWrap,
-        EWhiteSpace::kBreakSpaces => WhiteSpace::kBreakSpaces,
-        value if value.bits() == 2 => WhiteSpace::kPreserveBreaksNowrap,
-        value if value.bits() == 3 => WhiteSpace::kBreakSpacesNowrap,
-        _ => unreachable!("white-space collapse/wrap fields exceeded their bit widths"),
-    };
-    let overflow = |value| match value {
-        foundation::EOverflow::kVisible => Overflow::kVisible,
-        foundation::EOverflow::kHidden => Overflow::kHidden,
-        foundation::EOverflow::kScroll => Overflow::kScroll,
-        foundation::EOverflow::kAuto | foundation::EOverflow::kOverlay => Overflow::kAuto,
-        foundation::EOverflow::kClip => Overflow::kClip,
-    };
-    ext.overflow_x = overflow(native.OverflowX());
-    ext.overflow_y = overflow(native.OverflowY());
-    ext.list_style_position = match native.ListStylePosition() {
-        foundation::EListStylePosition::kOutside => LayoutListStylePosition::kOutside,
-        foundation::EListStylePosition::kInside => LayoutListStylePosition::kInside,
-    };
-    ext.list_style_image = ProjectListMarkerImage(native);
-    let list_style_type = native.ListStyleType().Get();
-    ext.list_style_type = if list_style_type.is_null() {
-        LayoutListStyleType::kNone
-    } else {
-        let list_style_type = unsafe { &*list_style_type };
-        if !list_style_type.IsCounterStyle() {
-            LayoutListStyleType::kDisc
-        } else {
-            match list_style_type.GetCounterStyleName().Utf8().as_str() {
-                "none" => LayoutListStyleType::kNone,
-                "circle" => LayoutListStyleType::kCircle,
-                "square" => LayoutListStyleType::kSquare,
-                "decimal" => LayoutListStyleType::kDecimal,
-                "lower-alpha" | "lower-latin" => LayoutListStyleType::kLowerAlpha,
-                _ => LayoutListStyleType::kDisc,
-            }
-        }
-    };
-
-    // FontDescription::ComputedSize already includes EffectiveZoom. The
-    // neutral layout snapshot is author-space and ZoomedStyle applies that
-    // factor at the boundary exactly once.
-    ext.font_size = font.SpecifiedSize() as f64;
-    ext.font_weight = font.Weight().ToFloat() as f64;
-    ext.font_italic = font.Style().ToFloat() != 0.0;
-    ext.font_smoothing = match font.FontSmoothing() {
-        font_engine::FontSmoothingMode::kNoSmoothing => {
-            layoutng::internal::layout_input::FontSmoothing::kNone
-        }
-        font_engine::FontSmoothingMode::kAntialiased => {
-            layoutng::internal::layout_input::FontSmoothing::kAntialiased
-        }
-        font_engine::FontSmoothingMode::kSubpixelAntialiased => {
-            layoutng::internal::layout_input::FontSmoothing::kSubpixelAntialiased
-        }
-        font_engine::FontSmoothingMode::kAutoSmoothing => {
-            layoutng::internal::layout_input::FontSmoothing::kAuto
-        }
-    };
-    // cpp: font_description_data.cc:127-145. The computed CSS value keeps a
-    // Length/percentage, while Layout consumes the used spacing resolved from
-    // the current computed font size.
-    let effective_zoom = native.EffectiveZoom();
-    let unzoom = |value: f32| {
-        if effective_zoom > 0.0 {
-            value as f64 / effective_zoom as f64
-        } else {
-            value as f64
-        }
-    };
-    ext.letter_spacing = unzoom(font.LetterSpacing());
-    ext.word_spacing = unzoom(font.WordSpacing());
-    ext.effective_zoom = effective_zoom;
-    ext.zoom = native.Zoom();
-    ext.has_author_background = native.HasAuthorBackground();
-    ext.has_author_border = native.HasAuthorBorder();
-    ext.has_author_border_radius = native.HasAuthorBorderRadius();
-    let mut family = font.Family() as *const font_engine::FontFamily;
-    while !family.is_null() {
-        let f = unsafe { &*family };
-        if !f.FamilyName().empty() {
-            ext.font_families.push(f.FamilyName().Utf8())
-        }
-        family = f.Next()
-    }
-
-    // cpp: ComputedStyle::GetCurrentColor/BorderWidth; StyleColor::Resolve.
-    // Paint's neutral projection shares these scalar results with the native
-    // object used by layout; complex paint payloads stay in their own mapping.
-    let current = native.GetCurrentColor(None);
-    let color=|value:&layoutng_style::css::style_color::StyleColor|->Result<layoutng::internal::layout_input_types::Color,DocumentStyleError>{
-        let value=value.Resolve(current,native.UsedColorScheme(),None);
-        let (red,green,blue)=value.ToSRGB();
-        Ok(layoutng::internal::layout_input_types::Color{red,green,blue,alpha:value.Alpha()})
-    };
-    resolved.style.paint.color = color(native.Color())?;
-    resolved.style.paint.background_color = color(native.BackgroundColor())?;
-    resolved.style.paint.respect_image_orientation = native.ImageOrientation()
-        == foundation::RespectImageOrientationEnum::kRespectImageOrientation;
-    crate::resolver::layout_projection::ProjectBorderRadii(native, &mut resolved.style.paint);
-    crate::resolver::layout_projection::ProjectShadows(native, &mut resolved.style.paint, color)?;
-    // cpp: computed_style.h SVG fill/stroke and style_transform.cc.  Layout
-    // consumes a renderer-neutral projection, but the native ComputedStyle is
-    // the single source of truth for both CSS declarations and SVG
-    // presentation attributes.  Do not leave these fields at PaintStyleData's
-    // defaults after the native cascade has resolved them.
-    use layoutng_style::style::svg_paint::SVGPaintType;
-    let project_svg_paint = |paint: &layoutng_style::style::svg_paint::SVGPaint,
-                             opacity: f32|
-     -> Result<
-        Option<layoutng::internal::layout_input_types::Color>,
-        DocumentStyleError,
-    > {
-        if paint.paint_type == SVGPaintType::kNone {
-            return Ok(None);
-        }
-        if !paint.HasColor() {
-            return Ok(None);
-        }
-        let mut projected = color(paint.GetColor())?;
-        projected.alpha *= opacity;
-        Ok(Some(projected))
-    };
-    resolved.style.paint.svg_fill = project_svg_paint(native.FillPaint(), native.FillOpacity())?;
-    resolved.style.paint.svg_stroke =
-        project_svg_paint(native.StrokePaint(), native.StrokeOpacity())?;
-    resolved.style.paint.svg_fill_reference = native
-        .FillPaint()
-        .HasUrl()
-        .then(|| native.FillPaint().GetUrl().Utf8());
-    resolved.style.paint.svg_stroke_reference = native
-        .StrokePaint()
-        .HasUrl()
-        .then(|| native.StrokePaint().GetUrl().Utf8());
-    resolved.style.paint.svg_fill_current_color = native.FillPaint().HasCurrentColor();
-    resolved.style.paint.svg_stroke_current_color = native.StrokePaint().HasCurrentColor();
-
-    resolved.style.paint.transform = crate::resolver::layout_projection::ProjectTransform(native);
-    resolved.style.paint.border_colors = [
-        color(native.BorderTopColor())?,
-        color(native.BorderRightColor())?,
-        color(native.BorderBottomColor())?,
-        color(native.BorderLeftColor())?,
-    ];
-    resolved.style.paint.outline_color = color(native.OutlineColor())?;
-    resolved.style.paint.outline_width = if native.OutlineStyle() == foundation::EBorderStyle::kNone
-    {
-        0.0
-    } else {
-        unzoom(*native.OutlineWidth() as f32)
-    };
-    resolved.style.paint.outline_offset = unzoom(*native.OutlineOffset() as f32);
-    resolved.style.paint.opacity = native.Opacity();
-    resolved.style.paint.visible = native.Visibility() == foundation::EVisibility::kVisible;
-    resolved.style.paint.pointer_events_none =
-        native.PointerEvents() == foundation::EPointerEvents::kNone;
-    resolved.style.paint.cursor = native.Cursor();
-    resolved.style.paint.z_index = (!native.HasAutoZIndex()).then(|| native.ZIndex());
-    resolved.style.border.top = unzoom(native.BorderTopWidth() as f32);
-    resolved.style.border.right = unzoom(native.BorderRightWidth() as f32);
-    resolved.style.border.bottom = unzoom(native.BorderBottomWidth() as f32);
-    resolved.style.border.left = unzoom(native.BorderLeftWidth() as f32);
-    fn border(
-        style: foundation::EBorderStyle,
-    ) -> layoutng::internal::layout_input::BorderLineStyle {
-        use foundation::EBorderStyle as N;
-        use layoutng::internal::layout_input::BorderLineStyle as P;
-        match style {
-            N::kNone => P::kNone,
-            N::kHidden => P::kHidden,
-            N::kSolid => P::kSolid,
-            N::kDashed => P::kDashed,
-            N::kDotted => P::kDotted,
-            N::kDouble => P::kDouble,
-            N::kGroove => P::kGroove,
-            N::kRidge => P::kRidge,
-            N::kInset => P::kInset,
-            N::kOutset => P::kOutset,
-        }
-    }
-    resolved.style.border_styles = [
-        border(native.BorderTopStyle()),
-        border(native.BorderRightStyle()),
-        border(native.BorderBottomStyle()),
-        border(native.BorderLeftStyle()),
-    ];
-    resolved.style.paint.outline_style = border(native.OutlineStyle());
-    crate::resolver::layout_projection::ProjectGeometry(native, resolved, &mut ext);
-    crate::resolver::layout_projection::ProjectShapeOutside(native, &mut ext);
-    resolved.style.extended = Some(ext.into());
-    Ok(())
-}
-
+// Layout owns the renderer input projection. Style passes the same immutable
+// Chromium ComputedStyle owner across this boundary and retains no separate
+// conversion algorithm.
 fn DocumentParserMode(document: &Document) -> CSSParserMode {
     if document.GetCompatibilityMode() == dom::persistent_document::CompatibilityMode::kQuirks {
         CSSParserMode::kHTMLQuirksMode
@@ -7312,7 +7147,8 @@ fn MediaDiffersOnlyByViewport(
 }
 
 fn PseudoUsesViewportUnits(pseudo: &dom::persistent_document::PseudoElement) -> bool {
-    unsafe { pseudo.native_style.Get().as_ref() }.is_some_and(|style| style.HasViewportUnits())
+    unsafe { pseudo.computed_style_owner.Get().as_ref() }
+        .is_some_and(|style| style.HasViewportUnits())
         || pseudo
             .marker
             .as_deref()
@@ -7320,7 +7156,8 @@ fn PseudoUsesViewportUnits(pseudo: &dom::persistent_document::PseudoElement) -> 
 }
 
 fn ResolvedStyleUsesViewportUnits(style: &dom::persistent_document::ResolvedNodeStyle) -> bool {
-    unsafe { style.native_style.Get().as_ref() }.is_some_and(|style| style.HasViewportUnits())
+    unsafe { style.computed_style_owner.Get().as_ref() }
+        .is_some_and(|style| style.HasViewportUnits())
         || [
             style.before.as_ref(),
             style.after.as_ref(),
@@ -7333,23 +7170,18 @@ fn ResolvedStyleUsesViewportUnits(style: &dom::persistent_document::ResolvedNode
         .any(PseudoUsesViewportUnits)
 }
 
-struct DocumentResolvedStyleCommit<'a> {
-    document: &'a mut Document,
-    viewport_dependent_elements: &'a mut HashSet<usize>,
-}
-
-impl style_commit::ResolvedStyleCommitBackend for DocumentResolvedStyleCommit<'_> {
-    type NodeId = usize;
-    type ResolvedStyle = ResolvedNodeStyle;
-
-    fn CommitResolvedStyle(&mut self, index: usize, style: ResolvedNodeStyle) {
-        if ResolvedStyleUsesViewportUnits(&style) {
-            self.viewport_dependent_elements.insert(index);
-        } else {
-            self.viewport_dependent_elements.remove(&index);
-        }
-        self.document.SetResolvedStyle(index, style);
+fn CommitResolvedStyle(
+    document: &mut Document,
+    viewport_dependent_elements: &mut HashSet<usize>,
+    index: usize,
+    style: ResolvedNodeStyle,
+) {
+    if ResolvedStyleUsesViewportUnits(&style) {
+        viewport_dependent_elements.insert(index);
+    } else {
+        viewport_dependent_elements.remove(&index);
     }
+    document.SetResolvedStyle(index, style);
 }
 
 // Immutable owner metadata used by the translated active-sheet comparison.
@@ -7578,17 +7410,17 @@ fn StyleImpact(
     let Some(old) = old else {
         return (StyleUpdateImpact::TREE, true);
     };
-    let (Some(old_native), Some(new_native)) =
-        (unsafe { old.native_style.Get().as_ref() }, unsafe {
-            new.native_style.Get().as_ref()
+    let (Some(old_computed_style), Some(new_computed_style)) =
+        (unsafe { old.computed_style_owner.Get().as_ref() }, unsafe {
+            new.computed_style_owner.Get().as_ref()
         })
     else {
         return (StyleUpdateImpact::TREE, true);
     };
     let reattach = ComputedStyle::NeedsReattachLayoutTree(
         &ReattachElement { document, index },
-        old_native,
-        new_native,
+        old_computed_style,
+        new_computed_style,
     );
     let mut pseudo_impact = StyleUpdateImpact::default();
     for (old, new) in [
@@ -7599,23 +7431,30 @@ fn StyleImpact(
     ] {
         match (old, new) {
             (None, None) => {}
-            (Some(old), Some(new))
-                if old.text == new.text
-                    && old.display_contents == new.display_contents
-                    && old.style.display == new.style.display
-                    && old.style.position == new.style.position
-                    && old.style.floating == new.style.floating =>
-            {
-                let fields = style_diff::FieldInvalidationDiff(
-                    unsafe { &*old.native_style.Get() },
-                    unsafe { &*new.native_style.Get() },
-                );
+            (Some(old), Some(new)) => {
+                let old_style = unsafe { old.computed_style_owner.Get().as_ref() };
+                let new_style = unsafe { new.computed_style_owner.Get().as_ref() };
+                let (Some(old_style), Some(new_style)) = (old_style, new_style) else {
+                    return (StyleUpdateImpact::TREE, reattach);
+                };
+                if old.text != new.text
+                    || old.content != new.content
+                    || old.display_contents != new.display_contents
+                    || old_style.Display() != new_style.Display()
+                    || old_style.GetPosition() != new_style.GetPosition()
+                    || old_style.Floating() != new_style.Floating()
+                {
+                    return (StyleUpdateImpact::TREE, reattach);
+                }
+                let fields = style_diff::FieldInvalidationDiff(old_style, new_style);
                 let layout = fields
                     & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits())
-                    != 0
-                    || !old.style.LayoutEquivalent(&new.style);
+                    != 0;
                 pseudo_impact.layout |= layout;
-                pseudo_impact.paint |= layout || fields != 0 || old.style.paint != new.style.paint;
+                pseudo_impact.paint |= layout
+                    || fields != 0
+                    || style_diff::ComputeDifference(old_style, new_style)
+                        != ComputedStyleDifference::kEqual;
             }
             _ => return (StyleUpdateImpact::TREE, reattach),
         }
@@ -7624,27 +7463,22 @@ fn StyleImpact(
         || old.generates_box != new.generates_box
         || old.own_generates_box != new.own_generates_box
         || old.own_display_contents != new.own_display_contents
-        || old_native.Display() != new_native.Display()
-        || old.style.display != new.style.display
-        || ComputedStyle::NeedsReinsertLayoutTree(old_native, new_native)
+        || old_computed_style.Display() != new_computed_style.Display()
+        || ComputedStyle::NeedsReinsertLayoutTree(old_computed_style, new_computed_style)
     {
         return (StyleUpdateImpact::TREE, reattach);
     }
-    let native_difference = style_diff::ComputeDifference(old_native, new_native);
-    let fields = style_diff::FieldInvalidationDiff(old_native, new_native);
-    // cpp: ComputedStyle::VisualInvalidationDiff, computed_style.cc:753-757.
-    // A reshape changes intrinsic advances and therefore requires layout even
-    // when the projected font size/family/weight fields remain unchanged.
-    let layout = fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0
-        || !old.style.LayoutEquivalent(&new.style);
+    let difference = style_diff::ComputeDifference(old_computed_style, new_computed_style);
+    let fields = style_diff::FieldInvalidationDiff(old_computed_style, new_computed_style);
+    // cpp: ComputedStyle::VisualInvalidationDiff, computed style.cc:753-757.
+    let layout = fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0;
     (
         StyleUpdateImpact {
             reattach: false,
             layout: pseudo_impact.layout || layout,
             paint: pseudo_impact.paint
-                || native_difference != ComputedStyleDifference::kEqual
+                || difference != ComputedStyleDifference::kEqual
                 || fields != 0
-                || old.style.paint != new.style.paint
                 || layout,
         },
         reattach,
@@ -7725,17 +7559,17 @@ fn OrdinarySignatureElement(document: &Document, index: usize) -> bool {
         && document.CorrespondingSVGElement(index).is_none()
 }
 
-fn NativeStyleHasVariableDependencies(style: &ComputedStyle) -> bool {
+fn StyleHasVariableDependencies(style: &ComputedStyle) -> bool {
     let uses_variables = |candidate: &ComputedStyle| {
         candidate.HasVariableDeclaration() || candidate.HasVariableReference()
     };
     if uses_variables(style) {
         return true;
     }
-    NativePseudoStyleHasVariableDependencies(style)
+    PseudoStyleHasVariableDependencies(style)
 }
 
-fn NativePseudoStyleHasVariableDependencies(style: &ComputedStyle) -> bool {
+fn PseudoStyleHasVariableDependencies(style: &ComputedStyle) -> bool {
     let uses_variables = |candidate: &ComputedStyle| {
         candidate.HasVariableDeclaration() || candidate.HasVariableReference()
     };
@@ -7833,31 +7667,7 @@ fn PatchInheritedCustomProperties(
 }
 
 fn CustomPropertiesEquivalent(a: &CustomProperties, b: &CustomProperties) -> bool {
-    if a.registered_values.len() != b.registered_values.len()
-        || !a.registered_values.iter().all(|(name, value)| {
-            b.registered_values
-                .get(name)
-                .is_some_and(|other| value.as_ref() == other.as_ref())
-        })
-    {
-        return false;
-    }
-    // Registered equality remains first (including its numeric semantics).
-    // Immutable unregistered maps detach through Rc::make_mut on every write.
-    if Rc::ptr_eq(&a.values, &b.values) {
-        return true;
-    }
-    if a.values.len() != b.values.len() {
-        return false;
-    }
-    a.values.iter().all(|(name, left)| {
-        let Some(right) = b.values.get(name) else {
-            return false;
-        };
-        crate::resolver::production_style_builder::custom_properties::ComputedVariablesEquivalent(
-            left, right,
-        )
-    })
+    a.CacheEquivalent(b)
 }
 
 fn MergePseudoVariableDependencies(
@@ -7905,7 +7715,7 @@ fn ContainerConditionsMatch(
     states: &HashMap<usize, ContainerState>,
     registered: Option<&dyn RegisteredContainerPropertyResolver>,
     stored_custom: &HashMap<usize, Rc<CustomProperties>>,
-    native: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
+    computed_style: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
     current_custom: Option<&HashMap<usize, Rc<CustomProperties>>>,
     environment_variables: Option<&dyn EnvironmentVariableResolver>,
     diagnostics: &mut Vec<DocumentStyleError>,
@@ -7922,13 +7732,13 @@ fn ContainerConditionsMatch(
                 if node.Type() != DOMNodeType::kElement {
                     continue;
                 }
-                let style = native
+                let style = computed_style
                     .and_then(|n| n.get(&index))
                     .and_then(|s| unsafe { s.Get().as_ref() })
                     .or_else(|| {
                         document
                             .ResolvedStyleFor(index)
-                            .and_then(|s| unsafe { s.native_style.Get().as_ref() })
+                            .and_then(|s| unsafe { s.computed_style_owner.Get().as_ref() })
                     });
                 let Some(style) = style else { continue };
                 if !query.name.IsNull() && !query.name.Utf8().is_empty() {
@@ -7974,13 +7784,13 @@ fn ContainerConditionsMatch(
                         root_index = index;
                     }
                 }
-                let root = native
+                let root = computed_style
                     .and_then(|n| n.get(&root_index))
                     .and_then(|s| unsafe { s.Get().as_ref() })
                     .or_else(|| {
                         document
                             .ResolvedStyleFor(root_index)
-                            .and_then(|s| unsafe { s.native_style.Get().as_ref() })
+                            .and_then(|s| unsafe { s.computed_style_owner.Get().as_ref() })
                     })
                     .unwrap_or(style);
                 let values = values.WithRootStyle(root);

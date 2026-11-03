@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
 use crate::fonts::font_description::FontDescription;
-// `Character` is supplied by font_engine/text/native/character.h/.cc, pending translation.
-use crate::text::native::character::Character;
-use crate::text::native::justification_opportunity::JustificationContext;
+// `Character` is supplied by third_party/blink/renderer/platform/text/character.h/.cc, pending translation.
+use crate::text::implementation::character::Character;
+use crate::text::implementation::justification_opportunity::JustificationContext;
 use foundation::blink_geometry::geometry::{InlineLayoutUnit, TextRunLayoutUnit};
 use foundation::{String, StringView, TextDirection, TextJustify};
 

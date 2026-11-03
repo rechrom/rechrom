@@ -76,7 +76,7 @@ impl PaintPath {
         match &self.geometry {
             PaintPathGeometry::Commands(commands) => commands.len(),
             PaintPathGeometry::RoundedRect { rect, radii } => {
-                crate::border_shape_utils::ConicRoundedRectPath(rect, radii).len()
+                crate::contoured_border_geometry::ConicRoundedRectPath(rect, radii).len()
             }
         }
     }

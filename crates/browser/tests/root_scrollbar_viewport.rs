@@ -1,9 +1,10 @@
 //! Root scrollbar ownership, native relayout and immutable CSSOM geometry.
-#[path = "../src/native_test_thread.rs"]
-mod native_test_thread;
+#[path = "../src/test_thread.rs"]
+mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::internal::layout_input::FontFace;
+use layoutng_assembly::layout_engine::PaintFragmentCursor;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -73,7 +74,7 @@ fn fixture_with_theme(
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(
-                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(
+                javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
                     4 * 1024 * 1024,
                 ),
             ),
@@ -100,34 +101,85 @@ fn check(page: &mut Page, expression: &str) {
         .unwrap();
     assert!(result.Succeeded(), "{:?}", result.exception);
 }
+
+fn root_paint(
+    fragments: &layoutng_assembly::fragment_tree::LayoutResultHandle,
+) -> &layoutng_assembly::fragment_tree::FragmentPaintData {
+    PaintFragmentCursor::FromHandle(fragments).PaintData()
+}
 #[test]
 fn classic_vertical_overflow_reserves_root_gutter() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture("#fill{height:400px}", "<div id=fill></div>", false);
-        check(&mut page, "if(document.getElementById('fill').getBoundingClientRect().width!==285)throw Error(JSON.stringify({inner:innerWidth,client:document.documentElement.clientWidth,height:document.documentElement.clientHeight,rect:document.getElementById('fill').getBoundingClientRect()}))");
+        check(
+            &mut page,
+            "if(document.getElementById('fill').getBoundingClientRect().width!==285)throw Error(JSON.stringify({inner:innerWidth,client:document.documentElement.clientWidth,height:document.documentElement.clientHeight,rect:document.getElementById('fill').getBoundingClientRect()}))",
+        );
     });
 }
 #[test]
 fn overlay_vertical_overflow_keeps_root_width() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture("#fill{height:400px}", "<div id=fill></div>", true);
-        check(&mut page, "if(document.getElementById('fill').getBoundingClientRect().width!==300)throw Error('overlay root width')");
+        check(
+            &mut page,
+            "if(document.getElementById('fill').getBoundingClientRect().width!==300)throw Error('overlay root width')",
+        );
     });
 }
+
+#[test]
+fn rowspan_cell_ink_overflow_recalculates_through_table_owner() {
+    test_thread::run(|| {
+        let mut page = fixture(
+            "table{border-collapse:collapse}td{width:40px;height:20px;padding:0}#span{box-shadow:0 0 0 7px red}",
+            "<table><tr><td id=span rowspan=2></td><td></td></tr><tr><td></td></tr></table>",
+            true,
+        );
+        check(
+            &mut page,
+            "const r=document.getElementById('span').getBoundingClientRect();if(r.width!==40||r.height!==40)throw Error(JSON.stringify(r))",
+        );
+    });
+}
+
+#[test]
+fn text_combine_shadow_and_outline_ink_overflow_keep_combined_text_horizontal() {
+    test_thread::run(|| {
+        let mut page = fixture(
+            "#vertical{writing-mode:vertical-rl;font-size:24px}#combined{text-combine-upright:all;text-shadow:5px 3px 2px red;outline:3px solid blue}",
+            "<div id=vertical><span id=combined>12</span></div>",
+            true,
+        );
+        check(
+            &mut page,
+            "const r=document.getElementById('combined').getBoundingClientRect();if(!(r.width>0&&r.height>0&&Number.isFinite(r.width)&&Number.isFinite(r.height)))throw Error(JSON.stringify(r))",
+        );
+    });
+}
+
 #[test]
 fn classic_without_overflow_keeps_root_width() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture("#fill{height:100px}", "<div id=fill></div>", false);
-        check(&mut page, "if(document.getElementById('fill').getBoundingClientRect().width!==300)throw Error('classic no overflow root width')");
+        check(
+            &mut page,
+            "if(document.getElementById('fill').getBoundingClientRect().width!==300)throw Error('classic no overflow root width')",
+        );
     });
 }
 
 fn dimensions(page: &mut Page, width: u32, height: u32) {
-    check(page, &format!("if(document.documentElement.clientWidth!=={width}||document.documentElement.clientHeight!=={height})throw Error('client '+document.documentElement.clientWidth+'x'+document.documentElement.clientHeight+' expected {width}x{height}')"));
+    check(
+        page,
+        &format!(
+            "if(document.documentElement.clientWidth!=={width}||document.documentElement.clientHeight!=={height})throw Error('client '+document.documentElement.clientWidth+'x'+document.documentElement.clientHeight+' expected {width}x{height}')"
+        ),
+    );
 }
 #[test]
 fn classic_root_overflow_both_axes_and_css_policies() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for (css, w, h) in [
             ("#fill{width:400px;height:100px}", 300, 185),
             ("#fill{width:400px;height:400px}", 285, 185),
@@ -152,7 +204,7 @@ fn classic_root_overflow_both_axes_and_css_policies() {
 }
 #[test]
 fn root_scrollbars_update_after_mutation_and_resize() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture("#fill{height:400px}", "<div id=fill></div>", false);
         dimensions(&mut page, 285, 200);
         check(
@@ -163,6 +215,16 @@ fn root_scrollbars_update_after_mutation_and_resize() {
         check(
             &mut page,
             "document.getElementById('fill').setAttribute('style','height:400px')",
+        );
+        dimensions(&mut page, 285, 200);
+        check(
+            &mut page,
+            "document.documentElement.setAttribute('style','scrollbar-width:thin')",
+        );
+        dimensions(&mut page, 293, 200);
+        check(
+            &mut page,
+            "document.documentElement.setAttribute('style','scrollbar-width:auto')",
         );
         dimensions(&mut page, 285, 200);
         page.ResizeViewport(300.0, 500.0, 1.0).unwrap();
@@ -177,7 +239,7 @@ fn root_scrollbars_update_after_mutation_and_resize() {
 }
 #[test]
 fn root_stable_gutter_reserves_space_without_overflow() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for (css, w, h) in [
             ("html{scrollbar-gutter:stable}", 285, 200),
             ("html{scrollbar-gutter:stable both-edges}", 270, 200),
@@ -197,7 +259,7 @@ fn root_stable_gutter_reserves_space_without_overflow() {
 }
 #[test]
 fn body_overflow_propagates_to_viewport() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for (css, w, h) in [
             ("body{overflow:hidden}#fill{height:400px}", 300, 200),
             ("body{overflow:scroll}#fill{height:100px}", 285, 185),
@@ -214,20 +276,73 @@ fn body_overflow_propagates_to_viewport() {
 }
 #[test]
 fn auto_scrollbar_keeps_viewport_units_full_size() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             "#fill{height:400px}#vw{width:100vw;height:100vh}",
             "<div id=fill><div id=vw></div></div>",
             false,
         );
         dimensions(&mut page, 285, 185);
-        check(&mut page,"let r=document.getElementById('vw').getBoundingClientRect();if(r.width!==300||r.height!==200)throw Error(JSON.stringify(r))");
+        check(
+            &mut page,
+            "let r=document.getElementById('vw').getBoundingClientRect();if(r.width!==300||r.height!==200)throw Error(JSON.stringify(r))",
+        );
+    });
+}
+
+#[test]
+fn unconditional_scrollbars_reduce_viewport_units() {
+    test_thread::run(|| {
+        let mut page = fixture(
+            "html{overflow:scroll}#vw{width:100vw;height:100vh}",
+            "<div id=vw></div>",
+            false,
+        );
+        dimensions(&mut page, 285, 185);
+        check(
+            &mut page,
+            "let r=document.getElementById('vw').getBoundingClientRect();if(r.width!==285||r.height!==185)throw Error(JSON.stringify(r))",
+        );
+    });
+}
+
+#[test]
+fn unconditional_scrollbar_mutation_updates_viewport_units_once() {
+    test_thread::run(|| {
+        let mut page = fixture(
+            "html{overflow:auto}#vw{width:100vw;height:100vh}",
+            "<div id=vw></div>",
+            false,
+        );
+        dimensions(&mut page, 300, 200);
+        check(
+            &mut page,
+            "(()=>{let rectangle=document.getElementById('vw').getBoundingClientRect();if(rectangle.width!==300||rectangle.height!==200)throw Error(JSON.stringify(rectangle))})() ",
+        );
+        check(
+            &mut page,
+            "document.documentElement.setAttribute('style','overflow:scroll')",
+        );
+        dimensions(&mut page, 285, 185);
+        check(
+            &mut page,
+            "(()=>{let rectangle=document.getElementById('vw').getBoundingClientRect();if(rectangle.width!==285||rectangle.height!==185)throw Error(JSON.stringify(rectangle))})() ",
+        );
+        check(
+            &mut page,
+            "document.documentElement.setAttribute('style','overflow:auto')",
+        );
+        dimensions(&mut page, 300, 200);
+        check(
+            &mut page,
+            "(()=>{let rectangle=document.getElementById('vw').getBoundingClientRect();if(rectangle.width!==300||rectangle.height!==200)throw Error(JSON.stringify(rectangle))})() ",
+        );
     });
 }
 
 #[test]
 fn injected_scrollbar_metrics_are_not_fixed_to_fifteen() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture_with_theme(
             "#fill{height:400px}",
             "<div id=fill></div>",
@@ -249,8 +364,8 @@ fn injected_scrollbar_metrics_are_not_fixed_to_fifteen() {
     });
 }
 #[test]
-fn page_zoom_keeps_root_native_geometry_in_one_coordinate_space() {
-    native_test_thread::run(|| {
+fn page_zoom_keeps_root_source_geometry_in_one_coordinate_space() {
+    test_thread::run(|| {
         for zoom in [2.0, 0.8] {
             let mut page = fixture_with_theme(
                 "#fill{height:100px}",
@@ -276,7 +391,7 @@ fn page_zoom_keeps_root_native_geometry_in_one_coordinate_space() {
 
 #[test]
 fn body_propagation_mutation_updates_clip_and_retained_snapshots() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             "body{overflow:hidden}#fill{height:400px}",
             "<div id=fill></div>",
@@ -284,7 +399,7 @@ fn body_propagation_mutation_updates_clip_and_retained_snapshots() {
         );
         dimensions(&mut page, 300, 200);
         let old = page.CurrentFrame().unwrap().fragments.clone();
-        assert_eq!(old.paint.client_size.unwrap().width, 300.0);
+        assert_eq!(root_paint(&old).paint.client_size.unwrap().width, 300.0);
         check(
             &mut page,
             "document.documentElement.setAttribute('style','overflow:auto')",
@@ -300,12 +415,12 @@ fn body_propagation_mutation_updates_clip_and_retained_snapshots() {
             "document.body.setAttribute('style','overflow:visible')",
         );
         dimensions(&mut page, 285, 200);
-        assert_eq!(old.paint.client_size.unwrap().width, 300.0);
+        assert_eq!(root_paint(&old).paint.client_size.unwrap().width, 300.0);
     });
 }
 #[test]
 fn containment_stops_body_overflow_propagation() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for css in [
             "body{overflow:hidden;contain:layout}#fill{height:400px}",
             "html{contain:layout}body{overflow:hidden}#fill{height:400px}",
@@ -317,25 +432,38 @@ fn containment_stops_body_overflow_propagation() {
 }
 #[test]
 fn classic_scrollbars_relayout_wrapping_and_nested_client_size() {
-    native_test_thread::run(|| {
-        let mut page=fixture("#fill{height:400px}#wrap{font-size:0;line-height:20px}#wrap span{display:inline-block;vertical-align:top;width:146px;height:20px}#nested{height:50px;width:100px;padding:5px;border:2px solid;overflow:auto}#nested div{height:100px}","<div id=fill><div id=wrap><span></span><span></span></div><div id=nested><div></div></div></div>",false);
+    test_thread::run(|| {
+        let mut page = fixture(
+            "#fill{height:400px}#wrap{font-size:0;line-height:20px}#wrap span{display:inline-block;vertical-align:top;width:146px;height:20px}#nested{height:50px;width:100px;padding:5px;border:2px solid;overflow:auto}#nested div{height:100px}",
+            "<div id=fill><div id=wrap><span></span><span></span></div><div id=nested><div></div></div></div>",
+            false,
+        );
         dimensions(&mut page, 285, 200);
-        check(&mut page,"let n=document.getElementById('nested');if(n.clientWidth!==95||n.clientHeight!==60)throw Error('nested '+n.clientWidth+'x'+n.clientHeight)");
-        check(&mut page,"if(document.getElementById('wrap').getBoundingClientRect().height!==40)throw Error('narrow lines '+JSON.stringify(document.getElementById('wrap').getBoundingClientRect()))");
+        check(
+            &mut page,
+            "let n=document.getElementById('nested');if(n.clientWidth!==95||n.clientHeight!==60)throw Error('nested '+n.clientWidth+'x'+n.clientHeight)",
+        );
+        check(
+            &mut page,
+            "if(document.getElementById('wrap').getBoundingClientRect().height!==40)throw Error('narrow lines '+JSON.stringify(document.getElementById('wrap').getBoundingClientRect()))",
+        );
         let root = page.CurrentFrame().unwrap().fragments.clone();
-        assert!(root.paint.scrollbars.as_ref().is_some());
+        assert!(root_paint(&root).paint.scrollbars.as_ref().is_some());
         check(
             &mut page,
             "document.getElementById('fill').setAttribute('style','height:100px')",
         );
         dimensions(&mut page, 300, 200);
-        check(&mut page,"if(document.getElementById('wrap').getBoundingClientRect().height!==20)throw Error('wide lines')");
+        check(
+            &mut page,
+            "if(document.getElementById('wrap').getBoundingClientRect().height!==20)throw Error('wide lines')",
+        );
     });
 }
 
 #[test]
 fn equal_viewport_size_retains_the_published_layout() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture("#fill{height:400px}", "<div id=fill></div>", false);
         let old = page.CurrentFrame().unwrap().fragments.clone();
         page.ResizeViewport(300.0, 200.0, 1.0).unwrap();
@@ -346,29 +474,55 @@ fn equal_viewport_size_retains_the_published_layout() {
 
 #[test]
 fn classic_root_canvas_background_reaches_compositor_with_matching_clip() {
-    native_test_thread::run(|| {
-        let page = fixture(
-            "html{background:rgb(20,40,60)}#fill{height:400px}",
-            "<div id=fill></div>",
-            false,
-        );
-        let mut pixels = vec![0; 300 * 200];
-        page.PaintInto(
-            300,
-            200,
-            1.0,
-            &mut pixels,
-            renderer_skia::PixelFormat::Rgba8888,
-            300,
-        )
-        .unwrap();
-        assert_eq!(pixels[100 * 300 + 100].to_ne_bytes(), [20, 40, 60, 255]);
+    test_thread::run(|| {
+        for (background, expected) in [
+            ("background:rgb(20,40,60)", [20, 40, 60, 255]),
+            (
+                "color-scheme:light dark;background:light-dark(#eee,#222)",
+                [238, 238, 238, 255],
+            ),
+        ] {
+            let page = fixture(
+                &format!("html{{{background}}}#fill{{height:400px}}"),
+                "<div id=fill></div>",
+                false,
+            );
+            let frame = page.CurrentFrame().unwrap();
+            let root = root_paint(&frame.fragments);
+            let canvas = root.paint.canvas_background.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "missing canvas background for {background}; root style={:?}",
+                    root.paint.style.background_color()
+                )
+            });
+            assert_eq!(
+                [
+                    (canvas.style.background_color().red * 255.0).round() as u8,
+                    (canvas.style.background_color().green * 255.0).round() as u8,
+                    (canvas.style.background_color().blue * 255.0).round() as u8,
+                    (canvas.style.background_color().alpha * 255.0).round() as u8,
+                ],
+                expected,
+                "canvas export for {background}"
+            );
+            let mut pixels = vec![0; 300 * 200];
+            page.PaintInto(
+                300,
+                200,
+                1.0,
+                &mut pixels,
+                renderer_skia::PixelFormat::Rgba8888,
+                300,
+            )
+            .unwrap();
+            assert_eq!(pixels[100 * 300 + 100].to_ne_bytes(), expected);
+        }
     });
 }
 
 #[test]
 fn canvas_scroll_and_fixed_layers_keep_clip_parity_after_scroll() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for overlay in [false, true] {
             for background in [
                 "background:rgb(20,40,60)",
@@ -376,13 +530,51 @@ fn canvas_scroll_and_fixed_layers_keep_clip_parity_after_scroll() {
                 "background:linear-gradient(red,blue) scroll",
                 "background-image:linear-gradient(red,blue),linear-gradient(green,yellow);background-attachment:fixed,scroll;background-color:rgb(20,40,60)",
             ] {
-                let mut page=fixture(&format!("html{{{background}}}#fill{{height:400px}}"),"<div id=fill></div>",overlay);
-                let mut pixels=vec![0;300*200];
-                page.PaintInto(300,200,1.0,&mut pixels,renderer_skia::PixelFormat::Rgba8888,300).unwrap();
-                page.ScrollWheelDefault(&interaction::input_event::WheelEvent { phase: interaction::input_event::WheelPhase::kEnded, position: layoutng_assembly::internal::layout_input::Offset { x: 100.0, y: 100.0 }, delta: layoutng_assembly::internal::layout_input::Offset { x: 0.0, y: 80.0 }, ..Default::default() }).unwrap();
-                assert_eq!(page.CurrentFrame().unwrap().fragments.paint.scroll_offset.y,80.0);
-                page.PaintInto(300,200,1.0,&mut pixels,renderer_skia::PixelFormat::Rgba8888,300).unwrap();
-                assert_eq!(pixels[100*300+100].to_ne_bytes()[3],255);
+                let mut page = fixture(
+                    &format!("html{{{background}}}#fill{{height:400px}}"),
+                    "<div id=fill></div>",
+                    overlay,
+                );
+                let mut pixels = vec![0; 300 * 200];
+                page.PaintInto(
+                    300,
+                    200,
+                    1.0,
+                    &mut pixels,
+                    renderer_skia::PixelFormat::Rgba8888,
+                    300,
+                )
+                .unwrap();
+                let retained = page.CurrentFrame().unwrap().fragments.clone();
+                page.ScrollWheelDefault(&interaction::input_event::WheelEvent {
+                    phase: interaction::input_event::WheelPhase::kEnded,
+                    position: layoutng_assembly::internal::layout_input::Offset {
+                        x: 100.0,
+                        y: 100.0,
+                    },
+                    delta: layoutng_assembly::internal::layout_input::Offset { x: 0.0, y: 80.0 },
+                    ..Default::default()
+                })
+                .unwrap();
+                assert!(retained.PtrEq(&page.CurrentFrame().unwrap().fragments));
+                assert_eq!(root_paint(&retained).paint.scroll_offset.y, 80.0);
+                assert_eq!(
+                    root_paint(&page.CurrentFrame().unwrap().fragments)
+                        .paint
+                        .scroll_offset
+                        .y,
+                    80.0
+                );
+                page.PaintInto(
+                    300,
+                    200,
+                    1.0,
+                    &mut pixels,
+                    renderer_skia::PixelFormat::Rgba8888,
+                    300,
+                )
+                .unwrap();
+                assert_eq!(pixels[100 * 300 + 100].to_ne_bytes()[3], 255);
             }
         }
     });
@@ -407,7 +599,7 @@ fn paint_fixed_control(page: &Page, width: u32, height: u32, x: usize, y: usize)
 
 #[test]
 fn fixed_control_keeps_root_overflow_clip_with_classic_and_overlay_scrollbars() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         for overlay in [false, true] {
             for (fill, client_width, client_height) in [
                 ("height:400px", if overlay { 300 } else { 285 }, 200),
@@ -423,7 +615,9 @@ fn fixed_control_keeps_root_overflow_clip_with_classic_and_overlay_scrollbars() 
                 ),
             ] {
                 let mut page = fixture(
-                    &format!("#fill{{{fill}}}#fixed{{position:fixed;right:24px;bottom:20px;width:44px;height:80px;background:rgb(20,40,60);border-radius:22px}}"),
+                    &format!(
+                        "#fill{{{fill}}}#fixed{{position:fixed;right:24px;bottom:20px;width:44px;height:80px;background:rgb(20,40,60);border-radius:22px}}"
+                    ),
                     "<div id=fill></div><div id=fixed></div>",
                     overlay,
                 );
@@ -444,7 +638,7 @@ fn fixed_control_keeps_root_overflow_clip_with_classic_and_overlay_scrollbars() 
 
 #[test]
 fn fixed_control_root_clip_tracks_scrollbar_mutation_resize_and_scroll() {
-    native_test_thread::run(|| {
+    test_thread::run(|| {
         let mut page = fixture(
             "#fill{height:400px}#fixed{position:fixed;right:24px;bottom:20px;width:44px;height:80px;background:rgb(20,40,60);border-radius:22px}",
             "<div id=fill></div><div id=fixed></div>",
@@ -459,7 +653,10 @@ fn fixed_control_root_clip_tracks_scrollbar_mutation_resize_and_scroll() {
         })
         .unwrap();
         assert_eq!(
-            page.CurrentFrame().unwrap().fragments.paint.scroll_offset.y,
+            root_paint(&page.CurrentFrame().unwrap().fragments)
+                .paint
+                .scroll_offset
+                .y,
             80.0
         );
         paint_fixed_control(&page, 300, 200, 239, 140);
@@ -485,8 +682,8 @@ fn fixed_control_root_clip_tracks_scrollbar_mutation_resize_and_scroll() {
 }
 
 #[test]
-fn fixed_control_uses_its_native_containing_block_clip() {
-    native_test_thread::run(|| {
+fn fixed_control_uses_its_source_containing_block_clip() {
+    test_thread::run(|| {
         let page = fixture(
             "#fill{height:400px}#clip{width:20px;height:20px;overflow:hidden}#fixed{position:fixed;right:24px;bottom:20px;width:44px;height:80px;background:rgb(20,40,60);border-radius:22px}",
             "<div id=clip><div id=fixed></div></div><div id=fill></div>",

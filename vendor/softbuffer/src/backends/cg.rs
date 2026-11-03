@@ -13,6 +13,8 @@ use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, MainThreadMark
 #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
 use objc2_core_foundation::CFRetained;
 use objc2_core_foundation::CGPoint;
+#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+use objc2_core_graphics::CGColor;
 #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
 use objc2_core_graphics::{
     CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
@@ -111,6 +113,8 @@ pub struct CGImpl<D, W> {
     layer: SendCALayer,
     #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
     targets: iosurface::TargetPool,
+    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+    presentation: std::sync::Arc<NativePresentationState>,
     /// The layer that our layer was created from.
     ///
     /// Can also be retrieved from `layer.superlayer()`.
@@ -186,6 +190,13 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
         let layer = CALayer::new();
         root_layer.addSublayer(&layer);
 
+        // The view layer can grow before the next IOSurface is committed
+        // during a live resize. Chromium exposes its opaque browser fallback
+        // in that interval; a transparent CALayer exposes AppKit's black
+        // backing around the preceding top-left IOSurface instead.
+        #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+        layer.setBackgroundColor(Some(&CGColor::new_generic_rgb(1.0, 1.0, 1.0, 1.0)));
+
         // Set the anchor point and geometry. Softbuffer's uses a coordinate system with the origin
         // in the top-left corner.
         //
@@ -254,6 +265,8 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
             layer: SendCALayer(layer),
             #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
             targets: iosurface::TargetPool::default(),
+            #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+            presentation: std::sync::Arc::new(NativePresentationState::default()),
             root_layer: SendCALayer(root_layer),
             observer,
             #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
@@ -289,9 +302,45 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
 
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
 impl<D, W> CGImpl<D, W> {
+    pub(crate) fn invalidate_pending_prepared_presentations(&mut self) {
+        self.presentation
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    fn next_presentation_generation(&self) -> u64 {
+        self.presentation
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
     pub(crate) fn prepared_buffer(&mut self) -> Result<PreparedBuffer, SoftBufferError> {
+        self.prepared_buffer_with_damage(&[crate::Rect {
+            x: 0,
+            y: 0,
+            width: NonZeroU32::new(self.width as u32).expect("non-empty CoreGraphics surface"),
+            height: NonZeroU32::new(self.height as u32).expect("non-empty CoreGraphics surface"),
+        }])
+    }
+
+    pub(crate) fn prepared_buffer_with_damage(
+        &mut self,
+        damage: &[crate::Rect],
+    ) -> Result<PreparedBuffer, SoftBufferError> {
+        let damage: Vec<_> = damage
+            .iter()
+            .map(|rect| iosurface::DamageRect {
+                x: rect.x as usize,
+                y: rect.y as usize,
+                width: rect.width.get() as usize,
+                height: rect.height.get() as usize,
+            })
+            .collect();
         Ok(PreparedBuffer {
-            native: self.targets.acquire(self.width, self.height)?,
+            native: self
+                .targets
+                .acquire_with_damage_rects(self.width, self.height, &damage)?,
             width: NonZeroU32::new(self.width as u32).expect("non-empty CoreGraphics surface"),
             height: NonZeroU32::new(self.height as u32).expect("non-empty CoreGraphics surface"),
         })
@@ -304,14 +353,15 @@ impl<D, W> CGImpl<D, W> {
         observer: Option<crate::NativeTransactionObserver>,
     ) -> Result<(), SoftBufferError> {
         let (surface, lease) = prepared.native.finish_with_lease()?;
-        let contents_unchanged = self.targets.submitted(surface.0.id());
+        let generation = self.next_presentation_generation();
         let pending = Box::new(MainThreadPresent {
             layer: SendCALayer(self.layer.0.clone()),
             surface,
             _lease: lease,
             callback,
             observer,
-            contents_unchanged,
+            presentation: self.presentation.clone(),
+            generation,
         });
         if MainThreadMarker::new().is_some() {
             pending.commit();
@@ -353,6 +403,9 @@ impl PreparedBuffer {
     }
     pub(crate) fn pixels_mut(&mut self) -> &mut [u32] {
         self.native.pixels_mut()
+    }
+    pub(crate) fn retained(&self) -> bool {
+        self.native.retained()
     }
 }
 
@@ -498,7 +551,13 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
         self.imp.layer.setOpaque(true);
         // SAFETY: Chromium bridges IOSurfaceRef to id for CALayer.contents.
         // Core Animation retains the IOSurface; CPU mapping is already unlocked.
-        let contents_unchanged = self.imp.targets.submitted(surface.0.id());
+        self.imp.next_presentation_generation();
+        let contents_unchanged = self
+            .imp
+            .presentation
+            .committed_surface
+            .swap(surface.0.id(), std::sync::atomic::Ordering::AcqRel)
+            == surface.0.id();
         if contents_unchanged {
             unsafe {
                 let _: () = msg_send![&*self.imp.layer, setContentsChanged];
@@ -529,14 +588,15 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
         observer: Option<crate::NativeTransactionObserver>,
     ) -> Result<(), SoftBufferError> {
         let (surface, lease) = self.native.finish_with_lease()?;
-        let contents_unchanged = self.imp.targets.submitted(surface.0.id());
+        let generation = self.imp.next_presentation_generation();
         let pending = Box::new(MainThreadPresent {
             layer: SendCALayer(self.imp.layer.0.clone()),
             surface,
             _lease: lease,
             callback,
             observer,
-            contents_unchanged,
+            presentation: self.imp.presentation.clone(),
+            generation,
         });
         if MainThreadMarker::new().is_some() {
             pending.commit();
@@ -561,13 +621,21 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
 }
 
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+#[derive(Debug, Default)]
+struct NativePresentationState {
+    generation: std::sync::atomic::AtomicU64,
+    committed_surface: std::sync::atomic::AtomicU32,
+}
+
+#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
 struct MainThreadPresent {
     layer: SendCALayer,
     surface: iosurface::SendSurface,
     _lease: std::sync::Arc<()>,
     callback: crate::PresentCallback,
     observer: Option<crate::NativeTransactionObserver>,
-    contents_unchanged: bool,
+    presentation: std::sync::Arc<NativePresentationState>,
+    generation: u64,
 }
 
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
@@ -576,15 +644,43 @@ impl MainThreadPresent {
         let _main =
             MainThreadMarker::new().expect("IOSurface layer commit requires the main thread");
         let started = std::time::Instant::now();
+        if self.presentation.generation.load(std::sync::atomic::Ordering::Acquire)
+            != self.generation
+        {
+            // The browser root changed after this IOSurface was queued for the
+            // AppKit thread. Acknowledging the skipped update releases the
+            // scheduler and its pool lease without letting an obsolete root
+            // transaction land after the input that replaced it.
+            (self.callback)(started, std::time::Instant::now());
+            return;
+        }
         if let Some(observer) = &self.observer {
             register_transaction_observer(observer.clone(), self.surface.0.id());
         }
         CATransaction::begin();
         CATransaction::setDisableActions(true);
+        // Chromium keeps the software buffer alive across the host/display
+        // handoff.  Rechrom installs it on the CALayer directly, so retain the
+        // pool lease until Core Animation has consumed this transaction.  The
+        // swap acknowledgement below remains immediate; this only prevents a
+        // following CPU paint from reusing the IOSurface in the short interval
+        // before IOSurfaceIsInUse becomes the WindowServer reuse fence.
+        let lease = self._lease.clone();
+        let completion = block2::RcBlock::new(move || {
+            let _ = &lease;
+        });
+        unsafe {
+            CATransaction::setCompletionBlock(Some(&completion));
+        }
         self.layer.setOpaque(true);
         // SAFETY: IOSurface is a supported CALayer.contents object. The queued
         // lease remains live through this update and the native transaction.
-        if self.contents_unchanged {
+        let contents_unchanged = self
+            .presentation
+            .committed_surface
+            .swap(self.surface.0.id(), std::sync::atomic::Ordering::AcqRel)
+            == self.surface.0.id();
+        if contents_unchanged {
             // DisplayCALayerTree::GotIOSurfaceFrame uses the same private CA
             // notification when software compositing reuses an IOSurface.
             unsafe {

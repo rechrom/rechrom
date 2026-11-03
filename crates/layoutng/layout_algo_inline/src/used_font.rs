@@ -1,6 +1,6 @@
 // C++: layoutng_inline/used_font.cc.
 // UsedFont's class and fields are physically owned by this package's
-// native_used_font boundary source. These exported Rust symbols match the
+// used_font_interface boundary source. These exported Rust symbols match the
 // cross-crate calls made through the compatibility facade.
 #![allow(non_snake_case)]
 

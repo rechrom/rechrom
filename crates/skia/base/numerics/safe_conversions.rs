@@ -732,7 +732,7 @@ where
 // Source: safe_conversions.h:80-108,148-157,206-236. Explicit CTFE-only
 // primitive specializations: no runtime trait call is mislabeled const.
 #[macro_export]
-macro_rules! NativeCheckedCastConst {
+macro_rules! CheckedCastConst {
     (i8,i8,$value:expr) => {{
         #[cfg(target_pointer_width = "32")]
         {
@@ -4802,7 +4802,7 @@ macro_rules! NativeCheckedCastConst {
     }};
 }
 #[macro_export]
-macro_rules! NativeSaturatedCastConst {
+macro_rules! SaturatedCastConst {
     (i8,i8,$value:expr) => {{
         #[cfg(target_pointer_width = "32")]
         {
@@ -11565,7 +11565,7 @@ macro_rules! NativeSaturatedCastConst {
     }};
 }
 #[macro_export]
-macro_rules! NativeStrictCastConst {
+macro_rules! StrictCastConst {
     (i8,i8,$value:expr) => {{
         #[cfg(target_pointer_width = "32")]
         {

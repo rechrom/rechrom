@@ -10,6 +10,7 @@ use crate::internal::layout_box::LayoutBox;
 use crate::internal::layout_box_model_object::LayoutBoxModelObject;
 use crate::internal::layout_inline::LayoutInline;
 use crate::internal::layout_input::NodeKind;
+use crate::internal::layout_node_metadata::{Element, ElementType, Node};
 use crate::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use crate::internal::layout_object::{RecalcScrollableOverflowResult, StyleChangeContext};
 use crate::internal::layout_object_child_list::LayoutObjectChildList;
@@ -19,11 +20,14 @@ use crate::internal::layout_replaced::LayoutReplaced;
 use crate::internal::layout_text::LayoutText;
 use crate::internal::layout_view::LayoutView;
 use crate::internal::map_coordinates_flags::MapCoordinatesFlags;
+use crate::internal::outline_info::LayoutOutlineInfo;
+use crate::internal::outline_rect_collector::OutlineRectCollector;
 use crate::physical_box_fragment::PhysicalBoxFragment;
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
-use foundation::{LayoutUnit, PhysicalOffset, PhysicalSize};
+use foundation::{FormControlType, LayoutUnit, PhysicalOffset, PhysicalRect, PhysicalSize};
 use layoutng_geometry::geometry::box_strut::{BoxStrut, PhysicalBoxStrut};
 use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layoutng_style::style::outline_type::OutlineType;
 use layoutng_style::style::style_difference::StyleDifference;
 use std::sync::OnceLock;
 
@@ -42,10 +46,39 @@ type GridStyleDidChange = fn(
     &StyleChangeContext,
 );
 static GRID_STYLE_DID_CHANGE: OnceLock<GridStyleDidChange> = OnceLock::new();
+type ReplacedStyleDidChange = fn(
+    *mut LayoutObject,
+    StyleDifference,
+    *const ComputedStyle,
+    &ComputedStyle,
+    &StyleChangeContext,
+);
+static REPLACED_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
+static IMAGE_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
+type ReplacedRecalcVisualOverflow = fn(*mut LayoutObject);
+static REPLACED_RECALC_VISUAL_OVERFLOW: OnceLock<ReplacedRecalcVisualOverflow> = OnceLock::new();
 static SVG_ROOT_CHILDREN: OnceLock<SvgRootChildren> = OnceLock::new();
 
 pub fn RegisterGridStyleDidChange(callback: GridStyleDidChange) {
     let existing = GRID_STYLE_DID_CHANGE.get_or_init(|| callback);
+    assert_eq!(*existing as usize, callback as usize);
+}
+
+/// LayoutReplaced lives in the downstream replaced-element package. Register
+/// its lifecycle override at construction so LayoutObject's virtual call site
+/// keeps the Chromium base/derived order without introducing a Cargo cycle.
+pub fn RegisterReplacedStyleDidChange(callback: ReplacedStyleDidChange) {
+    let existing = REPLACED_STYLE_DID_CHANGE.get_or_init(|| callback);
+    assert_eq!(*existing as usize, callback as usize);
+}
+
+pub fn RegisterImageStyleDidChange(callback: ReplacedStyleDidChange) {
+    let existing = IMAGE_STYLE_DID_CHANGE.get_or_init(|| callback);
+    assert_eq!(*existing as usize, callback as usize);
+}
+
+pub fn RegisterReplacedRecalcVisualOverflow(callback: ReplacedRecalcVisualOverflow) {
+    let existing = REPLACED_RECALC_VISUAL_OVERFLOW.get_or_init(|| callback);
     assert_eq!(*existing as usize, callback as usize);
 }
 
@@ -54,7 +87,7 @@ pub fn RegisterFlexStitchedRowGapIndex(callback: FlexStitchedRowGapIndex) {
     assert_eq!(*existing as usize, callback as usize);
 }
 
-/// LayoutSVGRoot owns its child list in the downstream SVG package. Native
+/// LayoutSVGRoot owns its child list in the downstream SVG package. Chromium
 /// fragment cursors may walk that list after the layout factory scope has
 /// ended, just as Chromium can call the object's vtable at any lifecycle
 /// stage. Register the concrete override once with the assembled engine.
@@ -140,6 +173,17 @@ pub extern "Rust" fn DispatchLayoutObjectIsBox(object: *const LayoutObject) -> b
             | LayoutObjectClass::SvgRoot
             | LayoutObjectClass::View
     )
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_object.h:2052-2055
+// cpp: third_party/blink/renderer/core/layout/layout_box.h:600-603
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsFragmentLessBox(object: *const LayoutObject) -> bool {
+    if DispatchLayoutObjectIsBox(object) {
+        unsafe { &*object.cast::<LayoutBox>() }.IsFragmentLessBox()
+    } else {
+        unsafe { &*object }.IsFragmentLessBoxBase()
+    }
 }
 
 // cpp: layoutng/internal/layout_block.h:225-228
@@ -245,14 +289,12 @@ macro_rules! block_false_predicates {
 }
 
 block_false_predicates!(
-    DispatchLayoutObjectIsCanvas,
     DispatchLayoutObjectIsFrameSet,
     DispatchLayoutObjectIsLayoutCustom,
     DispatchLayoutObjectIsCustomLayoutLoaded,
-    DispatchLayoutObjectIsImage,
     DispatchLayoutObjectIsLayoutIFrame,
-    DispatchLayoutObjectIsLayoutImage,
     DispatchLayoutObjectIsCounter,
+    DispatchLayoutObjectIsEmbeddedObject,
     DispatchLayoutObjectIsQuote,
     DispatchLayoutObjectIsRuby,
     DispatchLayoutObjectIsLayoutEmbeddedContent,
@@ -262,6 +304,175 @@ block_false_predicates!(
     DispatchLayoutObjectIsVideo,
     DispatchLayoutObjectIsViewTransitionRoot,
 );
+
+// Chromium creates LayoutImage for ordinary HTML images, image-submit
+// controls, and ImageContentData's anonymous generated object. Rechrom keeps
+// those derived identities in Node metadata while sharing LayoutReplaced's
+// Rust representation, so the assembled vtable dispatch must restore the
+// LayoutImage overrides instead of inferring image-ness in Paint.
+// cpp: core/layout/layout_image.h:135-138,158-161
+fn IsLayoutImageIdentity(
+    runtime_class: LayoutObjectClass,
+    style_generated: bool,
+    element_type: Option<ElementType>,
+    form_control_type: Option<FormControlType>,
+) -> bool {
+    runtime_class == LayoutObjectClass::Replaced
+        && (style_generated
+            || element_type == Some(ElementType::kHTMLImageElement)
+            || (element_type == Some(ElementType::kHTMLInputElement)
+                && form_control_type == Some(FormControlType::kInputImage)))
+}
+
+fn IsLayoutImage(object: *const LayoutObject) -> bool {
+    let runtime_class = class(object);
+    if runtime_class != LayoutObjectClass::Replaced {
+        return false;
+    }
+    let node = unsafe { &*object }.GetNode();
+    if node.is_null() {
+        return false;
+    }
+    let node = unsafe { &*node };
+    let element = node
+        .IsElementNode()
+        .then(|| unsafe { &*(node as *const Node).cast::<Element>() });
+    IsLayoutImageIdentity(
+        runtime_class,
+        node.InputIsStyleGenerated(),
+        element.map(Element::GetElementType),
+        element.and_then(|element| {
+            element
+                .InputElementData()
+                .as_ref()
+                .and_then(|data| data.form_control_type)
+        }),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsLayoutImage(object: *const LayoutObject) -> bool {
+    IsLayoutImage(object)
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsImage(object: *const LayoutObject) -> bool {
+    IsLayoutImage(object)
+}
+
+#[cfg(test)]
+mod layout_image_identity_tests {
+    use super::*;
+
+    #[test]
+    fn replaced_html_image_has_layout_image_virtual_identity() {
+        assert!(IsLayoutImageIdentity(
+            LayoutObjectClass::Replaced,
+            false,
+            Some(ElementType::kHTMLImageElement),
+            None,
+        ));
+    }
+
+    #[test]
+    fn replaced_image_input_has_layout_image_virtual_identity() {
+        assert!(IsLayoutImageIdentity(
+            LayoutObjectClass::Replaced,
+            false,
+            Some(ElementType::kHTMLInputElement),
+            Some(FormControlType::kInputImage),
+        ));
+    }
+
+    #[test]
+    fn generated_replaced_content_has_layout_image_virtual_identity() {
+        assert!(IsLayoutImageIdentity(
+            LayoutObjectClass::Replaced,
+            true,
+            Some(ElementType::kElement),
+            None,
+        ));
+    }
+
+    #[test]
+    fn canvas_and_non_replaced_objects_are_not_layout_images() {
+        assert!(!IsLayoutImageIdentity(
+            LayoutObjectClass::Replaced,
+            false,
+            Some(ElementType::kHTMLElement),
+            None,
+        ));
+        assert!(!IsLayoutImageIdentity(
+            LayoutObjectClass::Box,
+            true,
+            Some(ElementType::kHTMLImageElement),
+            None,
+        ));
+    }
+}
+
+// cpp: core/layout/layout_html_canvas.h:48-48
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsCanvas(object: *const LayoutObject) -> bool {
+    class(object);
+    let node = unsafe { &*object }.GetNode();
+    !node.is_null() && unsafe { &*node }.InputIsHTMLCanvasElement()
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_object.h:2160-2161
+// cpp: third_party/blink/renderer/core/layout/layout_object.cc:4514-4522
+// cpp: third_party/blink/renderer/core/layout/layout_view.h:179-183
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectCanHaveAdditionalCompositingReasonsProvider(
+    object: &LayoutObject,
+) -> bool {
+    if class(object) == LayoutObjectClass::View {
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutView>() }
+            .CanHaveAdditionalCompositingReasons()
+    } else {
+        object.CanHaveAdditionalCompositingReasonsBase()
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectAdditionalCompositingReasonsProvider(
+    object: &LayoutObject,
+) -> foundation::CompositingReasons {
+    if class(object) == LayoutObjectClass::View {
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutView>() }
+            .AdditionalCompositingReasons()
+    } else {
+        object.AdditionalCompositingReasonsBase()
+    }
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_object.h:3615-3618
+// cpp: third_party/blink/renderer/core/layout/layout_text.h:396-398
+// cpp: third_party/blink/renderer/core/layout/layout_image.h:149-152
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectCanBeSelectionLeafInternal(
+    object: *const LayoutObject,
+) -> bool {
+    match class(object) {
+        LayoutObjectClass::Text | LayoutObjectClass::SvgInlineText => {
+            unsafe { &*object.cast::<LayoutText>() }.CanBeSelectionLeafInternal()
+        }
+        _ if IsLayoutImage(object) => true,
+        _ => unsafe { &*object }.CanBeSelectionLeafInternalBase(),
+    }
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_box.h:214-217
+// cpp: third_party/blink/renderer/core/layout/layout_image.h:168-171
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutBoxBackgroundShouldAlwaysBeClippedProvider(box_: &LayoutBox) -> bool {
+    let object = box_ as *const LayoutBox as *const LayoutObject;
+    if IsLayoutImage(object) {
+        true
+    } else {
+        box_.BackgroundShouldAlwaysBeClippedBase()
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutTableCol(object: *const LayoutObject) -> bool {
@@ -329,7 +540,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObj
 }
 
 // core/layout/svg/layout_svg_hidden_container.h and
-// layout_svg_resource_container.h: most-derived native SVG resource kinds.
+// layout_svg_resource_container.h: most-derived source SVG resource kinds.
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGHiddenContainer(object: *const LayoutObject) -> bool {
     matches!(
@@ -462,7 +673,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsBR(object: *const LayoutObject) -> bo
     !node.is_null() && unsafe { &*node }.InputKind() == NodeKind::kLineBreak
 }
 
-// cpp: layoutng/internal/layout_replaced.h:124-126
+// cpp: core/layout/layout_replaced.h:163-166
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutReplaced(object: *const LayoutObject) -> bool {
     matches!(
@@ -472,8 +683,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutReplaced(object: *const LayoutO
 }
 
 // LayoutReplaced itself inherits LayoutObject's default. The only override
-// in the translated native hierarchy is SVGForeignObject. LayoutVideo is not
-// a represented native class and must supply its own override when translated.
+// in the translated source hierarchy is SVGForeignObject. LayoutVideo is not
+// a represented source class and must supply its own override when translated.
 // cpp: core/layout/layout_object.h:737-740
 // cpp: core/layout/svg/layout_svg_foreign_object.h:62-65
 #[unsafe(no_mangle)]
@@ -490,7 +701,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsReplacedNormalFlowStackingContext(
     }
 }
 
-// cpp: layoutng/internal/layout_replaced.h:68-70
+// cpp: core/layout/layout_replaced.h:70-73
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectCanHaveChildren(object: *const LayoutObject) -> bool {
     if class(object) == LayoutObjectClass::TableColumn {
@@ -734,7 +945,7 @@ pub extern "Rust" fn DispatchLayoutObjectAddChild(
     before_child: *mut LayoutObject,
 ) {
     if class(object).IsTableClass() {
-        (table_virtuals().add_child)(unsafe { &mut *object }, child, before_child);
+        (table_virtuals(object).add_child)(unsafe { &mut *object }, child, before_child);
         return;
     }
 
@@ -829,7 +1040,7 @@ pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
     object: *const LayoutObject,
 ) -> *mut LayoutObjectChildList {
     if class(object).IsTableClass() {
-        return (table_virtuals().virtual_children)(unsafe { &*object });
+        return (table_virtuals(object).virtual_children)(unsafe { &*object });
     }
 
     match class(object) {
@@ -895,7 +1106,7 @@ pub extern "Rust" fn DispatchLayoutObjectGetName(object: *const LayoutObject) ->
                 "LayoutTableCol"
             } else {
                 "LayoutTableColGroup"
-            }
+            };
         }
         _ => {}
     }
@@ -927,6 +1138,7 @@ pub extern "Rust" fn DispatchLayoutObjectGetName(object: *const LayoutObject) ->
         LayoutObjectClass::SvgShape => "LayoutSVGShape",
         LayoutObjectClass::SvgRoot => "LayoutSVGRoot",
         LayoutObjectClass::Fieldset => "LayoutFieldset",
+        LayoutObjectClass::Replaced if IsLayoutImage(object) => "LayoutImage",
         LayoutObjectClass::Replaced => "LayoutInputReplaced",
         LayoutObjectClass::FlexibleBox => "LayoutFlexibleBox",
         LayoutObjectClass::Grid => "LayoutGrid",
@@ -1138,7 +1350,9 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectStickyContainer(
     owner: *const LayoutBoxModelObject,
 ) -> *mut LayoutBlock {
     if class(owner.cast()).IsTableClass() {
-        return (table_virtuals().sticky_container)(unsafe { &*owner.cast::<LayoutBox>() });
+        return (table_virtuals(owner.cast()).sticky_container)(unsafe {
+            &*owner.cast::<LayoutBox>()
+        });
     }
 
     class(owner.cast::<LayoutObject>());
@@ -1169,17 +1383,21 @@ pub extern "Rust" fn DispatchLayoutObjectOffsetFromContainerInternal(
 pub extern "Rust" fn DispatchLayoutObjectRecalcScrollableOverflow(
     object: *mut LayoutObject,
 ) -> RecalcScrollableOverflowResult {
-    if matches!(
-        class(object),
-        LayoutObjectClass::Table | LayoutObjectClass::TableRow | LayoutObjectClass::TableSection
-    ) {
-        return unsafe { &mut *object.cast::<LayoutBlock>() }.RecalcScrollableOverflow();
-    }
-
     let runtime_class = class(object);
-    if matches!(
+    if IsLayoutBlockClass(runtime_class) {
+        unsafe { &mut *object.cast::<LayoutBlock>() }.RecalcScrollableOverflow()
+    } else {
+        unsafe { &mut *object }.RecalcScrollableOverflow()
+    }
+}
+
+fn IsLayoutBlockClass(runtime_class: LayoutObjectClass) -> bool {
+    matches!(
         runtime_class,
-        LayoutObjectClass::Block
+        LayoutObjectClass::Table
+            | LayoutObjectClass::TableRow
+            | LayoutObjectClass::TableSection
+            | LayoutObjectClass::Block
             | LayoutObjectClass::FlexibleBox
             | LayoutObjectClass::Grid
             | LayoutObjectClass::BlockFlow
@@ -1201,10 +1419,190 @@ pub extern "Rust" fn DispatchLayoutObjectRecalcScrollableOverflow(
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
             | LayoutObjectClass::View
+    )
+}
+
+// Source: core/layout/layout_object.cc:2268-2278,
+// core/layout/layout_box_model_object.cc:442-459,
+// core/layout/layout_block.cc:629-641, core/layout/layout_text.cc:1486-1495,
+// core/layout/layout_replaced.cc:301-319 and
+// core/layout/svg/layout_svg_root.cc:215-220.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectRecalcVisualOverflow(object: *mut LayoutObject) {
+    let runtime_class = class(object);
+    // LayoutSVGRoot derives from LayoutReplaced and its source override begins
+    // with LayoutReplaced::RecalcVisualOverflow(). The translated SVG package
+    // does not yet add the subsequent unclipped SVG contents rect, but it must
+    // retain this most-derived base dispatch instead of falling through to
+    // LayoutBoxModelObject's inline-only overflow path.
+    if matches!(
+        runtime_class,
+        LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot
     ) {
-        unsafe { &mut *object.cast::<LayoutBlock>() }.RecalcScrollableOverflow()
-    } else {
-        unsafe { &mut *object }.RecalcScrollableOverflow()
+        REPLACED_RECALC_VISUAL_OVERFLOW
+            .get()
+            .expect("replaced RecalcVisualOverflow virtual dispatch is not registered")(
+            object
+        );
+        return;
+    }
+    if IsLayoutBlockClass(runtime_class) {
+        unsafe { &mut *object.cast::<LayoutBlock>() }.RecalcVisualOverflow();
+        return;
+    }
+    if matches!(
+        runtime_class,
+        LayoutObjectClass::Text | LayoutObjectClass::SvgInlineText
+    ) {
+        #[cfg(debug_assertions)]
+        unsafe { &mut *object.cast::<LayoutText>() }.RecalcVisualOverflow();
+        #[cfg(not(debug_assertions))]
+        unsafe { &mut *object }.RecalcVisualOverflowBase();
+        return;
+    }
+    unsafe { &mut *object.cast::<LayoutBoxModelObject>() }.RecalcVisualOverflow();
+}
+
+// cpp: core/layout/layout_box_model_object.h:173-173,
+// core/layout/layout_box.h:326-326 and core/layout/layout_inline.h:155-155.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutBoxModelObjectVisualOverflowRect(
+    object: &LayoutBoxModelObject,
+) -> PhysicalRect {
+    let layout_object = object as *const LayoutBoxModelObject as *const LayoutObject;
+    match class(layout_object) {
+        LayoutObjectClass::Inline
+        | LayoutObjectClass::InlineListItem
+        | LayoutObjectClass::InsideListMarker => {
+            unsafe { &*layout_object.cast::<LayoutInline>() }.VisualOverflowRect()
+        }
+        LayoutObjectClass::Box
+        | LayoutObjectClass::Block
+        | LayoutObjectClass::FlexibleBox
+        | LayoutObjectClass::Grid
+        | LayoutObjectClass::Table
+        | LayoutObjectClass::TableCaption
+        | LayoutObjectClass::TableCell
+        | LayoutObjectClass::TableColumn
+        | LayoutObjectClass::TableRow
+        | LayoutObjectClass::TableSection
+        | LayoutObjectClass::BlockFlow
+        | LayoutObjectClass::ListItem
+        | LayoutObjectClass::OutsideListMarker
+        | LayoutObjectClass::TextCombine
+        | LayoutObjectClass::TextControlSingleLine
+        | LayoutObjectClass::TextControlMultiLine
+        | LayoutObjectClass::TextControlInnerEditor
+        | LayoutObjectClass::Fieldset
+        | LayoutObjectClass::SvgRoot
+        | LayoutObjectClass::SvgForeignObject
+        | LayoutObjectClass::Replaced
+        | LayoutObjectClass::View => {
+            unsafe { &*layout_object.cast::<LayoutBox>() }.VisualOverflowRect()
+        }
+        runtime_class => {
+            panic!("VisualOverflowRect is not a LayoutBoxModelObject virtual for {runtime_class:?}")
+        }
+    }
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_box_model_object.cc:522-543
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutBoxModelObjectVisualOverflowRectIncludingFilters(
+    object: &LayoutBoxModelObject,
+) -> PhysicalRect {
+    LayoutBoxModelObjectApplyFiltersToRect(object, &object.VisualOverflowRect())
+}
+
+// cpp: third_party/blink/renderer/core/layout/layout_box_model_object.cc:526-543
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutBoxModelObjectApplyFiltersToRect(
+    object: &LayoutBoxModelObject,
+    rect: &PhysicalRect,
+) -> PhysicalRect {
+    if !object.HasReflection() && !object.StyleRef().HasFilter() {
+        return *rect;
+    }
+
+    let layer = object.Layer();
+    if !layer.is_null() {
+        return unsafe { &*layer }.MapRectForFilter(rect);
+    }
+
+    debug_assert!(object.IsSVGChild());
+    PhysicalRect::EnclosingRect(
+        &object
+            .StyleRef()
+            .Filter()
+            .MapRect(&foundation::gfx::RectF::from(*rect)),
+    )
+}
+
+// cpp: core/layout/layout_object.h:2812-2816. The concrete methods retain
+// their source-package implementations; this is only the C++ vtable edge.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectAddOutlineRects(
+    object: &LayoutObject,
+    collector: &mut dyn OutlineRectCollector,
+    info: *mut LayoutOutlineInfo,
+    additional_offset: &PhysicalOffset,
+    outline_type: OutlineType,
+) {
+    match object.RuntimeClass() {
+        LayoutObjectClass::Inline
+        | LayoutObjectClass::InlineListItem
+        | LayoutObjectClass::InsideListMarker => {
+            unsafe { &*(object as *const LayoutObject as *const LayoutInline) }.AddOutlineRects(
+                collector,
+                info,
+                additional_offset,
+                outline_type,
+            )
+        }
+        LayoutObjectClass::BlockFlow
+        | LayoutObjectClass::ListItem
+        | LayoutObjectClass::OutsideListMarker
+        | LayoutObjectClass::TextCombine
+        | LayoutObjectClass::TextControlSingleLine
+        | LayoutObjectClass::TextControlMultiLine
+        | LayoutObjectClass::TextControlInnerEditor
+        | LayoutObjectClass::Fieldset
+        | LayoutObjectClass::TableCell
+        | LayoutObjectClass::TableCaption
+        | LayoutObjectClass::View => {
+            unsafe { &*(object as *const LayoutObject as *const LayoutBlockFlow) }.AddOutlineRects(
+                collector,
+                info,
+                additional_offset,
+                outline_type,
+            )
+        }
+        LayoutObjectClass::Block
+        | LayoutObjectClass::FlexibleBox
+        | LayoutObjectClass::Grid
+        | LayoutObjectClass::Table => {
+            unsafe { &*(object as *const LayoutObject as *const LayoutBlock) }.AddOutlineRects(
+                collector,
+                info,
+                additional_offset,
+                outline_type,
+            )
+        }
+        LayoutObjectClass::Box
+        | LayoutObjectClass::TableColumn
+        | LayoutObjectClass::TableRow
+        | LayoutObjectClass::TableSection
+        | LayoutObjectClass::SvgRoot
+        | LayoutObjectClass::SvgForeignObject
+        | LayoutObjectClass::Replaced => {
+            unsafe { &*(object as *const LayoutObject as *const LayoutBox) }.AddOutlineRects(
+                collector,
+                info,
+                additional_offset,
+                outline_type,
+            )
+        }
+        _ => object.AddOutlineRectsBase(collector, info, additional_offset, outline_type),
     }
 }
 
@@ -1235,7 +1633,7 @@ pub extern "Rust" fn DispatchLayoutObjectUpdateAnonymousChildStyle(
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectInsertedIntoTree(object: *mut LayoutObject) {
     if class(object).IsTableClass() {
-        (table_virtuals().inserted_into_tree)(unsafe { &mut *object });
+        (table_virtuals(object).inserted_into_tree)(unsafe { &mut *object });
         return;
     }
 
@@ -1259,7 +1657,7 @@ pub extern "Rust" fn DispatchLayoutObjectInsertedIntoTree(object: *mut LayoutObj
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectWillBeRemovedFromTree(object: *mut LayoutObject) {
     if class(object).IsTableClass() {
-        (table_virtuals().will_be_removed_from_tree)(unsafe { &mut *object });
+        (table_virtuals(object).will_be_removed_from_tree)(unsafe { &mut *object });
         return;
     }
 
@@ -1370,7 +1768,7 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableColumn
         | LayoutObjectClass::TableRow
-        | LayoutObjectClass::TableSection => (table_virtuals().style_did_change)(
+        | LayoutObjectClass::TableSection => (table_virtuals(object).style_did_change)(
             unsafe { &mut *object },
             difference,
             old_style,
@@ -1454,10 +1852,18 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
             unsafe { &mut *object.cast::<LayoutBlock>() }
                 .StyleDidChange(difference, old_style, new_style, context)
         }
-        LayoutObjectClass::Box | LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot => {
-            unsafe { &mut *object.cast::<LayoutBox>() }
-                .StyleDidChange(difference, old_style, new_style, context)
-        }
+        LayoutObjectClass::Replaced if IsLayoutImage(object) => IMAGE_STYLE_DID_CHANGE
+            .get()
+            .expect("image StyleDidChange virtual dispatch is not registered")(
+            object, difference, old_style, new_style, context,
+        ),
+        LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot => REPLACED_STYLE_DID_CHANGE
+            .get()
+            .expect("replaced StyleDidChange virtual dispatch is not registered")(
+            object, difference, old_style, new_style, context,
+        ),
+        LayoutObjectClass::Box => unsafe { &mut *object.cast::<LayoutBox>() }
+            .StyleDidChange(difference, old_style, new_style, context),
         LayoutObjectClass::BoxModelObject => unsafe { &mut *object.cast::<LayoutBoxModelObject>() }
             .StyleDidChange(difference, old_style, new_style, context),
         LayoutObjectClass::Base => unreachable!(),
@@ -1556,7 +1962,7 @@ pub extern "Rust" fn DispatchLayoutObjectRemoveChild(
     old_child: *mut LayoutObject,
 ) {
     if class(object).IsTableClass() {
-        (table_virtuals().remove_child)(unsafe { &mut *object }, old_child);
+        (table_virtuals(object).remove_child)(unsafe { &mut *object }, old_child);
         return;
     }
 
@@ -1648,7 +2054,9 @@ pub extern "Rust" fn LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider(
     parent: *const LayoutObject,
 ) -> *mut LayoutBox {
     if class(box_ as *const LayoutBox as *const LayoutObject).IsTableClass() {
-        return (table_virtuals().create_anonymous)(box_, parent);
+        return (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).create_anonymous)(
+            box_, parent,
+        );
     }
 
     match class(box_ as *const LayoutBox as *const LayoutObject) {
@@ -1683,7 +2091,9 @@ pub extern "Rust" fn LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider(
 #[unsafe(no_mangle)]
 pub extern "Rust" fn InvalidateLayoutResultCacheAfterMeasureProvider(box_: &LayoutBox) {
     if class(box_ as *const LayoutBox as *const LayoutObject).IsTableClass() {
-        (table_virtuals().invalidate_after_measure)(box_);
+        (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).invalidate_after_measure)(
+            box_,
+        );
         return;
     }
 
@@ -1698,7 +2108,9 @@ pub extern "Rust" fn LayoutBoxIntrinsicLogicalWidthsBorderSizesProvider(
     box_: &LayoutBox,
 ) -> *const BoxStrut {
     if class(box_ as *const LayoutBox as *const LayoutObject).IsTableClass() {
-        return (table_virtuals().intrinsic_borders)(box_);
+        return (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).intrinsic_borders)(
+            box_,
+        );
     }
 
     assert!(is_box_class(class(
@@ -1713,7 +2125,9 @@ pub extern "Rust" fn LayoutBoxSetIntrinsicLogicalWidthsBorderSizesProvider(
     borders: &BoxStrut,
 ) {
     if class(box_ as *mut LayoutBox as *mut LayoutObject).IsTableClass() {
-        (table_virtuals().set_intrinsic_borders)(box_, borders);
+        (table_virtuals(box_ as *mut LayoutBox as *mut LayoutObject).set_intrinsic_borders)(
+            box_, borders,
+        );
         return;
     }
 
@@ -1729,7 +2143,9 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectPaddingOutsets(
     owner: *const LayoutBoxModelObject,
 ) -> PhysicalBoxStrut {
     if class(owner.cast()).IsTableClass() {
-        return (table_virtuals().padding_outsets)(unsafe { &*owner.cast::<LayoutBox>() });
+        return (table_virtuals(owner.cast()).padding_outsets)(unsafe {
+            &*owner.cast::<LayoutBox>()
+        });
     }
 
     class(owner.cast::<LayoutObject>());
@@ -1741,7 +2157,9 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectBorderOutsets(
     owner: *const LayoutBoxModelObject,
 ) -> PhysicalBoxStrut {
     if class(owner.cast()).IsTableClass() {
-        return (table_virtuals().border_outsets)(unsafe { &*owner.cast::<LayoutBox>() });
+        return (table_virtuals(owner.cast()).border_outsets)(unsafe {
+            &*owner.cast::<LayoutBox>()
+        });
     }
 
     class(owner.cast::<LayoutObject>());
@@ -2016,15 +2434,17 @@ pub extern "Rust" fn DispatchLayoutObjectRespectsCSSOverflow(object: &LayoutObje
     }
 }
 
-fn table_virtuals() -> crate::internal::layout_object_factory_set::TableObjectVirtuals {
-    unsafe { LayoutObjectFactoryScope::Objects().as_ref() }
+fn table_virtuals(
+    object: *const LayoutObject,
+) -> crate::internal::layout_object_factory_set::TableObjectVirtuals {
+    unsafe { (&*object).FactorySet().as_ref() }
         .and_then(|o| o.table_virtuals)
-        .expect("native table virtual dispatch is not installed")
+        .expect("source table virtual dispatch is not installed")
 }
 #[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxStitchedSizeProvider(box_: &LayoutBox) -> PhysicalSize {
     if box_.RuntimeClass().IsTableClass() {
-        (table_virtuals().stitched_size)(box_)
+        (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).stitched_size)(box_)
     } else {
         box_.StitchedSizeBase()
     }
@@ -2032,7 +2452,7 @@ pub extern "Rust" fn LayoutBoxStitchedSizeProvider(box_: &LayoutBox) -> Physical
 #[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxPhysicalLocationProvider(box_: &LayoutBox) -> PhysicalOffset {
     if box_.RuntimeClass().IsTableClass() {
-        (table_virtuals().physical_location)(box_)
+        (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).physical_location)(box_)
     } else {
         box_.PhysicalLocationBase()
     }
@@ -2043,7 +2463,9 @@ pub extern "Rust" fn LayoutBoxOverflowClipRectProvider(
     behavior: foundation::OverlayScrollbarClipBehavior,
 ) -> foundation::PhysicalRect {
     if box_.RuntimeClass().IsTableClass() {
-        (table_virtuals().overflow_clip_rect)(box_, behavior)
+        (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).overflow_clip_rect)(
+            box_, behavior,
+        )
     } else {
         box_.OverflowClipRectWithBehaviorBase(behavior)
     }
@@ -2067,7 +2489,7 @@ pub extern "Rust" fn DispatchLayoutObjectVisualRectRespectsVisibility(
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectUpdateFromElement(object: *mut LayoutObject) {
     if class(object).IsTableClass() {
-        (table_virtuals().update_from_element)(unsafe { &mut *object });
+        (table_virtuals(object).update_from_element)(unsafe { &mut *object });
     } else {
         unsafe { &mut *object }.UpdateFromElementBase();
     }

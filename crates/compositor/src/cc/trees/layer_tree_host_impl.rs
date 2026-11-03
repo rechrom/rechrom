@@ -2204,15 +2204,15 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             }
             if context
                 .services
-                .MutatorHasNativePropertyAnimation(&self.mutator_host_)
+                .MutatorHasPropertyAnimation(&self.mutator_host_)
             {
                 context
                     .services
-                    .TrackersStartSequence(&mut self.frame_trackers_, kCompositorNativeAnimation);
+                    .TrackersStartSequence(&mut self.frame_trackers_, kCompositorAnimation);
             } else {
                 context
                     .services
-                    .TrackersStopSequence(&mut self.frame_trackers_, kCompositorNativeAnimation);
+                    .TrackersStopSequence(&mut self.frame_trackers_, kCompositorAnimation);
             }
         } else {
             context
@@ -2223,7 +2223,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
                 .TrackersStopSequence(&mut self.frame_trackers_, kCompositorRasterAnimation);
             context
                 .services
-                .TrackersStopSequence(&mut self.frame_trackers_, kCompositorNativeAnimation);
+                .TrackersStopSequence(&mut self.frame_trackers_, kCompositorAnimation);
         }
         if tick_result.needs_next_frame
             && context
@@ -4955,9 +4955,11 @@ mod source_chunk_b {
         }
 
         fn input_will_draw(&mut self) {
-            if let Some(input) = self.host.input_delegate_.as_mut() {
-                input.WillDraw();
-            }
+            self.host.WithInputHandler(self.context, |input, runtime| {
+                if let Some(input) = input {
+                    input.WillDraw(runtime);
+                }
+            });
         }
 
         fn tick_worklet_animations(&mut self) {
@@ -5508,11 +5510,6 @@ mod source_chunk_b {
 
         fn requires_high_resolution_to_draw(&self) -> bool {
             self.host.requires_high_res_to_draw_
-        }
-
-        fn prevent_visible_scroll_checkerboarding(&mut self) -> bool {
-            self.host.GetActivelyScrollingType(self.context)
-                != crate::cc::input::actively_scrolling_type::ActivelyScrollingType::kNone
         }
 
         fn report_expected_missing_high_resolution_content(&mut self) {
@@ -9016,9 +9013,11 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         let mut did_animate = false;
         // TODO(bokan): This should return did_animate, see the source TODO in
         // ElasticOverscrollController::Animate, crbug.com/551138.
-        if let Some(input) = self.input_delegate_.as_mut() {
-            input.TickAnimations(monotonic_time);
-        }
+        self.WithInputHandler(context, |input, runtime| {
+            if let Some(input) = input {
+                input.TickAnimations(runtime, monotonic_time);
+            }
+        });
         did_animate |= self.AnimatePageScale(monotonic_time, context);
         did_animate |= self.AnimateLayers(monotonic_time, true, context);
         did_animate |= self.AnimateScrollbars(monotonic_time, context);
@@ -12401,6 +12400,42 @@ mod source_input_host {
         fn StretchAmount(&self, helper: &B::Elasticity, id: ElementId) -> Vector2dF {
             self.StretchAmountForInput(helper, id)
         }
+        fn ConstrainOverscrollDelta(
+            &self,
+            helper: &B::Elasticity,
+            id: ElementId,
+            delta: &Vector2dF,
+        ) -> Vector2dF {
+            self.ConstrainOverscrollDeltaForInput(helper, id, delta)
+        }
+        fn IsUserOverscrollable(&self, helper: &B::Elasticity, id: ElementId) -> bool {
+            self.IsUserOverscrollableForInput(helper, id)
+        }
+        fn SetStretchAmount(
+            &mut self,
+            helper: &mut B::Elasticity,
+            id: ElementId,
+            amount: &Vector2dF,
+        ) {
+            self.SetStretchAmountForInput(helper, id, amount)
+        }
+        fn ElasticScrollOffset(&self, helper: &B::Elasticity, id: ElementId) -> PointF {
+            self.ElasticScrollOffsetForInput(helper, id)
+        }
+        fn ElasticMaxScrollOffset(&self, helper: &B::Elasticity, id: ElementId) -> PointF {
+            self.ElasticMaxScrollOffsetForInput(helper, id)
+        }
+        fn ElasticScrollBy(
+            &mut self,
+            helper: &mut B::Elasticity,
+            id: ElementId,
+            delta: &Vector2dF,
+        ) {
+            self.ElasticScrollByForInput(helper, id, delta)
+        }
+        fn ElasticRequestOneBeginFrame(&mut self, helper: &mut B::Elasticity) {
+            self.ElasticRequestOneBeginFrameForInput(helper)
+        }
         fn CreateScrollElasticityHelper(&mut self) -> B::Elasticity {
             self.CreateScrollElasticityHelperForInput()
         }
@@ -12533,7 +12568,11 @@ mod source_input_host {
                 trees.transform_tree(),
                 trees.state(),
             );
-            let animation_start_offset = self.core.current_begin_frame_tracker_.Current().interval;
+            let animation_start_offset = self
+                .core
+                .current_begin_frame_tracker_
+                .DangerousMethodCurrentOrLast()
+                .interval;
             if let Some(receiver) = self
                 .animation_reentry
                 .as_mut()
@@ -13171,7 +13210,11 @@ mod source_input_host {
         }
         // Source: cc/trees/layer_tree_host_impl.cc:5100-5103.
         fn TickScrollAnimations(&mut self) {
-            let time = self.core.current_begin_frame_tracker_.Current().frame_time;
+            let time = self
+                .core
+                .current_begin_frame_tracker_
+                .DangerousMethodCurrentOrLast()
+                .frame_time;
             self.context.services.MutatorTickScrollAnimations(
                 self.core.mutator_host_,
                 time,
@@ -13231,7 +13274,11 @@ mod source_input_host {
                 trees
                     .scroll_tree()
                     .MaxScrollOffset(node_id, trees.transform_tree(), trees.state());
-            let time = self.core.current_begin_frame_tracker_.Current().frame_time;
+            let time = self
+                .core
+                .current_begin_frame_tracker_
+                .DangerousMethodCurrentOrLast()
+                .frame_time;
             if let Some(receiver) = self
                 .animation_reentry
                 .as_mut()
@@ -13948,7 +13995,11 @@ mod source_input_scrollbar {
             velocity: f32,
         ) {
             let host = &mut *self.host;
-            let animation_start_offset = host.core.current_begin_frame_tracker_.Current().interval;
+            let animation_start_offset = host
+                .core
+                .current_begin_frame_tracker_
+                .DangerousMethodCurrentOrLast()
+                .interval;
             let tree = host.active_tree_.as_ref().unwrap();
             assert_eq!(tree.id, node.tree);
             let properties = tree.property_trees();
@@ -14407,6 +14458,54 @@ mod source_elasticity_runtime {
             id: ElementId,
         ) -> Vector2dF {
             helper.StretchAmount(&ReadContext { host: self }, id)
+        }
+        pub(crate) fn ConstrainOverscrollDeltaForInput(
+            &self,
+            helper: &B::Elasticity,
+            id: ElementId,
+            delta: &Vector2dF,
+        ) -> Vector2dF {
+            helper.ConstrainOverscrollDelta(&ReadContext { host: self }, id, delta)
+        }
+        pub(crate) fn IsUserOverscrollableForInput(
+            &self,
+            helper: &B::Elasticity,
+            id: ElementId,
+        ) -> bool {
+            helper.IsUserOverscrollable(&ReadContext { host: self }, id)
+        }
+        pub(crate) fn SetStretchAmountForInput(
+            &mut self,
+            helper: &mut B::Elasticity,
+            id: ElementId,
+            amount: &Vector2dF,
+        ) {
+            helper.SetStretchAmount(&mut Context { host: self }, id, amount)
+        }
+        pub(crate) fn ElasticScrollOffsetForInput(
+            &self,
+            helper: &B::Elasticity,
+            id: ElementId,
+        ) -> PointF {
+            helper.ScrollOffset(&ReadContext { host: self }, id)
+        }
+        pub(crate) fn ElasticMaxScrollOffsetForInput(
+            &self,
+            helper: &B::Elasticity,
+            id: ElementId,
+        ) -> PointF {
+            helper.MaxScrollOffset(&ReadContext { host: self }, id)
+        }
+        pub(crate) fn ElasticScrollByForInput(
+            &mut self,
+            helper: &mut B::Elasticity,
+            id: ElementId,
+            delta: &Vector2dF,
+        ) {
+            helper.ScrollBy(&mut Context { host: self }, id, delta)
+        }
+        pub(crate) fn ElasticRequestOneBeginFrameForInput(&mut self, helper: &mut B::Elasticity) {
+            helper.RequestOneBeginFrame(&mut Context { host: self })
         }
     }
 }
@@ -14895,7 +14994,7 @@ mod source_chunk_d {
                     .display_transform_hint(),
             );
             metadata.set_is_mobile_optimized(self.host.WithActiveTree(self.context, |tree, c| {
-                IsMobileOptimized(&HostNativeTreeView { tree, context: c })
+                IsMobileOptimized(&HostTreeView { tree, context: c })
             }));
         }
 
@@ -15014,7 +15113,7 @@ mod source_chunk_d {
                 tree.GetViewportSelection(&mut metadata.selection, c)
             });
             metadata.is_mobile_optimized = self.host.WithActiveTree(self.context, |tree, c| {
-                IsMobileOptimized(&HostNativeTreeView { tree, context: c })
+                IsMobileOptimized(&HostTreeView { tree, context: c })
             });
             let viewport = self
                 .host
@@ -15400,7 +15499,7 @@ mod source_chunk_d {
         fn populate_content_color_usage(&mut self, metadata: &mut Self::Metadata) {
             self.host.WithActiveTree(self.context, |tree, c| {
                 PopulateMetadataContentColorUsage(
-                    &HostNativeTreeView { tree, context: c },
+                    &HostTreeView { tree, context: c },
                     self.frame,
                     metadata,
                 )
@@ -16249,6 +16348,41 @@ mod source_chunk_d {
         ) -> Option<crate::cc::metrics::submit_info::SubmitInfo<B::EventMetricsSet>> {
             debug_assert!(self.CanDraw(context));
             debug_assert_eq!(frame.has_no_damage, frame.render_passes.is_empty());
+            if let Some(tree) = self.active_tree_.as_deref() {
+                let offset = ViewportTotalScrollOffsetForTree(tree);
+                let mut trace = crate::performance::Span(
+                    crate::performance::CompositorPackage::Frame,
+                    "Compositor.Frame.ActiveViewport",
+                );
+                trace.set("scroll_x", offset.x() as f64);
+                trace.set("scroll_y", offset.y() as f64);
+                if let Some(node) = tree.InnerViewportScrollNode() {
+                    let property_trees = tree.property_trees();
+                    let elastic = property_trees.scroll_tree().GetElasticOverscroll(node);
+                    let drawn = property_trees
+                        .transform_tree()
+                        .GetDrawnElasticOverscroll(node.element_id);
+                    trace.set("elastic_x", elastic.x() as f64);
+                    trace.set("elastic_y", elastic.y() as f64);
+                    trace.set("drawn_elastic_x", drawn.x() as f64);
+                    trace.set("drawn_elastic_y", drawn.y() as f64);
+                    if let Some(transform) = tree.OverscrollElasticityTransformNode() {
+                        trace.set(
+                            "elastic_transform_pending_update",
+                            transform.needs_local_transform_update as u8 as f64,
+                        );
+                    }
+                }
+                if let Some(node) = tree.CurrentlyScrollingNode() {
+                    let trees = tree.property_trees();
+                    let offset = trees
+                        .scroll_tree()
+                        .current_scroll_offset(node.element_id, trees.state());
+                    trace.set("active_element", node.element_id.GetInternalValue() as f64);
+                    trace.set("active_scroll_x", offset.x() as f64);
+                    trace.set("active_scroll_y", offset.y() as f64);
+                }
+            }
             compositor_frame::draw_submission::SubmitDrawnFrame(
                 &mut FrameDrawSubmissionAdapter::new(self, frame, context),
             )
@@ -16377,11 +16511,11 @@ mod source_chunk_d {
     }
 
     // Borrow-only view of the actual tree for source cc204–211/227–238.
-    struct HostNativeTreeView<'a, 'c, B: HostImplTypes> {
+    struct HostTreeView<'a, 'c, B: HostImplTypes> {
         tree: &'a LayerTreeImpl<B>,
         context: &'a LayerTreeContext<'c, B>,
     }
-    impl<'a, B: HostImplTypes> HostImplTreeView for HostNativeTreeView<'a, '_, B> {
+    impl<'a, B: HostImplTypes> HostImplTreeView for HostTreeView<'a, '_, B> {
         type Layer = B::Layer;
         fn LayerById(&self, id: i32) -> Option<&Self::Layer> {
             self.tree.LayerById(id)
@@ -20248,7 +20382,7 @@ pub(crate) fn TraceCpuPrioritizedTile<R: crate::runtime::types::CpuSkiaBackend>(
     let tiling_id = tile
         .source_tiling_id()
         .expect("source nonnull prioritized tiling");
-    let native_id = tile.tile_id().expect("source nonnull prioritized tile");
+    let id = tile.tile_id().expect("source nonnull prioritized tile");
     for tree in trees.into_iter().flatten() {
         for picture in tree.picture_layers() {
             if let Some(tiling) = picture
@@ -20256,7 +20390,7 @@ pub(crate) fn TraceCpuPrioritizedTile<R: crate::runtime::types::CpuSkiaBackend>(
                 .TilingByIdIfPresent(tiling_id)
             {
                 tile.AsValueIntoWithResident(
-                    tiling.TileById(native_id),
+                    tiling.TileById(id),
                     tiling.raster_source(),
                     value,
                     &Trace::<Cpu<R>>(trace),

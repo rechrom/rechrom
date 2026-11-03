@@ -19,16 +19,16 @@ pub mod layout_table_column;
 pub mod layout_table_row;
 pub mod layout_table_section;
 #[cfg(test)]
-mod native_test_thread;
-#[cfg(test)]
 mod table_distribution_tests;
+#[cfg(test)]
+mod test_thread;
 
 pub mod assembly;
 mod table_object_virtuals;
 pub mod table_tree_insertion;
 
 #[cfg(test)]
-mod table_native_object_tests;
+mod table_object_tests;
 
 pub mod table_row_measurement;
 

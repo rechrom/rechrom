@@ -568,8 +568,8 @@ impl SelectorCheckerBackend for Backend {
     fn ScrollbarHorizontal(&self, s: &Self::CustomScrollbar) -> bool {
         panic!("unexpected test dependency: ScrollbarHorizontal")
     }
-    fn ScrollbarNativeThemeHasButtons(&self, s: &Self::CustomScrollbar) -> bool {
-        panic!("unexpected test dependency: ScrollbarNativeThemeHasButtons")
+    fn ScrollbarThemeHasButtons(&self, s: &Self::CustomScrollbar) -> bool {
+        panic!("unexpected test dependency: ScrollbarThemeHasButtons")
     }
     fn ScrollbarCornerVisible(&self, s: &Self::CustomScrollbar) -> bool {
         panic!("unexpected test dependency: ScrollbarCornerVisible")

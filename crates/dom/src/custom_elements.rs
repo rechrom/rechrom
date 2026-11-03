@@ -298,7 +298,7 @@ impl PersistentDocument {
         self.custom_elements.HasPending()
     }
 
-    /// Nodes retained by the native custom-element reaction queues.
+    /// Nodes retained by the source custom-element reaction queues.
     pub fn PendingCustomElementReferenceRoots(&self) -> Vec<u64> {
         self.custom_elements
             .reactions
@@ -364,7 +364,7 @@ impl PersistentDocument {
         }
     }
 
-    /// The native half of Definition::Upgrade. No JavaScript runs here. The
+    /// The source half of Definition::Upgrade. No JavaScript runs here. The
     /// host calls the captured constructor immediately after this returns true.
     pub fn BeginCustomElementUpgrade(
         &mut self,

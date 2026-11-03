@@ -122,7 +122,7 @@ pub type IntrinsicMap =
     crate::src::core::SkTHash::THashMap<&'static [u8], IntrinsicKind, IntrinsicHash>;
 #[derive(Default)]
 pub struct IntrinsicHash;
-impl crate::src::core::SkTHash::NativeHash<&'static [u8]> for IntrinsicHash {
+impl crate::src::core::SkTHash::HashPolicy<&'static [u8]> for IntrinsicHash {
     fn hash(&self, value: &&'static [u8]) -> u32 {
         crate::src::core::SkChecksum::Hash32(value, 0)
     }

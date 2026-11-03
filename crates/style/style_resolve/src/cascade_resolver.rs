@@ -91,7 +91,7 @@ impl<F> CycleNode<F> {
             random_value_count: 0,
         }
     }
-    pub fn ForNativeProperty(property: &CSSProperty) -> Self {
+    pub fn ForCSSProperty(property: &CSSProperty) -> Self {
         Self::ForProperty(*property, property.GetCSSPropertyName())
     }
     pub fn ForAttribute(name: AtomicString) -> Self {
@@ -166,7 +166,7 @@ impl<D: CSSPropertyValueBackend, F> CascadeResolver<D, F> {
     }
     // cpp: cascade_resolver.h:98-102.
     pub fn IsLockedProperty(&self, property: &CSSProperty) -> bool {
-        self.IsLocked(&CycleNode::ForNativeProperty(property))
+        self.IsLocked(&CycleNode::ForCSSProperty(property))
     }
     pub fn IsLocked(&self, node: &CycleNode<F>) -> bool {
         self.Find(node) != kNotFound
@@ -250,7 +250,7 @@ impl<D: CSSPropertyValueBackend, F> CascadeResolver<D, F> {
     }
     // cpp: cascade_resolver.h:192-196; cc:31-39.
     pub fn DetectCycleProperty(&mut self, property: &CSSProperty) -> bool {
-        self.DetectCycle(&CycleNode::ForNativeProperty(property))
+        self.DetectCycle(&CycleNode::ForCSSProperty(property))
     }
     pub fn DetectCycle(&mut self, node: &CycleNode<F>) -> bool {
         self.DetectCycleAt(self.Find(node))
@@ -304,7 +304,7 @@ impl<'a, D: CSSPropertyValueBackend, F> AutoLock<'a, D, F> {
         Self { resolver }
     }
     pub fn ForProperty(property: &CSSProperty, resolver: &'a mut CascadeResolver<D, F>) -> Self {
-        Self::new(CycleNode::ForNativeProperty(property), resolver)
+        Self::new(CycleNode::ForCSSProperty(property), resolver)
     }
 }
 impl<D: CSSPropertyValueBackend, F> Deref for AutoLock<'_, D, F> {

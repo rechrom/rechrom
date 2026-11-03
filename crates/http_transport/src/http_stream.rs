@@ -24,6 +24,7 @@ pub enum HTTPStreamEvent {
         status: i64,
         final_url: String,
         content_type: String,
+        content_dpr: Option<f64>,
         referrer_policy: String,
         content_security_policy: Vec<String>,
     },
@@ -267,6 +268,7 @@ async fn transfer(
         status,
         final_url,
         mime_type,
+        content_dpr,
         referrer_policy,
         content_security_policy,
         encodings,
@@ -278,6 +280,7 @@ async fn transfer(
             status,
             final_url,
             content_type: mime_type,
+            content_dpr,
             referrer_policy,
             content_security_policy,
         }),
@@ -400,7 +403,7 @@ impl HTTPRequestTransport {
         let scheduler = self.scheduler.clone();
         let task = executor.spawn(async move {
             let mut trace_guard = trace.guard();
-            let Ok(_slot) = scheduler.slots.clone().acquire_owned().await else {
+            let Ok(_slot) = scheduler.acquire_slot(request.priority).await else {
                 trace.failed(0, &protocol_error("HTTP admission closed"), false);
                 trace_guard.finish();
                 return;

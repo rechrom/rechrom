@@ -29,7 +29,6 @@ use layoutng_geometry::geometry::logical_rect::LogicalRect;
 use layoutng_geometry::geometry::logical_size::{LogicalSize, ToLogicalSize};
 use layoutng_geometry::geometry::overflow_clip_axes::kOverflowClipBothAxis;
 use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
-use layoutng_geometry::geometry::static_position::LogicalStaticPosition;
 use layoutng_geometry::geometry::writing_mode_converter::WritingModeConverter;
 use layoutng_style::style::computed_style::ComputedStyle;
 use layoutng_style::style::style_overflow_clip_margin::ReferenceBox;
@@ -71,9 +70,9 @@ use super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::layout_replaced::LayoutReplaced;
 use super::layout_utils::LayoutCacheStatus;
 use super::layout_view::LayoutView;
-use super::loader::fetch::resource_priority::ResourcePriority;
+use super::loader::fetch::resource_priority::{ResourcePriority, VisibilityStatus};
 use super::loader::resource::image_resource_observer::{CanDeferInvalidation, WrappedImagePtr};
-use super::map_coordinates_flags::MapCoordinatesFlags;
+use super::map_coordinates_flags::{MapCoordinatesFlags, MapCoordinatesMode};
 use super::measure_cache::MeasureCache;
 use super::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
 use super::min_max_sizes_cache::MinMaxSizesCache;
@@ -85,54 +84,59 @@ use super::scroll_layout_scope::ScrollbarFreezeState;
 use super::shapes::shape_outside_info::ShapeOutsideInfo;
 use layoutng_style::style::outline_type::OutlineType;
 
-#[path = "../../../layout_fragment/src/native_layout_box_fragment_geometry.rs"]
-mod layout_fragment_native_layout_box_fragment_geometry;
-use layout_fragment_native_layout_box_fragment_geometry::{
+#[path = "../../../layout_fragment/src/layout_box_fragment_geometry.rs"]
+mod layout_fragment_layout_box_fragment_geometry;
+use layout_fragment_layout_box_fragment_geometry::{
     LayoutBoxBoundingBoxRelativeToFirstFragment, LayoutBoxComputeSize,
     LayoutBoxFindPreviousBreakToken, LayoutBoxLocationContainer,
     LayoutBoxPhysicalContractedBoxRect, LayoutBoxQuadsInAncestorInternal,
     LayoutBoxResolvedDirection, LayoutBoxStitchedBlockSize,
 };
 
-#[path = "../../../layout_fragment/src/native_layout_box_fragment_access.rs"]
-mod layout_fragment_native_layout_box_fragment_access;
+#[path = "../../../layout_fragment/src/layout_box_fragment_access.rs"]
+mod layout_fragment_layout_box_fragment_access;
 
-#[path = "../../../layout_fragment/src/native_layout_result_overflow.rs"]
-mod layout_fragment_native_layout_result_overflow;
-use layout_fragment_native_layout_result_overflow::LayoutBoxSetScrollableOverflowFromLayoutResults;
+#[path = "../../../layout_fragment/src/layout_box_background.rs"]
+mod layout_fragment_layout_box_background;
 
-#[path = "../../../layout_fragment/src/native_physical_fragment_list.rs"]
-mod layout_fragment_native_physical_fragment_list;
-pub use layout_fragment_native_physical_fragment_list::{
-    PhysicalFragmentIterator, PhysicalFragmentList,
-};
+#[path = "../../../layout_fragment/src/layout_box_resource_priority.rs"]
+mod layout_fragment_layout_box_resource_priority;
+use layout_fragment_layout_box_resource_priority::LayoutBoxComputeResourcePriorityProvider;
 
-#[path = "../../../layout_invalidation/src/native_transform_invalidation.rs"]
-mod layout_invalidation_native_transform_invalidation;
-use layout_invalidation_native_transform_invalidation::LayoutBoxTransformsChangeMayRequireLayout;
+#[path = "../../../layout_fragment/src/layout_result_overflow.rs"]
+mod layout_fragment_layout_result_overflow;
+use layout_fragment_layout_result_overflow::LayoutBoxSetScrollableOverflowFromLayoutResults;
 
-#[path = "../../../layout_invalidation/src/native_layout_box_fragment_retirement.rs"]
-mod layout_invalidation_native_layout_box_fragment_retirement;
-use layout_invalidation_native_layout_box_fragment_retirement::LayoutBoxDisassociatePhysicalFragments;
+#[path = "../../../layout_fragment/src/physical_fragment_list.rs"]
+mod layout_fragment_physical_fragment_list;
+pub use layout_fragment_physical_fragment_list::{PhysicalFragmentIterator, PhysicalFragmentList};
 
-#[path = "../../../layout_reuse/src/native_layout_box_result_cache.rs"]
-mod layout_reuse_native_layout_box_result_cache;
-use layout_reuse_native_layout_box_result_cache::{
+#[path = "../../../layout_invalidation/src/transform_invalidation.rs"]
+mod layout_invalidation_transform_invalidation;
+use layout_invalidation_transform_invalidation::LayoutBoxTransformsChangeMayRequireLayout;
+
+#[path = "../../../layout_invalidation/src/layout_box_fragment_retirement.rs"]
+mod layout_invalidation_layout_box_fragment_retirement;
+use layout_invalidation_layout_box_fragment_retirement::LayoutBoxDisassociatePhysicalFragments;
+
+#[path = "../../../layout_reuse/src/layout_box_result_cache.rs"]
+mod layout_reuse_layout_box_result_cache;
+use layout_reuse_layout_box_result_cache::{
     LayoutBoxAddMeasureLayoutResult, LayoutBoxGetCachedLayoutResult,
     LayoutBoxGetCachedMeasureResult, LayoutBoxGetSingleCachedLayoutResult,
     LayoutBoxGetSingleCachedMeasureResultForTesting, LayoutBoxSetCachedLayoutResult,
 };
 
-#[path = "../../../layout_commit/src/native_layout_box_result_commit.rs"]
-mod layout_commit_native_layout_box_result_commit;
-use layout_commit_native_layout_box_result_commit::{
+#[path = "../../../layout_commit/src/layout_box_result_commit.rs"]
+mod layout_commit_layout_box_result_commit;
+use layout_commit_layout_box_result_commit::{
     LayoutBoxAppendLayoutResult, LayoutBoxFinalizeLayoutResults, LayoutBoxRebuildFragmentTreeSpine,
     LayoutBoxReplaceLayoutResult, LayoutBoxSetLayoutResult, LayoutBoxShrinkLayoutResults,
 };
 
-#[path = "../../../layout_algo_block/src/native_column_spanner_admission.rs"]
-mod layout_algo_block_native_column_spanner_admission;
-use layout_algo_block_native_column_spanner_admission::{
+#[path = "../../../layout_algo_block/src/column_spanner_admission.rs"]
+mod layout_algo_block_column_spanner_admission;
+use layout_algo_block_column_spanner_admission::{
     LayoutBoxDoesAncestryAllowColumnSpanner, LayoutBoxIsSelfValidColumnSpanner,
     LayoutBoxIsValidColumnSpannerInTree, LayoutBoxShouldPreventColumnSpannerDescendants,
 };
@@ -324,7 +328,6 @@ unsafe extern "Rust" {
         offset: i32,
         shape: CaretShape,
     ) -> PhysicalRect;
-    fn LayoutBoxComputeResourcePriorityProvider(box_: &LayoutBox) -> ResourcePriority;
     fn LayoutBoxInvalidatePaintProvider(box_: &LayoutBox, context: &PaintInvalidatorContext);
     fn LayoutBoxGetCustomLayoutChildProvider(box_: &LayoutBox) -> *mut CustomLayoutChild;
     fn LayoutBoxMapToVisualRectInAncestorSpaceInternalProvider(
@@ -364,6 +367,19 @@ pub struct LayoutBoxMutableForPainting {
 impl LayoutBoxMutableForPainting {
     pub fn GetLayoutBox(&mut self) -> &mut LayoutBox {
         unsafe { &mut *self.box_ }
+    }
+
+    // LayoutBox::MutableForPainting derives from the LayoutObject mutator in
+    // Chromium; forward the inherited pre-paint-only property invalidation.
+    pub fn SetOnlyThisNeedsPaintPropertyUpdate(&mut self) {
+        self.base_.SetOnlyThisNeedsPaintPropertyUpdate();
+    }
+
+    // LayoutBox::MutableForPainting inherits this operation unchanged from
+    // LayoutObject::MutableForPainting.
+    // cpp: core/layout/layout_object.h:3089-3095
+    pub fn SetShouldCheckForPaintInvalidation(&mut self) {
+        self.base_.SetShouldCheckForPaintInvalidation();
     }
 
     // cpp: layoutng/internal/layout_box.h:961-966
@@ -458,7 +474,6 @@ pub(crate) fn FindPreviousBreakToken(fragment: &PhysicalBoxFragment) -> *const B
 pub struct LayoutBox {
     model_object_: LayoutBoxModelObject,
     pub(crate) scrollbar_freeze_state_: ScrollbarFreezeState,
-    pub(crate) static_position_for_layout_: LogicalStaticPosition,
     pub(crate) frame_location_: PhysicalOffset,
     pub(crate) frame_size_: Cell<PhysicalSize>,
     pub(crate) previous_size_: PhysicalSize,
@@ -556,7 +571,7 @@ impl LayoutBox {
     }
 
     pub fn ComputeResourcePriority(&self) -> ResourcePriority {
-        unsafe { LayoutBoxComputeResourcePriorityProvider(self) }
+        LayoutBoxComputeResourcePriorityProvider(self)
     }
 
     pub fn InvalidatePaint(&self, context: &PaintInvalidatorContext) {
@@ -909,14 +924,6 @@ impl LayoutBox {
         true
     }
 
-    pub fn SetStaticPositionForLayout(&mut self, position: &LogicalStaticPosition) {
-        self.static_position_for_layout_ = *position;
-    }
-
-    pub fn StaticPositionForLayout(&self) -> &LogicalStaticPosition {
-        &self.static_position_for_layout_
-    }
-
     pub fn IsEligibleForSizeContainmentBase(&self) -> bool {
         self.CheckIsNotDestroyed();
         true
@@ -1227,9 +1234,6 @@ impl LayoutBox {
         let box_ = Self {
             model_object_: LayoutBoxModelObject::new(node),
             scrollbar_freeze_state_: ScrollbarFreezeState::default(),
-            static_position_for_layout_: LogicalStaticPosition::from_offset(
-                LogicalOffset::default(),
-            ),
             frame_location_: PhysicalOffset::default(),
             frame_size_: Cell::new(PhysicalSize::default()),
             previous_size_: PhysicalSize::default(),

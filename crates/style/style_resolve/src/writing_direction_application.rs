@@ -57,9 +57,9 @@ pub(super) fn Apply(
     };
     // StyleResolverState::SetWritingMode:347-353 invalidates conversion data
     // and marks the FontBuilder orientation update. Production length data is
-    // computed per value, and the native font description is staged here.
+    // computed per value, and the computed style font description is staged here.
     b.SetWritingMode(mode);
-    // cpp: font_builder.cc:597-604; computed_style.cc:3115-3130.
+    // cpp: font_builder.cc:597-604; computed style.cc:3115-3130.
     use font_engine::fonts::font_orientation::FontOrientation;
     let orientation = if foundation::IsHorizontalTypographicMode(mode) {
         FontOrientation::kHorizontal
