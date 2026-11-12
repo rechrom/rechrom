@@ -1444,7 +1444,7 @@ impl PageRenderPipeline {
             WheelPhase::kEnded | WheelPhase::kCancelled => ScrollPhase::End,
             WheelPhase::kNone | WheelPhase::kChanged => ScrollPhase::Update,
         };
-        let (delta, unconstrained) = wheel.GestureScrollDelta();
+        let (mut delta, mut unconstrained) = wheel.GestureScrollDelta();
         let granularity = match wheel.delta_units {
             ScrollGranularity::kScrollByPrecisePixel => {
                 compositor::adapter::input_types::ScrollGranularity::kScrollByPrecisePixel
@@ -1462,6 +1462,26 @@ impl PageRenderPipeline {
                 compositor::adapter::input_types::ScrollGranularity::kScrollByDocument
             }
         };
+        // InputRouter::ScaleEvent delegates to ui::ScaleWebInputEvent, which
+        // scales both the widget position and pixel/precise-pixel wheel
+        // deltas before the renderer and cc see the event.  The resident cc
+        // scroll tree is expressed in the same LayoutZoomFactor coordinates
+        // as Paint's scroll property nodes, so scaling only the position made
+        // an impl scroll advance in CSS pixels and then jump when the main
+        // thread committed the corresponding Layout offset.
+        //
+        // Page/document granularity is deliberately scale independent, and
+        // Chromium also leaves line/document deltas unchanged here.
+        if matches!(
+            wheel.delta_units,
+            ScrollGranularity::kScrollByPrecisePixel | ScrollGranularity::kScrollByPixel
+        ) {
+            let scale = f64::from(position_scale);
+            delta.x *= scale;
+            delta.y *= scale;
+            unconstrained.x *= scale;
+            unconstrained.y *= scale;
+        }
         let input = CompositorInput::Wheel {
             position: CompositorPointF::new(
                 wheel.position.x as f32 * position_scale,

@@ -295,27 +295,17 @@ impl Page {
         // the next normal lifecycle update.
         let native_element =
             foundation::CompositorElementId::new(element.GetInternalValue());
-        // cc scroll offsets remain in viewport CSS/DIP coordinates. Blink's
-        // resident ScrollableArea is built in LayoutZoomFactor coordinates,
-        // so ScrollingCoordinator converts at the compositor-to-Layout edge,
-        // not while recognizing the input gesture. The returned offset stays
-        // in Layout coordinates for the DOM owner and retained paint state;
-        // CSSOM converts that canonical scalar back by the same zoom factor.
-        let layout_zoom = self.state.constraints.borrow().layout_zoom_factor;
-        let layout_zoom = if layout_zoom.is_finite() && layout_zoom > 0.0 {
-            layout_zoom
-        } else {
-            1.0
-        };
-        let layout_offset = Offset {
-            x: offset.x * layout_zoom,
-            y: offset.y * layout_zoom,
-        };
+        // Paint's resident scroll nodes and cc's scroll tree share Layout's
+        // zoomed coordinate space. InputRouter scales pixel wheel deltas into
+        // that space before cc consumes them, so the absolute impl offset is
+        // already the value ScrollingCoordinator must reflect. Multiplying it
+        // again here made every main-thread commit reset the active tree to a
+        // different offset, observed as a jump or rebound at DPR != 1.
         let main = self
             .state
             .layout_engine
             .borrow_mut()
-            .DidCompositorScroll(native_element, layout_offset, source_type);
+            .DidCompositorScroll(native_element, offset, source_type);
         let Some(update) = main else {
             let target = self
                 .state

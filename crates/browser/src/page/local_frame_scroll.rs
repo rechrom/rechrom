@@ -462,22 +462,12 @@ impl LocalFrameDomain {
             let Some(runtime) = frame.runtime.borrow().clone() else {
                 continue;
             };
-            // The compositor offset is CSS/DIP. Each child Document owns its
-            // own ConstraintSpace, so convert only after the element resolves
-            // to that frame rather than applying the root document's zoom.
-            let layout_zoom = runtime.constraints.borrow().layout_zoom_factor;
-            let layout_zoom = if layout_zoom.is_finite() && layout_zoom > 0.0 {
-                layout_zoom
-            } else {
-                1.0
-            };
-            let layout_offset = Offset {
-                x: offset.x * layout_zoom,
-                y: offset.y * layout_zoom,
-            };
+            // Child-frame property nodes enter the same cc tree in their
+            // Layout coordinate space, so the impl offset already matches the
+            // resolved child Layout owner and must not be scaled a second time.
             let update = runtime.layout.borrow_mut().DidCompositorScroll(
                 element,
-                layout_offset,
+                offset,
                 source_type,
             );
             if let Some(update) = update {
