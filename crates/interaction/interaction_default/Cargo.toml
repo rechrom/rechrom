@@ -5,10 +5,10 @@ edition = "2021"
 publish = false
 
 [dependencies]
-intersection_observer = { path = "../../intersection_observer" }
-resize_observer = { path = "../../resize_observer" }
+intersection_observer = { path = "../../webapi/intersection_observer" }
+resize_observer = { path = "../../webapi/resize_observer" }
 url = "2"
-navigation_history = { path = "../../navigation_history" }
+navigation_history = { path = "../../document/navigation_history" }
 interaction_dispatch = { path = "../interaction_dispatch" }
 interaction_input = { path = "../interaction_input" }
 

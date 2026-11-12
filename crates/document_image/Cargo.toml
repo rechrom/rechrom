@@ -8,7 +8,7 @@ foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_fou
 style = { path = "../style/style" }
 cssom = { path = "../cssom" }
 dom = { path = "../dom" }
-html = { path = "../html" }
+html = { path = "../document/html" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 layoutng_style = { path = "../layoutng/layoutng_style" }

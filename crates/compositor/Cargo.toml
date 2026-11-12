@@ -9,7 +9,7 @@ default = []
 chromeos = []
 
 [dependencies]
-scroll_animation = { path = "../scroll_animation" }
+scroll_animation = { path = "scroll_animation" }
 canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
 compositor_layerize = { path = "compositor_layerize" }

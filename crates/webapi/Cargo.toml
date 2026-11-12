@@ -14,7 +14,8 @@ style = { path = "../style/style" }
 browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 interaction = { path = "../interaction" }
-navigation_history = { path = "../navigation_history" }
+navigation_history = { path = "../document/navigation_history" }
+fileapi = { path = "fileapi" }
 javascript = { path = "../javascript" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
@@ -27,10 +28,10 @@ getrandom = "0.4"
 paint = { path = "../paint" }
 skia = { path = "../skia" }
 canvas = { path = "../canvas" }
-webgl = { path = "../webgl" }
+webgl = { path = "webgl" }
 
 [dev-dependencies]
-html = { path = "../html" }
+html = { path = "../document/html" }
 http_transport = { path = "../http_transport" }
 # Standalone Web API tests link the assembly dispatch's real replaced-object
 # provider; browser executables already supply it through their layout bundle.

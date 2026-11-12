@@ -1,5 +1,5 @@
 //! Convert paint inputs into independent Skia raster commands.
-use raster_commands::commands as target;
+use crate::raster_commands::commands as target;
 pub trait ToSkia {
     type Output;
     fn to_skia(&self) -> Self::Output;
@@ -282,7 +282,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
                     Ok(layers) => (layers, None),
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 };
-                raster_commands::filter_graph::RenderReflectionMask {
+                crate::raster_commands::filter_graph::RenderReflectionMask {
                     // A specified but pending/empty mask is transparent. It
                     // must not degrade into an unmasked reflected branch.
                     layers,

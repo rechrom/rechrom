@@ -5,15 +5,15 @@ edition = "2021"
 
 [dependencies]
 serde_json = "1"
-intersection_observer = { path = "../intersection_observer" }
-navigation_history = { path = "../navigation_history" }
-scroll_animation = { path = "../scroll_animation" }
-fileapi = { path = "../fileapi" }
+intersection_observer = { path = "../webapi/intersection_observer" }
+navigation_history = { path = "../document/navigation_history" }
+scroll_animation = { path = "../compositor/scroll_animation" }
+fileapi = { path = "../webapi/fileapi" }
 getrandom = "0.4"
 canvas = { path = "../canvas" }
 icu_bidi = { path = "../icu_bidi" }
-url_formatter = { path = "../url_formatter" }
-resize_observer = { path = "../resize_observer" }
+url_formatter = { path = "url_formatter" }
+resize_observer = { path = "../webapi/resize_observer" }
 event_loop = { path = "../event_loop" }
 executor = { path = "../executor" }
 animation = { path = "../animation" }
@@ -29,7 +29,7 @@ interaction = { path = "../interaction" }
 page_mutation = { path = "../page_mutation" }
 cssom = { path = "../cssom" }
 dom = { path = "../dom" }
-html = { path = "../html" }
+html = { path = "../document/html" }
 javascript = { path = "../javascript" }
 webapi = { path = "../webapi" }
 xhr_transport = { path = "../xhr_transport" }

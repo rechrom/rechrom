@@ -224,14 +224,14 @@ pub struct PaintFilterOperation {
     pub r#type: PaintFilterType,
     pub amount: f64,
     pub color_matrix: Vec<f64>,
-    pub canvas_filter: Option<crate::filter_graph::RenderSvgFilterKind>,
+    pub canvas_filter: Option<crate::raster_commands::filter_graph::RenderSvgFilterKind>,
     pub offset: Offset,
     pub blur_radius: f64,
     pub color: Color,
     pub reflection_direction: PaintReflectionDirection,
     pub reflection_offset: f64,
     pub reflection_has_mask: bool,
-    pub reflection_mask: Option<crate::filter_graph::RenderReflectionMask>,
+    pub reflection_mask: Option<crate::raster_commands::filter_graph::RenderReflectionMask>,
 }
 impl Default for PaintFilterOperation {
     fn default() -> Self {
@@ -406,7 +406,7 @@ pub struct SvgPatternMask {
 pub enum SvgPatternCommand {
     SaveLayerOpacity(f32),
     SaveLayerFilter(Vec<PaintFilterOperation>),
-    SaveLayerReferenceFilter(Arc<crate::filter_graph::RenderSvgFilterGraph>),
+    SaveLayerReferenceFilter(Arc<crate::raster_commands::filter_graph::RenderSvgFilterGraph>),
     SaveLayerBlend(PaintBlendMode),
     SaveLayerMask(Arc<SvgPatternMask>),
     Restore,

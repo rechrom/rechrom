@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-scroll_snap = { path = "../../scroll_snap" }
+scroll_snap = { path = "../scroll_snap" }
 browser_tracing = { path = "../../tracing" }
 compositor_animation = { path = "../compositor_animation" }
 compositor_scheduler = { path = "../compositor_scheduler" }

@@ -4,4 +4,4 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-icu_bidi = { path = "../icu_bidi" }
+icu_bidi = { path = "../../icu_bidi" }

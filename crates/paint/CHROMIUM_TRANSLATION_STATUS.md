@@ -39,8 +39,8 @@ This table groups only source files with manually assigned Rechrom ownership. It
 
 | Rechrom package | Files | Code | Translated | Unsupported | N/A | Remaining |
 |---|---:|---:|---:|---:|---:|---:|
-| `browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor` | 1 | 89 | 48 | 28 | 13 | 0 |
-| `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor` | 1 | 203 | 146 | 23 | 34 | 0 |
+| `browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor` | 1 | 89 | 48 | 28 | 13 | 0 |
+| `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor` | 1 | 203 | 146 | 23 | 34 | 0 |
 | `browser/dom/layoutng_assembly/layout_invalidation/layout_fragment/prepaint/paint_record` | 1 | 135 | 117 | 5 | 13 | 0 |
 | `browser/dom/style/http_transport/url_loader/resource/document_loader/image_resource/layoutng_assembly/layout_invalidation/layout_fragment/prepaint/paint_record` | 1 | 311 | 255 | 30 | 26 | 0 |
 | `browser/layout_fragment/prepaint/paint_record/compositor` | 2 | 369 | 0 | 287 | 82 | 0 |
@@ -76,7 +76,7 @@ This table groups only source files with manually assigned Rechrom ownership. It
 | `layout_fragment/paint_record/paint_walk/paint_chunk` | 2 | 185 | 69 | 86 | 30 | 0 |
 | `layout_fragment/paint_record/raster` | 6 | 1681 | 836 | 735 | 110 | 0 |
 | `layout_fragment/paint_record/raster/compositor` | 3 | 235 | 167 | 20 | 48 | 0 |
-| `layout_fragment/paint_record/raster_commands/raster/compositor` | 1 | 67 | 58 | 0 | 9 | 0 |
+| `layout_fragment/paint_record/raster/compositor` | 1 | 67 | 58 | 0 | 9 | 0 |
 | `layout_fragment/prepaint` | 11 | 5215 | 2973 | 1961 | 281 | 0 |
 | `layout_fragment/prepaint/paint_model` | 2 | 371 | 335 | 0 | 36 | 0 |
 | `layout_fragment/prepaint/paint_record` | 7 | 1087 | 891 | 90 | 106 | 0 |
@@ -177,7 +177,7 @@ This table groups only source files with manually assigned Rechrom ownership. It
 | GeometryBoxUtils | `prepaint` | `third_party/blink/renderer/core/paint/geometry_box_utils.h` | 13 | 3 | 0 | 10 | 0 |
 | HTMLCanvasPainter | `canvas/layout_fragment/paint_record/raster` | `third_party/blink/renderer/core/paint/html_canvas_painter.cc` | 76 | 61 | 0 | 15 | 0 |
 | HTMLCanvasPainterContract | `canvas/layout_fragment/paint_record/raster` | `third_party/blink/renderer/core/paint/html_canvas_painter.h` | 18 | 7 | 0 | 11 | 0 |
-| ImagePainter | `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor` | `third_party/blink/renderer/core/paint/image_painter.cc` | 203 | 146 | 23 | 34 | 0 |
+| ImagePainter | `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor` | `third_party/blink/renderer/core/paint/image_painter.cc` | 203 | 146 | 23 | 34 | 0 |
 | ImagePainter | `layout_fragment/paint_record` | `third_party/blink/renderer/core/paint/image_painter.h` | 24 | 9 | 0 | 15 | 0 |
 | InlineBoxFragmentPainter | `layout_fragment/prepaint/paint_record/paint_walk` | `third_party/blink/renderer/core/paint/inline_box_fragment_painter.cc` | 509 | 433 | 44 | 32 | 0 |
 | InlineBoxFragmentPainter | `layout_fragment/prepaint/paint_record/paint_walk` | `third_party/blink/renderer/core/paint/inline_box_fragment_painter.h` | 206 | 155 | 0 | 51 | 0 |
@@ -470,7 +470,7 @@ This table groups only source files with manually assigned Rechrom ownership. It
 | RasterInvalidationTracking | `compositor` | `third_party/blink/renderer/platform/graphics/paint/raster_invalidation_tracking.h` | 75 | 54 | 0 | 21 | 0 |
 | PaintUnderInvalidationChecker | `paint_record` | `third_party/blink/renderer/platform/graphics/paint/paint_under_invalidation_checker.cc` | 213 | 189 | 8 | 16 | 0 |
 | PaintUnderInvalidationChecker | `paint_record` | `third_party/blink/renderer/platform/graphics/paint/paint_under_invalidation_checker.h` | 44 | 31 | 0 | 13 | 0 |
-| VideoPainter | `browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor` | `third_party/blink/renderer/core/paint/video_painter.cc` | 89 | 48 | 28 | 13 | 0 |
+| VideoPainter | `browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor` | `third_party/blink/renderer/core/paint/video_painter.cc` | 89 | 48 | 28 | 13 | 0 |
 | VideoPainter | `layout_fragment/paint_record` | `third_party/blink/renderer/core/paint/video_painter.h` | 18 | 9 | 0 | 9 | 0 |
 | ViewPainter | `paint_record` | `third_party/blink/renderer/core/paint/view_painter.cc` | 317 | 268 | 13 | 36 | 0 |
 | SubsequenceRecorder | `paint_record/paint_walk` | `third_party/blink/renderer/platform/graphics/paint/subsequence_recorder.h` | 32 | 20 | 0 | 12 | 0 |
@@ -508,7 +508,7 @@ This table groups only source files with manually assigned Rechrom ownership. It
 | FramePainter | `browser/layoutng/layout_fragment/paint/paint_walk/paint_record` | `third_party/blink/renderer/core/paint/frame_painter.cc` | 59 | 15 | 8 | 36 | 0 |
 | FramePainter | `browser/paint` | `third_party/blink/renderer/core/paint/frame_painter.h` | 22 | 4 | 1 | 17 | 0 |
 | LayoutObjectCounter | `paint` | `third_party/blink/renderer/core/paint/layout_object_counter.h` | 15 | 8 | 0 | 7 | 0 |
-| PaintAutoDarkMode | `layout_fragment/paint_record/raster_commands/raster/compositor` | `third_party/blink/renderer/core/paint/paint_auto_dark_mode.cc` | 67 | 58 | 0 | 9 | 0 |
+| PaintAutoDarkMode | `layout_fragment/paint_record/raster/compositor` | `third_party/blink/renderer/core/paint/paint_auto_dark_mode.cc` | 67 | 58 | 0 | 9 | 0 |
 | PaintAutoDarkMode | `layout_fragment/paint_record` | `third_party/blink/renderer/core/paint/paint_auto_dark_mode.h` | 39 | 28 | 0 | 11 | 0 |
 | URLMetadataUtils | `layout_fragment/paint_record/raster` | `third_party/blink/renderer/core/paint/url_metadata_utils.cc` | 20 | 0 | 13 | 7 | 0 |
 | URLMetadataUtils | `layout_fragment/paint_record/raster` | `third_party/blink/renderer/core/paint/url_metadata_utils.h` | 12 | 0 | 4 | 8 | 0 |

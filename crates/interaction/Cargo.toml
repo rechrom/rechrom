@@ -23,10 +23,10 @@ layoutng_style = { path = "../layoutng/layoutng_style" }
 image_resource = { path = "../image_resource" }
 font_engine = { path = "../font_engine" }
 
-html = { path = "../html" }
+html = { path = "../document/html" }
 
-navigation_history = { path = "../navigation_history" }
-fileapi = { path = "../fileapi" }
+navigation_history = { path = "../document/navigation_history" }
+fileapi = { path = "../webapi/fileapi" }
 
 url = "2"
 base64 = "0.22"

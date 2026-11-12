@@ -4,15 +4,15 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-navigation_history = { path = "../navigation_history" }
-intersection_observer = { path = "../intersection_observer" }
-resize_observer = { path = "../resize_observer" }
+navigation_history = { path = "../document/navigation_history" }
+intersection_observer = { path = "../webapi/intersection_observer" }
+resize_observer = { path = "../webapi/resize_observer" }
 getrandom = "0.4"
 base64 = "0.22"
 sha2 = "0.10"
 # Chromium net/http structured-header parser wrapper uses this exact RFC parser.
 sfv = "=0.15.0"
-fileapi = { path = "../fileapi" }
+fileapi = { path = "../webapi/fileapi" }
 canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
 cssom = { path = "../cssom" }
@@ -27,7 +27,7 @@ style_parser = { path = "../style/style_parser" }
 url = "2"
 
 [dev-dependencies]
-html = { path = "../html" }
+html = { path = "../document/html" }
 style = { path = "../style/style" }
 # Standalone DOM tests link the assembly dispatch's real replaced-object
 # provider; browser executables already supply it through their layout bundle.

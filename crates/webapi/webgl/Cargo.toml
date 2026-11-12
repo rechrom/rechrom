@@ -4,5 +4,5 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-canvas = { path = "../canvas" }
+canvas = { path = "../../canvas" }
 gpu_webgl = { path = "../gpu_webgl" }

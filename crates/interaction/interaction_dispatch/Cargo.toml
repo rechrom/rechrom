@@ -6,8 +6,8 @@ publish = false
 
 [dependencies]
 base64 = "0.22"
-navigation_history = { path = "../../navigation_history" }
-fileapi = { path = "../../fileapi" }
+navigation_history = { path = "../../document/navigation_history" }
+fileapi = { path = "../../webapi/fileapi" }
 foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
 interaction_input = { path = "../interaction_input" }
 url = "2"

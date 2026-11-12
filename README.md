@@ -13,12 +13,16 @@ Rechrom is a modular browser engine for browsers and apps. It rebuilds Chromium 
 ```text
 DOM / CSSOM
     ↓ mutations
+StyleEngine
+    ↓ ComputedStyle
 LayoutEngine
     ↓ layout result
 PaintEngine
     ↓ PaintArtifact
-LayerTileEngine
-    ↓ FramePlan
+Compositor
+    ↓ CompositorFrame
+Viz
+    ↓ aggregate render pass
 Renderer / Display
 ```
 
@@ -114,17 +118,20 @@ cargo build -p browser
 ```text
 apps/rechrom/       desktop browser shell
 crates/browser/     public engine integration crate
+crates/document/    document ownership, HTML parsing, and navigation history
 crates/dom/         DOM ownership and mutation routing
+crates/webapi/      script-facing APIs, observers, File API, and WebGL
+crates/resource/    resource lifecycle, fetch policy, and network helpers
+crates/style/       style parsing, resolution, and ComputedStyle ownership
 crates/layoutng/layoutng_*/  layout algorithms and fragment output
 crates/paint/       pre-paint state and PaintArtifact generation
-crates/layer_tile/  retained layers, tiles, and frame planning
-crates/compositor/  retained cc state, tiling and raster-work selection
-crates/raster/      RasterEngine resource lifecycle and private backend
-crates/skia/   source-aligned Rust Skia raster implementation
+crates/compositor/  retained layers, tiling, raster scheduling, and CompositorFrame output
+crates/raster/      RasterEngine, command vocabulary, and private backend
+crates/skia/        source-aligned Rust Skia raster implementation
 crates/renderer/    composition contracts
 crates/renderer_skia/ software Viz renderer implementation
 crates/devtools/    local Performance protocol and UI
-vendor/             patched build dependencies
+vendor/             patched and pinned third-party dependencies
 ```
 
 ## Status

@@ -10,15 +10,15 @@ pub struct RenderReflectionMaskLayer {
     pub image_width: u32,
     pub image_height: u32,
     pub image_rgba: std::sync::Arc<Vec<u8>>,
-    pub image_interpolation_quality: crate::commands::ImageInterpolationQuality,
-    pub dynamic_range_limit: crate::commands::DynamicRangeLimit,
-    pub paint_shader: Option<crate::commands::PaintShader>,
-    pub clip_rect: crate::commands::PaintRect,
-    pub source_rect: crate::commands::PaintRect,
-    pub tile_rect: crate::commands::PaintRect,
+    pub image_interpolation_quality: crate::raster_commands::commands::ImageInterpolationQuality,
+    pub dynamic_range_limit: crate::raster_commands::commands::DynamicRangeLimit,
+    pub paint_shader: Option<crate::raster_commands::commands::PaintShader>,
+    pub clip_rect: crate::raster_commands::commands::PaintRect,
+    pub source_rect: crate::raster_commands::commands::PaintRect,
+    pub tile_rect: crate::raster_commands::commands::PaintRect,
     pub repeat_x: bool,
     pub repeat_y: bool,
-    pub tile_spacing: crate::commands::Size,
+    pub tile_spacing: crate::raster_commands::commands::Size,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,7 +122,7 @@ pub enum RenderSvgFilterKind {
         meet_or_slice: RenderSvgMeetOrSlice,
         width: u32,
         height: u32,
-        orientation: crate::commands::ImageOrientation,
+        orientation: crate::raster_commands::commands::ImageOrientation,
         pixels: std::sync::Arc<Vec<u8>>,
     },
     Convolve {

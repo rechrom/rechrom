@@ -5,12 +5,12 @@ edition = "2021"
 
 [dependencies]
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
-navigation_history = { path = "../navigation_history" }
+navigation_history = { path = "../document/navigation_history" }
 browser_tracing = { path = "../tracing" }
 cssom = { path = "../cssom" }
 document_loader = { path = "../document_loader" }
 dom = { path = "../dom" }
-html = { path = "../html" }
+html = { path = "../document/html" }
 interaction = { path = "../interaction" }
 javascript = { path = "../javascript" }
 resource = { path = "../resource" }

@@ -7,5 +7,5 @@ edition = "2021"
 animation = { path = "../animation" }
 cssom = { path = "../cssom" }
 dom = { path = "../dom" }
-html = { path = "../html" }
+html = { path = "html" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }

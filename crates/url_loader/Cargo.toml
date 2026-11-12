@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 http_transport = { path = "../http_transport" }
-navigation_history = { path = "../navigation_history" }
-fileapi = { path = "../fileapi" }
+navigation_history = { path = "../document/navigation_history" }
+fileapi = { path = "../webapi/fileapi" }

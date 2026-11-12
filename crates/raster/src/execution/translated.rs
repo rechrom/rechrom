@@ -11,6 +11,11 @@ pub use drag_image::{ResizeAndOrientDragImage, ResizeDragImageBitmap, ScaleCache
 #[path = "canvas_2d.rs"]
 mod canvas_2d;
 use crate::convert::{resources, ToSkia};
+use crate::raster_commands::commands::{
+    self as command, CommandKind, DrawCommand, FontSmoothing, ImageInterpolationQuality,
+    ImageOrientation, MaskLayer, PaintBlendMode, PaintMaskComposite, PaintMaskMode,
+    PaintPathCommand, PaintPathVerb, ResourceContext,
+};
 pub use canvas_2d::Canvas2DRasterBackendFactory;
 use compositor_core::{
     adapter::{
@@ -26,11 +31,6 @@ use compositor_core::{
     },
 };
 use paint::paint_engine::PaintArtifact;
-use raster_commands::commands::{
-    self as command, CommandKind, DrawCommand, FontSmoothing, ImageInterpolationQuality,
-    ImageOrientation, MaskLayer, PaintBlendMode, PaintMaskComposite, PaintMaskMode,
-    PaintPathCommand, PaintPathVerb, ResourceContext,
-};
 use skia::{
     include::core::{
         SkAlphaType::SkAlphaType,
@@ -1846,10 +1846,10 @@ fn translated_filter_operations(
 }
 
 fn translated_canvas_filter(
-    kind: &raster_commands::filter_graph::RenderSvgFilterKind,
+    kind: &crate::raster_commands::filter_graph::RenderSvgFilterKind,
     input: Option<Arc<dyn SkImageFilter>>,
 ) -> io::Result<Option<Arc<dyn SkImageFilter>>> {
-    use raster_commands::filter_graph::{RenderSvgEdgeMode, RenderSvgFilterKind};
+    use crate::raster_commands::filter_graph::{RenderSvgEdgeMode, RenderSvgFilterKind};
     use skia::src::effects::{colorfilters, imagefilters};
 
     Ok(match kind {
@@ -2214,7 +2214,7 @@ fn translated_filter_graph_srgb(
 /// draws, but preserves the same buffer limit, local bounds, SrcIn crop, flip,
 /// and final SrcOver ordering.
 fn translated_reflection_mask_filter(
-    layers: &[raster_commands::filter_graph::RenderReflectionMaskLayer],
+    layers: &[crate::raster_commands::filter_graph::RenderReflectionMaskLayer],
 ) -> io::Result<Option<Arc<dyn SkImageFilter>>> {
     use skia::src::effects::imagefilters;
 
@@ -2381,7 +2381,7 @@ fn translated_reflection_filter(
     direction: command::PaintReflectionDirection,
     offset: f64,
     has_mask: bool,
-    mask_layers: &[raster_commands::filter_graph::RenderReflectionMaskLayer],
+    mask_layers: &[crate::raster_commands::filter_graph::RenderReflectionMaskLayer],
     input: Option<Arc<dyn SkImageFilter>>,
 ) -> io::Result<Option<Arc<dyn SkImageFilter>>> {
     use skia::src::effects::imagefilters;
@@ -2436,9 +2436,9 @@ fn translated_reflection_filter(
 // component-transfer function in double precision, clamps the result in the
 // byte domain and then truncates through the uint8_t conversion.
 fn svg_component_transfer_table(
-    function: &raster_commands::filter_graph::RenderSvgTransfer,
+    function: &crate::raster_commands::filter_graph::RenderSvgTransfer,
 ) -> [u8; 256] {
-    use raster_commands::filter_graph::RenderSvgTransfer;
+    use crate::raster_commands::filter_graph::RenderSvgTransfer;
 
     let clamp_to_u8 = |value: f64| value.clamp(0.0, 255.0) as u8;
     std::array::from_fn(|index| match function {
@@ -2496,10 +2496,10 @@ fn turbulence_unscaled_tile_extent(parameter_extent: f32, filter_scale: f32) -> 
 // In particular, feSpecularLighting with a non-positive specularConstant uses
 // a diffuse material whose (diffuse) constant is zero.
 fn resolved_lighting_type(
-    authored: raster_commands::filter_graph::RenderSvgLightingType,
+    authored: crate::raster_commands::filter_graph::RenderSvgLightingType,
     constant: f32,
-) -> raster_commands::filter_graph::RenderSvgLightingType {
-    use raster_commands::filter_graph::RenderSvgLightingType;
+) -> crate::raster_commands::filter_graph::RenderSvgLightingType {
+    use crate::raster_commands::filter_graph::RenderSvgLightingType;
     if authored == RenderSvgLightingType::Specular && constant > 0.0 {
         RenderSvgLightingType::Specular
     } else {
@@ -2513,10 +2513,12 @@ fn resolved_lighting_type(
 fn svg_preserve_aspect_ratio_rects(
     mut dest: SkRect,
     mut src: SkRect,
-    align: raster_commands::filter_graph::RenderSvgPreserveAspectRatioAlign,
-    meet_or_slice: raster_commands::filter_graph::RenderSvgMeetOrSlice,
+    align: crate::raster_commands::filter_graph::RenderSvgPreserveAspectRatioAlign,
+    meet_or_slice: crate::raster_commands::filter_graph::RenderSvgMeetOrSlice,
 ) -> (SkRect, SkRect) {
-    use raster_commands::filter_graph::{RenderSvgMeetOrSlice, RenderSvgPreserveAspectRatioAlign};
+    use crate::raster_commands::filter_graph::{
+        RenderSvgMeetOrSlice, RenderSvgPreserveAspectRatioAlign,
+    };
     if align == RenderSvgPreserveAspectRatioAlign::None {
         return (dest, src);
     }
@@ -2844,7 +2846,7 @@ fn translated_reference_filter(
     source_linear_rgb: bool,
     source_origin_tainted: bool,
 ) -> io::Result<TranslatedFilterValue> {
-    use raster_commands::filter_graph::{
+    use crate::raster_commands::filter_graph::{
         RenderSvgBlend, RenderSvgComposite, RenderSvgEdgeMode, RenderSvgFilterKind, RenderSvgLight,
         RenderSvgLightingType, RenderSvgTransfer,
     };
@@ -7030,7 +7032,7 @@ mod tests {
 
     #[test]
     fn component_transfer_lut_uses_chromium_double_math_and_u8_truncation() {
-        use raster_commands::filter_graph::RenderSvgTransfer;
+        use crate::raster_commands::filter_graph::RenderSvgTransfer;
 
         let identity = svg_component_transfer_table(&RenderSvgTransfer::Identity);
         assert_eq!(identity, std::array::from_fn(|index| index as u8));
@@ -7061,7 +7063,7 @@ mod tests {
 
     #[test]
     fn non_positive_specular_constant_selects_diffuse_material() {
-        use raster_commands::filter_graph::RenderSvgLightingType::{Diffuse, Specular};
+        use crate::raster_commands::filter_graph::RenderSvgLightingType::{Diffuse, Specular};
 
         assert_eq!(resolved_lighting_type(Specular, -1.0), Diffuse);
         assert_eq!(resolved_lighting_type(Specular, 0.0), Diffuse);
@@ -7071,7 +7073,7 @@ mod tests {
 
     #[test]
     fn fe_image_preserve_aspect_ratio_matches_chromium_rect_transform() {
-        use raster_commands::filter_graph::{
+        use crate::raster_commands::filter_graph::{
             RenderSvgMeetOrSlice::{Meet, Slice},
             RenderSvgPreserveAspectRatioAlign::{None, XMaxYMin, XMinYMax},
         };
@@ -8557,7 +8559,7 @@ mod tests {
 
     #[test]
     fn command_canvas_effect_classes_build_filters() {
-        use raster_commands::filter_graph::{
+        use crate::raster_commands::filter_graph::{
             RenderSvgEdgeMode, RenderSvgFilterKind, RenderSvgTransfer,
         };
 

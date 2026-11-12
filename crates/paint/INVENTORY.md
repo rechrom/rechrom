@@ -86,7 +86,7 @@ it does not by itself mean that no equivalent Rust behavior exists.
 | `third_party/blink/renderer/core/paint/hit_testing_transform_state.h` | `paint_model/interaction` | 46 | 4 | 20 | 22 | 0 |
 | `third_party/blink/renderer/core/paint/html_canvas_painter.cc` | `canvas/layout_fragment/paint_record/raster` | 76 | 41 | 20 | 15 | 0 |
 | `third_party/blink/renderer/core/paint/html_canvas_painter.h` | `canvas/layout_fragment/paint_record/raster` | 18 | 7 | 0 | 11 | 0 |
-| `third_party/blink/renderer/core/paint/image_painter.cc` | `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor` | 203 | 146 | 23 | 34 | 0 |
+| `third_party/blink/renderer/core/paint/image_painter.cc` | `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor` | 203 | 146 | 23 | 34 | 0 |
 | `third_party/blink/renderer/core/paint/image_painter.h` | `layout_fragment/paint_record` | 24 | 9 | 0 | 15 | 0 |
 | `third_party/blink/renderer/core/paint/inline_box_fragment_painter.cc` | `layout_fragment/prepaint/paint_record/paint_walk` | 509 | 433 | 44 | 32 | 0 |
 | `third_party/blink/renderer/core/paint/inline_box_fragment_painter.h` | `layout_fragment/prepaint/paint_record/paint_walk` | 206 | 155 | 0 | 51 | 0 |
@@ -112,7 +112,7 @@ it does not by itself mean that no equivalent Rust behavior exists.
 | `third_party/blink/renderer/core/paint/object_painter.h` | `layout_fragment/paint_record/paint_walk/paint_chunk` | 32 | 12 | 5 | 15 | 0 |
 | `third_party/blink/renderer/core/paint/outline_painter.cc` | `layout_fragment/prepaint/paint_record/raster` | 880 | 158 | 668 | 54 | 0 |
 | `third_party/blink/renderer/core/paint/outline_painter.h` | `layout_fragment/prepaint/paint_record/raster` | 48 | 10 | 6 | 32 | 0 |
-| `third_party/blink/renderer/core/paint/paint_auto_dark_mode.cc` | `layout_fragment/paint_record/raster_commands/raster/compositor` | 67 | 58 | 0 | 9 | 0 |
+| `third_party/blink/renderer/core/paint/paint_auto_dark_mode.cc` | `layout_fragment/paint_record/raster/compositor` | 67 | 58 | 0 | 9 | 0 |
 | `third_party/blink/renderer/core/paint/paint_auto_dark_mode.h` | `layout_fragment/paint_record` | 39 | 28 | 0 | 11 | 0 |
 | `third_party/blink/renderer/core/paint/paint_event.h` | `paint` | 11 | 6 | 0 | 5 | 0 |
 | `third_party/blink/renderer/core/paint/paint_flags.h` | `paint_model` | 18 | 9 | 0 | 9 | 0 |
@@ -202,7 +202,7 @@ it does not by itself mean that no equivalent Rust behavior exists.
 | `third_party/blink/renderer/core/paint/theme_painter_default.h` | `layout_fragment/paint_record/raster` | 82 | 58 | 8 | 16 | 0 |
 | `third_party/blink/renderer/core/paint/url_metadata_utils.cc` | `layout_fragment/paint_record/raster` | 20 | 0 | 13 | 7 | 0 |
 | `third_party/blink/renderer/core/paint/url_metadata_utils.h` | `layout_fragment/paint_record/raster` | 12 | 0 | 4 | 8 | 0 |
-| `third_party/blink/renderer/core/paint/video_painter.cc` | `browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor` | 89 | 46 | 30 | 13 | 0 |
+| `third_party/blink/renderer/core/paint/video_painter.cc` | `browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor` | 89 | 46 | 30 | 13 | 0 |
 | `third_party/blink/renderer/core/paint/video_painter.h` | `layout_fragment/paint_record` | 18 | 9 | 0 | 9 | 0 |
 | `third_party/blink/renderer/core/paint/view_painter.cc` | `paint_record` | 317 | 268 | 13 | 36 | 0 |
 | `third_party/blink/renderer/core/paint/view_painter.h` | `layout_fragment/paint_record` | 40 | 18 | 0 | 22 | 0 |

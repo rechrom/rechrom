@@ -23,7 +23,7 @@ foundation = { package = "layoutng_foundation", path = "../../crates/layoutng/la
 
 [dependencies]
 icu_bidi = { path = "../../crates/icu_bidi" }
-fileapi = { path = "../../crates/fileapi" }
+fileapi = { path = "../../crates/webapi/fileapi" }
 bytemuck = "1.24"
 executor = { path = "../../crates/executor" }
 browser_tracing = { path = "../../crates/tracing" }
@@ -32,8 +32,8 @@ devtools = { path = "../../crates/devtools" }
 foundation = { package = "layoutng_foundation", path = "../../crates/layoutng/layoutng_foundation" }
 paint = { path = "../../crates/paint" }
 browser = { path = "../../crates/browser" }
-net_filename = { path = "../../crates/net_filename" }
-navigation_history = { path = "../../crates/navigation_history" }
+net_filename = { path = "../../crates/resource/net_filename" }
+navigation_history = { path = "../../crates/document/navigation_history" }
 compositor = { path = "../../crates/compositor" }
 renderer_skia = { path = "../../crates/renderer_skia" }
 renderer = { path = "../../crates/renderer" }

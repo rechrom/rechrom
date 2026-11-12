@@ -6,12 +6,12 @@ edition = "2021"
 [dependencies]
 # Same already-vendored parser backend as pinned Blink xml_ffi.rs. The source
 # lives in the adjacent Chromium checkout, so offline builds never fetch it.
-xml = { path = "../xml_vendor" }
-dom = { path = "../dom" }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+xml = { path = "../../../vendor/xml" }
+dom = { path = "../../dom" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
 
 # DOM retains layout objects; standalone tests link the Rust replaced-object
 # boundary and the source inline implementation used by their destructor.
 [dev-dependencies]
-layout_algo_replaced = { path = "../layoutng/layout_algo_replaced" }
-layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
+layout_algo_replaced = { path = "../../layoutng/layout_algo_replaced" }
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly", features = ["translation_in_progress"] }

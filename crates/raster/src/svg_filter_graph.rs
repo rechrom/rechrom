@@ -1,5 +1,10 @@
 //! Shared translation from document SVG filter graphs to Skia effect surfaces.
 
+use crate::raster_commands::filter_graph::{
+    RenderSvgBlend, RenderSvgComposite, RenderSvgEdgeMode, RenderSvgFilterGraph,
+    RenderSvgFilterKind, RenderSvgFilterPrimitive, RenderSvgLight, RenderSvgLightingType,
+    RenderSvgMeetOrSlice, RenderSvgPreserveAspectRatioAlign, RenderSvgTransfer,
+};
 use layoutng_assembly::internal::paint_input::{
     PaintCanvasFilter, PaintComponentTransferType, PaintConvolveEdgeMode, PaintTurbulenceType,
     SvgBlendMode, SvgColorMatrixType, SvgCompositeOperator, SvgFilterGraph, SvgFilterInput,
@@ -8,11 +13,6 @@ use layoutng_assembly::internal::paint_input::{
 };
 use paint::paint_engine::PaintRect;
 use paint::svg_filter_geometry::{resolve_svg_filter_geometry, SvgFilterGeometryError};
-use raster_commands::filter_graph::{
-    RenderSvgBlend, RenderSvgComposite, RenderSvgEdgeMode, RenderSvgFilterGraph,
-    RenderSvgFilterKind, RenderSvgFilterPrimitive, RenderSvgLight, RenderSvgLightingType,
-    RenderSvgMeetOrSlice, RenderSvgPreserveAspectRatioAlign, RenderSvgTransfer,
-};
 use std::io;
 use std::sync::Arc;
 
@@ -152,9 +152,9 @@ fn svg_input(input: &SvgFilterInput) -> String {
 
 fn image_orientation(
     value: image_resource::ImageOrientation,
-) -> raster_commands::commands::ImageOrientation {
+) -> crate::raster_commands::commands::ImageOrientation {
+    use crate::raster_commands::commands::ImageOrientation as Target;
     use image_resource::ImageOrientation as Source;
-    use raster_commands::commands::ImageOrientation as Target;
     match value {
         Source::kDefault => Target::kDefault,
         Source::kFlipHorizontal => Target::kFlipHorizontal,
@@ -701,7 +701,7 @@ mod tests {
             RenderSvgFilterKind::Image {
                 align: RenderSvgPreserveAspectRatioAlign::XMaxYMin,
                 meet_or_slice: RenderSvgMeetOrSlice::Slice,
-                orientation: raster_commands::commands::ImageOrientation::kRotate90,
+                orientation: crate::raster_commands::commands::ImageOrientation::kRotate90,
                 ..
             }
         ));

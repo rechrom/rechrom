@@ -86,7 +86,7 @@ it does not by itself mean that no equivalent Rust behavior exists.
 | `third_party/blink/renderer/core/paint/hit_testing_transform_state.h` | `unassigned` | 46 | 0 | 0 | 0 | 46 |
 | `third_party/blink/renderer/core/paint/html_canvas_painter.cc` | `canvas/layout_fragment/paint_record/raster` | 76 | 28 | 0 | 15 | 33 |
 | `third_party/blink/renderer/core/paint/html_canvas_painter.h` | `canvas/layout_fragment/paint_record/raster` | 18 | 7 | 0 | 11 | 0 |
-| `third_party/blink/renderer/core/paint/image_painter.cc` | `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor` | 203 | 140 | 29 | 34 | 0 |
+| `third_party/blink/renderer/core/paint/image_painter.cc` | `browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor` | 203 | 140 | 29 | 34 | 0 |
 | `third_party/blink/renderer/core/paint/image_painter.h` | `layout_fragment/paint_record` | 24 | 9 | 0 | 15 | 0 |
 | `third_party/blink/renderer/core/paint/inline_box_fragment_painter.cc` | `layout_fragment/prepaint/paint_record/paint_walk` | 509 | 433 | 44 | 32 | 0 |
 | `third_party/blink/renderer/core/paint/inline_box_fragment_painter.h` | `layout_fragment/prepaint/paint_record/paint_walk` | 206 | 155 | 0 | 51 | 0 |

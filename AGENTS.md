@@ -296,6 +296,11 @@ URL/input
 - `javascript`/`webapi`: input is an explicit task, event, or host binding call;
   output is script-visible values and typed DOM/CSSOM/resource effects. The
   runtime does not own rendering lifecycle, Layout, Paint, or presentation.
+  File API values, native Intersection/Resize Observer mechanisms, and WebGL
+  API state live in dependency-root packages beneath `crates/webapi/`; DOM,
+  Layout, Interaction, and the facade may depend on their narrow values without
+  depending back on the `webapi` facade. Platform GPU implementations remain
+  separate backend packages rather than WebAPI state owners.
 - `interaction`: input is host `InputEvent`, immutable document interaction
   state, and the current fragment snapshot; output is `InteractionOutput`
   (`DOMMutation`, `InteractionStateMutation`, or an interaction effect). It
@@ -380,7 +385,8 @@ URL/input
   those values, but must not collapse them into one opaque Paint timer.
 - `raster`: input is immutable raster work selected by Compositor from its
   resident picture layers and tiles; output is immutable raster resources and
-  typed completion values. It owns Skia replay and tile pixel resources. It
+  typed completion values. It owns the backend-neutral raster-command
+  vocabulary, Skia replay, and tile pixel resources. It
   never owns layerization, layers, tilings, tile priority, activation, DOM,
   Style, Layout, Paint, Page, Viz, or the native window.
 - `compositor`: each instance belongs to exactly one Page domain and consumes
@@ -404,8 +410,11 @@ URL/input
   implementation is partitioned into `compositor_layerize`, `compositor_tree`,
   `compositor_tile`, `compositor_raster`, `compositor_draw`, `compositor_frame`,
   `compositor_resource`, `compositor_scheduler`, `compositor_input`, and
-  `compositor_animation`, with `compositor` as the Page-facing facade. Each
-  package boundary is also a performance-attribution boundary: traces use the
+  `compositor_animation`, with `compositor` as the Page-facing facade. The
+  shared `scroll_snap` and `scroll_animation` dependency roots are nested under
+  `crates/compositor/`; it carries only source-aligned values and algorithms
+  used across the package boundary and never owns Page or facade lifecycle.
+  Each package boundary is also a performance-attribution boundary: traces use the
   matching `compositor.<package>` category and package owners report their own
   work counts instead of the facade reconstructing private state. Typed
   main-thread effects carry wheel disposition and acknowledged impl-scroll

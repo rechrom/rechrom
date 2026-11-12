@@ -5479,7 +5479,7 @@
     },
     {
       "entity": "ImagePainter",
-      "package": "browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor",
+      "package": "browser/dom/http_transport/resource/document_loader/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor",
       "path": "third_party/blink/renderer/core/paint/image_painter.cc",
       "mappings": [
         {
@@ -5570,7 +5570,7 @@
               278
             ]
           ],
-          "rust": "crates/browser/src/page.rs; crates/browser/src/persistent_layout.rs; crates/dom/src/persistent_document.rs; crates/dom/src/layout_mapping/persistent_tree_builder.rs; crates/http_transport/src/referrer_policy.rs; crates/url_loader/src/lib.rs; crates/resource/src/engine.rs; crates/document_loader/src/resource_fetcher.rs; crates/image_resource/src/lib.rs; crates/layoutng/layoutng/src/internal/layout_input.rs; crates/layoutng/layout_invalidation/src/element_data_equivalence.rs; crates/layoutng/layout_invalidation/src/managed_input_admission.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/retained_paint_refresh.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/display_item.rs; crates/paint/src/paint_engine.rs; crates/raster_commands/src/commands.rs; crates/raster/src/convert.rs; crates/raster/src/native/translated.rs; crates/compositor/src/runtime/paint/record.rs; crates/compositor/src/runtime/paint/image_values.rs; crates/compositor/src/runtime/paint/discardable.rs",
+          "rust": "crates/browser/src/page.rs; crates/browser/src/persistent_layout.rs; crates/dom/src/persistent_document.rs; crates/dom/src/layout_mapping/persistent_tree_builder.rs; crates/http_transport/src/referrer_policy.rs; crates/url_loader/src/lib.rs; crates/resource/src/engine.rs; crates/document_loader/src/resource_fetcher.rs; crates/image_resource/src/lib.rs; crates/layoutng/layoutng/src/internal/layout_input.rs; crates/layoutng/layout_invalidation/src/element_data_equivalence.rs; crates/layoutng/layout_invalidation/src/managed_input_admission.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/retained_paint_refresh.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/display_item.rs; crates/paint/src/paint_engine.rs; crates/raster/src/raster_commands/commands.rs; crates/raster/src/convert.rs; crates/raster/src/native/translated.rs; crates/compositor/src/runtime/paint/record.rs; crates/compositor/src/runtime/paint/image_values.rs; crates/compositor/src/runtime/paint/discardable.rs",
           "note": "ImagePainter's entry point delegates the common LayoutReplaced paint pass and contributes its replaced foreground and HTML image-map focus ring at the preserved paint_record boundary. Browser/Style performs Chromium's required EnsureComputedStyle for the focused display:none area; DOM resolves its map and the first associated image in document order, including name/id/usemap mutation ownership. Typed LayoutImage input carries the area shape, parsed coordinates, outline facts, color and zoom through retained layout_fragment and PrePaint without Paint querying DOM. paint_record builds default, rect, circle and even-odd polygon paths, clips to the pixel-snapped image content box, records kImageAreaFocusRing, and raster applies the platform corner path effect. Layout exports the resolved ReplacedContentRect, clipping policy and native LayoutImage identity; paint_record consumes that native rectangle, pixel-snaps it, maps a clipped destination back into oriented source coordinates and records the image with the resolved interpolation quality. ImagePainter's HasImage decision is a validated paint-time resource query: a missing, failed, evicted or malformed frame takes Chromium's half-pixel-inset one-pixel light-gray placeholder branch with border-role automatic darkening without confusing other replaced elements for images, while the preserved kSelectionDragImage phase returns before manufacturing that placeholder. URL loading compares the document origin with the response's redirect-final origin and retains ImageResourceContent::IsCorsSameOrigin provenance on the immutable PaintImage; privacy-preserving PaintInfo suppresses tainted cross-origin pixels. The supported image request model is no-CORS; successful crossorigin/Access-Control-Allow-Origin requests remain outside the current loader contract. Missing native geometry is rejected instead of triggering a Paint-side object-fit reconstruction. Document-backed SVG images consume FragmentData's local cull rect and use it only when fully contained by the enclosing visual rect; bitmap images retain the full rect. The retained layout_fragment payload owns LayoutImage's last painted rect and HTML image's last painted PaintImage id; prepaint carries both across replacement fragments with the same native client. The decoding attribute is typed at DOM projection, an unspecified content transition is forced to synchronous decode exactly at the final image paint, and the use-site mode reaches cc discardable-image analysis instead of being collapsed to a fixed value. The immutable paint-pass resource snapshot lets HasImage and GetImage share the same validated frame; absent or invalid image dimensions never panic. Chromium corrects an oriented source rect back to storage space before DrawImage; Rechrom preserves the same coordinates by orienting immutable pixels at the raster boundary before source-rect sampling. The DevTools PaintImage event is emitted at the final DrawImage boundary. Diagnostic under-invalidation paint rejects cached drawings globally and marks a freshly recorded possibly-animated image uncacheable for the guard lifetime. Forced-dark image classification reaches the raster decode bit for icon/separator content. Paint timing and CSS image-node animation branches remain unclaimed."
         },
         {
@@ -6617,7 +6617,7 @@
               567
             ]
           ],
-          "rust": "crates/layoutng/layoutng_style/src/style/filter_operation.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/style_effect_projection.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/paint_model/src/cc/paint/filter_operation.rs; crates/paint/paint_model/src/cc/paint/render_surface_filters.rs; crates/paint/paint_record/src/display_item.rs; crates/paint/paint_record/src/paint_context.rs; crates/raster_commands/src/commands.rs; crates/raster/src/native/translated.rs; crates/raster/src/svg_filter_graph.rs",
+          "rust": "crates/layoutng/layoutng_style/src/style/filter_operation.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/style_effect_projection.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/paint_model/src/cc/paint/filter_operation.rs; crates/paint/paint_model/src/cc/paint/render_surface_filters.rs; crates/paint/paint_record/src/display_item.rs; crates/paint/paint_record/src/paint_context.rs; crates/raster/src/raster_commands/commands.rs; crates/raster/src/native/translated.rs; crates/raster/src/svg_filter_graph.rs",
           "note": "the exact Blink grayscale, sepia, luminance-to-alpha and generic 4x5 color matrices, the CSS scalar component-transfer operations, blur, drop shadow, box reflection, ordered effect chaining, and resolved SVG reference graph are retained in the canonical Effect value and executed by Raster. Canvas ConvolveMatrix, ComponentTransfer and Turbulence retain their source class payloads through the Layout/Paint boundary and execute as immutable cc reference graphs: invalid convolution parameters render transparent black, kernels are reversed, zero divisors use the source sum fallback, component LUTs keep Chromium double math, and turbulence keeps negative-frequency fallback, nine-octave cap and the zero-sized stitch tile produced by the shorthand Filter's unassigned primitive subregion. Invalid generic matrix arity uses FEColorMatrix's identity fallback. Reference-box, optional viewport size and zoom inputs remain attached to that value; the canvas CTM is deliberately left for Skia's parameter-to-layer mapping instead of being baked into the SVG graph a second time. Native resource mutation is replaced by an immutable resolved graph; invalid resources, empty regions and empty graphs append no operation, while unsupported resolved primitives stay typed blockers. SVG primitive results retain their current sRGB/linearRGB interpolation space and origin-taint state across reference and shorthand operations; each reference filter captures its incoming taint and the ordered chain converts to sRGB only at its final tail. Box-reflection bitmap and gradient mask layers replay through the Chromium-sized mask buffer and SrcIn/flip/SrcOver graph; document PaintRecord masks and the oversized RecordPaintFilter fallback remain explicit unsupported paths. Drop-shadow currentColor dependence is retained independently of its resolved color"
         },
         {
@@ -12130,7 +12130,7 @@
               340
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/background_geometry.rs; crates/paint/prepaint/src/paint_shader_resolver.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/paint_model/src/boundary.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/svg_mask_painter.rs; crates/paint/paint_record/src/scoped_svg_paint_state.rs; crates/raster_commands/src/commands.rs; crates/raster/src/execution/translated.rs; crates/compositor/src/runtime/paint/record.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/background_geometry.rs; crates/paint/prepaint/src/paint_shader_resolver.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/paint_model/src/boundary.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/svg_mask_painter.rs; crates/paint/paint_record/src/scoped_svg_paint_state.rs; crates/raster/src/raster_commands/commands.rs; crates/raster/src/execution/translated.rs; crates/compositor/src/runtime/paint/record.rs",
           "note": "native style preserves every SVG mask origin/clip keyword and typed resource; PrePaint resolves SVG reference/painting boxes, oriented intrinsic/generated-image tile geometry, content transforms, resource regions and MaskClip bounds; SVGMaskPainter records the cacheable kSVGMask item after content and carries forced-dark plus dynamic-range image settings; raster replays reverse-order composition, optional clipping, image orientation, luminance conversion, bitmap dark-mode filtering, generated-gradient stop filtering and SVG records. Exact unavailable SVG container/path stroke-box geometry is rejected instead of approximated."
         },
         {
@@ -21670,7 +21670,7 @@
               83
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layoutng_style/src/style/filter_operation.rs; crates/layoutng/layoutng_style/src/style/filter_operations.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layoutng_style/src/style/filter_operation.rs; crates/layoutng/layoutng_style/src/style/filter_operations.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "constructor values, anisotropic source fields, scaled offset/sigma, resolved color-opacity multiplication, source-union bounds, draw-shadow-and-foreground mode and Skia filter chaining remain ordered across Style, DOM, Layout, Paint and Raster for both CSS and SVG drop shadows"
         },
         {
@@ -22652,7 +22652,7 @@
               303
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "feImage mirrors the exact preserveAspectRatio token grammar, default/invalid reset, all nine alignments plus none, meet/slice state, and TransformRect behavior: meet adjusts the destination rectangle while slice crops and aligns the source rectangle"
         },
         {
@@ -22710,7 +22710,7 @@
               115
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the five transfer types, identity fallback for invalid type names, table/slope/intercept/amplitude/exponent/offset defaults and immutable function value extraction are retained across DOM graph publication and Raster replay"
         },
         {
@@ -22746,7 +22746,7 @@
               26
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the concrete feFuncR runtime identity selects the red component-transfer slot"
         },
         {
@@ -22778,7 +22778,7 @@
               26
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the concrete feFuncG runtime identity selects the green component-transfer slot"
         },
         {
@@ -22810,7 +22810,7 @@
               26
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the concrete feFuncB runtime identity selects the blue component-transfer slot"
         },
         {
@@ -22842,7 +22842,7 @@
               26
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the concrete feFuncA runtime identity selects the alpha component-transfer slot"
         },
         {
@@ -22878,7 +22878,7 @@
               88
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "input ownership, identity defaults, exact SVG-runtime-type filtering, ordered last-wins R/G/B/A child selection and four-function effect construction are retained in the immutable primitive graph"
         },
         {
@@ -22958,7 +22958,7 @@
               108
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the four-value type enumeration, matrix missing/invalid fallback, transactional SVG number-list values, input lookup and immutable effect construction are retained across DOM graph publication and Raster replay"
         },
         {
@@ -23006,7 +23006,7 @@
               159
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the 20-coefficient matrix, exact saturate/hue-rotate/luminance coefficients, identity fallback for every wrong value-list arity, alpha-additive AffectsTransparentPixels predicate, one-input construction, operating color space, forward FilterEffect bounds and primitive crop are retained in the immutable Paint geometry/render graph and native Skia color-filter node"
         },
         {
@@ -23074,7 +23074,7 @@
               52
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "direct children are filtered by the SVG feMergeNode runtime type rather than tag text alone, then every exact input is retained in document order through the immutable primitive and native merge filter"
         },
         {
@@ -23106,7 +23106,7 @@
               47
             ]
           ],
-          "rust": "crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "all merge inputs, their document order, each input's operating-space conversion and the resolved primitive crop are retained in the native Skia merge node"
         },
         {
@@ -23142,7 +23142,7 @@
               75
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "zero dx/dy defaults, exact input lookup and immutable offset construction are retained from DOM parsing through anisotropically scaled native Raster replay"
         },
         {
@@ -23186,7 +23186,7 @@
               69
             ]
           ],
-          "rust": "crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "dx/dy ownership, horizontal and vertical filter scaling, exact MapEffect translation, input operating-space conversion, forward bounds and the resolved primitive crop are retained from Paint geometry through the native Skia offset node"
         },
         {
@@ -23226,7 +23226,7 @@
               141
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "all seven operators including Chromium's post-SVG-1.1 lighter value, over missing/invalid fallback, zero arithmetic coefficients and ordered two-input effect construction are retained across the existing package boundaries"
         },
         {
@@ -23270,7 +23270,7 @@
               200
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "over/in/out/atop/xor/lighter map exactly to their Skia modes, arithmetic retains all four coefficients and both premultiplied-validation variants, coefficient-sensitive MapInputs and k4 AffectsTransparentPixels produce Blink's forward bounds, and input order, operating color space and primitive crop reach the native filter unchanged"
         },
         {
@@ -23358,7 +23358,7 @@
               63
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "input identity, LastEffect fallback and the one-input tile effect are retained in the immutable graph and render command"
         },
         {
@@ -23398,7 +23398,7 @@
               56
             ]
           ],
-          "rust": "crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "MapInputs returns the absolute primitive bounds independently of its argument; source-input/filter-region selection, named input primitive subregion selection, independent destination primitive subregion, device scaling and input ownership then reach Skia as the exact source/destination tile rectangles"
         },
         {
@@ -23434,7 +23434,7 @@
               94
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "one-or-two stdDeviation parsing/defaults, non-negative clamping, input selection and the unconditional decal blur are retained; the unrelated proposed edgeMode extension is deliberately absent just as in Chromium"
         },
         {
@@ -23474,7 +23474,7 @@
               147
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the complete sixteen-value SVG blend enumeration, normal missing/invalid fallback, two-input graph order and exact Skia blend-mode selection are retained across DOM parsing, the immutable layout graph and Raster replay"
         },
         {
@@ -23514,7 +23514,7 @@
               53
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "all sixteen blend modes, foreground/background input order, operating-space conversion and the resolved primitive crop are retained in the native Skia blend node"
         },
         {
@@ -23554,7 +23554,7 @@
               128
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "operator enumeration with erode missing/invalid fallback, one-or-two radius parsing, input lookup and immutable morphology construction retain both scaled radii as floating-point values through native Skia replay"
         },
         {
@@ -23598,7 +23598,7 @@
               99
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/paint/paint_model/src/svg_filter_geometry.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "non-negative float radii, horizontal/vertical filter scaling, exact MapEffect outsets for forward bounds, erode/dilate choice, input ownership and primitive crop are preserved in the immutable Paint geometry/render command and translated Skia graph"
         },
         {
@@ -23878,7 +23878,7 @@
               130
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the R/G/B/A channel enumeration, A missing/invalid channel fallback, zero scale default and ordered two-input construction are retained through origin-taint propagation and native displacement replay"
         },
         {
@@ -23918,7 +23918,7 @@
               132
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "constructor defaults, exact input lookup, non-negative anisotropic sigma, dx/dy, computed flood color-opacity, currentColor origin taint and direct drop-shadow primitive identity cross the existing DOM-to-Layout-to-Paint-to-Raster graph unchanged"
         },
         {
@@ -24020,7 +24020,7 @@
               53
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the input-free flood value, color/opacity ownership, fixed-sRGB SetOperatingInterpolationSpace override and native filter construction contract are retained across the immutable graph boundary"
         },
         {
@@ -24064,7 +24064,7 @@
               70
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "flood color and clamped opacity are combined once, the effect starts and remains in sRGB, and the input-free solid color is bounded by the resolved primitive crop"
         },
         {
@@ -24190,7 +24190,7 @@
               75
             ]
           ],
-          "rust": "crates/dom/src/image_resource.rs; crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/dom/src/image_resource.rs; crates/dom/src/layout_mapping/svg_filter_graph.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "the external image owner, resource selection, filter-effect identity, preserveAspectRatio value, native construction and fixed-sRGB operating-space override are retained across DOM resources and Raster"
         },
         {
@@ -24612,7 +24612,7 @@
               56
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "diffuse lighting identity, color/surface/light ownership and non-negative diffuse-constant clamping are retained in the immutable native lighting node"
         },
         {
@@ -24652,7 +24652,7 @@
               72
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster_commands/src/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/raster/src/raster_commands/filter_graph.rs; crates/raster/src/svg_filter_graph.rs; crates/raster/src/native/translated.rs",
           "note": "specular lighting identity, color/surface/light ownership, non-negative specular-constant clamping and inclusive 1..128 shininess clamping are retained in the immutable native lighting node"
         },
         {
@@ -25669,7 +25669,7 @@
     },
     {
       "entity": "VideoPainter",
-      "package": "browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster_commands/raster/compositor",
+      "package": "browser/dom/document_loader/image_decoder/image_resource/layoutng/layout_invalidation/layout_fragment/prepaint/paint_record/raster/compositor",
       "path": "third_party/blink/renderer/core/paint/video_painter.cc",
       "mappings": [
         {
@@ -26064,7 +26064,7 @@
             [23, 176],
             [180, 244]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/prepaint/src/nine_piece_image_grid.rs; crates/paint/paint_record/src/nine_piece_image_painter.rs; crates/raster_commands/src/commands.rs; crates/raster/src/execution/translated.rs; crates/compositor/src/runtime/paint/record.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/prepaint/src/nine_piece_image_grid.rs; crates/paint/paint_record/src/nine_piece_image_painter.rs; crates/raster/src/raster_commands/commands.rs; crates/raster/src/execution/translated.rs; crates/compositor/src/runtime/paint/record.rs",
           "note": "the Rust boundary preserves StyleImage loaded/renderable state, forced image orientation, native and CSS image sizes, resolution scale, slice/width/outset/rule data, generated shaders and dynamic-range limit; painting pixel-snaps the destination grid, retains side filtering, computes identical stretch/repeat/round/space tile parameters, and records oriented image draws or generated-image pieces while preserving Chromium's pending-image fallback semantics"
         },
         {
@@ -26941,7 +26941,7 @@
     },
     {
       "entity": "PaintAutoDarkMode",
-      "package": "layout_fragment/paint_record/raster_commands/raster/compositor",
+      "package": "layout_fragment/paint_record/raster/compositor",
       "path": "third_party/blink/renderer/core/paint/paint_auto_dark_mode.cc",
       "mappings": [
         {
@@ -26950,7 +26950,7 @@
             [15, 53],
             [58, 102]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/table_painters.rs; crates/paint/paint_record/src/display_item.rs; crates/raster_commands/src/commands.rs; crates/raster/src/convert.rs; crates/raster/src/execution/translated.rs; crates/compositor/src/runtime/paint/record.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/table_painters.rs; crates/paint/paint_record/src/display_item.rs; crates/raster/src/raster_commands/commands.rs; crates/raster/src/convert.rs; crates/raster/src/execution/translated.rs; crates/compositor/src/runtime/paint/record.rs",
           "note": "Paint classifies icon, separator and photo images in enclosing-pixel space after removing only LayoutZoomFactor from the destination, leaves intrinsic source geometry unscaled, gates the result on ComputedStyle::ForceDark, and preserves the optional element role. Replaced images plus box and table background images carry the admitted icon/separator result through DisplayItem and DrawCommand into CpuDrawImage::use_dark_mode for the compositor decode cache. SVG document sizing implements the same feature-gated 64-pixel threshold with an explicit policy input."
         },
         {

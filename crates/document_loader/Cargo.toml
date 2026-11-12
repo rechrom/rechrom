@@ -4,17 +4,17 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-fileapi = { path = "../fileapi" }
+fileapi = { path = "../webapi/fileapi" }
 getrandom = "0.4"
-navigation_history = { path = "../navigation_history" }
-fetch_policy = { path = "../fetch_policy" }
+navigation_history = { path = "../document/navigation_history" }
+fetch_policy = { path = "../resource/fetch_policy" }
 url = "2"
 browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 url_loader = { path = "../url_loader" }
 resource = { path = "../resource" }
 decode = { path = "../decode" }
-html = { path = "../html" }
+html = { path = "../document/html" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 image_resource = { path = "../image_resource" }

@@ -5,8 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-scroll_animation = { path = "../../scroll_animation" }
-scroll_snap = { path = "../../scroll_snap" }
+scroll_animation = { path = "../../compositor/scroll_animation" }
+scroll_snap = { path = "../../compositor/scroll_snap" }
 foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
 interaction_dispatch = { path = "../interaction_dispatch" }
 interaction_hit_test = { path = "../interaction_hit_test" }

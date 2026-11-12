@@ -13,7 +13,7 @@ layoutng_style = { path = "../layoutng_style" }
 
 [dev-dependencies]
 dom = { path = "../../dom" }
-html = { path = "../../html" }
+html = { path = "../../document/html" }
 cssom = { path = "../../cssom" }
 style = { path = "../../style/style" }
 layout_algo_replaced = { path = "../layout_algo_replaced" }

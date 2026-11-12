@@ -8,6 +8,10 @@
 pub mod convert;
 mod png;
 mod reflection_mask;
+pub(crate) mod raster_commands {
+    pub mod commands;
+    pub mod filter_graph;
+}
 pub mod svg_filter_graph;
 
 pub use png::EncodeRgbaPng;

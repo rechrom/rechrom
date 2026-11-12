@@ -3529,13 +3529,8 @@ dependencies = [
  "layoutng_assembly",
  "layoutng_foundation",
  "paint",
- "raster_commands",
  "skia",
 ]
-
-[[package]]
-name = "raster_commands"
-version = "0.0.1"
 
 [[package]]
 name = "rav1d"
@@ -4900,6 +4895,7 @@ dependencies = [
  "css_parser",
  "cssom",
  "dom",
+ "fileapi",
  "getrandom 0.4.3",
  "html",
  "http_transport",
